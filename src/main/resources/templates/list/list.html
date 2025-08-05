@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <title>공지사항 목록</title>
+  <link rel="stylesheet" th:href="@{/css/main.css}">
+</head>
+<body>
+<h1>📢 공지사항</h1>
+<a th:href="@{/admin/notices/new}">[새 공지 작성]</a>
+<table>
+  <thead>
+  <tr>
+    <th>제목</th><th>작성자</th><th>타입</th><th>등록일</th><th>상세</th>
+  </tr>
+  </thead>
+  <tbody>
+  <tr th:each="notice : ${list}">
+    <td th:text="${notice.title}">제목</td>
+    <td th:text="${notice.createdBy.name}">관리자</td>
+    <td th:text="${notice.type}">GLOBAL</td>
+    <td th:text="${#dates.format(notice.createdAt, 'yyyy-MM-dd')}">2025-06-12</td>
+    <td><a th:href="@{/notices/{id}(id=${notice.id})}">보기</a></td>
+  </tr>
+  </tbody>
+</table>
+</body>
+</html>

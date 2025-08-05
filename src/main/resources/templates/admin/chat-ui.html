@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI 서비스 통합 플랫폼</title>
+
+  <!-- 라이브러리 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet"/>
+
+  <!-- CSRF -->
+  <meta name="_csrf" th:content="${_csrf?.token}" th:if="${_csrf}"/>
+  <meta name="_csrf_header" th:content="${_csrf?.headerName}" th:if="${_csrf}"/>
+
+  <!-- 스타일 -->
+  <style>
+    :root {
+        --sidebar-width: 340px;
+        --border-color: #dee2e6;
+        --top-bar-height: 40px;
+    }
+
+    /* 공통 */
+    body, html {
+        height: 100%;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    /* 작은 화면(모바일)용 가독성 개선 */
+    @media (max-width: 575.98px) {
+        body, html {
+            font-size: 1rem;
+        }
+
+        .msg {
+            font-size: 1rem;
+        }
+
+        input.form-control-lg {
+            font-size: 1rem;
+            padding: .75rem 1rem;
+        }
+    }
+
+    /* 유틸리티 바 */
+    .top-utility-bar {
+        height: var(--top-bar-height);
+        background: #f8f9fa;
+        border-bottom: 1px solid var(--border-color);
+        padding: 0 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        font-size: .85rem;
+    }
+
+    .top-utility-bar a {
+        text-decoration: none;
+    }
+
+    /* 메인 레이아웃 */
+    .main-container {
+        display: flex;
+        height: calc(100% - var(--top-bar-height));
+        position: relative;
+    }
+
+    /* 사이드바 */
+    .sidebar {
+        width: var(--sidebar-width);
+        min-width: var(--sidebar-width);
+        background: #f8f9fa;
+        border-right: 1px solid var(--border-color);
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        transition: transform .3s ease-in-out;
+        height: 100%;
+    }
+
+    .sidebar-body {
+        flex-grow: 1;
+        overflow-y: auto;
+        min-height: 0;
+    }
+
+    .session-list {
+        list-style: none;
+        padding-left: 0;
+    }
+
+    .session-item a {
+        display: block;
+        padding: .75rem 1rem;
+        border-radius: .5rem;
+        text-decoration: none;
+        color: #212529;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .session-item a:hover {
+        background: #e9ecef;
+    }
+
+    .session-item a.active {
+        background: #0d6efd;
+        color: #fff;
+        font-weight: 500;
+    }
+
+    .admin-section {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border-color);
+    }
+
+    #adminStatus {
+        font-size: .8rem;
+        background: #e9ecef;
+        padding: .5rem .75rem;
+        border-radius: .4rem;
+        max-height: 95px;
+        overflow-y: auto;
+    }
+
+    /* 채팅 영역 */
+    .chat-area-wrapper {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        height: 100%;
+        padding: 1.25rem 2rem;
+    }
+
+    #chatWindow {
+        flex-grow: 1;
+        overflow-y: auto;
+        margin-bottom: 1rem;
+    }
+
+    .msg-container {
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+        margin-bottom: 1rem;
+    }
+
+    .msg {
+        padding: .75rem 1.25rem;
+        border-radius: 1.25rem;
+        max-width: 80%;
+        line-height: 1.55;
+        word-break: break-word;
+    }
+
+    .msg-user-container {
+        align-items: flex-end;
+    }
+
+    .msg-user {
+        background: #0d6efd;
+        color: #fff;
+    }
+
+    .msg-assistant-container {
+        align-items: flex-start;
+    }
+
+    .msg-assistant {
+        background: #e9ecef;
+    }
+
+    /* 사이드바 토글러 (모바일) */
+    .sidebar-toggler {
+        display: none;
+    }
+
+    /* 로그인 팝오버 */
+    .login-popover {
+        --bs-popover-max-width: 300px;
+        --bs-popover-border-color: var(--bs-primary);
+        --bs-popover-header-bg: var(--bs-primary);
+        --bs-popover-header-color: var(--bs-white);
+    }
+
+    /* 992px 미만(태블릿/모바일) 레이아웃 */
+    @media (max-width: 991.98px) {
+        .sidebar {
+            position: fixed;
+            top: var(--top-bar-height);
+            left: 0;
+            z-index: 1050;
+            transform: translateX(-100%);
+            height: calc(100% - var(--top-bar-height));
+        }
+
+        .sidebar.show {
+            transform: translateX(0);
+        }
+
+        .sidebar-toggler {
+            display: block;
+            position: fixed;
+            top: calc(var(--top-bar-height) + .75rem);
+            left: .75rem;
+            z-index: 1100;
+        }
+
+        .chat-area-wrapper {
+            padding-top: 4.5rem;
+        }
+    }
+  </style>
+</head>
+<body>
+
+<!-- 상단 유틸리티 바 -->
+<div class="top-utility-bar">
+  <div sec:authorize="isAuthenticated()" class="d-flex align-items-center gap-3">
+    <span><strong sec:authentication="name" class="text-primary">사용자</strong>님 환영합니다.</span>
+    <a th:href="@{/logout}">로그아웃</a>
+  </div>
+  <div sec:authorize="!isAuthenticated()">
+    <a href="#" id="login-popover-trigger" role="button">로그인</a>
+  </div>
+</div>
+
+<!-- 사이드바 토글 버튼 (모바일) -->
+<button class="btn btn-light border sidebar-toggler" id="sideOpen" aria-label="Open sidebar">
+  <i class="bi bi-list"></i>
+</button>
+
+<div class="main-container">
+  <!-- 사이드바 -->
+  <aside class="sidebar" id="sideNav" aria-label="대시보드 사이드바">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 class="mb-0">AI Platform</h4>
+      <button class="btn-close d-lg-none" id="sideClose" aria-label="Close sidebar"></button>
+    </div>
+
+    <div class="d-grid mb-3">
+      <button id="newChatBtn" class="btn btn-primary"><i class="bi bi-plus-lg"></i> 새 대화</button>
+    </div>
+
+    <!-- 세션 목록 -->
+    <div class="sidebar-body">
+      <nav aria-label="세션 목록">
+        <ul id="sessionList" class="session-list list-unstyled mb-3"></ul>
+      </nav>
+
+      <!-- GPT 상세 설정 -->
+      <section id="advancedSettings" class="admin-section" aria-labelledby="gpt-settings-heading">
+        <div class="d-flex justify-content-between align-items-center">
+          <h6 id="gpt-settings-heading" class="mb-1">GPT 상세 설정</h6>
+          <button class="btn btn-sm btn-link text-decoration-none p-0" data-bs-toggle="collapse"
+                  data-bs-target="#advWrap" aria-expanded="true" aria-controls="advWrap">
+            <i class="bi bi-chevron-down"></i>
+          </button>
+        </div>
+        <div id="advWrap" class="collapse show mt-2">
+          <!-- 새 토큰 슬라이더 세트 -->
+          <div class="mb-2">
+            <label class="form-label small" for="maxTokensSlider">Max Tokens: <span id="maxTokensValue">2048</span></label>
+            <input id="maxTokensSlider" type="range" class="form-range" min="256" max="16384" step="128" value="2048"/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small" for="maxMemorySlider">장기 기억 토큰: <span id="maxMemoryValue">7500</span></label>
+            <input id="maxMemorySlider" type="range" class="form-range" min="0" max="15000" step="500" value="7500"/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small" for="maxRagSlider">RAG 토큰: <span id="maxRagValue">5000</span></label>
+            <input id="maxRagSlider" type="range" class="form-range" min="0" max="10000" step="500" value="5000"/>
+          </div>
+          <!-- 기존 설정들 -->
+          <div class="mb-2">
+            <label class="form-label small" for="systemPromptInput">시스템 프롬프트</label>
+            <textarea id="systemPromptInput" class="form-control form-control-sm" rows="2"></textarea>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small" for="temperatureSlider">온도: <span id="temperatureValue">0.7</span></label>
+            <input id="temperatureSlider" type="range" class="form-range" min="0" max="2" step="0.1" value="0.7"/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small" for="topPSlider">Top P: <span id="topPValue">1.0</span></label>
+            <input id="topPSlider" type="range" class="form-range" min="0" max="1" step="0.05" value="1.0"/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small" for="freqPenaltySlider">반복 패널티: <span id="freqPenaltyValue">0.0</span></label>
+            <input id="freqPenaltySlider" type="range" class="form-range" min="-2.0" max="2.0" step="0.1" value="0.0"/>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small" for="presPenaltySlider">주제 패널티: <span id="presPenaltyValue">0.0</span></label>
+            <input id="presPenaltySlider" type="range" class="form-range" min="-2.0" max="2.0" step="0.1" value="0.0"/>
+          </div>
+          <button id="saveSettingsBtn" class="btn btn-success btn-sm w-100">
+            <i class="bi bi-check-lg"></i> 설정 저장
+          </button>
+        </div>
+      </section>
+
+      <!-- 기본 모델 선택 -->
+      <section class="admin-section" aria-labelledby="model-settings-heading">
+        <h6 id="model-settings-heading" class="mb-2">기본 모델</h6>
+        <div class="input-group">
+          <select id="defaultModelSelect" class="form-select"></select>
+          <button id="saveModelBtn" class="btn btn-outline-success" aria-label="Save model">
+            <i class="bi bi-save"></i>
+          </button>
+        </div>
+      </section>
+
+      <!-- 학습 & 파인튜닝 -->
+      <section class="admin-section" aria-labelledby="admin-tools-heading">
+        <h6 id="admin-tools-heading" class="mb-2">학습 & 파인튜닝</h6>
+        <div class="d-grid gap-2 mb-2">
+          <button id="trainBtn" class="btn btn-info">
+            <span class="spinner-border spinner-border-sm d-none me-1"></span>
+            <i class="bi bi-magic"></i> 규칙 학습
+          </button>
+          <button id="startFineTuneBtn" class="btn btn-danger">
+            <span class="spinner-border spinner-border-sm d-none me-1"></span>
+            <i class="bi bi-fire"></i> 파인튜닝
+          </button>
+        </div>
+        <div class="input-group">
+          <input id="jobIdInput" class="form-control form-control-sm" placeholder="Job ID"/>
+          <button id="checkFineTuneBtn" class="btn btn-secondary btn-sm">
+            <i class="bi bi-search"></i>
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <!-- 관리자 상태 -->
+    <div id="adminStatus" class="mt-auto pt-2 text-muted" aria-live="polite">준비 완료.</div>
+  </aside>
+
+  <!-- 채팅 영역 -->
+  <main class="chat-area-wrapper">
+    <!-- 도구 토글 -->
+    <div class="d-flex justify-content-end mb-2">
+      <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse"
+              data-bs-target="#toolsCollapse" aria-expanded="false" aria-controls="toolsCollapse">
+        <i class="bi bi-tools"></i> 도구
+      </button>
+    </div>
+
+    <!-- 도구 영역 -->
+    <div class="collapse" id="toolsCollapse">
+      <header class="p-3 border rounded mb-3 shadow-sm">
+        <div class="d-flex flex-wrap gap-4 justify-content-center align-items-center">
+          <div class="form-check form-switch">
+            <input id="useRag" class="form-check-input" type="checkbox">
+            <label class="form-check-label fw-semibold text-success" for="useRag">🧠 RAG 검색</label>
+          </div>
+          <div class="form-check form-switch">
+            <input id="useAdaptiveTranslator" class="form-check-input" type="checkbox">
+            <label class="form-check-label fw-semibold text-primary" for="useAdaptiveTranslator">🚀 적응형 번역</label>
+          </div>
+          <div class="form-check form-switch">
+            <input id="autoTranslate" class="form-check-input" type="checkbox">
+            <label class="form-check-label" for="autoTranslate">한/영 자동번역</label>
+          </div>
+
+
+          <!-- ✨ 새 2-Pass 폴리싱 토글 -->
+          <div class="form-check form-switch">
+            <input id="usePolish" class="form-check-input" type="checkbox">
+            <label class="form-check-label fw-semibold text-warning" for="usePolish">
+              🪄 2-Pass 폴리싱
+            </label>
+          </div>
+          <div class="form-check form-switch">
+            <input id="useHistory" class="form-check-input" type="checkbox" checked>
+            <label class="form-check-label" for="useHistory">대화 기록 저장</label>
+          </div>
+        </div>
+      </header>
+    </div>
+
+    <!-- 채팅 메시지 표시 영역 -->
+    <section id="chatWindow" aria-live="polite">
+      <div id="chatMessages" class="d-flex flex-column h-100"></div>
+    </section>
+
+    <!-- 메시지 입력 -->
+    <form class="mt-auto" onsubmit="event.preventDefault();document.getElementById('sendBtn').click();">
+      <div class="input-group">
+        <input id="messageInput" class="form-control form-control-lg" placeholder="메시지를 입력하세요…" autocomplete="off">
+        <button id="sendBtn" class="btn btn-primary px-4">전송</button>
+      </div>
+    </form>
+  </main>
+</div>
+
+<!-- 로그인 템플릿 -->
+<template id="login-form-template">
+  <form id="popoverLoginForm" class="p-2">
+    <div id="popoverLoginError" class="alert alert-danger p-1 small d-none mb-2 text-center">로그인 실패</div>
+    <div class="mb-2"><input type="text" name="username" class="form-control form-control-sm" placeholder="아이디" required></div>
+    <div class="mb-2"><input type="password" name="password" class="form-control form-control-sm" placeholder="비밀번호" required></div>
+    <div class="d-grid"><button type="submit" class="btn btn-primary btn-sm">로그인</button></div>
+  </form>
+</template>
+
+<!-- 초기 데이터 (Thymeleaf) -->
+<script th:inline="javascript">
+  /*<![CDATA[*/
+  window.initialData = {
+      models: /*[[${models}]]*/ [],
+      currentModel: /*[[${currentModel}]]*/ null
+  };
+  /*]]>*/
+</script>
+
+<!-- 스크립트 -->
+<script type="module" src="/js/fetch-wrapper.js"></script>
+<script type="module" src="/js/chat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- 로그인 팝오버 -->

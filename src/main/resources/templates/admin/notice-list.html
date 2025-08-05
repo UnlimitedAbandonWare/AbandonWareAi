@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <title>공지사항 목록</title>
+</head>
+<body>
+<h1>공지사항 목록</h1>
+
+<!-- 새 공지 작성 버튼 -->
+<p>
+  <a th:href="@{/admin/notices/new}">새 공지 작성</a>
+</p>
+
+<table border="1" cellspacing="0" cellpadding="8">
+  <thead>
+  <tr>
+    <th>번호</th>
+    <th>제목</th>
+    <th>작성일</th>
+  </tr>
+  </thead>
+  <tbody>
+  <!-- notices 라는 모델 속성의 리스트를 순회 -->
+  <tr th:each="notice, iterStat : ${notices}">
+    <!-- 순번 -->
+    <td th:text="${iterStat.index + 1}">1</td>
+    <!-- 제목: 상세보기 링크 -->
+    <td>
+      <a th:href="@{|/admin/notices/${notice.id}|}"
+         th:text="${notice.title}">
+        공지 제목
+      </a>
+    </td>
+    <!-- 작성일: Java 8 Date/Time 을 포맷하려면 #temporals 사용 -->
+    <td th:text="${#temporals.format(notice.createdAt, 'yyyy-MM-dd HH:mm')}">
+      2025-06-09 16:00
+    </td>
+  </tr>
+  <!-- 공지가 하나도 없을 때 -->
+  <tr th:if="${#lists.isEmpty(notices)}">
+    <td colspan="3">등록된 공지사항이 없습니다.</td>
+  </tr>
+  </tbody>
+</table>
+</body>
+</html>
