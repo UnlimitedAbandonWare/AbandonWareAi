@@ -1,76 +1,3 @@
-flowchart TD
-    subgraph Client[클라이언트 계층]
-        A1[LMS 웹/모바일 UI]
-        A2[카카오톡 알림/메시지]
-        A3[번역 요청, AI 질문, 학습 관리]
-    end
-
-    subgraph Controller[컨트롤러 계층]
-        B1[AdaptiveTranslateController]
-        B2[TranslationController]
-        B3[TrainingController]
-        B4[기타 LMS 기능 컨트롤러]
-    end
-
-    subgraph Service[서비스 계층]
-        subgraph AI[AI 호출]
-            C1[GPTService]
-            C2[PromptService]
-            C3[PromptBuilder / SystemPrompt / PromptContext]
-        end
-
-        subgraph Translation[번역]
-            C4[TranslationService]
-            C5[AdaptiveTranslationService]
-        end
-
-        subgraph Training[학습/튜닝]
-            C6[TrainingService]
-            C7[FineTuningService]
-            C8[WeightTuningService]
-        end
-
-        subgraph RLHF[RLHF(강화학습)]
-            C9[MemoryReinforcementService]
-            C10[ReinforcementQueue]
-        end
-
-        subgraph Quality[품질 검증]
-            C11[FactVerifierService]
-            C12[QualityMetricService]
-        end
-
-        subgraph RAG[검색/RAG]
-            C13[NaverSearchService]
-            C14[EmbeddingStoreManager]
-            C15[RagConfig (미완)]
-            C16[RagRetrievalService (미완)]
-            C17[LangChainChatService (미완)]
-        end
-    end
-
-    subgraph Data[데이터 & 외부 서비스 계층]
-        D1[LMS DB (사용자, 과제, 메모리)]
-        D2[벡터 DB(예정)]
-        D3[OpenAI/HuggingFace API]
-        D4[Naver API]
-        D5[Kakao API]
-    end
-
-    %% 연결 관계
-    Client --> Controller
-    Controller --> Service
-    AI --> Translation
-    AI --> Training
-    AI --> RLHF
-    AI --> Quality
-    AI --> RAG
-    Translation --> Data
-    Training --> Data
-    RLHF --> Training
-    Quality --> RAG
-    RAG --> Data
-    Service --> Data
 
 프로젝트의 핵심 기능, 아키텍처, 설정 방법, 그리고 최근 개선 사항까지 모두 포함하여 명확하고 구조적으로 정리했습니다.
 
@@ -257,3 +184,51 @@ PR 단위로 충분한 JUnit 테스트 코드를 추가해야 합니다.
 
 📄 라이선스
 이 프로젝트는 MIT 라이선스에 따라 배포됩니다. 자세한 내용은 LICENSE 파일을 참조하십시오.
+
+                ┌───────────────────────┐
+                │     클라이언트 계층     │
+                │───────────────────────│
+                │ - LMS 웹/모바일        │
+                │ - 카카오톡 알림        │
+                │ - 번역/AI 질의         │
+                └─────────┬─────────────┘
+                          │ REST API
+                          ▼
+       ┌──────────────────────────────────┐
+       │         컨트롤러 계층              │
+       │──────────────────────────────────│
+       │ AdaptiveTranslateController       │
+       │ TranslationController             │
+       │ TrainingController                │
+       │ 기타 LMS 기능 컨트롤러             │
+       └─────────────────┬────────────────┘
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│                      서비스 계층                        │
+│────────────────────────────────────────────────────────│
+│ **AI 호출**   GPTService ──▶ PromptService + PromptBuilder
+│              SystemPrompt / PromptContext               │
+│                                                        │
+│ **번역**     TranslationService / AdaptiveTranslation  │
+│                                                        │
+│ **학습**     TrainingService / FineTuning / WeightTuning│
+│                                                        │
+│ **RLHF**     MemoryReinforcementService ─▶ ReinforcementQueue
+│                                                        │
+│ **품질 검증** FactVerifierService + QualityMetricService│
+│                                                        │
+│ **검색/RAG** NaverSearchService ─▶ EmbeddingStoreManager
+│             RagConfig (미완) / RagRetrievalService(미완)
+│             LangChainChatService(미완)                 │
+└──────────────────────────┬─────────────────────────────┘
+                           ▼
+           ┌──────────────────────────────────┐
+           │     데이터 & 외부 서비스 계층     │
+           │──────────────────────────────────│
+           │ - LMS DB (사용자, 과제, 메모리)  │
+           │ - 벡터 DB(예정)                   │
+           │ - OpenAI/HF API                   │
+           │ - Naver API                       │
+           │ - Kakao API                       │
+           └──────────────────────────────────┘
+
