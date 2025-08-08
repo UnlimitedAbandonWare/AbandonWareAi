@@ -1,6 +1,4 @@
 
-네, (AbandonWare)님. Git 저장소에 바로 올릴 수 있도록 전문적인 README.md 파일을 생성해 드리겠습니다.
-
 프로젝트의 핵심 기능, 아키텍처, 설정 방법, 그리고 최근 개선 사항까지 모두 포함하여 명확하고 구조적으로 정리했습니다.
 
 📑 하이브리드 RAG AI 챗봇 서비스 (Hybrid RAG AI Chatbot Service)
