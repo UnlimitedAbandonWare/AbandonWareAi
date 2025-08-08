@@ -11,7 +11,6 @@ HybridRetriever & SimpleReranker 신규 도입: 여러 검색기(Web, Analyze, R
 
 ChatService 파이프라인 재설계: HybridRetriever를 통해 **단 한 번의 통합 검색(1-Pass)**을 수행하고, 그 결과를 LLM 호출(invoke... 메서드)에 직접 전달하여 중복 검색과 불필요한 LLM 호출을 제거했습니다.
 
-고유명사 검색 정확도 향상 (AnalyzeWebSearchRetriever): 'DW아카데미'처럼 영문과 한글이 조합된 고유명사는 형태소 분석을 건너뛰고 원문 그대로 검색하여, 의미 없는 단어로 분해되는 문제를 해결했습니다.
 
 세션 격리 및 공용 데이터 처리 강화:
 
