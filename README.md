@@ -185,50 +185,6 @@ PR 단위로 충분한 JUnit 테스트 코드를 추가해야 합니다.
 📄 라이선스
 이 프로젝트는 MIT 라이선스에 따라 배포됩니다. 자세한 내용은 LICENSE 파일을 참조하십시오.
 
-                ┌───────────────────────┐
-                │     클라이언트 계층     │
-                │───────────────────────│
-                │ - LMS 웹/모바일        │
-                │ - 카카오톡 알림        │
-                │ - 번역/AI 질의         │
-                └─────────┬─────────────┘
-                          │ REST API
-                          ▼
-       ┌──────────────────────────────────┐
-       │         컨트롤러 계층              │
-       │──────────────────────────────────│
-       │ AdaptiveTranslateController       │
-       │ TranslationController             │
-       │ TrainingController                │
-       │ 기타 LMS 기능 컨트롤러             │
-       └─────────────────┬────────────────┘
-                          ▼
-┌────────────────────────────────────────────────────────┐
-│                      서비스 계층                        │
-│────────────────────────────────────────────────────────│
-│ **AI 호출**   GPTService ──▶ PromptService + PromptBuilder
-│              SystemPrompt / PromptContext               │
-│                                                        │
-│ **번역**     TranslationService / AdaptiveTranslation  │
-│                                                        │
-│ **학습**     TrainingService / FineTuning / WeightTuning│
-│                                                        │
-│ **RLHF**     MemoryReinforcementService ─▶ ReinforcementQueue
-│                                                        │
-│ **품질 검증** FactVerifierService + QualityMetricService│
-│                                                        │
-│ **검색/RAG** NaverSearchService ─▶ EmbeddingStoreManager
-│             RagConfig (미완) / RagRetrievalService(미완)
-│             LangChainChatService(미완)                 │
-└──────────────────────────┬─────────────────────────────┘
-                           ▼
-           ┌──────────────────────────────────┐
-           │     데이터 & 외부 서비스 계층     │
-           │──────────────────────────────────│
-           │ - LMS DB (사용자, 과제, 메모리)  │
-           │ - 벡터 DB(예정)                   │
-           │ - OpenAI/HF API                   │
-           │ - Naver API                       │
-           │ - Kakao API                       │
-           └──────────────────────────────────┘
+<img width="356" height="1187" alt="image" src="https://github.com/user-attachments/assets/4ad84a7c-5e17-44e8-840b-cc3bf7690704" />
+
 
