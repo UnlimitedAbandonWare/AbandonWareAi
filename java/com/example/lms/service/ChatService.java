@@ -1,5 +1,5 @@
 package com.example.lms.service;
-
+import com.example.lms.search.QueryHygieneFilter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import com.example.lms.domain.enums.RulePhase;
 import com.example.lms.dto.ChatRequestDto;
@@ -403,7 +403,9 @@ public class ChatService {
         }
 
         // 🔸 4) 최종 프롬프트/컨텍스트 구성
-        String ctx = promptEngine.createPrompt(finalQuery, topDocs);
+        // 🔸 4) 최종 프롬프트/컨텍스트 구성
+        String webCtx = promptEngine.createPrompt(finalQuery, topDocs); // 웹/벡터 문서 컨텍스트
+        String unifiedCtx = buildUnifiedContext(webCtx, ragCtx, memCtx); // web → rag → mem 우선순위 합성
 
 
         // 🔸 5) 단일 LLM 호출로 답변 생성

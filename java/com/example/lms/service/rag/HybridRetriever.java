@@ -2,6 +2,7 @@ package com.example.lms.service.rag;
 
 import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import com.example.lms.service.rag.handler.RetrievalHandler;
+import com.example.lms.search.QueryHygieneFilter;
 
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -149,6 +150,7 @@ public class HybridRetriever implements ContentRetriever {
             // 2) Self‑Ask로 1~2개 핵심 질의 생성 → 위생 필터
             List<String> planned = (selfAskPlanner != null) ? selfAskPlanner.plan(question, 2) : List.of(question);
             List<String> queries = QueryHygieneFilter.sanitize(planned, 2, 0.80);
+
             if (queries.isEmpty()) queries = List.of(question);
 
             // 3) 필요한 쿼리만 순차 처리 → 융합
@@ -172,7 +174,12 @@ public class HybridRetriever implements ContentRetriever {
             return List.of(Content.from("[검색 오류]"));
         }
     }
-}
+
+
+
+/**
+ * 다중 쿼리 병렬 검색  RRF 융합
+ */
 
     /**
      * 다중 쿼리 병렬 검색 + RRF 융합
@@ -222,8 +229,11 @@ public class HybridRetriever implements ContentRetriever {
         } catch (Exception e) {
             log.error("[Hybrid] retrieveAll 실패", e);
             return List.of(Content.from("[검색 오류]"));
-        }
-    }
+
+        } // retrieveProgressive 메서드 종료
+    } // 여기가 클래스 종료 지점이 되어야 함. 아래는 기존 코드.
+
+
 
     // ───────────────────────────── 헬퍼들 ─────────────────────────────
 
