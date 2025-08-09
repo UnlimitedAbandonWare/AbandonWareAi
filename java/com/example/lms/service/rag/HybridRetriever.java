@@ -27,30 +27,30 @@ public class HybridRetriever implements ContentRetriever {
     private static final double GAME_SIM_THRESHOLD = 0.3;
 
     // 메타키 (필요 시 Query.metadata에 실어 전달)
-    private static final String META_ALLOWED_DOMAINS  = "allowedDomains";   // List<String>
-    private static final String META_MAX_PARALLEL     = "maxParallel";      // Integer
-    private static final String META_DEDUPE_KEY       = "dedupeKey";        // "text" | "url" | "hash"
+    private static final String META_ALLOWED_DOMAINS = "allowedDomains";   // List<String>
+    private static final String META_MAX_PARALLEL = "maxParallel";      // Integer
+    private static final String META_DEDUPE_KEY = "dedupeKey";        // "text" | "url" | "hash"
     private static final String META_OFFICIAL_DOMAINS = "officialDomains";  // List<String>
 
     @Value("${rag.search.top-k:5}")
     private int topK;
 
     // 체인 & 융합기
-    private final RetrievalHandler      handlerChain;
-    private final ReciprocalRankFuser   fuser;
+    private final RetrievalHandler handlerChain;
+    private final ReciprocalRankFuser fuser;
     private final AnswerQualityEvaluator qualityEvaluator;
-    private final SelfAskPlanner         selfAskPlanner;
+    private final SelfAskPlanner selfAskPlanner;
     private final RelevanceScoringService relevanceScoringService;
     // 리트리버들
-    private final SelfAskWebSearchRetriever  selfAskRetriever;
-    private final AnalyzeWebSearchRetriever  analyzeRetriever;
-    private final WebSearchRetriever         webSearchRetriever;
-    private final QueryComplexityGate        gate;
+    private final SelfAskWebSearchRetriever selfAskRetriever;
+    private final AnalyzeWebSearchRetriever analyzeRetriever;
+    private final WebSearchRetriever webSearchRetriever;
+    private final QueryComplexityGate gate;
 
     // RAG/임베딩
-    private final LangChainRAGService                ragService;
-    private final EmbeddingModel                     embeddingModel;
-    private final EmbeddingStore<TextSegment>        gameEmbeddingStore;
+    private final LangChainRAGService ragService;
+    private final EmbeddingModel embeddingModel;
+    private final EmbeddingStore<TextSegment> gameEmbeddingStore;
 
     @Value("${pinecone.index.name}")
     private String pineconeIndexName;
@@ -65,6 +65,7 @@ public class HybridRetriever implements ContentRetriever {
     private int maxParallel;
     @Value("${hybrid.min-relatedness:0.4}")
     private double minRelatedness;
+
     @Override
     public List<Content> retrieve(Query query) {
 
@@ -88,8 +89,8 @@ public class HybridRetriever implements ContentRetriever {
         List<String> officialDomains =
                 (List<String>) md.getOrDefault(META_OFFICIAL_DOMAINS, allowedDomains);
 
-        int    maxParallel = Optional.ofNullable((Integer) md.get(META_MAX_PARALLEL)).orElse(3);
-        String dedupeKey   = (String) md.getOrDefault(META_DEDUPE_KEY, "text");
+        int maxParallel = Optional.ofNullable((Integer) md.get(META_MAX_PARALLEL)).orElse(3);
+        String dedupeKey = (String) md.getOrDefault(META_DEDUPE_KEY, "text");
 
         LinkedHashSet<Content> mergedContents = new LinkedHashSet<>();
 
@@ -126,8 +127,10 @@ public class HybridRetriever implements ContentRetriever {
             }
         }
 
-        // -> finalizeResults 호출 시 'question' 텍스트를 추가로 전달하도록 변경
+        // 최종 정제 후 반환
+        return finalizeResults(new ArrayList<>(mergedContents), dedupeKey, officialDomains, q);
     }
+
     /**
      * Progressive retrieval:
      * 1) Local RAG 우선 → 품질 충분 시 조기 종료
@@ -169,6 +172,9 @@ public class HybridRetriever implements ContentRetriever {
             }
 
             List<Content> fused = fuser.fuse(buckets, top);
+            List<Content> combined = new ArrayList<>(local);
+            combined.addAll(fused);
+            List<Content> out = finalizeResults(combined, "text", java.util.Collections.emptyList(), question);
             List<Content> out = finalizeResults(new ArrayList<>(local), "text", java.util.Collections.emptyList(), question);
             return out.size() > top ? out.subList(0, top) : out;
 
@@ -177,7 +183,6 @@ public class HybridRetriever implements ContentRetriever {
             return List.of(Content.from("[검색 오류]"));
         }
     }
-
 
 
 /**
@@ -229,18 +234,20 @@ public class HybridRetriever implements ContentRetriever {
             }
             // RRF 융합 후 상위 limit 반환
             return fuser.fuse(results, Math.max(1, limit));
-        } catch (Exception e) {
+        } catch (Exception e) { // retrieveAll 종료
             log.error("[Hybrid] retrieveAll 실패", e);
             return List.of(Content.from("[검색 오류]"));
+        }
+        // 클래스 종료는 파일 말미로 이동 (헬퍼 메서드 포함)
 
-        } // retrieveProgressive 메서드 종료
     } // 여기가 클래스 종료 지점이 되어야 함. 아래는 기존 코드.
-
 
 
     // ───────────────────────────── 헬퍼들 ─────────────────────────────
 
-    /** (옵션) 코사인 유사도 — 필요 시 사용 */
+    /**
+     * (옵션) 코사인 유사도 — 필요 시 사용
+     */
     private double cosineSimilarity(String q, String doc) {
         try {
             var qVec = embeddingModel.embed(q).content().vector();
@@ -251,8 +258,8 @@ public class HybridRetriever implements ContentRetriever {
             double dot = 0, nq = 0, nd = 0;
             for (int i = 0; i < qVec.length; i++) {
                 dot += qVec[i] * dVec[i];
-                nq  += qVec[i] * qVec[i];
-                nd  += dVec[i] * dVec[i];
+                nq += qVec[i] * qVec[i];
+                nd += dVec[i] * dVec[i];
             }
             if (nq == 0 || nd == 0) return 0d;
             return dot / (Math.sqrt(nq) * Math.sqrt(nd) + 1e-9);
@@ -304,9 +311,9 @@ public class HybridRetriever implements ContentRetriever {
 
     /**
      * 최종 정제:
-     *  - dedupeKey 기준 중복 제거
-     *  - 공식 도메인 보너스(+0.20)
-     *  - 점수 내림차순 정렬 후 topK 반환
+     * - dedupeKey 기준 중복 제거
+     * - 공식 도메인 보너스(+0.20)
+     * - 점수 내림차순 정렬 후 topK 반환
      */
     private List<Content> finalizeResults(List<Content> raw,
                                           String dedupeKey,
@@ -324,14 +331,15 @@ public class HybridRetriever implements ContentRetriever {
             double rel = 0.0;
             try {
                 rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
-            } catch (Exception ignore) { }
+            } catch (Exception ignore) {
+            }
             if (rel < minRelatedness) continue; // 저관련 스니펫 제거
 
             String key;
             switch (dedupeKey) {
-                case "url"  -> key = Optional.ofNullable(extractUrl(text)).orElse(text);
+                case "url" -> key = Optional.ofNullable(extractUrl(text)).orElse(text);
                 case "hash" -> key = Integer.toHexString(text.hashCode());
-                default     -> key = text; // "text"
+                default -> key = text; // "text"
             }
             uniq.putIfAbsent(key, c); // 첫 등장만 유지
         }
@@ -340,12 +348,13 @@ public class HybridRetriever implements ContentRetriever {
         class Scored {
             final Content content;
             final double score;
+
             Scored(Content content, double score) {
-                this.content = content; this.score = score;
+                this.content = content;
+                this.score = score;
             }
         }
 
-        List<Scored> scored = new ArrayList<>();
         int rank = 0;
         for (Content c : uniq.values()) {
             rank++;                     // 낮을수록 우선
@@ -356,17 +365,21 @@ public class HybridRetriever implements ContentRetriever {
                     .orElse(c.toString());
             String url = extractUrl(text);
             if (isOfficial(url, officialDomains)) {
-                                base += 0.20;
-                           }
-                             double rel = 0.0;
-                        try {
-                              rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
-                          } catch (Exception ignore) { /* 0.0 유지 */ }
-                              double finalScore = (0.6 * rel) + (0.4 * base);
-                       scored.add(new Scored(c, finalScore));
+                base += 0.20;
+            }
+            double rel = 0.0;
+            try {
+                rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
+            } catch (Exception ignore) { /* 0.0 유지 */ }
+            double finalScore = (0.6 * rel) + (0.4 * base);
+            scored.add(new Scored(c, finalScore));
+        }
+        // 점수 내림차순 정렬 후 상위 topK 반환
+        scored.sort((a, b) -> Double.compare(b.score, a.score));
         return scored.stream()
                 .limit(topK)
                 .map(s -> s.content)
                 .collect(Collectors.toList());
     }
+// ... (isOfficial, extractUrl 등 다른 헬퍼 메서드)
 }
