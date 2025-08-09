@@ -16,6 +16,5 @@ public interface CrossEncoderReranker {
      * @param topN       반환할 결과의 수
      * @return 재정렬된 상위 N개의 Content 목록
      */
-
     List<Content> rerank(String query, List<Content> candidates, int topN);
 }

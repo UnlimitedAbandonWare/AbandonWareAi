@@ -6,6 +6,7 @@ import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.service.NaverSearchService;
+import com.example.lms.service.rag.CrossEncoderReranker;   // ★ 누락된 import 추가
 import java.util.LinkedHashSet;
 import java.util.Collections;
 import java.util.List;
