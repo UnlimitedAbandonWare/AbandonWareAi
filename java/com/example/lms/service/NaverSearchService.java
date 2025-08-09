@@ -20,6 +20,8 @@ import java.util.stream.Collectors;
 import java.util.Objects;                        // NEW – distinct/limit 필터
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.http.ResponseEntity;
+import com.example.lms.search.RateLimitPolicy;
 import org.springframework.dao.DataIntegrityViolationException;
 import com.example.lms.transform.QueryTransformer;
 import com.example.lms.util.RelevanceScorer;
@@ -160,6 +162,8 @@ public class NaverSearchService {
     private final LoadingCache<String, float[]> locationEmbedCache;
     /** Scorer for cosine similarity. */
     private final RelevanceScorer relevanceScorer;
+    /** 레이트리밋 정책(헤더 기반 동적 제어) */
+    private final RateLimitPolicy ratePolicy;
     /** NEW – 별도 트랜잭션 컨텍스트용 */
     private final TransactionTemplate txTemplate;
     /** Supplier of the current session id. */
@@ -174,6 +178,7 @@ public class NaverSearchService {
     @Value("${naver.search.rag-top-k:5}")
     private int ragTopK;   // 벡터 RAG top‑k
     /** (NEW) 네이버 API에서 한 번에 받아올 검색 결과 수(1‑100) */
+
     @Value("${naver.search.display:5}")
     private int display;
     @Value("${naver.search.query-suffix:}")
@@ -355,7 +360,8 @@ public class NaverSearchService {
             @Value("${naver.keys:}") String naverKeysCsv,
             @Value("${naver.web.cache.max-size:2000}") long maxSize,
             @Value("${naver.web.cache.ttl-sec:300}") long ttlSec,
-            PlatformTransactionManager txManager) {                     // NEW – 주입
+            PlatformTransactionManager txManager,
+            RateLimitPolicy ratePolicy) {                     // NEW – 주입
         this.queryTransformer = queryTransformer;
         this.memorySvc = memorySvc;
         this.retrieverProvider = retrieverProvider;
@@ -365,6 +371,7 @@ public class NaverSearchService {
         this.preprocessor = preprocessor;          // ⭐ NEW
         this.naverKeysCsv = naverKeysCsv;           // 🔴 저장
         this.relevanceScorer = new RelevanceScorer(embeddingModel);
+        this.ratePolicy = ratePolicy;
 
         /* ───────────────────────────────
          * ① 공통 HTTP 요청‑응답 로그 필터
@@ -589,9 +596,10 @@ public class NaverSearchService {
                     .toList();
 
             // 유사 변형 쿼리 제거 후 상한 적용
+            int limitQs = Math.min(MAX_QUERIES_PER_SEARCH, ratePolicy.allowedExpansions());
             qs = Q.filterSimilarQueries(qs, similarThreshold)
                     .stream()
-                    .limit(MAX_QUERIES_PER_SEARCH)
+                    .limit(limitQs)
                     .toList();
 
             LinkedHashSet<String> acc2 = new LinkedHashSet<>();
@@ -654,9 +662,10 @@ public class NaverSearchService {
         expandedQueries = expandedQueries.stream().toList();
 
         // () 유사 변형 제거
+        int limitQs2 = Math.min(MAX_QUERIES_PER_SEARCH, ratePolicy.allowedExpansions());
         expandedQueries = Q.filterSimilarQueries(expandedQueries, similarThreshold)
                 .stream()
-                .limit(MAX_QUERIES_PER_SEARCH)
+                .limit(limitQs2)
                 .toList();
 
         /* ② (개선) 키워드 동의어 확장 — “모두 붙이기” 금지, 별도 변형  구문 고정 */
@@ -800,24 +809,29 @@ public class NaverSearchService {
         if (first == null) return Mono.just(List.of());
 
         String keyLabel1 = first.id().length() > 4 ? first.id().substring(first.id().length() - 4) : first.id();
-        Mono<String> primary = web.get()
+        Mono<ResponseEntity<String>> primary = web.get()
                 .uri(uri)
                 .header("X-Naver-Client-Id", first.id())
                 .header("X-Naver-Client-Secret", first.secret())
                 .header("X-Key-Label", "K-" + keyLabel1)
                 .retrieve()
-                .bodyToMono(String.class)
-                // RAW JSON 일부만 로그(디버그 전용)
-                .doOnNext(json -> {
-                    if (debugJson) log.debug("[Naver RAW] {} chars: {}", json.length(), safeTrunc(json, 4000));
-                })
+                .toEntity(String.class)
+                // 구독 지연(레이트리밋/Retry-After 반영)
+                .delaySubscription(Duration.ofMillis(Math.max(0, ratePolicy.currentDelayMs())))
                 // 일관된 타임아웃
                 .timeout(Duration.ofMillis(apiTimeoutMs));
 
 
         /* 🔵 단일 키 모드 – 실패 시 DuckDuckGo 폴백 */
         return primary
-                .map(json -> parseNaverResponse(query, json))
+                .map(entity -> {
+                    try { ratePolicy.updateFromHeaders(entity.getHeaders()); } catch (Exception ignore) {}
+                    String json = entity.getBody();
+                    if (debugJson && json != null) {
+                        log.debug("[Naver RAW] {} chars: {}", json.length(), safeTrunc(json, 4000));
+                    }
+                    return parseNaverResponse(query, json);
+                })
                 .onErrorResume(WebClientResponseException.class, e -> {
                     int sc = e.getStatusCode().value();
                     log.warn("Naver API {} → fallback DuckDuckGo", sc);
@@ -925,7 +939,7 @@ public class NaverSearchService {
             return Collections.emptyList();
         }
         String qTrim = query.trim();
-        if (qTrim.length() < 3) {
+        if (qTrim.length() < 2) {
             return Collections.emptyList();
         }
         // Append suffix if configured

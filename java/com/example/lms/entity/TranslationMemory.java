@@ -5,6 +5,8 @@ import lombok.*;
 import org.hibernate.annotations.UpdateTimestamp;
 // 🆕 Bandit 보상 계산용
 import java.util.concurrent.atomic.AtomicInteger;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import org.apache.commons.codec.digest.DigestUtils;   // 🔺 해시용
 
 import java.time.LocalDateTime;

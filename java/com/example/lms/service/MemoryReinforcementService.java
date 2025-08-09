@@ -61,6 +61,11 @@ public class MemoryReinforcementService {
     /** 최종점수 가중: final = avgSim * (1 + coverageWeight * coverage) */
     @Value("${memory.reinforce.pruning.coverage-weight:0.1}")
     private double coverageWeight;
+    /** 저장 길이 제약 (가드) */
+    @Value("${memory.reinforce.min-length:32}")
+    private int minContentLength;
+    @Value("${memory.reinforce.max-length:4000}")
+    private int maxContentLength;
 
     /* ─────────────── DI ─────────────── */
     private final TranslationMemoryRepository memoryRepository;
@@ -256,13 +261,21 @@ public class MemoryReinforcementService {
             log.debug("[Memory] coverage<min → skip (cov={} < {})", pruned.coverage(), pruningMinCoverage);
             return;
         }
+        if (pruned.refined() == null
+                || pruned.refined().length() < minContentLength) {
+            log.debug("[Memory] too-short refined snippet → skip (len<{})", minContentLength);
+            return;
+        }
+        String refined = pruned.refined().length() > maxContentLength
+                ? pruned.refined().substring(0, maxContentLength)
+                : pruned.refined();
 
         // 3) 최종 점수: avgSim & coverage 반영
         double finalScore = pruned.avgSimilarity() * (1.0 + coverageWeight * pruned.coverage());
         finalScore = Math.max(0.0001, Math.min(1.0, finalScore));
 
         // 4) dedupe는 '정제된 본문' 기준으로
-        String refined = pruned.refined();
+
         String h = storageHashFromSnippet(refined);
         if (recentSnippetCache.getIfPresent(h) != null) return;
         recentSnippetCache.put(h, Boolean.TRUE);

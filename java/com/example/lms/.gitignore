@@ -1,0 +1,6 @@
+# application.properties 파일 제외
+/src/main/resources/application.properties
+
+# keystore 파일 제외 (나중에 필요할 수 있으니 추가)
+*.p12
+*.jks

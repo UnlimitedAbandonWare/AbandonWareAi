@@ -57,7 +57,8 @@ public class QueryComplexityGate {
         String s = q.strip();
 
         // (A) 매우 짧거나 직접 검색 연산자 포함 → SIMPLE
-        if (s.length() <= 24 || DIRECT_SEARCH.matcher(s).find()) {
+        // 길이 임계치 24 → 16으로 완화: 'AI', 'C#', '최신 스펙?' 등 짧지만 복잡한 질의의 오분류 방지
+        if (s.length() <= 16 || DIRECT_SEARCH.matcher(s).find()) {
             return Level.SIMPLE;
         }
 

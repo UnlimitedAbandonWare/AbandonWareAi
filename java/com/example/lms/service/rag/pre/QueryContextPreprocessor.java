@@ -10,4 +10,5 @@ public interface QueryContextPreprocessor {
      * @return 고유명사 보존·위치 정보가 주입된 쿼리
      */
     String enrich(String original);
+
 }

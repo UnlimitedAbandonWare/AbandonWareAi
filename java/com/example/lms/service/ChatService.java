@@ -6,12 +6,9 @@ import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.service.NaverSearchService;
-// src/main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java
 import java.util.LinkedHashSet;
 import java.util.Collections;
 import java.util.List;
-import com.example.lms.service.rag.CrossEncoderReranker;
-import com.example.lms.prompt.PromptEngine;
 import com.example.lms.service.rag.CrossEncoderReranker;
 import com.example.lms.prompt.PromptEngine;
 
@@ -32,7 +29,7 @@ import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatCompletionResult;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
 import com.theokanning.openai.service.OpenAiService;
-import dev.langchain4j.chain.ConversationalRetrievalChain;
+
 import com.example.lms.service.FactVerifierService;  // 검증 서비스 주입
 // + 신규 공장
 import com.example.lms.llm.DynamicChatModelFactory;
@@ -167,6 +164,9 @@ public class ChatService {
     private int hybridTopK;
     @Value("${rag.rerank.top-n:10}")
     private int rerankTopN;
+    /** 하이브리드 우회(진단용): true면 HybridRetriever를 건너뛰고 단일패스로 처리 */
+    @Value("${debug.hybrid.bypass:false}")
+    private boolean bypassHybrid;
 
     /* ─────────────────────── 설정 (application.yml) ─────────────────────── */
     // 기존 상수 지워도 되고 그대로 둬도 상관없음
@@ -278,13 +278,19 @@ public class ChatService {
         List<String> history = (sessionId != null)
                 ? chatHistoryService.getFormattedRecentHistory(sessionId, 5)
                 : Collections.emptyList();
+        if (log.isDebugEnabled()) {
+            log.debug("[decideFinalQuery] sid={}, histSize={}, q='{}'",
+                    sessionId, (history != null ? history.size() : 0), originalQuery);
+        }
 
         DisambiguationResult r = disambiguationService.clarify(originalQuery, history);
         if (r != null && r.isConfident()
                 && r.getRewrittenQuery() != null
                 && !r.getRewrittenQuery().isBlank()) {
+            log.debug("[decideFinalQuery] rewritten='{}' (confident)", r.getRewrittenQuery());
             return r.getRewrittenQuery();
         }
+        log.debug("[decideFinalQuery] use-original");
         return originalQuery;
     }
 
@@ -303,6 +309,13 @@ public class ChatService {
         if (!originalMsg.equals(correctedMsg)) {
             log.debug("[QC] corrected '{}' -> '{}'", originalMsg, correctedMsg);
         }
+        /* 0-2) 의미 확정(Ser8 ↔ S8 등) 적용 */
+        Long sidNum = Optional.ofNullable(req.getSessionId())
+                .map(Object::toString)
+                .filter(s -> s.matches("\\d"))
+                .map(Long::valueOf)
+                .orElse(null);
+        final String finalQuery = decideFinalQuery(correctedMsg, sidNum);
         /* A. RAG Stand-Alone */
 // A. RAG Stand-Alone
         if (ragStandalone) {
@@ -351,51 +364,61 @@ public class ChatService {
         /* ── 세션별 메모리 / RAG 컨텍스트 로드 ───────────────── */
         String memCtx = memorySvc.loadContext(sessionKey);   // ✅ 세션‑스코프
         String ragCtx = req.isUseRag()
-                ? ragSvc.getAnswer(correctedMsg, sessionKey)
+                ? ragSvc.getAnswer(finalQuery, sessionKey)
                 : null;
+
+        /* ▶ 진단용 우회: HybridRetriever 비활성화 */
+        if (bypassHybrid) {
+            log.warn("[Bypass] debug.hybrid.bypass=true → HybridRetriever 미사용 (sid={})", sessionKey);
+            boolean useLc = Optional.ofNullable(req.getModel())
+                    .map(m -> m.startsWith("lc:"))
+                    .orElse(false);
+            return useLc
+                    ? invokeLangChain(req, buildUnifiedContext(null, ragCtx, memCtx))
+                    : invokeOpenAiJava(req, buildUnifiedContext(null, ragCtx, memCtx));
+        }
+
 
         /* ❶ "정보 없음" 은 의미 없는 컨텍스트 → null 로 치환 */
         if ("정보 없음".equals((ragCtx != null ? ragCtx.trim() : ""))) {
             ragCtx = null;
         }
 
-        // 1차 웹 검색(사용자 질의만, 생 스니펫 보존)
-        java.util.List<String> webSnippets = req.isUseWebSearch()
-                ? externalCtxProvider.apply(correctedMsg)
-                : java.util.List.of();
-
-
-        // ▲ 컨텍스트 저장은 NaverSearchService가 스니펫별 점수로 수행.
-        //    ChatService에서는 별도 강화하지 않음(ASSISTANT/HYBRID 오염 방지).
-        // (MatrixTransformer가 최종 unifiedContext를 생성하므로, 레거시 buildUnifiedContext 호출 제거)
-
-        /* 🔴 Retriever Failure Guardrail
-         *    webCtx와 ragCtx가 모두 비면 LLM 호출 자체를 중단하고 즉시 "정보 없음" 반환
-         *    (메모리만으로 답변하도록 두지 않음: 통제 불가 외부 검색/환각 방지) */
-        if (webSnippets.isEmpty()
-                && !org.springframework.util.StringUtils.hasText(ragCtx)) {
-            log.warn("[Guard] webCtx & ragCtx empty → block LLM call (sid={}, q='{}')",
-                    sessionKey, req.getMessage());
-            return ChatResult.of("정보 없음",
-                    "lc:" + chatModel.getClass().getSimpleName(),
-                    /*ragUsed*/ true);
-        }
+        // 🔸 프리플라이트 웹검색 제거 → 이중 호출 방지(하이브리드 단일 패스)
 
 // ❷ 체인 캐싱 역시 동일 키 사용
         // 🔸 1) 적응형 다중 쿼리 생성(사용자 질의 기반, 초안 미사용 단일 패스)
-        List<String> expanded = queryTransformer.transformEnhanced(correctedMsg, null);
+        List<String> expanded = queryTransformer.transformEnhanced(finalQuery, null);
         if (expanded == null || expanded.isEmpty()) {
-            expanded = List.of(correctedMsg);
+            expanded = List.of(finalQuery);
         }
+        // 과도·중복 확장 방지: 정규화·중복 제거 후 상위 3개만
+        expanded = expanded.stream()
+                .map(String::trim)
+                .filter(org.springframework.util.StringUtils::hasText)
+                .distinct()
+                .limit(3)
+                .toList();
 
         // 🔸 2) 하이브리드 병렬 검색  RRF 융합 (topK)
         List<Content> fused = hybridRetriever.retrieveAll(expanded, hybridTopK);
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
-        List<Content> topDocs = reranker.rerank(correctedMsg, fused, rerankTopN);
+        List<Content> topDocs = reranker.rerank(finalQuery, fused, rerankTopN);
+        if (log.isDebugEnabled()) {
+            log.debug("[Hybrid] fused={}, topN={} (sid={})",
+                    (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
+        }
+        /* 🔴 컨텍스트 부족 가드레일(하이브리드 이후로 이동)
+         *   웹/벡터 문서(topDocs)와 RAG가 모두 비면 즉시 종료 */
+        if ((topDocs == null || topDocs.isEmpty()) && !org.springframework.util.StringUtils.hasText(ragCtx)) {
+            log.warn("[Guard] no web/vector docs & no ragCtx → stop LLM (sid={}, q='{}')", sessionKey, finalQuery);
+            return ChatResult.of("정보 없음",
+                    "lc:"+  chatModel.getClass().getSimpleName(), true);
+        }
 
         // 🔸 4) 최종 프롬프트/컨텍스트 구성(메모리 포함)
-        String ctx = promptEngine.createPrompt(correctedMsg, topDocs);
+        String ctx = promptEngine.createPrompt(finalQuery, topDocs);
         String unifiedCtx = buildUnifiedContext(null, ctx, memCtx); // 웹은 promptEngine 포함하므로 webCtx=null
 
         // 🔸 5) 단일 LLM 호출로 답변 생성

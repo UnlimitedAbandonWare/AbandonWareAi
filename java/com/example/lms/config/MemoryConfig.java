@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Primary;
 @Configuration
 public class MemoryConfig {
 
-    @Bean("persistentChatMemoryProvider")  // ★ 이름 변경
+    //@Bean("persistentChatMemoryProvider")  // ★ 이름 변경
     @Primary                               // 우선 선택
     public ChatMemoryProvider persistentChatMemoryProvider(
             @Value("${openai.api.history.max-messages:20}") int maxMsgs) {

@@ -1,4 +1,6 @@
 package com.example.lms.service.rag;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
 
 import java.lang.reflect.Method;
 import com.example.lms.service.MemoryReinforcementService;
@@ -121,8 +123,10 @@ public class LangChainRAGService {
 
     /** helper: session‑filtered matches to String with fallback */
     private List<String> filterMatchesToString(EmbeddingSearchResult<TextSegment> res, String sessionId) {
-        int total = res.matches() != null ? res.matches().size() : 0;
-        List<String> matches = res.matches().stream()
+        var safeMatches = java.util.Optional.ofNullable(res.matches())
+                .orElse(java.util.Collections.emptyList());
+        int total = safeMatches.size();
+        List<String> matches = safeMatches.stream()
                 .filter(m -> passesSid(toMap(m.embedded().metadata()), sessionId))
                 .map(match -> match.embedded().text())
                 .collect(Collectors.toList());
@@ -175,7 +179,12 @@ public class LangChainRAGService {
         );
 
         ChatModel use = (override != null ? override : this.chatModel);   // ★ 핵심
-        String answer = use.chat(prompt);
+
+        // LangChain4j 1.0.1: chat(List<ChatMessage>) → AiMessage.text()
+        String answer = use.chat(java.util.List.of(
+                SystemMessage.from("Use the following sections to answer the question."),
+                UserMessage.from(prompt)
+        )).aiMessage().text();
 
         java.util.concurrent.atomic.AtomicInteger rank = new java.util.concurrent.atomic.AtomicInteger(1);
         for (String snippet : ragSnippets) {
@@ -193,8 +202,10 @@ public class LangChainRAGService {
     }
 
     private List<Content> filterMatchesToContent(EmbeddingSearchResult<TextSegment> res, String sessionId) {
-        int total = res.matches() != null ? res.matches().size() : 0;
-        List<Content> list = res.matches().stream()
+        var safeMatches = java.util.Optional.ofNullable(res.matches())
+                .orElse(java.util.Collections.emptyList());
+        int total = safeMatches.size();
+        List<Content> list = safeMatches.stream()
                 .filter(m -> passesSid(toMap(m.embedded().metadata()), sessionId))
                 .map(m -> Content.from(m.embedded().text()))
                 .collect(Collectors.toList());
