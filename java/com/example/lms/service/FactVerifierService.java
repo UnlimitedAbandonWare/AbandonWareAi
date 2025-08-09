@@ -127,9 +127,13 @@ public class FactVerifierService {
                     return draft;
                 }
             }
+            // ✅ 이 부분이 추가되어야 합니다.
+            default -> {
+                // 안전망: PASS, INSUFFICIENT, CORRECTED 외의 다른 enum 값이 생길 경우 대비
+                return draft;
+            }
         }
     }
-
 
     /**
      * 간단 개체 추출: 모델/제품/버전 등 (KO/EN 혼용)

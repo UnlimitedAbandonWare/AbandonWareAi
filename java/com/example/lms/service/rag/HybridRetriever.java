@@ -170,12 +170,12 @@ public class HybridRetriever implements ContentRetriever {
                 }
                 buckets.add(acc);
             }
-
+            // 융합 및 최종 정제 후 상위 top 반환
             List<Content> fused = fuser.fuse(buckets, top);
-            List<Content> combined = new ArrayList<>(local);
+            List<Content> combined = new ArrayList<>(local); // 'local'은 이 메소드 상단에서 이미 정의되어 있어야 합니다.
             combined.addAll(fused);
+
             List<Content> out = finalizeResults(combined, "text", java.util.Collections.emptyList(), question);
-            List<Content> out = finalizeResults(new ArrayList<>(local), "text", java.util.Collections.emptyList(), question);
             return out.size() > top ? out.subList(0, top) : out;
 
         } catch (Exception e) {
@@ -356,9 +356,11 @@ public class HybridRetriever implements ContentRetriever {
         }
 
         int rank = 0;
+        // ✅ 'scored' 리스트를 여기서 선언하고 초기화합니다.
+        List<Scored> scored = new ArrayList<>();
         for (Content c : uniq.values()) {
-            rank++;                     // 낮을수록 우선
-            double base = 1.0 / rank;   // 기본 점수
+            rank++;
+            double base = 1.0 / rank;
 
             String text = Optional.ofNullable(c.textSegment())
                     .map(TextSegment::text)
@@ -372,8 +374,10 @@ public class HybridRetriever implements ContentRetriever {
                 rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
             } catch (Exception ignore) { /* 0.0 유지 */ }
             double finalScore = (0.6 * rel) + (0.4 * base);
-            scored.add(new Scored(c, finalScore));
-        }
+            scored.add(new Scored(c, finalScore)); // 이제 정상적으로 사용 가능
+        
+
+    }
         // 점수 내림차순 정렬 후 상위 topK 반환
         scored.sort((a, b) -> Double.compare(b.score, a.score));
         return scored.stream()
@@ -381,5 +385,5 @@ public class HybridRetriever implements ContentRetriever {
                 .map(s -> s.content)
                 .collect(Collectors.toList());
     }
-// ... (isOfficial, extractUrl 등 다른 헬퍼 메서드)
+
 }
