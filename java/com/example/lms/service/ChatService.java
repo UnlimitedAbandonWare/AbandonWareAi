@@ -9,7 +9,7 @@ import com.example.lms.service.NaverSearchService;
 import java.util.LinkedHashSet;
 import java.util.Collections;
 import java.util.List;
-import com.example.lms.service.rag.CrossEncoderReranker;
+import com.example.lms.service.QueryAugmentationService;
 import com.example.lms.prompt.PromptEngine;
 
  import com.example.lms.service.disambiguation.QueryDisambiguationService;
@@ -150,7 +150,7 @@ public class ChatService {
     private final ChatMemoryProvider chatMemoryProvider; // 세션 메모리 Bean
     private final QueryTransformer queryTransformer;     // ⬅️ 힌트 기반 2차 검색
 
-    private final HybridRetriever hybridRetriever;
+    private final QueryAugmentationService augmentationSvc; // ★ 질의 향상 서비스
     private final QueryCorrectionService correctionSvc;             // ★ 추가
     // 🔹 NEW: 다차원 누적·보강·합성기
     // 🔹 단일 패스 오케스트레이션을 위해 체인 캐시는 제거
@@ -388,7 +388,11 @@ public class ChatService {
 
 // ❷ 체인 캐싱 역시 동일 키 사용
         // 🔸 Progressive Retrieval (로컬 RAG → 필요 시 Self‑Ask → 웹) 으로 검색 로직 일원화
-        List<Content> fused = hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
+        List<String> augmented = augmentationSvc.augment(finalQuery);
+        List<String> queries = QueryHygieneFilter.sanitize(augmented, 4, 0.80);
+        List<Content> fused = (queries != null && queries.size() > 1)
+                ? hybridRetriever.retrieveAll(queries, hybridTopK)
+                : hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
 
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서

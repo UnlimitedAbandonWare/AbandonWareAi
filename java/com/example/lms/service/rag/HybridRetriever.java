@@ -40,6 +40,7 @@ public class HybridRetriever implements ContentRetriever {
     private final ReciprocalRankFuser   fuser;
     private final AnswerQualityEvaluator qualityEvaluator;
     private final SelfAskPlanner         selfAskPlanner;
+    private final RelevanceScoringService relevanceScoringService;
     // 리트리버들
     private final SelfAskWebSearchRetriever  selfAskRetriever;
     private final AnalyzeWebSearchRetriever  analyzeRetriever;
@@ -62,6 +63,8 @@ public class HybridRetriever implements ContentRetriever {
     private double qualityMinScore;
     @Value("${hybrid.max-parallel:3}")
     private int maxParallel;
+    @Value("${hybrid.min-relatedness:0.4}")
+    private double minRelatedness;
     @Override
     public List<Content> retrieve(Query query) {
 
@@ -123,7 +126,7 @@ public class HybridRetriever implements ContentRetriever {
             }
         }
 
-        return finalizeResults(new ArrayList<>(mergedContents), dedupeKey, officialDomains);
+        // -> finalizeResults 호출 시 'question' 텍스트를 추가로 전달하도록 변경
     }
     /**
      * Progressive retrieval:
@@ -307,7 +310,8 @@ public class HybridRetriever implements ContentRetriever {
      */
     private List<Content> finalizeResults(List<Content> raw,
                                           String dedupeKey,
-                                          List<String> officialDomains) {
+                                          List<String> officialDomains,
+                                          String queryText) {
 
         // 1) 중복 제거
         Map<String, Content> uniq = new LinkedHashMap<>();
@@ -316,6 +320,12 @@ public class HybridRetriever implements ContentRetriever {
             String text = Optional.ofNullable(c.textSegment())
                     .map(TextSegment::text)
                     .orElse(c.toString());
+            // 관련도 필터 (임베딩 기반)
+            double rel = 0.0;
+            try {
+                rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
+            } catch (Exception ignore) { }
+            if (rel < minRelatedness) continue; // 저관련 스니펫 제거
 
             String key;
             switch (dedupeKey) {
@@ -349,6 +359,8 @@ public class HybridRetriever implements ContentRetriever {
                 base += 0.20;           // 공식 도메인 보너스
             }
             scored.add(new Scored(c, base));
+                       // 최종 점수: 관련도 0.6 + 순위기반 0.4
+                               scored.add(new Scored(c, (0.6 * rel) + (0.4 * base)));
         }
 
         // 3) 정렬 및 topK 컷

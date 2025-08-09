@@ -83,7 +83,8 @@ public class LangChainConfig {
     }
 
     @Bean
-    public QueryTransformer queryTransformer(OpenAiChatModel llm) {
+    public QueryTransformer queryTransformer(ChatModel llm) {
+        // ChatModel 타입으로 완화하여 OpenAiChatModel/프록시 모두 수용
         return new QueryTransformer(llm);
     }
 
