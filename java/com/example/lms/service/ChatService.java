@@ -149,8 +149,8 @@ public class ChatService {
     // 이미 있는 DI 필드 아래쪽에 추가
     private final NaverSearchService searchService;
     private final ChatMemoryProvider chatMemoryProvider; // 세션 메모리 Bean
-    private final QueryTransformer queryTransformer;     // ⬅️ 힌트 기반 2차 검색
-
+    private final QueryTransformer queryTransformer;
+    private final HybridRetriever hybridRetriever; // ★ 하이브리드 리트리버 DI 복구
     private final QueryAugmentationService augmentationSvc; // ★ 질의 향상 서비스
     private final QueryCorrectionService correctionSvc;             // ★ 추가
     // 🔹 NEW: 다차원 누적·보강·합성기
@@ -391,9 +391,9 @@ public class ChatService {
         // 🔸 Progressive Retrieval (로컬 RAG → 필요 시 Self‑Ask → 웹) 으로 검색 로직 일원화
         List<String> augmented = augmentationSvc.augment(finalQuery);
         List<String> queries = QueryHygieneFilter.sanitize(augmented, 4, 0.80);
-        List<Content> fused = (queries != null && queries.size() > 1)
-                ? hybridRetriever.retrieveAll(queries, hybridTopK)
-                : hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
+        List<Content> fused = (queries != null && queries.size() > 1) ?
+                hybridRetriever.retrieveAll(queries, hybridTopK) :
+                hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
 
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서

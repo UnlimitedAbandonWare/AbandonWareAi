@@ -11,7 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;  // ★ 누락된 유틸
 import java.util.ArrayList;
-import java.util.regex.Pattern;
+
 import java.util.List;                     // ★ 누락된 List
 import java.util.regex.Pattern;
 import com.example.lms.service.verification.FactVerificationStatus;
@@ -119,7 +119,7 @@ public class FactVerifierService {
                             .getChoices().get(0).getMessage().getContent();
                     int split = raw.indexOf("CONTENT:");
                     if (split > -1) {
-                        return raw.substring(split 8).trim();
+                        return raw.substring(split + 8).trim();
                     }
                     return raw.trim();
                 } catch (Exception e) {

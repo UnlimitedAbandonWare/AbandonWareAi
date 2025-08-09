@@ -1,9 +1,3 @@
-Of course. Here are the two Java files combined into a single, more robust implementation.
-
-        I've designated the more advanced, batch-processing version as the primary implementation (@Primary) because it is more efficient and includes better error handling.
-
-        EmbeddingModelCrossEncoderReranker.java
-        Java
 
         package com.example.lms.service.rag;
 

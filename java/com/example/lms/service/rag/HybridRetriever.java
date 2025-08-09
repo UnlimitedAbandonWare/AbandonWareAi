@@ -146,7 +146,7 @@ public class HybridRetriever implements ContentRetriever {
 
             if (qualityEvaluator != null && qualityEvaluator.isSufficient(question, local, qualityMinDocs, qualityMinScore)) {
                 log.info("[Hybrid] Local RAG sufficient → skip web (sid={}, q='{}')", sessionKey, question);
-                List<Content> out = finalizeResults(new ArrayList<>(local), "text", List.of());
+                List<Content> out = finalizeResults(new ArrayList<>(local), "text", java.util.Collections.emptyList(), question);
                 return out.size() > top ? out.subList(0, top) : out;
             }
 
@@ -169,7 +169,7 @@ public class HybridRetriever implements ContentRetriever {
             }
 
             List<Content> fused = fuser.fuse(buckets, top);
-            List<Content> out = finalizeResults(new ArrayList<>(fused), "text", List.of());
+            List<Content> out = finalizeResults(new ArrayList<>(local), "text", java.util.Collections.emptyList(), question);
             return out.size() > top ? out.subList(0, top) : out;
 
         } catch (Exception e) {
@@ -356,15 +356,14 @@ public class HybridRetriever implements ContentRetriever {
                     .orElse(c.toString());
             String url = extractUrl(text);
             if (isOfficial(url, officialDomains)) {
-                base += 0.20;           // 공식 도메인 보너스
-            }
-            scored.add(new Scored(c, base));
-                       // 최종 점수: 관련도 0.6 + 순위기반 0.4
-                               scored.add(new Scored(c, (0.6 * rel) + (0.4 * base)));
-        }
-
-        // 3) 정렬 및 topK 컷
-        scored.sort((a, b) -> Double.compare(b.score, a.score));
+                                base += 0.20;
+                           }
+                             double rel = 0.0;
+                        try {
+                              rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
+                          } catch (Exception ignore) { /* 0.0 유지 */ }
+                              double finalScore = (0.6 * rel) + (0.4 * base);
+                       scored.add(new Scored(c, finalScore));
         return scored.stream()
                 .limit(topK)
                 .map(s -> s.content)
