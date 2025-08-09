@@ -1,5 +1,7 @@
 package com.example.lms.config;
 
+import com.example.lms.service.rag.HybridRetriever;
+import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.chat.ChatModel;           // 🔹 인터페이스
@@ -18,11 +20,10 @@ import dev.langchain4j.model.chat.ChatModel;
 
 import com.example.lms.service.rag.AnalyzeWebSearchRetriever;
 import com.example.lms.service.rag.HybridRetriever;
-import com.example.lms.service.rag.QueryComplexityGate;   // ✅ 추가
 import com.example.lms.service.rag.LangChainRAGService;
 
 import com.example.lms.service.rag.WebSearchRetriever;
-import com.example.lms.service.rag.handler.RetrievalHandler;   // ★ 추가
+import com.example.lms.service.rag.QueryComplexityGate;   // ✅ 추가
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.ko.KoreanAnalyzer;
 import org.springframework.context.annotation.Primary;
@@ -127,6 +128,63 @@ public class LangChainConfig {
             @Value("${search.web.top-k:3}") int topK) {
         return new WebSearchRetriever(svc, topK);
     }
+// - @Bean public ChatModel chatModel(...) { ... }
+
+    // + 이름 변경 & Primary 지정
+    @Bean("utilityChatModel")
+    @Primary
+    public ChatModel utilityChatModel(
+            @Value("${lms.use-rag:true}") boolean useRagDefault) {
+        return OpenAiChatModel.builder()
+                .apiKey(openAiKey)
+                .modelName(chatModelName)
+                .temperature(useRagDefault ? chatTemperature : 0.0)
+                .timeout(Duration.ofSeconds(openAiTimeoutSec))
+                .build();
+    }
+
+
+    // LangChainConfig.java
+    @Bean
+    public ReciprocalRankFuser reciprocalRankFuser() {
+        return new ReciprocalRankFuser();
+    }
+
+    @Bean
+    public HybridRetriever.RetrievalHandler retrievalHandler(
+            SelfAskWebSearchRetriever selfAsk,
+            AnalyzeWebSearchRetriever analyze,
+            WebSearchRetriever web,
+            LangChainRAGService rag,
+            @Value("${pinecone.index.name}") String indexName) {
+
+        return (query, out) -> {
+            out.addAll(selfAsk.retrieve(query));
+            if (out.size() < 5) out.addAll(analyze.retrieve(query));
+            if (out.size() < 5) out.addAll(web.retrieve(query));
+            out.addAll(rag.asContentRetriever(indexName).retrieve(query));
+        };
+    }
+
+    @Bean
+    public HybridRetriever hybridRetriever(
+            HybridRetriever.RetrievalHandler handler,
+            ReciprocalRankFuser fuser,
+            SelfAskWebSearchRetriever selfAsk,
+            AnalyzeWebSearchRetriever analyze,
+            WebSearchRetriever web,
+            QueryComplexityGate gate,
+            LangChainRAGService rag,
+            EmbeddingModel embeddingModel,
+            EmbeddingStore<TextSegment> embeddingStore) {
+
+        return new HybridRetriever(
+                handler, fuser, selfAsk, analyze, web, gate, rag, embeddingModel, embeddingStore
+        );
+    }
+
+
+
 
     @Bean
     public AnalyzeWebSearchRetriever analyzeWebSearchRetriever(
@@ -135,31 +193,17 @@ public class LangChainConfig {
             @Value("${search.morph.max-tokens:5}") int maxTokens) {
         return new AnalyzeWebSearchRetriever(koreanAnalyzer, svc, maxTokens);
     }
-
     /* ═════════ 4. 벡터-RAG 서비스 ═════════ */
     @Bean
     public LangChainRAGService langChainRAGService(
             ChatModel chatModel,
             EmbeddingModel embeddingModel,
             EmbeddingStore<TextSegment> store,
-            MemoryReinforcementService memorySvc) {
+            MemoryReinforcementService memorySvc
+    ) {
         return new LangChainRAGService(chatModel, embeddingModel, store, memorySvc);
     }
 
-    /* ═════════ 5. HybridRetriever ═════════ */
-    @Bean
-    public HybridRetriever hybridRetriever(
-            RetrievalHandler            handlerChain,          // ★ 체인 주입
-            WebSearchRetriever            web,
-            AnalyzeWebSearchRetriever     analyze,
-            SelfAskWebSearchRetriever     selfAsk,
-            LangChainRAGService           rag,
-            QueryComplexityGate           gate,
-            EmbeddingModel                embeddingModel,
-            EmbeddingStore<TextSegment>   embeddingStore) {
 
 
-        /* HybridRetriever 시그니처  ➜ (handlerChain, embeddingModel, embeddingStore) */
-        return new HybridRetriever(handlerChain, embeddingModel, embeddingStore);
-    }
 }

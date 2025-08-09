@@ -2,7 +2,6 @@ package com.example.lms.service;
 
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.repository.TranslationMemoryRepository;
-import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -13,19 +12,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Map;
-
-import static com.example.lms.service.rag.LangChainRAGService.META_SID;
 
 /**
- * Loads translation-memory rows into the in-memory embedding store at startup.
+ * Loads translation memory rows into the in‑memory embedding store at startup.
  *
- * <p><b>Null/blank strings are filtered out first</b> so that
+ * <p>💡 <strong>Null/blank strings are filtered out first</strong> so that
  * {@code TextSegment.from()} never receives an empty value – this is what caused the
  * {@code IllegalArgumentException: text cannot be null or blank} you saw.</p>
- *
- * <p>💡 All segments are marked with {@code sid="*"} so that they can be reused
- * across sessions.</p>
  */
 @Service
 @Slf4j
@@ -45,11 +38,7 @@ public class EmbeddingStoreManager {
         List<TextSegment> segments = memoryRepo.findAll().stream()
                 .map(TranslationMemory::getCorrected)          // 필요에 따라 getSourceHash 로 교체
                 .filter(s -> s != null && !s.isBlank())        // ⚠️  방어 로직 (핵심!)
-                .map(s -> TextSegment.from(
-                        s,
-                        // 공용 세그먼트(sid="*")로 지정해 재사용성 확보
-                        Metadata.from(Map.of(META_SID, "*"))
-                ))
+                .map(TextSegment::from)
                 .toList();
 
         if (segments.isEmpty()) {

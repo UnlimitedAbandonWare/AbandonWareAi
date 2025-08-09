@@ -95,10 +95,10 @@ public class AppSecurityConfig {
                 .ifPresentOrElse(
                         admin -> log.info("✅ 'admin' 계정이 이미 존재합니다."),
                         () -> {
-                            log.warn("⚠️ 'admin' 계정이 없어 새로 생성합니다. (기본 비밀번호: )");
+                            log.warn("⚠️ 'admin' 계정이 없어 새로 생성합니다. (기본 비밀번호: aa0526)");
                             Administrator administrator = new Administrator(
                                     "admin",
-                                    passwordEncoder.encode(""),
+                                    passwordEncoder.encode("aa0526"),
                                     "ROLE_ADMIN"
                             );
                             adminRepo.save(administrator);

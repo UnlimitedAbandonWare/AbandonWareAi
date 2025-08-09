@@ -8,6 +8,7 @@ import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.ChatSessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,8 +16,10 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
+@Primary
 @RequiredArgsConstructor
 @Slf4j
 public class ChatHistoryServiceImpl implements ChatHistoryService {
@@ -32,7 +35,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
 
     /* =======================================================
      * HTML 차단 정책
-     *  - TRACE 메타(위 3종)는 무조건 저장 (A안)
+     *  - TRACE 메타(위 3종)는 무조건 저장
      *  - 그 외 system 메시지의 '의도치 않은 생 HTML'만 차단
      * ======================================================= */
     private static boolean isTraceMeta(String content) {
@@ -45,7 +48,6 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     /** 아주 느슨한 생 HTML 감지 (TRACE 메타는 선별에서 이미 제외) */
     private static boolean looksLikeRawHtml(String content) {
         if (content == null || content.isBlank()) return false;
-        // 빠른 휴리스틱: HTML 태그의 시그니처
         String c = content;
         return c.contains("<div") || c.contains("<span")
                 || c.contains("<table") || c.contains("<a ")
@@ -102,14 +104,14 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         String r = Objects.toString(role, "");
         String c = Objects.toString(content, "");
 
-        // 1) TRACE 메타(system)면 예외적으로 무조건 저장 (A안)
+        // 1) TRACE 메타(system)면 예외적으로 무조건 저장
         if ("system".equals(r) && isTraceMeta(c)) {
             save(sessionId, r, c);
             log.debug("세션 {}: system TRACE 메타 저장 ({} bytes)", sessionId, c.length());
             return;
         }
 
-        // 2) TRACE가 아닌데 system에 생 HTML로 보이면 차단 (DB 오염 방지)
+        // 2) TRACE가 아닌데 system에 생 HTML로 보이면 차단
         if ("system".equals(r) && looksLikeRawHtml(c)) {
             log.debug("raw HTML detected → skip persist (non-trace, session {})", sessionId);
             return;
@@ -140,8 +142,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         ChatSession session = sessionRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("세션을 찾을 수 없습니다: " + id));
 
-        // 메시지 강제 로드 + 정렬 보장(시간 ASC, 동률 시 ID ASC)
-        List<ChatMessage> list = messageRepository.findBySessionId(id);
+        // createdAt ASC 보장 (동률 시 id ASC)
+        List<ChatMessage> list = messageRepository.findBySessionIdOrderByCreatedAtAsc(id);
         list.sort(Comparator
                 .comparing(ChatMessage::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(ChatMessage::getId, Comparator.nullsLast(Comparator.naturalOrder())));
@@ -154,5 +156,24 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     public void deleteSession(Long id) {
         sessionRepository.deleteById(id);
         log.info("세션 {} 삭제 완료", id);
+    }
+
+    /* -------------------- Formatting -------------------- */
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> getFormattedRecentHistory(Long sessionId, int limit) {
+
+        if (sessionId == null) return List.of();
+        List<ChatMessage> all =
+                messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        int from = Math.max(0, all.size() - Math.max(1, limit));
+        return all.subList(from, all.size()).stream()
+                .map(m -> {
+                    String role = (m.getRole() == null ? "user" : m.getRole().toLowerCase());
+                    String content = (m.getContent() == null ? "" : m.getContent());
+                    return role + ": " + content;
+                })
+                .collect(Collectors.toList());
     }
 }

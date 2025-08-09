@@ -2,6 +2,9 @@
 package com.example.lms.service.rag;
 
 import com.example.lms.service.NaverSearchService;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
+import java.time.Duration;
 
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -299,13 +302,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     /**
      * 로컬 휴리스틱: 실시간 패치/공지 질의 여부
      */
-    private static boolean isLivePatchNewsQuery(String text) {
-        if (text == null) return false;
-        String t = text.toLowerCase(Locale.ROOT);
-        boolean isGame = t.matches(".*(원신|genshin|호요버스|hoyoverse).*");
-        boolean isNews = t.matches(".*(패치|업데이트|공지|배너|이벤트|점검|ver\\.?\\s*\\d\\.\\d|v\\d\\.\\d|patch|update).*");
-        return isGame && isNews;
-    }
+
 
     private static List<String> splitLines(String raw) {
         if (!StringUtils.hasText(raw)) return List.of();
@@ -316,6 +313,11 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 .toList();
     }
 
+    private List<String> rephrase(String q) {
+        if (q == null || q.isBlank()) return List.of();
+        // 필요하면 더 똑똑하게 확장
+        return List.of(q, q + " 후기", q + " 정리", q + " 요약");
+    }
 
 
 

@@ -1,10 +1,13 @@
-
 package com.example.lms.service;
 import org.springframework.lang.Nullable;
+
+import com.example.lms.service.search.SearchDisambiguation; //  중의성(자동차 등) 필터
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.Semaphore;   // 세마포어 클래스 :contentReference[oaicite:0]{index=0}
 import reactor.core.publisher.Flux;
 import java.util.Locale;                        // ★ Locale 누락
+
+import com.fasterxml.jackson.databind.JsonNode;
 import reactor.core.publisher.Mono;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.http.HttpHeaders;
@@ -16,7 +19,6 @@ import java.time.Duration;                       // ▲ Sync Facade에서 block 
 import java.util.stream.Collectors;
 import java.util.Objects;                        // NEW – distinct/limit 필터
 import org.springframework.beans.factory.annotation.Qualifier;
-
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.dao.DataIntegrityViolationException;
 import com.example.lms.transform.QueryTransformer;
@@ -48,7 +50,6 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -69,6 +70,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.util.StringUtils;
 import reactor.util.retry.Retry;
 
 /**
@@ -81,14 +83,13 @@ import reactor.util.retry.Retry;
 @Service
 @Primary
 @Slf4j
-
 public class NaverSearchService {
+
     /**
      * LLM 답변을 활용한 검색 (딥 리서치 모드)
      */
 
-
-// 🔑 Naver API 키 CSV(생성자에서 주입) & 키 회전용 변수들
+    // 🔑 Naver API 키 CSV(생성자에서 주입) & 키 회전용 변수들
     private final String naverKeysCsv;          // keys 1:a1b2c3,2:d4e5f6 …
     private List<ApiKey> naverKeys = List.of(); // 초기값은 빈 리스트
     private final AtomicLong keyCursor = new AtomicLong(); // 라운드-로빈 인덱스
@@ -124,8 +125,7 @@ public class NaverSearchService {
     /**
      * 스니펫 + 추적 묶음
      */
-    public record SearchResult(List<String> snippets, SearchTrace trace) {
-    }
+    public record SearchResult(List<String> snippets, SearchTrace trace) { }
 
     public static final class MetadataKeys {
         /**
@@ -138,9 +138,7 @@ public class NaverSearchService {
          * cross‑session bleed.
          */
         public static final String SESSION_ID = LangChainRAGService.META_SID;
-
-        private MetadataKeys() {
-        }
+        private MetadataKeys() {}
     }
 
     /* === Dependencies === */
@@ -154,44 +152,29 @@ public class NaverSearchService {
     private final WebClient duck;     // + DuckDuckGo HTML용
     private final ObjectMapper om;
     /** Cache for normalized queries to web snippet lists. */
-    /**
-     * 비동기 캐시 (block 금지)
-     */
+    /** 비동기 캐시 (block 금지) */
     private final AsyncLoadingCache<String, List<String>> cache;
-    /**
-     * Cache to prevent reinforcing duplicate snippets.
-     */
+    /** Cache to prevent reinforcing duplicate snippets. */
     private final LoadingCache<String, Boolean> recentSnippetCache;
     /** Cache for location token embeddings (memoization) */
     private final LoadingCache<String, float[]> locationEmbedCache;
-    /**
-     * Scorer for cosine similarity.
-     */
+    /** Scorer for cosine similarity. */
     private final RelevanceScorer relevanceScorer;
-    /**
-     * NEW – 별도 트랜잭션 컨텍스트용
-     */
+    /** NEW – 별도 트랜잭션 컨텍스트용 */
     private final TransactionTemplate txTemplate;
-    /**
-     * Supplier of the current session id.
-     */
+    /** Supplier of the current session id. */
     private final Supplier<Long> sessionIdProvider;
 
     /* === Configuration properties === */
     // (client-id / client-secret 개별 프로퍼티는 더 이상 사용하지 않는다)
-    /**
-     * 단순화된 호출 타임아웃(ms)
-     */
+    /** 단순화된 호출 타임아웃(ms) */
     private static final long API_TIMEOUT_MS = 3000;
     @Value("${naver.search.web-top-k:5}")
     private int webTopK;   // LLM에 넘길 개수
     @Value("${naver.search.rag-top-k:5}")
     private int ragTopK;   // 벡터 RAG top‑k
-    /**
-     * (NEW) 네이버 API에서 한 번에 받아올 검색 결과 수(1‑100)
-     */
+    /** (NEW) 네이버 API에서 한 번에 받아올 검색 결과 수(1‑100) */
     @Value("${naver.search.display:5}")
-
     private int display;
     @Value("${naver.search.query-suffix:}")
     private String querySuffix;
@@ -201,8 +184,7 @@ public class NaverSearchService {
     private volatile boolean enableDomainFilter;
 
     /* ---------- 2. ApiKey 헬퍼 타입 ---------- */
-    private record ApiKey(String id, String secret) {
-    }
+    private record ApiKey(String id, String secret) { }
 
     // 기본 허용 목록에 서브도메인 포함 도메인 추가(부재 시 0개 스니펫 방지)
     @Value("${naver.filters.domain-allowlist:eulji.ac.kr,eulji.or.kr}")
@@ -216,16 +198,12 @@ public class NaverSearchService {
     @Value("${naver.search.debug:false}")          // ⬅ 추가
     private boolean debugSearchApi;                // ⬅ 추가
 
-    /**
-     * Comma-separated blacklist of domains to exclude entirely.
-     */
+    /** Comma-separated blacklist of domains to exclude entirely. */
     @Value("${naver.search.blocked-domains:}")
     private String blockedDomainsCsv;
 
     /** (선택) 대화 문맥에 따라 쿼리를 재작성하는 Transformer – 존재하지 않으면 주입 안 됨 */
-    /**
-     * 오타·맞춤법 교정을 담당하는 Transformer
-     */
+    /** 오타·맞춤법 교정을 담당하는 Transformer */
     private final QueryTransformer queryTransformer;
 
     /* 최대 동시 네이버 API 호출량 (429 방지) */
@@ -238,7 +216,6 @@ public class NaverSearchService {
        변형 쿼리 폭주를 안전하게 제한한다. */
     private static final int MAX_QUERIES_PER_SEARCH = 9;
 
-
     /* ────────────────────────────────────────────────
      * “site eulji ac kr …” 류 도메인-스코프 변형 차단용 패턴
      *  - ‘site ’ 로 시작하거나
@@ -247,12 +224,20 @@ public class NaverSearchService {
     private static final Pattern DOMAIN_SCOPE_PREFIX =
             Pattern.compile("(?i)^\\s*(site\\s+)?\\S+\\s+ac\\s+kr\\b");
 
-
     /* ── 헤징(동시 이중 발사) 관련: 기본 OFF, 필요 시 지연 헤징만 허용 ── */
     /* 🔵 다중-키 헤징 전략 제거: 항상 첫 번째 네이버 키만 사용 */
     private final boolean hedgeEnabled = false;
     @Value("${naver.hedge.timeout-ms:3000}")
     private long hedgeTimeoutMs;   // primary 타임아웃 계산엔 그대로 사용
+    @Value("${naver.search.timeout-ms:5000}")
+    private long apiTimeoutMs;
+
+    @Value("${naver.search.debug-json:false}")
+    private boolean debugJson;
+    @Value("${naver.search.expansion-policy:conservative}")
+    private String expansionPolicy;  //  동의어 확장 정책 (conservative|none)
+
+
 
     @Value("${naver.search.product-keywords:k8plus,k8 plus,k8+,케이8 플러스,케이8플러스}")
     private String productKeywordsCsv;
@@ -264,50 +249,21 @@ public class NaverSearchService {
     private String flipKeywordsCsv;
 
     /* ───── {스터프2} 에서 가져온 ‘메모리 오염 방지’ 옵션 ───── */
-    /**
-     * assistant 답변을 장기 메모리에 reinforcement 할지 여부 (기본 OFF)
-     */
+    /** assistant 답변을 장기 메모리에 reinforcement 할지 여부 (기본 OFF) */
     @Value("${naver.reinforce-assistant:false}")
     private boolean enableAssistantReinforcement;
 
-    /**
-     * reinforcement 시 적용할 감쇠 가중치 (0.0 ~ 1.0) – 높을수록 더 많이 반영
-     */
+    /** reinforcement 시 적용할 감쇠 가중치 (0.0 ~ 1.0) – 높을수록 더 많이 반영 */
     @Value("${naver.reinforce-assistant.weight:0.4}")
     private double assistantReinforceWeight;
 
     private Set<String> productKeywords;
     private Set<String> foldKeywords;
     private Set<String> flipKeywords;
-    /* === Query alias map used to normalize user input. */
-    private static final Map<String, String> QUERY_ALIAS = Map.ofEntries(
-            Map.entry("폴드7", "갤럭시 Z 폴드 7"),
-            Map.entry("폴드6", "갤럭시 Z 폴드 6"),
-            Map.entry("K8Plus", "K8 Plus"),
-            Map.entry("케이8플러스", "K8 Plus"),
-            Map.entry("케이8 플러스", "K8 Plus"),
-            Map.entry("k8 플러스", "K8 Plus"),
-            // 뮤직전생 → 음악 전생
-            Map.entry("뮤직전생", "음악 전생"),
-            Map.entry("뮤직전생에 대해", "음악 전생")
-            // 🔽 NEW: include common variants of Galaxy Fold 6 to avoid accidental fallback
-            , Map.entry("갤럭시z폴드6", "갤럭시 Z 폴드 6")
-            , Map.entry("galaxy z fold6", "갤럭시 Z 폴드 6")
-            , Map.entry("galaxy z fold 6", "갤럭시 Z 폴드 6")
-    );
+// ❌ 별칭/규칙 기반 전처리 제거: 의도/재작성은 ChatService 상단의 LLM 단계에서 끝낸다.
 
     /* === Patterns and stop words === */
-    private static final Set<String> STOP_WORDS_SEARCH = Set.of("plus", "플러스", "discount", "할인");
-    /*  교정 메타가 붙은 쿼리는 네이버 API 호출 자체를 생략 */
-    private static final Set<String> STOP_QUERY_PREFIXES = Set.of(
-            "틀렸습니다", "틀렸어요", "틀렸네요",
-            "올바른 표기", "올바른 표현"
-    );
-    private static final Set<String> FILLER_WORDS = Set.of(
-            "대해", "찾아봐", "찾아바", "해줘", "해주세요", "해바", "해봐",
-            "소개", "알려", "정보", "관련", "검색", "검색해줘",
-            "해드려요", "해줄래", "에", "어요", "주세요", "어줘"
-    );
+    // ❌ 불용어/접두사/필러 제거 로직 삭제 (단순 검색 전용으로 축소)
     private static final Pattern LOCATION_PATTERN =
             Pattern.compile(".*(역|정류장|도로|길|거리|로|시|구|동|읍|면|군).*", Pattern.UNICODE_CASE);
     private static final Pattern NON_ALNUM =
@@ -320,37 +276,31 @@ public class NaverSearchService {
     private static final Pattern OFFICIAL_INFO_PATTERN = Pattern.compile(
             "(?i)(병원|의료|의사|전문의|교수|대학교|대학|학과|연구실|연구소|센터|학교|공공기관|정부기관|학회|세미나|논문)");
 
-
     /** 학술·논문 검색어 감지용 */
     private static final Pattern ACADEMIC_PATTERN = Pattern.compile(
             "(?i)(논문|학술|저널|학회|conference|publication|research)");
-    /**
-     * Source tag for assistant-generated responses stored into memory.
-     */
+
+    /** Source tag for assistant-generated responses stored into memory. */
     private static final String ASSISTANT_SOURCE = "ASSISTANT";
     private static final Pattern VERSION_PATTERN = Pattern.compile("(\\d+\\.\\d+)");
+
     // (+) 유사 쿼리로 판정할 Jaccard 임계값 (운영에서 조정 가능)
     @Value("${naver.search.similar-threshold:0.86}")
     private double similarThreshold;
+
     /* ───── E. 외부 클래스에서 여전히 참조하는 상수/유틸 복구 ───── */
-    /**
-     * 의료 OR 공공 패턴(간단합치기)
-     */
+    /** 의료 OR 공공 패턴(간단합치기) */
     public static final Pattern MEDICAL_OR_OFFICIAL_PATTERN =
             Pattern.compile(MEDICAL_PATTERN.pattern() + "|" +
                             OFFICIAL_INFO_PATTERN.pattern(),
                     Pattern.CASE_INSENSITIVE);
 
-    /**
-     * “중고나라” 키워드 포함 여부
-     */
+    /** “중고나라” 키워드 포함 여부 */
     public static boolean containsJoongna(String t) {
         return t != null && t.toLowerCase().contains("중고나라");
     }
 
-    /**
-     * “번개장터” 키워드 포함 여부
-     */
+    /** “번개장터” 키워드 포함 여부 */
     public static boolean containsBunjang(String t) {
         return t != null && t.toLowerCase().contains("번개장터");
     }
@@ -372,9 +322,7 @@ public class NaverSearchService {
         );
     }
 
-    /**
-     * Utility methods for query classification.
-     */
+    /** Utility methods for query classification. */
     private static boolean isMedicalQuery(String q) {
         return q != null && !q.isBlank() && MEDICAL_PATTERN.matcher(q).find();
     }
@@ -387,11 +335,10 @@ public class NaverSearchService {
         return q != null && !q.isBlank() && LOCATION_PATTERN.matcher(q).find();
     }
 
-
-
     private static boolean isAcademicQuery(String q) {
         return q != null && !q.isBlank() && ACADEMIC_PATTERN.matcher(q).find();
     }
+
     /**
      * Constructor with dependency injection.
      */
@@ -418,6 +365,7 @@ public class NaverSearchService {
         this.preprocessor = preprocessor;          // ⭐ NEW
         this.naverKeysCsv = naverKeysCsv;           // 🔴 저장
         this.relevanceScorer = new RelevanceScorer(embeddingModel);
+
         /* ───────────────────────────────
          * ① 공통 HTTP 요청‑응답 로그 필터
          *    debugSearchApi=true 일 때만 TRACE/DEBUG 레벨로 출력
@@ -452,25 +400,24 @@ public class NaverSearchService {
                 .filter(logFilter)
                 .build();
 
-
         this.om = new ObjectMapper();
         this.cache = Caffeine.newBuilder()
                 .maximumSize(maxSize)
                 .expireAfterWrite(Duration.ofSeconds(ttlSec))
                 // ✅ buildAsync는 한 번만. 캐시 키는 get(canonical(q))에서 정규화 처리
                 .buildAsync((key, executor) -> callNaverApiMono(key).toFuture());
-        this.recentSnippetCache = Caffeine.newBuilder()
 
+        this.recentSnippetCache = Caffeine.newBuilder()
                 .maximumSize(4_096)
                 .expireAfterWrite(Duration.ofMinutes(10))
                 .build(k -> Boolean.TRUE);
+
         // Cache for (text → vector) to eliminate repeated remote embedding calls
         this.locationEmbedCache = Caffeine.newBuilder()
                 .maximumSize(4_096)
                 .build(key -> embeddingModel.embed(key)              // Response<Embedding>
                         .content()                  // → Embedding
                         .vector());                 // → float[]
-
 
         // Snippet 저장 시 독립 트랜잭션 사용
         this.txTemplate = new TransactionTemplate(txManager);
@@ -486,10 +433,7 @@ public class NaverSearchService {
                     })
                     .toList();
         }
-
     }
-
-
 
     /* ---------- 4. 키 순환 유틸 ---------- */
     private @Nullable ApiKey nextKey() {
@@ -498,7 +442,6 @@ public class NaverSearchService {
         return naverKeys.get((int) idx);
     }
 
-
     /* === Public API === */
 
     /** Search using the default topK (LLM 힌트 미사용). */
@@ -506,9 +449,7 @@ public class NaverSearchService {
      * 1) ──  Reactive(Mono) 이름 → *Mono 로 변경  ──
      *──────────────────────────────────────────────*/
 
-    /**
-     * Mono 버전(기존 구현) – 새 코드에서만 호출
-     */
+    /** Mono 버전(기존 구현) – 새 코드에서만 호출 */
     public Mono<List<String>> searchSnippetsMono(String query) {
         return searchSnippetsInternal(query, webTopK, null, null);
     }
@@ -517,34 +458,24 @@ public class NaverSearchService {
     //  Sync Facade (기존 호출부 호환용 · 임시 block)
     // ──────────────────────────────────────────────
 
-    /**
-     * (임시) 동기 호출을 원하는 곳에서 사용 – block ≤ 5 초
-     */
+    /** (임시) 동기 호출을 원하는 곳에서 사용 – block ≤ 5 초 */
     public List<String> searchSnippetsSync(String query, int topK) {
         return searchSnippetsMono(query, topK)
                 .blockOptional(Duration.ofSeconds(5))
                 .orElseGet(List::of);
     }
 
-    /**
-     * 기본 top-K(webTopK) 동기 검색
-     */
+    /** 기본 top-K(webTopK) 동기 검색 */
     public List<String> searchSnippetsSync(String query) {
         return searchSnippetsSync(query, webTopK);
     }
 
-    /**
-     * Trace 결과를 동기로 돌려주는 Facade
-     */
+    /** Trace 결과를 동기로 돌려주는 Facade */
     public SearchResult searchWithTraceSync(String query, int topK) {
-        return searchWithTraceMono(query, topK)
-                .block(Duration.ofSeconds(5));
+        return searchWithTraceMono(query, topK).block(Duration.ofSeconds(5));
     }
 
-
-    /**
-     * LLM 답변까지 받아서 ‘딥 리서치’ 검색을 수행하는 Mono 버전
-     */
+    /** LLM 답변까지 받아서 ‘딥 리서치’ 검색을 수행하는 Mono 버전 */
     public Mono<List<String>> searchSnippetsMono(String userPrompt,
                                                  String assistantAnswer,
                                                  int topK) {
@@ -553,58 +484,35 @@ public class NaverSearchService {
 
     /**
      * 사용자의 쿼리를 검색하면서 동시에 어시스턴트가 생성한 최종 답변을
-     * 메모리 서비스에 강화(Reinforce)합니다. 이렇게 하면 같은 세션에서 후속 질문을 할 때
-     * 이전에 제공한 답변이 컨텍스트에 포함되어 RAG 체인이 참고할 수 있습니다.
-     * ChatService는 답변을 생성한 이후, 사용자의 질문과 답변을 이 메서드에 넘겨주세요.
-     *
-     * @param query  사용자의 원본 질문
-     * @param answer 어시스턴트의 최종 답변
-     * @return 검색된 웹 스니펫 목록
+     * 메모리 서비스에 강화(Reinforce)합니다.
      */
     public Mono<List<String>> searchAndReinforce(String query, String answer) {
         return searchAndReinforce(query, webTopK, answer);
     }
 
-    /**
-     * topK를 지정하여 검색을 수행한 뒤 답변을 메모리에 강화합니다.
-     *
-     * @param query  사용자의 원본 질문
-     * @param topK   가져올 웹 스니펫의 개수
-     * @param answer 어시스턴트의 최종 답변
-     * @return 검색된 웹 스니펫 목록
-     */
+    /** topK 지정 검색 후 답변을 메모리에 강화 */
     public Mono<List<String>> searchAndReinforce(String query, int topK, String answer) {
         return searchSnippetsInternal(query, topK, null, answer)
                 .doOnNext(list -> {
-                    // {스터프2} 장점: 웹 근거가 없거나 옵션이 꺼져 있으면 reinforcement 건너뜀
                     if (enableAssistantReinforcement && !list.isEmpty()) {
                         reinforceAssistantResponse(query, answer);
                     }
                 });
     }
 
-    /**
-     * Perform a web search without adding any marketplace keywords or site
-     * restrictions. Only the normalized query and an optional location
-     * suffix are sent to the Naver API. Snippets are reinforced into memory.
-     */
-    /**
-     * UI(검색 과정 패널) 없이 일반 검색
-     */
+    /** UI(검색 과정 패널) 없이 일반 검색 */
     public Mono<List<String>> searchSnippetsMono(String query, int topK) {
         return searchSnippetsInternal(query, topK, null, null);
     }
 
-    /**
-     * UI(검색 과정 패널) 노출을 위해 추적 포함 검색
-     */
+    /** UI(검색 과정 패널) 노출을 위해 추적 포함 검색 */
     public Mono<SearchResult> searchWithTraceMono(String query, int topK) {
         SearchTrace trace = new SearchTrace();
         long t0 = System.nanoTime();
         return searchSnippetsInternal(query, topK, trace, null)
                 .map(snippets -> {
                     trace.totalMs = (System.nanoTime() - t0) / 1_000_000L;
-                    if (!hasCreds()) {                       // 🔴 보조 설명
+                    if (!hasCreds()) {
                         trace.steps.add(new SearchStep("키 미설정으로 호출 생략", 0, 0, 0));
                     }
                     return new SearchResult(snippets, trace);
@@ -615,23 +523,17 @@ public class NaverSearchService {
      * 2) ──  Sync Facade —  “옛 API” 유지  ────────────
      *──────────────────────────────────────────────*/
 
-    /**
-     * default top-K 동기 검색(List)
-     */
+    /** default top-K 동기 검색(List) */
     public List<String> searchSnippets(String query) {
         return searchSnippetsSync(query, webTopK);
     }
 
-    /**
-     * top-K 지정 동기 검색(List)
-     */
+    /** top-K 지정 동기 검색(List) */
     public List<String> searchSnippets(String query, int topK) {
         return searchSnippetsSync(query, topK);
     }
 
-    /**
-     * (질문·답변 동시 전달) 동기 검색
-     */
+    /** (질문·답변 동시 전달) 동기 검색 */
     public List<String> searchSnippets(String userPrompt,
                                        String assistantAnswer,
                                        int topK) {
@@ -640,184 +542,168 @@ public class NaverSearchService {
                 .orElseGet(List::of);
     }
 
-    /**
-     * Trace 포함 동기 버전
-     */
+    /** Trace 포함 동기 버전 */
     public SearchResult searchWithTrace(String query, int topK) {
-        return searchWithTraceMono(query, topK)
-                .block(Duration.ofSeconds(5));
+        return searchWithTraceMono(query, topK).block(Duration.ofSeconds(5));
     }
 
     /**
      * 실제 검색 본체(일반/추적 공용)
+     * - 두 번째 소스의 normalizeQuery / extractTopKeywords를 통합
+     * - assistantAnswer 브랜치에 힌트 기반 보강 쿼리 추가
      */
     private Mono<List<String>> searchSnippetsInternal(String query,
                                                       int topK,
                                                       SearchTrace trace,
                                                       @Nullable String assistantAnswer) {
+        // ✔ 의도/별칭 정규화는 상위 LLM 단계에서 처리됨 (여긴 입력 그대로 사용)
 
 
         // ① Guardrail 전처리 적용 ------------------------------------------------
         if (preprocessor != null) {
             query = preprocessor.enrich(query);
         }
-        /* ─ assistantAnswer(딥-리서치) 브랜치도 동일한 Reactive flow ─ */
+
+        // assistantAnswer(딥-리서치) 브랜치 – QueryTransformer + 키워드 힌트 통합
         if (assistantAnswer != null && !assistantAnswer.isBlank()) {
+            // 기본 변형 쿼리 생성
             List<String> qs = (queryTransformer != null)
                     ? queryTransformer.transformEnhanced(query, assistantAnswer)
                     : List.of(query);
-            qs = qs == null ? List.of() : qs;
+
+            // 두 번째 소스의 키워드 힌트 추출(간단 2‑pass)
+            String hint = extractTopKeywords(assistantAnswer, 4);
+            if (StringUtils.hasText(hint)) {
+                String base = normalizeQuery(query);
+                List<String> tmp = new ArrayList<>(qs);
+                tmp.add(base + " " + hint);
+                qs = tmp;
+            }
+
+            qs = (qs == null) ? List.of() : qs;
             qs = qs.stream()
                     .filter(Objects::nonNull)
                     .map(String::trim)
                     .filter(s -> !s.isEmpty())
                     .distinct()
                     .toList();
-            // () 유사 변형 쿼리 제거 후 상한 적용
-            qs = Q.filterSimilarQueries(qs, similarThreshold)
-                    .stream().limit(MAX_QUERIES_PER_SEARCH).toList();
-            LinkedHashSet<String> acc2 = new LinkedHashSet<>();
-            // ✅ 중복된 return 라인 제거, flatMap 시 동시성 파라미터 문법 수정
-            /* 🆕 ensure captured variables are final */
-            final String queryCopy1 = query;
 
+            // 유사 변형 쿼리 제거 후 상한 적용
+            qs = Q.filterSimilarQueries(qs, similarThreshold)
+                    .stream()
+                    .limit(MAX_QUERIES_PER_SEARCH)
+                    .toList();
+
+            LinkedHashSet<String> acc2 = new LinkedHashSet<>();
+            final String queryCopy1 = query;  // for reinforcement capture
+
+            // ▶ 순차 실행: 가장 가능성 높은 쿼리부터 하나씩 시도하고,
+            //    누적 스니펫이 topK에 도달하는 즉시 상류 취소(early exit)
             return Flux.fromIterable(qs)
-                    .flatMap(q -> Mono.fromFuture(cache.get(Q.canonical(q)))
-                                    .subscribeOn(Schedulers.boundedElastic()),
-                            MAX_CONCURRENT_API)
-                    .flatMapIterable(list -> list)
-                    .filter(acc2::add)
-                    .take(topK)
+                    .concatMap(q -> Mono.fromFuture(cache.get(Q.canonical(q)))
+                            .subscribeOn(Schedulers.boundedElastic()))
+                    .flatMapIterable(list -> list)   // 각 쿼리 결과를 줄 단위로
+                    .filter(acc2::add)               // 중복 제거(LinkedHashSet)
+                    .take(topK)                      // ★ topK 채워지면 즉시 종료
                     .collect(Collectors.toCollection(LinkedHashSet::new))
                     .<List<String>>map(set -> new ArrayList<>(set))   // ✔ 제네릭 교정
-                    .doOnNext(snips -> {            // 🐛 'q' must be final
+                    .doOnNext(snips -> {
                         Long sid = sessionIdProvider.get();
                         if (sid != null) reinforceSnippets(sid, queryCopy1, snips);
+                        if (snips.isEmpty()) {
+                            log.debug("[Search] 결과 스니펫 0개 (assistantAnswer-branch)");
+                        }
                     });
-
         }
 
-        if (isBlank(query) || !hasCreds()) {
+        if (isBlank(query)) {
             return Mono.just(Collections.emptyList());
         }
 
-// (assistantAnswer 브랜치 바로 밑, prevFilter 선언 **앞**)
-        String normalized = normalizeDeclaratives(
-                QUERY_ALIAS.getOrDefault(query.trim(), query.trim()));
+        // (assistantAnswer 브랜치 바로 밑, prevFilter 선언 **앞**)
+        // 두 번째 소스의 normalizeQuery + 기존 선언형 정리(normalizeDeclaratives) 결합
+        String cleaned = normalizeQuery(query == null ? "" : query.trim());
+        String normalized = normalizeDeclaratives(cleaned);
 
         /* 0) 신학·학술 키워드는 도메인‑필터를 잠시 끈다 --------------------- */
         boolean prevFilter = enableDomainFilter;               // 원래 상태 저장
         boolean academic = isAcademicQuery(normalized);
         if (academic) enableDomainFilter = false;              // OFF
 
-
-        List<String> expandedQueries;
         // 기본 확장 쿼리로 초기화
-        expandedQueries = expandQueries(normalized);
+        List<String> expandedQueries = expandQueries(normalized);
+
         // QueryTransformer가 존재할 경우 시도하되 예외 발생 시 fallback
         if (queryTransformer != null) {
             try {
-                // ❸ assistantAnswer 존재 시 transformEnhanced 사용
-                List<String> candidateQueries;
-                if (assistantAnswer != null && !assistantAnswer.isBlank()) {
-                    candidateQueries = queryTransformer.transformEnhanced(query, assistantAnswer);
-                } else {
-                    // () 대화 맥락을 함께 넘겨 정확도 향상
-                    candidateQueries = queryTransformer.transform(getConversationContext(), normalized);
-                }
+                // 대화 맥락을 함께 넘겨 정확도 향상
+                List<String> candidateQueries = queryTransformer.transform(getConversationContext(), normalized);
                 if (candidateQueries != null && !candidateQueries.isEmpty()) {
                     expandedQueries = candidateQueries;
                 }
             } catch (Exception e) {
                 // LLM 호출 실패 또는 인터럽트 발생 시 경고 로그 후 기본 확장으로 대체
                 log.warn("QueryTransformer failed for query '{}': {}", query, e.toString());
-                // expandedQueries 이미 기본값이므로 그대로 사용
             }
         }
 
-        /* ① 폭주 차단: 중복 제거 → 유사도 제거 → 상한 */
-        expandedQueries = expandedQueries.stream()
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .distinct()
-                .toList();
+        // ❌ LLM 교정 메타 접두사 필터 제거
+
         // () LLM 교정 메타로 시작하는 쿼리는 호출 생략
-        expandedQueries = expandedQueries.stream()
-                .filter(qv -> STOP_QUERY_PREFIXES.stream().noneMatch(qv::startsWith))
-                .toList();
+        // (제거) LLM 교정 메타 접두사 필터는 상위 단계에서 처리
+        expandedQueries = expandedQueries.stream().toList();
+
         // () 유사 변형 제거
         expandedQueries = Q.filterSimilarQueries(expandedQueries, similarThreshold)
-                .stream().limit(MAX_QUERIES_PER_SEARCH).toList();
-        /* ② 디바이스·상품 키워드(Fold·Flip 등) 포함 시 동의어 자동 부착 */
-        /*
-         *  ② 키워드 기반 동의어 부착: fold/flip/product 키워드가 들어갈 때
-         *  해당 세트에 포함된 키워드만 부착한다. 이전 코드에서는 모든 세트의 키워드를
-         *  무조건 추가하여 검색 문구가 지나치게 길어져 엉뚱한 결과(예: 강아지 정보)가
-         *  노출되는 문제가 있었다. 이를 수정하여, 폴드 키워드가 포함된 경우엔
-         *  fold 관련 키워드만, 플립 키워드가 포함된 경우엔 flip 관련 키워드만, 제품 키워드가
-         *  포함된 경우엔 product 관련 키워드만 부착한다.
-         */
-        {
-            Set<String> extraKeywords = new LinkedHashSet<>();
-            String qLower = normalized.toLowerCase();
-            if (containsAny(qLower, productKeywords)) {
-                extraKeywords.addAll(productKeywords);
-            }
-            if (containsAny(qLower, foldKeywords)) {
-                extraKeywords.addAll(foldKeywords);
-            }
-            if (containsAny(qLower, flipKeywords)) {
-                extraKeywords.addAll(flipKeywords);
-            }
-            if (!extraKeywords.isEmpty()) {
-                final String extras = String.join(" ", extraKeywords);
-                expandedQueries = expandedQueries.stream()
-                        .map(q -> q + " " + extras)
-                        .toList();
-            }
-        }
+                .stream()
+                .limit(MAX_QUERIES_PER_SEARCH)
+                .toList();
+
+        /* ② (개선) 키워드 동의어 확장 — “모두 붙이기” 금지, 별도 변형  구문 고정 */
+        // ❌ 동의어 확장 제거 (확장은 상위 LLM 단계가 책임)
 
         /* ③ 도메인-스코프 프리픽스 완전 제거 (검색 편향 FIX) */
         expandedQueries = expandedQueries.stream()
                 .filter(q -> !DOMAIN_SCOPE_PREFIX.matcher(q).find())
                 .filter(q -> !q.toLowerCase(Locale.ROOT).startsWith("site "))
                 .toList();
+
         /* 🔽 모든 변형이 제거된 경우 – 원본 쿼리로 대체해 검색 공백 방지 */
         if (expandedQueries.isEmpty()) {
             expandedQueries = List.of(normalized);
         }
+
         /* ② 중복 차단 & early-exit */
         LinkedHashSet<String> acc = new LinkedHashSet<>();
+        // ▶ 순차 실행  조기 종료 (일반 검색 브랜치)
         Flux<String> snippetFlux =
                 Flux.fromIterable(expandedQueries)
-                        // ✅ flatMap 동시성 파라미터 위치/괄호 정정
-                        .flatMap(q -> Mono.fromFuture(cache.get(Q.canonical(q)))
-                                        .subscribeOn(Schedulers.boundedElastic()),
-                                MAX_CONCURRENT_API)
+                        .concatMap(q -> Mono.fromFuture(cache.get(Q.canonical(q)))
+                                .subscribeOn(Schedulers.boundedElastic()))
                         .flatMapIterable(list -> list)
-                        .filter(acc::add)   // 한 번만 누적
-                        .take(topK);
+                        .filter(acc::add)   // 중복 제거(LinkedHashSet)
+                        .take(topK);        // ★ topK 확보 시 즉시 종료
 
         // ▶ 전체 검색 파이프라인 타임아웃(동적 계산, 상한 4.5s) + 폴백
         long perCallMs = Math.max(500L, hedgeTimeoutMs); // 각 API 호출 타임아웃
         int n = Math.max(1, expandedQueries.size());
-        int waves = Math.max(1, (int) Math.ceil(n / (double) MAX_CONCURRENT_API));
+        // 순차 실행이므로 waves = 쿼리 개수 (상한 4.5s)
+        int waves = Math.max(1, n);
         long overallMs = Math.min(4500L, perCallMs * waves + 500L); // headroom 0.5s
 
-        final String queryCopy2 = query;            // 🆕 second capture
+        final String queryCopy2 = query;            // capture for reinforcement
 
         return snippetFlux
                 .collectList()
+                //  전체 파이프라인 타임아웃 & 에러 가드
                 .timeout(Duration.ofMillis(overallMs), Mono.just(List.of()))
-                // 🔁 학술 질의로 인해 임시로 끈 도메인 필터를 반드시 원복
+                .onErrorReturn(Collections.emptyList())
                 .doFinally(sig -> enableDomainFilter = prevFilter)
-                .doOnNext(list -> {                 // 🐛 same issue
+                .doOnNext(list -> {
                     Long sid = sessionIdProvider.get();
                     if (sid != null) reinforceSnippets(sid, queryCopy2, list);
                 });
     }
-
 
     /**
      * Merge RAG context (local + external) with web snippets.
@@ -861,7 +747,6 @@ public class NaverSearchService {
             // external RAG
             ContentRetriever ext = retrieverProvider.getIfAvailable();
             if (ext != null) {
-                final double simThreshold = querySimThreshold;
                 remoteCtx = ext.retrieve(Query.from(query)).stream()
                         .limit(ragTopK)
                         .filter(c -> {
@@ -870,7 +755,6 @@ public class NaverSearchService {
                                     ? md.get(LangChainRAGService.META_SID)
                                     : null);
                         })
-
                         .map(Content::toString)
                         .toList();
             }
@@ -892,7 +776,6 @@ public class NaverSearchService {
      * site restriction is applied—only the query (plus optional suffix)
      * is used.  Domain allow/deny and keyword filtering are enforced.
      */
-    /* ===== 비동기 API 콜 ===== */
     private Mono<List<String>> callNaverApiMono(String query) {
         //  키가 아예 없을 때도 DuckDuckGo로 폴백
         if (isBlank(query)) return Mono.just(Collections.emptyList());
@@ -900,7 +783,6 @@ public class NaverSearchService {
             log.warn("No NAVER creds → fallback DuckDuckGo");
             return callDuckDuckGoMono(appendLocationSuffix(query));
         }
-
 
         String apiQuery = appendLocationSuffix(query);
 
@@ -913,6 +795,7 @@ public class NaverSearchService {
                 .queryParam("sort", "sim")
                 .build(false)
                 .toUriString();
+
         ApiKey first = nextKey();
         if (first == null) return Mono.just(List.of());
 
@@ -924,28 +807,33 @@ public class NaverSearchService {
                 .header("X-Key-Label", "K-" + keyLabel1)
                 .retrieve()
                 .bodyToMono(String.class)
-                .timeout(Duration.ofMillis(hedgeTimeoutMs));
-        /* 🔵 단일 키 모드 – 실패 시 Bing 훅으로 넘김 (헤징 블록 완전 제거) */
+                // RAW JSON 일부만 로그(디버그 전용)
+                .doOnNext(json -> {
+                    if (debugJson) log.debug("[Naver RAW] {} chars: {}", json.length(), safeTrunc(json, 4000));
+                })
+                // 일관된 타임아웃
+                .timeout(Duration.ofMillis(apiTimeoutMs));
+
+
+        /* 🔵 단일 키 모드 – 실패 시 DuckDuckGo 폴백 */
         return primary
-                // 1️⃣ JSON → 스니펫 변환 시 원본 쿼리를 함께 전달해야 키워드 필터링이 가능하다.
                 .map(json -> parseNaverResponse(query, json))
-                // 2️⃣ 429·5xx → DuckDuckGo 폴백
                 .onErrorResume(WebClientResponseException.class, e -> {
                     int sc = e.getStatusCode().value();
-                    // ⚠ 상태코드가 뭐가 오든 네이버 실패 시엔 일단 DDG로 폴백
                     log.warn("Naver API {} → fallback DuckDuckGo", sc);
                     return callDuckDuckGoMono(apiQuery);
                 })
-                // 3️⃣ 기타 예외 → DuckDuckGo 폴백
                 .onErrorResume(t -> {
                     log.warn("Naver API '{}' failed: {}", query, t.toString());
                     return callDuckDuckGoMono(apiQuery);
-                });
-    }
+                })
+                .onErrorReturn(Collections.emptyList());
 
+    }
 
     /**
      * JSON → 스니펫 파싱  (선택) 키워드 필터링.
+     * - 두 번째 소스의 정규화/HTML 제거 로직을 반영(단, 출력 포맷은 기존 앵커 형식 유지)
      *
      * @param query 원본 검색어 (키워드 필터에 사용)
      * @param json  Naver API 응답 JSON 문자열
@@ -953,10 +841,24 @@ public class NaverSearchService {
     private List<String> parseNaverResponse(String query, String json) {
         if (isBlank(json)) return Collections.emptyList();
         try {
-            NaverResponse resp = om.readValue(json, NaverResponse.class);
-            if (resp.items() == null) return Collections.emptyList();
+            // 1) items 존재 및 크기(원시) 확인
+            JsonNode root = om.readTree(json);
+            JsonNode itemsNode = root.path("items");
+            int rawSize = itemsNode.isArray() ? itemsNode.size() : -1;
 
-            List<String> lines = resp.items().stream()
+            // 2) DTO 역직렬화
+            NaverResponse resp = om.readValue(json, NaverResponse.class);
+            List<NaverItem> items = (resp.items() == null) ? Collections.emptyList() : resp.items();
+
+            if (items.isEmpty()) {
+                if (debugJson) {
+                    log.debug("[Naver Parse] items empty (rawSize={}) → 원문 일부: {}", rawSize, safeTrunc(json, 800));
+                }
+                return Collections.emptyList();
+            }
+
+            // 3) 스니펫 변환 + 도메인 필터/블록
+            List<String> lines = items.stream()
                     .filter(item -> !enableDomainFilter || isAllowedDomain(item.link()))
                     .filter(item -> !isBlockedDomain(item.link()))
                     .map(item -> "- <a href=\"%s\" target=\"_blank\" rel=\"noopener\">%s</a>: %s"
@@ -965,13 +867,13 @@ public class NaverSearchService {
                                     stripHtml(item.description())))
                     .distinct()
                     .toList();
+            //  (개선) 제품/개념 중의성 오염 제거 (예: K8Plus ↔ 자동차)
+            lines = applyDisambiguationFilters(query, lines);
 
-            // 🔍 키워드 OR 필터 복원
+            // 4) (선택) 키워드 OR 필터
             if (enableKeywordFilter && !lines.isEmpty()) {
                 List<String> kws = keywords(query);
-
-                int requiredHits = Math.max(1,
-                        Math.min(keywordMinHits, (kws.size() + 1) / 3));
+                int requiredHits = Math.max(1, Math.min(keywordMinHits, (kws.size() + 1) / 3));
                 List<String> filtered = lines.stream()
                         .filter(sn -> hitCount(sn, kws) >= requiredHits)
                         .toList();
@@ -979,12 +881,20 @@ public class NaverSearchService {
                     return filtered;
                 }
             }
+
+            if (lines.isEmpty() && debugJson) {
+                log.debug("[Naver Parse] 파싱 이후 스니펫 0개 (rawSize={})", rawSize);
+            }
             return lines;
         } catch (Exception e) {
-            log.error("Parse error", e);
+            log.error("[Naver Parse] JSON 파싱 실패: {}", e.toString(), e);
+            if (debugJson) {
+                log.debug("[Naver Parse] 원본 일부: {}", safeTrunc(json, 1200));
+            }
             return Collections.emptyList();
         }
     }
+
 
     //
     //  DuckDuckGo(HTML) Fallback(비동기)
@@ -1006,7 +916,7 @@ public class NaverSearchService {
     }
 
     /**
-     * 추적 지원 버전
+     * 추적 지원 버전 – 동기 호출
      */
     private List<String> callNaverApi(String query, SearchTrace trace) {
         final boolean prevFilter = this.enableDomainFilter; // ← 원복용 캡처
@@ -1015,7 +925,7 @@ public class NaverSearchService {
             return Collections.emptyList();
         }
         String qTrim = query.trim();
-        if (qTrim.length() < 3 || STOP_WORDS_SEARCH.contains(qTrim.toLowerCase())) {
+        if (qTrim.length() < 3) {
             return Collections.emptyList();
         }
         // Append suffix if configured
@@ -1073,7 +983,7 @@ public class NaverSearchService {
             if (resp.items() == null) {
                 return Collections.emptyList();
             }
-            // Convert items to lines, apply domain filters
+            // Convert items to lines, apply domain filters (앵커 포맷)
             List<String> lines = resp.items().stream()
                     .filter(item -> !enableDomainFilter || isAllowedDomain(item.link()))
                     .filter(item -> !isBlockedDomain(item.link()))
@@ -1081,8 +991,6 @@ public class NaverSearchService {
                         String title = stripHtml(item.title());
                         String desc = stripHtml(item.description());
                         String link = item.link();
-                        // 목록 형식과 클릭 가능한 링크를 제공하여 프런트에서 가독성을 높임
-                        // 예: "- <a href=\"https://example.com\" target=\"_blank\">기사제목</a>: 기사요약"
                         return String.format("- <a href=\"%s\" target=\"_blank\" rel=\"noopener\">%s</a>: %s", link, title, desc).trim();
                     })
                     .filter(s -> !s.isEmpty())
@@ -1096,7 +1004,6 @@ public class NaverSearchService {
                 List<String> filtered = lines.stream()
                         .filter(sn -> hitCount(sn, kws) >= requiredHits)
                         .toList();
-                // OR 규칙: 하나라도 맞으면 통과(너무 엄격해서 0건 되는 것 방지)
                 if (!filtered.isEmpty()) {
                     lines = filtered;
                 }
@@ -1123,7 +1030,6 @@ public class NaverSearchService {
             REQUEST_SEMAPHORE.release();
         }
     } // --- callNaverApi(String, SearchTrace) 끝 ---
-
 
     //
     //  DuckDuckGo(HTML) 파싱
@@ -1167,6 +1073,8 @@ public class NaverSearchService {
                 if (!isBlank(line)) lines.add(line);
             }
             lines = lines.stream().distinct().toList();
+            //  (개선) 제품/개념 중의성 오염 제거 (예: K8Plus ↔ 자동차)
+            lines = applyDisambiguationFilters(originalQuery, lines);
             if (enableKeywordFilter && !lines.isEmpty()) {
                 List<String> kws = keywords(originalQuery);
                 int requiredHits = Math.max(1, Math.min(keywordMinHits, (kws.size() + 1) / 3));
@@ -1207,26 +1115,54 @@ public class NaverSearchService {
         }
     }
 
-//  ⬆︎ Duplicate stub removed – original definition already exists above.
-
     // (-) Bing/Google 폴백 제거, DDG로 통일
 
-
+    /* ================== NEW: 보수적 동의어 확장 & 중의성 필터 ================== */
     /**
-     * 429 상태 코드 감지 – 재시도 필터
+     * 보수적 동의어 확장:
+     *  - 기존처럼 "모든 동의어를 한 쿼리에 합쳐 붙임" 금지
+     *  - 각 동의어는 별도 변형 쿼리로만 추가
+     *  - 공백/한글/'' 포함 시 따옴표로 감싸 구문 고정(phrase search 유도)
      */
+    // ❌ 동의어 확장 메서드/관련 필드 전체 삭제
+
+    /** 결과 라인에 대해 중의성(예: K8 자동차) 오염을 제거한다. */
+    private List<String> applyDisambiguationFilters(String originalQuery, List<String> lines) {
+        var profile = SearchDisambiguation.resolve(originalQuery);
+        if (profile.negativeKeywords().isEmpty() && profile.blockedHosts().isEmpty()) return lines;
+        List<String> out = new ArrayList<>();
+        for (String line : lines) {
+            // 1) 텍스트 상의 부정 키워드(hitCount 재활용)
+            if (hitCount(line, new ArrayList<>(profile.negativeKeywords())) > 0) continue;
+            // 2) 호스트 기반 차단
+            boolean block = false;
+            try {
+                int i = line.indexOf("href=\"");
+                if (i >= 0) {
+                    int j = line.indexOf("\"", i+  6);
+                    String url = j > 0 ? line.substring(i  + 6, j) : "";
+                    String host = URI.create(url).getHost();
+                    if (host != null) {
+                        for (String b : profile.blockedHosts()) {
+                            if (host.contains(b)) { block = true; break; }
+                        }
+                    }
+                }
+            } catch (Exception ignore) {}
+            if (!block) out.add(line);
+        }
+        return out;
+    }
+
+    /** 429 상태 코드 감지 – 재시도 필터 */
     private boolean isTooManyRequests(Throwable t) {
         return t instanceof WebClientResponseException
                 && ((WebClientResponseException) t).getStatusCode().value() == 429;
     }
 
-    /**
-     * Single-shot fallback (no extra modifications).
-     */
+    /** Single-shot fallback (no extra modifications). */
     private List<String> searchOnce(String q) throws IOException {
-        // In this simplified version, searchOnce is not used because we no
-        // longer apply site-specific fallbacks.
-        return List.of();
+        return List.of(); // Simplified: unused
     }
 
     /* === Helper functions === */
@@ -1235,7 +1171,7 @@ public class NaverSearchService {
         boolean ok = naverKeys != null && !naverKeys.isEmpty()
                 && naverKeys.stream().anyMatch(k -> !isBlank(k.id()) && !isBlank(k.secret()));
         if (!ok) {
-            log.warn("[NaverSearch] no API keys loaded. property 'naver.keys'='{}'", naverKeysCsv); // 🔴 원인 로깅
+            log.warn("[NaverSearch] no API keys loaded. property 'naver.keys'='{}'", naverKeysCsv);
         }
         return ok;
     }
@@ -1278,11 +1214,11 @@ public class NaverSearchService {
                     .toList();
             if (!uncached.isEmpty()) {
                 try {
-                    List<Embedding> embs = embeddingModel.embedAll(             // Response<List<Embedding>>
+                    List<Embedding> embs = embeddingModel.embedAll(
                             uncached.stream().map(TextSegment::from).toList()
                     ).content();
                     for (int i = 0; i < uncached.size(); i++) {
-                        locationEmbedCache.put(uncached.get(i), embs.get(i).vector());   // content() 제거
+                        locationEmbedCache.put(uncached.get(i), embs.get(i).vector());
                     }
                 } catch (Exception ignore) { /* graceful fallback */ }
             }
@@ -1316,10 +1252,7 @@ public class NaverSearchService {
         return querySuffix;
     }
 
-    /**
-     * Dynamically tighten/loosen similarity threshold.
-     * Short, precise queries → higher bar; long, verbose queries → lower bar.
-     */
+    /** Dynamically tighten/loosen similarity threshold. */
     private double adaptiveThreshold(String q) {
         int len = (q == null) ? 0
                 : NON_ALNUM.matcher(q).replaceAll("").length();
@@ -1382,7 +1315,7 @@ public class NaverSearchService {
                 .map(t -> NON_ALNUM.matcher(t).replaceAll(""))
                 .filter(t -> !t.isBlank())
                 .filter(t -> t.length() > 1)
-                .filter(t -> !FILLER_WORDS.contains(t))
+                // (제거) FILLER_WORDS 필터 — 상위 LLM 단계에서 처리
                 .toList();
     }
 
@@ -1401,8 +1334,7 @@ public class NaverSearchService {
             SearchStatus status,
             List<String> snippets,
             @Nullable String failureReason
-    ) {
-    }
+    ) { }
 
     private void reinforceSnippets(Long sessionId, String query, List<String> snippets) {
         for (int idx = 0; idx < snippets.size(); idx++) {
@@ -1421,21 +1353,18 @@ public class NaverSearchService {
 
             // ★ 람다에서 사용할 불변 변수
             final double score = tmpScore;
-            /* 🔴 NEW: 루프별 스니펫 값을 불변 변수로 캡처 */
-            final String snip = snippet;        // 🔴
-
-            /* 🔴 NEW: 세션·쿼리도 불변 변수로 캡처 */
-            final Long sid = sessionId;     // 🔴
-            final String qCopy = query;         // 🔴
+            final String snip = snippet;
+            final Long sid = sessionId;
+            final String qCopy = query;
 
             /* 개선 ①  독립 트랜잭션 & 중복 안전 처리 */
             Schedulers.boundedElastic().schedule(() ->
                     txTemplate.executeWithoutResult(txStatus -> {
                         try {
                             memorySvc.reinforceWithSnippet(
-                                    String.valueOf(sid),    // 🔴
-                                    qCopy,                  // 🔴
-                                    snip,          // 🔴 변경
+                                    String.valueOf(sid),
+                                    qCopy,
+                                    snip,
                                     "WEB",
                                     score);
                         } catch (DataIntegrityViolationException dup) {
@@ -1448,7 +1377,7 @@ public class NaverSearchService {
             );
 
             /* 🔴 캐시 갱신도 snip 사용 */
-            recentSnippetCache.put(DigestUtils.md5Hex(snip), Boolean.TRUE);  // 🔴
+            recentSnippetCache.put(DigestUtils.md5Hex(snip), Boolean.TRUE);
         }
     }
 
@@ -1457,9 +1386,65 @@ public class NaverSearchService {
         if (q == null) return "";
         String s = q.replaceFirst("^\\s*검색어\\s*:\\s*", "");
         s = s.replace("입니다", "");
-        // 문장 끝의 명령형 군더더기 제거: "싹다/전부/모두 찾고와|찾아와|검색해와"
+        // 문장 끝의 명령형 군더더기 제거
         s = s.replaceAll("\\s*(싹다|전부|모두)?\\s*(찾[아고]와|찾아와|검색해와)\\.?\\s*$", "");
         return s.trim();
+    }
+
+    /**
+     * 두 번째 소스의 "교정된 문장/입력 문장/검색어1..." 접두사 제거용 정규화
+     */
+    private static String normalizeQuery(String q) {
+        if (q == null) return "";
+        String s = q;
+        s = s.replaceAll("(?i)(교정된\\s*문장|입력\\s*문장|검색어\\s*\\d+|질문\\s*초안|요약)[:：]?", "");
+        s = s.replaceAll("\\s+", " ").trim();
+        return s;
+    }
+
+    /**
+     * 두 번째 소스의 키워드 추출(간단 빈도 기반) – assistantAnswer 2‑pass에 사용
+     */
+    private static String extractTopKeywords(String text, int max) {
+        if (!StringUtils.hasText(text)) return "";
+        Set<String> stop = Set.of(
+                "the","and","for","with","that","this","you","your",
+                "및","그리고","그러나","또는","등","수","것","관련","대한","무엇","뭐야","뭐가","어떤","어떻게"
+        );
+        Pattern p = Pattern.compile("[\\p{IsHangul}A-Za-z0-9]{2,}");
+        Matcher m = p.matcher(text);
+
+        Map<String,Integer> freq = new java.util.HashMap<>();
+        while (m.find()) {
+            String w = m.group().toLowerCase(Locale.ROOT);
+            if (stop.contains(w)) continue;
+            freq.put(w, freq.getOrDefault(w, 0) + 1);
+        }
+        return freq.entrySet().stream()
+                .sorted((a,b) -> Integer.compare(b.getValue(), a.getValue()))
+                .limit(max)
+                .map(Map.Entry::getKey)
+                .collect(Collectors.joining(" "));
+    }
+
+    /**
+     * 두 번째 소스의 간단 스니펫 포맷터(현재는 사용하지 않지만 호환성 위해 유지)
+     *  - 제목 — 요약 (호스트)
+     */
+    @SuppressWarnings("unused")
+    private String toSnippetLegacy(String title, String description, String link) {
+        String cleanTitle = stripHtml(title);
+        String cleanDesc  = stripHtml(description);
+        String url   = (link == null ? "" : link);
+        String host;
+        try {
+            host = StringUtils.hasText(url) ? URI.create(url).getHost() : null;
+        } catch (Exception e) {
+            host = null;
+        }
+        String text = (cleanTitle + " — " + cleanDesc).trim();
+        if (text.length() < 10) return null;
+        return "- " + text + " (" + (StringUtils.hasText(host) ? host : url) + ")";
     }
 
     /**
@@ -1508,16 +1493,12 @@ public class NaverSearchService {
                 .replace(">", "&gt;");
     }
 
-
     /* === DTOs for JSON parsing === */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record NaverResponse(List<NaverItem> items) {
-    }
+    private record NaverResponse(List<NaverItem> items) { }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record NaverItem(String title, String link, String description) {
-    }
-
+    private record NaverItem(String title, String link, String description) { }
 
     @jakarta.annotation.PostConstruct
     private void initKeywordSets() {
@@ -1534,16 +1515,12 @@ public class NaverSearchService {
                 .collect(Collectors.toSet());
     }
 
-    /**
-     * 텍스트가 키워드 집합 중 하나라도 포함하는지 확인
-     */
+    /** 텍스트가 키워드 집합 중 하나라도 포함하는지 확인 */
     private boolean containsAny(String text, Set<String> keywords) {
         return keywords.stream().anyMatch(text::contains);
     }
 
-    /**
-     * 세션별 대화 기록을 불러와 QueryTransformer에 전달
-     */
+    /** 세션별 대화 기록을 불러와 QueryTransformer에 전달 */
     private String getConversationContext() {
         Long sid = sessionIdProvider.get();
         if (sid == null) return "";
@@ -1555,37 +1532,23 @@ public class NaverSearchService {
     }
 
     /**
-     * Reinforce the assistant's response into translation memory so that it can be
-     * retrieved in future context. The score is computed from the cosine similarity
-     * between the original query and the assistant's answer. If computation fails,
-     * the score defaults to 1.0.
-     *
-     * @param query  the user query that produced the assistant response
-     * @param answer the assistant's final answer text
+     * Reinforce the assistant's response into translation memory.
      */
     public void reinforceAssistantResponse(String query, String answer) {
-
-        /* 옵션이 꺼져 있으면 바로 종료 → {스터프2} 장점 */
         if (!enableAssistantReinforcement || isBlank(answer) || isBlank(query)) return;
-        // ▲ "정보 없음"은 저장 금지
         if ("정보 없음".equals(answer.trim()) || "정보 없음.".equals(answer.trim())) return;
         Long sessionId = sessionIdProvider.get();
         if (sessionId == null) return;
-        double score;           // 원래 점수
+        double score;
         try {
             double sim = relevanceScorer.score(query, answer);
             score = (sim > 0 ? sim : 1.0);
         } catch (Exception ignore) {
             score = 1.0;
         }
-        /* 과신을 방지하기 위해 가중치를 감쇠 – 기본 0.4 (설정 가능)
-         *  ⚠ score를 다시 대입하면 ‘effectively final’ 조건을 깨므로
-         *    감쇠-적용 값을 새로 final 변수로 만들어 준다. */
         final double finalScore = Math.max(0.01, score * assistantReinforceWeight);
 
-        // 어시스턴트 응답을 메모리에 저장하여 후속 RAG 검색에서 사용할 수 있도록 함
         try {
-            /* 개선 ②  ASSISTANT 강화도 동일 전략 적용 */
             txTemplate.executeWithoutResult(tx -> {
                 try {
                     memorySvc.reinforceWithSnippet(
@@ -1603,9 +1566,7 @@ public class NaverSearchService {
         }
     }
 
-    /**
-     * API 호출용으로 위치 접미사를 붙인 쿼리 문자열 생성
-     */
+    /** API 호출용으로 위치 접미사를 붙인 쿼리 문자열 생성 */
     private String appendLocationSuffix(String base) {
         String suffix = deriveLocationSuffix(base);
         return isBlank(suffix) ? base : base + " " + suffix;
@@ -1652,7 +1613,13 @@ public class NaverSearchService {
             }
             return kept;
         }
+
+
+    }
+    private static String safeTrunc(String s, int max) {
+        if (s == null) return "";
+        if (s.length() <= max) return s;
+        return s.substring(0, max) + "…";
     }
 
-// ✅ 중복된 정규화/유사도 유틸 블록 제거 (단일 정의만 유지)
 }

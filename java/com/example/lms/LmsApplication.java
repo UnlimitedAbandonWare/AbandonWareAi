@@ -26,8 +26,8 @@ public class LmsApplication {
     public CommandLineRunner init(AdminService adminService) {
         return args -> {
             try {
-                adminService.create("admin", "", "최고관리자");
-                System.out.println("▶ 기본 관리자 계정 생성: admin / 비밀번호 ");
+                adminService.create("admin", "aa0526", "최고관리자");
+                System.out.println("▶ 기본 관리자 계정 생성: admin / 비밀번호 aa0526");
             } catch (Exception ignore) { /* 이미 있으면 패스 */ }
         };
     }

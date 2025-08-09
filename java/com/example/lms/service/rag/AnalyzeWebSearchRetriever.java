@@ -4,17 +4,17 @@ import com.example.lms.service.NaverSearchService;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
-// lombok.RequiredArgsConstructor;      // ← import 제거
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
-import java.util.concurrent.ExecutorService;   // ✅ 추가
-import java.util.concurrent.Executors;        // ✅ 추가
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import java.io.IOException;
 import java.util.*;
-
+import java.util.regex.Pattern;              /* 🔴 NEW */
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -23,35 +23,23 @@ import java.util.concurrent.Executors;
  * 형태소 분석 → 키워드 기반 네이버 검색 Retriever.
  */
 @Slf4j
+@RequiredArgsConstructor
 public class AnalyzeWebSearchRetriever implements ContentRetriever {
 
     private final Analyzer           analyzer;
     private final NaverSearchService searchSvc;
-    private final int                maxTokens;  // 토큰화 길이 제한
-    private final int                topK;       // 검색 결과 상한 (maxTokens와 동일 값 사용)
+    private final int                topK;
+
     /** Executor for parallel token searches */
-    private final ExecutorService searchExecutor =
-            Executors.newFixedThreadPool(
-                    Math.max(2, Runtime.getRuntime().availableProcessors()));
-
-
-    public AnalyzeWebSearchRetriever(
-            Analyzer analyzer,
-            NaverSearchService svc,
-            int maxTokens) {
-        this.analyzer = analyzer;
-        this.searchSvc = svc;
-        this.maxTokens = maxTokens;
-        this.topK = maxTokens;   // 동일 값으로 초기화
-    }
+    private final ExecutorService searchExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors())
+    );
+    /** per-token 검색 타임아웃(ms) */
+    private static final long PER_TOKEN_TIMEOUT_MS = 5000L;
 
     /* 🔴 메타 태그‧시간 태그 필터용 패턴 */
     private static final Pattern META_TAG = Pattern.compile("\\[[^\\]]+\\]");
     private static final Pattern TIME_TAG = Pattern.compile("\\b\\d{1,2}:\\d{2}\\b");
-
-    /* 🔴 영문한글/고유명사 결합 보존 규칙 */
-    private static final Pattern PROPER_COMPOUND = Pattern.compile(
-            "(?i)^[A-Z]{1,6}[\\s-]?[가-힣].*|[A-Za-z]아카데미$|[가-힣]아카데미$");
 
     /* 🔴 메타·개행 제거 유틸 */
     private static String normalize(String raw) {
@@ -66,12 +54,6 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
 
         /* 🔴 1) 원문 정규화(노이즈 제거) */
         String normalized = normalize(query.text());
-        /* 2) 고유명사 패턴이면 분해 우회(원문 그대로 검색) */
-        if (PROPER_COMPOUND.matcher(normalized).find()) {
-            List<String> lines = searchSvc.searchSnippets(normalized, topK);
-            return lines.stream().distinct().limit(topK).map(Content::from).toList();
-        }
-
 
         /* 2) 형태소 토큰화 */
         Set<String> tokens = analyze(normalized);
@@ -93,7 +75,10 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
         }
         for (CompletableFuture<List<Content>> future : futures) {
             try {
-                merged.addAll(future.join());
+                merged.addAll(future.get(PER_TOKEN_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+            } catch (TimeoutException te) {
+                future.cancel(true);
+                log.warn("[Analyze] token search timed out ({} ms)", PER_TOKEN_TIMEOUT_MS);
             } catch (Exception e) {
                 log.warn("[Analyze] async search failed", e);
             }

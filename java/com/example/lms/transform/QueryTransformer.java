@@ -2,8 +2,10 @@ package com.example.lms.transform;
 
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.regex.Matcher;
-import dev.langchain4j.model.openai.OpenAiChatModel;
+
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
 import org.springframework.lang.Nullable;
 import java.util.regex.Matcher;
 import java.time.Duration;
@@ -54,11 +56,15 @@ public class QueryTransformer {
     /** site eulji ac kr … 형태 도메인‑스코프 프리픽스 */
             private static final Pattern DOMAIN_SCOPE_PREFIX =
                         Pattern.compile("(?i)^\\s*(site\\s+)?\\S+\\s+ac\\s+kr\\b");
+    /** 원문 보존 보호어: 원문에 있으면 금지어(오인어)로 변형하지 않도록 방어 */
+    private static final Map<String, Set<String>> PROTECTED_TERMS = Map.of(
+            "원신", Set.of("원숭이", "monkey")
+    );
 
     /* (선택) 프로젝트에서 유지할 소규모 오타 사전 – 빈맵이면 사용 안 함 */
     private final Map<String,String> dict;
 
-    private final OpenAiChatModel llm;
+    private final ChatModel chatModel;
     private final HintExtractor hintExtractor;
     /** LLM 호출 결과를 캐시하여 동일한 요청에 대한 비용과 지연을 줄인다. */
     private final LoadingCache<String, String> llmCache;
@@ -67,13 +73,13 @@ public class QueryTransformer {
     /* LLM이 생성할 동적 버프 1회 한도 */
     private static final int MAX_DYNAMIC_BUFFS = 4;
 
-    public QueryTransformer(OpenAiChatModel llm) {
-        this(llm, Map.of(), null);
+    public QueryTransformer(ChatModel chatModel) {
+        this(chatModel, Map.of(), null);
     }
-    public QueryTransformer(OpenAiChatModel llm,
+    public QueryTransformer(ChatModel chatModel,
                             Map<String,String> customDict,
                             @Nullable HintExtractor hintExtractor) {
-        this.llm           = llm;
+        this.chatModel     = chatModel;
         this.dict          = (customDict != null) ? customDict : Map.of();
         this.hintExtractor = (hintExtractor != null) ? hintExtractor : new RegexHintExtractor();
         // 캐시는 5분 동안 결과를 보존하며 최대 1000개의 프롬프트를 저장한다.
@@ -82,12 +88,23 @@ public class QueryTransformer {
                 .maximumSize(1000)
                 .build(prompt -> {
                     try {
-                        return llm.chat(prompt);
+                        return runLLM(prompt);
                     } catch (Exception e) {
                         // 캐시 로딩 실패 시 빈 문자열 반환
                         return "";
                     }
                 });
+    }
+    /** LangChain4j 1.0.1 표준 메시지 호출로 LLM을 실행 */
+    private String runLLM(String prompt) {
+        try {
+            return chatModel.chat(List.of(
+                    SystemMessage.from("간결하고 한 줄로만 응답하세요."),
+                    UserMessage.from(prompt)
+            )).aiMessage().text();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     public List<String> transform(String context, String normalizedQuery) {
@@ -293,7 +310,22 @@ public class QueryTransformer {
                 // “을지대학교” 키워드가 원문에 없으면 제외
                 .filter(v -> originalContainsUnwanted
                         || !UNWANTED_WORD_PATTERN.matcher(v).find())
+                // 보호어 위반(원신→원숭이 등) 변형 제거
+                .filter(v -> !violatesProtectedTerms(original, v))
                 .toList();
+    }
+    /** 보호어 위반 여부: 원문 토큰에 보호 키가 있고, 변형 토큰에 금지 토큰이 있으면 true */
+    private boolean violatesProtectedTerms(String original, String variant) {
+        Set<String> oTok = tokenize(original);
+        Set<String> vTok = tokenize(variant);
+        for (var e : PROTECTED_TERMS.entrySet()) {
+            if (oTok.contains(e.getKey())) {
+                for (String banned : e.getValue()) {
+                    if (vTok.contains(banned)) return true;
+                }
+            }
+        }
+        return false;
     }
 
     /* ────────────────────────────────────────
