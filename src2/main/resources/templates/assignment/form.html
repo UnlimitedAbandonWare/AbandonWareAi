@@ -1,0 +1,31 @@
+<!-- src/main/resources/templates/assignments/form.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head th:replace="fragments/layout :: head"></head>
+<body>
+<div th:replace="fragments/layout :: header"></div>
+<div class="container mt-4">
+  <h1 th:text="'과제 제출: ' + ${assignment.title}">과제 제출</h1>
+  <p th:text="'제출 마감: ' + #dates.format(${assignment.deadline}, 'yyyy-MM-dd HH:mm')">
+    제출 마감 정보
+  </p>
+
+  <form th:action="@{/upload(token=${token})}"
+        method="post"
+        enctype="multipart/form-data">
+    <!-- CSRF 토큰 -->
+    <input type="hidden"
+           th:if="${_csrf != null}"
+           th:name="${_csrf.parameterName}"
+           th:value="${_csrf.token}"/>
+
+    <div class="mb-3">
+      <label class="form-label">파일 선택</label>
+      <input type="file" name="file" class="form-control" required/>
+    </div>
+    <button type="submit" class="btn btn-primary">제출하기</button>
+  </form>
+</div>
+<div th:replace="fragments/layout :: footer"></div>
+</body>
+</html>
