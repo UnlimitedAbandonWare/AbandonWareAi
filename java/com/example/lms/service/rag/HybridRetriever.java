@@ -2,6 +2,7 @@ package com.example.lms.service.rag;
 
 import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import com.example.lms.service.rag.handler.RetrievalHandler;
+
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.rag.content.Content;
@@ -36,7 +37,8 @@ public class HybridRetriever implements ContentRetriever {
     // 체인 & 융합기
     private final RetrievalHandler      handlerChain;
     private final ReciprocalRankFuser   fuser;
-
+    private final AnswerQualityEvaluator qualityEvaluator;
+    private final SelfAskPlanner         selfAskPlanner;
     // 리트리버들
     private final SelfAskWebSearchRetriever  selfAskRetriever;
     private final AnalyzeWebSearchRetriever  analyzeRetriever;
@@ -53,6 +55,10 @@ public class HybridRetriever implements ContentRetriever {
 
     @Value("${hybrid.debug.sequential:false}")
     private boolean debugSequential;
+    @Value("${hybrid.progressive.quality-min-docs:4}")
+    private int qualityMinDocs;
+    @Value("${hybrid.progressive.quality-min-score:0.62}")
+    private double qualityMinScore;
     @Value("${hybrid.max-parallel:3}")
     private int maxParallel;
     @Override
@@ -118,6 +124,55 @@ public class HybridRetriever implements ContentRetriever {
 
         return finalizeResults(new ArrayList<>(mergedContents), dedupeKey, officialDomains);
     }
+    /**
+     * Progressive retrieval:
+     * 1) Local RAG 우선 → 품질 충분 시 조기 종료
+     * 2) 미흡 시 Self‑Ask(1~2개)로 정제된 웹 검색만 수행
+     */
+    public List<Content> retrieveProgressive(String question, String sessionKey, int limit) {
+        if (question == null || question.isBlank()) {
+            return List.of(Content.from("[빈 질의]"));
+        }
+        final int top = Math.max(1, limit);
+
+        try {
+            // 1) 로컬 RAG 우선
+            ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
+            List<Content> local = pine.retrieve(Query.from(question));
+
+            if (qualityEvaluator != null && qualityEvaluator.isSufficient(question, local, qualityMinDocs, qualityMinScore)) {
+                log.info("[Hybrid] Local RAG sufficient → skip web (sid={}, q='{}')", sessionKey, question);
+                List<Content> out = finalizeResults(new ArrayList<>(local), "text", List.of());
+                return out.size() > top ? out.subList(0, top) : out;
+            }
+
+            // 2) Self‑Ask로 1~2개 핵심 질의 생성 → 위생 필터
+            List<String> planned = (selfAskPlanner != null) ? selfAskPlanner.plan(question, 2) : List.of(question);
+            List<String> queries = QueryHygieneFilter.sanitize(planned, 2, 0.80);
+            if (queries.isEmpty()) queries = List.of(question);
+
+            // 3) 필요한 쿼리만 순차 처리 → 융합
+            List<List<Content>> buckets = new ArrayList<>();
+            for (String q : queries) {
+                List<Content> acc = new ArrayList<>();
+                try {
+                    handlerChain.handle(Query.from(q), acc);
+                } catch (Exception e) {
+                    log.warn("[Hybrid] handler 실패: {}", e.toString());
+                }
+                buckets.add(acc);
+            }
+
+            List<Content> fused = fuser.fuse(buckets, top);
+            List<Content> out = finalizeResults(new ArrayList<>(fused), "text", List.of());
+            return out.size() > top ? out.subList(0, top) : out;
+
+        } catch (Exception e) {
+            log.error("[Hybrid] retrieveProgressive 실패(sid={}, q='{}')", sessionKey, question, e);
+            return List.of(Content.from("[검색 오류]"));
+        }
+    }
+}
 
     /**
      * 다중 쿼리 병렬 검색 + RRF 융합

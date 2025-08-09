@@ -312,7 +312,7 @@ public class ChatService {
         /* 0-2) 의미 확정(Ser8 ↔ S8 등) 적용 */
         Long sidNum = Optional.ofNullable(req.getSessionId())
                 .map(Object::toString)
-                .filter(s -> s.matches("\\d"))
+                .filter(s -> s.matches("\\d+"))   // ✔ 다자리 숫자 허용
                 .map(Long::valueOf)
                 .orElse(null);
         final String finalQuery = decideFinalQuery(correctedMsg, sidNum);
@@ -387,28 +387,13 @@ public class ChatService {
         // 🔸 프리플라이트 웹검색 제거 → 이중 호출 방지(하이브리드 단일 패스)
 
 // ❷ 체인 캐싱 역시 동일 키 사용
-        // 🔸 1) 적응형 다중 쿼리 생성(사용자 질의 기반, 초안 미사용 단일 패스)
-        List<String> expanded = queryTransformer.transformEnhanced(finalQuery, null);
-        if (expanded == null || expanded.isEmpty()) {
-            expanded = List.of(finalQuery);
-        }
-        // 과도·중복 확장 방지: 정규화·중복 제거 후 상위 3개만
-        expanded = expanded.stream()
-                .map(String::trim)
-                .filter(org.springframework.util.StringUtils::hasText)
-                .distinct()
-                .limit(3)
-                .toList();
+        // 🔸 Progressive Retrieval (로컬 RAG → 필요 시 Self‑Ask → 웹) 으로 검색 로직 일원화
+        List<Content> fused = hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
 
-        // 🔸 2) 하이브리드 병렬 검색  RRF 융합 (topK)
-        List<Content> fused = hybridRetriever.retrieveAll(expanded, hybridTopK);
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
         List<Content> topDocs = reranker.rerank(finalQuery, fused, rerankTopN);
-        if (log.isDebugEnabled()) {
-            log.debug("[Hybrid] fused={}, topN={} (sid={})",
-                    (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
-        }
+        if (log.isDebugEnabled()) log.debug("[Hybrid] fused={}, topN={} (sid={})", (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
         /* 🔴 컨텍스트 부족 가드레일(하이브리드 이후로 이동)
          *   웹/벡터 문서(topDocs)와 RAG가 모두 비면 즉시 종료 */
         if ((topDocs == null || topDocs.isEmpty()) && !org.springframework.util.StringUtils.hasText(ragCtx)) {
@@ -417,9 +402,9 @@ public class ChatService {
                     "lc:"+  chatModel.getClass().getSimpleName(), true);
         }
 
-        // 🔸 4) 최종 프롬프트/컨텍스트 구성(메모리 포함)
+        // 🔸 4) 최종 프롬프트/컨텍스트 구성
         String ctx = promptEngine.createPrompt(finalQuery, topDocs);
-        String unifiedCtx = buildUnifiedContext(null, ctx, memCtx); // 웹은 promptEngine 포함하므로 webCtx=null
+
 
         // 🔸 5) 단일 LLM 호출로 답변 생성
         String cleanModel = chooseModel(req.getModel(), true);
