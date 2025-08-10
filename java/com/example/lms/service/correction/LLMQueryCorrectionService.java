@@ -1,33 +1,44 @@
 package com.example.lms.service.correction;
 
 import com.example.lms.util.ProductAliasNormalizer;
-// import dev.langchain4j.model.chat.ChatLanguageModel; // ⛔ 의존성 잡히기 전까지 비활성
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
 import com.theokanning.openai.service.OpenAiService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
-import java.util.Locale;   // ★ 누락된 import 추가
+
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class LLMQueryCorrectionService implements QueryCorrectionService {
 
-    // private final ObjectProvider<ChatLanguageModel> chatModelProvider; // ⛔ 임시 비활성
     private final ObjectProvider<OpenAiService> openAiProvider;
     private final DomainTermDictionary dictionaryProvider;
 
-    @Value("${query.correction.enabled:true}") private boolean enabled;
-    @Value("${query.correction.model:gpt-4o-mini}") private String openAiModel;
-    @Value("${query.correction.max-length:140}") private int maxLength;
+    @Value("${query.correction.enabled:true}")
+    private boolean enabled;
+    @Value("${query.correction.model:gpt-4o-mini}")
+    private String openAiModel;
+    @Value("${query.correction.max-length:140}")
+    private int maxLength;
+
+    // --- @RequiredArgsConstructor 대신 생성자 직접 작성 ---
+    public LLMQueryCorrectionService(
+            ObjectProvider<OpenAiService> openAiProvider,
+            @Qualifier("defaultDomainTermDictionary") DomainTermDictionary dictionaryProvider
+    ) {
+        this.openAiProvider = openAiProvider;
+        this.dictionaryProvider = dictionaryProvider;
+    }
+    // ----------------------------------------------------
 
     @Override
     public String correct(@Nullable String originalInput) {
@@ -59,7 +70,7 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
             if (!protectedTerms.isEmpty()) {
                 String outLower = corrected.toLowerCase(Locale.ROOT);
                 boolean dropped = protectedTerms.stream()
-                        .anyMatch(t -> !outLower.contains(t.toLowerCase(Locale.ROOT))); // ★ Locale 고정
+                        .anyMatch(t -> !outLower.contains(t.toLowerCase(Locale.ROOT)));
                 if (dropped) return originalInput;
             }
             return corrected;

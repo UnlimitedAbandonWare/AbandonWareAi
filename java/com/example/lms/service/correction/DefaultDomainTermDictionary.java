@@ -1,9 +1,10 @@
 package com.example.lms.service.correction;
-
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import java.util.*;
-
-@Component
+// 예: 기본으로 쓰고 싶은 구현체
+@Service
+@Primary
 public class DefaultDomainTermDictionary implements DomainTermDictionary {
 
     private static final Map<String, Set<String>> DICTIONARY = Map.of(
