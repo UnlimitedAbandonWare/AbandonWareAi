@@ -22,7 +22,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
-
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -122,28 +125,34 @@ public class ChatApiController {
                             .body(new ChatResponseDto("Error: " + ex.getMessage(), null, "error-model", false)));
                 });
     }
-    /* ================================================================
-     * SSE 스트리밍 엔드포인트 (생각하는 기능)
-     * ================================================================ */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<ChatStreamEvent>> chatStream(
             @RequestBody @Valid ChatRequestDto req,
             @AuthenticationPrincipal UserDetails principal) {
+
         String username = (principal != null) ? principal.getUsername() : "anonymousUser";
         Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink = Sinks.many().unicast().onBackpressureBuffer();
 
         Mono.fromRunnable(() -> {
             try {
+                // 1) 설정 병합
                 ChatRequestDto dto = mergeWithSettings(req);
+
+                // 2) 세션 upsert
                 ChatSession session = req.getSessionId() == null
                         ? historyService.startNewSession(dto.getMessage(), username)
                         .orElseThrow(() -> new IllegalStateException("세션 생성 실패"))
                         : historyService.getSessionWithMessages(req.getSessionId());
+
                 if (req.getSessionId() != null) {
                     historyService.appendMessage(session.getId(), "user", dto.getMessage());
                 }
+
+                // 3) 상태
                 sink.tryEmitNext(sse(ChatStreamEvent.status("쿼리 분석 중…")));
                 sink.tryEmitNext(sse(ChatStreamEvent.status("웹/하이브리드 검색 준비…")));
+
+                // 4) 웹 검색(추적)
                 NaverSearchService.SearchResult sr = dto.isUseWebSearch()
                         ? searchService.searchWithTrace(dto.getMessage(), 5)
                         : new NaverSearchService.SearchResult(List.of(), null);
@@ -151,6 +160,8 @@ public class ChatApiController {
                     String traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
                     sink.tryEmitNext(sse(ChatStreamEvent.trace(traceHtml)));
                 }
+
+                // 5) 본 호출
                 sink.tryEmitNext(sse(ChatStreamEvent.status("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
                 ChatRequestDto dtoForCall = ChatRequestDto.builder()
                         .sessionId(session.getId())
@@ -164,17 +175,24 @@ public class ChatApiController {
                         .useRag(dto.isUseRag())
                         .useWebSearch(dto.isUseWebSearch())
                         .build();
+
                 sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
                 ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
                 String finalText = result.content();
+
+                // 6) 토큰 스트리밍(청크)
                 for (String c : chunk(finalText, 60)) {
                     sink.tryEmitNext(sse(ChatStreamEvent.token(c)));
                 }
+
+                // 7) 세션 저장 + 모델 메타
                 historyService.appendMessage(session.getId(), "assistant", finalText);
                 String modelUsedFinal = (result.modelUsed() != null && !result.modelUsed().isBlank())
                         ? result.modelUsed()
                         : (dto.getModel() != null && !dto.getModel().isBlank() ? dto.getModel() : FALLBACK_MODEL);
                 historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
+
+                // 8) 완료 이벤트
                 sink.tryEmitNext(sse(ChatStreamEvent.done(modelUsedFinal, result.ragUsed(), session.getId())));
             } catch (Exception ex) {
                 log.error("chatStream() 처리 오류", ex);
@@ -183,17 +201,18 @@ public class ChatApiController {
                 sink.tryEmitComplete();
             }
         }).subscribeOn(Schedulers.boundedElastic()).subscribe();
+
         return sink.asFlux();
     }
 
-    // ──────────────── SSE 유틸 ────────────────
+    // ─── SSE 유틸은 컨트롤러 클래스의 private static 메서드로 둡니다 ───
     private static ServerSentEvent<ChatStreamEvent> sse(ChatStreamEvent e) {
         return ServerSentEvent.<ChatStreamEvent>builder(e).event(e.type()).build();
     }
-    private static List<String> chunk(String s, int size) {
-        if (s == null) return List.of();
+    private static java.util.List<String> chunk(String s, int size) {
+        if (s == null) return java.util.List.of();
         int n = Math.max(1, size);
-        List<String> out = new java.util.ArrayList<>();
+        java.util.List<String> out = new java.util.ArrayList<>();
         for (int i = 0; i < s.length(); i += n) {
             out.add(s.substring(i, Math.min(s.length(), i + n)));
         }
