@@ -1,43 +1,40 @@
+Got it. I'll combine the summary of code changes with the existing README.md content to create a comprehensive project overview suitable for GitHub.
+
+Here is the updated README.md:
+
 <a href="https://github.com/anuraghazra/github-readme-stats"> <img height="200" align="center" src="https://github-readme-stats.vercel.app/api?username=UnlimitedAbandonWare" /> </a>
+
 (AbandonWare) 하이브리드 RAG AI 챗봇 서비스
 Java 17 · Spring Boot · LangChain4j 1.0.1 (BOM/core/starter/OpenAI)
 
-단순 LLM 호출을 넘어서 웹 검색·분석·벡터 RAG를 통합하고, 재랭크→검증(2‑Pass) 으로 환각을 줄이는 하이브리드 RAG 오케스트레이터입니다. 세션 격리, 캐시, 안전가드까지 운영 관점에서 필요한 것들을 실제로 넣었습니다.
+단순 LLM 호출을 넘어서 "스스로 생각하고(검색/추론) 사용자 피드백으로 발전하는(강화)" 지능형 RAG(검색 증강 생성) 시스템입니다. 실시간 웹 검색, 벡터 DB, 책임 연쇄(Chain of Responsibility) 패턴 기반의 검색 파이프라인, 재랭킹 및 2-Pass 검증을 통해 환각을 최소화합니다. 세션 격리, 캐싱, API 스트리밍, 동적 설정 등 운영 환경에 필수적인 기능들을 포함하고 있습니다.
 
 📑 프로젝트 개요
-실시간 웹 검색(Web) + 분석 기반 검색(Analyze) + 벡터 RAG(Vector/Pinecone) 를 한 번에 묶어 신뢰도 높은 컨텍스트를 구성합니다.
+실시간 웹 검색(Web), 형태소 분석 기반 검색(Analyze), 벡터 RAG(Vector/Pinecone)를 결합하여 신뢰도 높은 컨텍스트를 동적으로 구성합니다. 전체 시스템은 다음과 같은 단계적 파이프라인을 통해 지능형으로 작동합니다.
 
-HybridRetriever가 모든 리트리버의 결과를 취합하고 Rerank(간단 토큰/교집합 기반 → 필요 시 Cross)와 RRF Fuser로 정제합니다.
+질의 향상 (Query Augmentation & Correction): 사용자의 불완전한 질문을 정제하고 확장하여 검색 품질을 극대화합니다.
 
-FactVerifierService가 초안 답변을 다시 한 번 사실 검증(2‑Pass) 하여 품질을 끌어올립니다.
+심층 검색 및 결과 정제 (Deep Search & Refinement): 여러 소스에서 병렬로 정보를 수집하고, RRF(Reciprocal Rank Fusion)와 Cross-Encoder 재정렬을 통해 가장 관련성 높은 정보를 선별합니다.
 
-META_SID 세션 메타데이터로 체인을 격리하고, Caffeine 캐시로 응답 속도를 개선합니다.
+검증 및 생성 (Grounded Generation): 생성된 답변의 내용이 검색된 근거에 실제로 존재하는지 교차 검증하여 환각을 억제합니다.
 
-LLM Query Guardrail(별칭/사전/프롬프트 가드)로 고유명사 오교정을 방지합니다.
+"생각하는 기능" (Streaming UX): SSE(Server-Sent Events)를 통해 AI의 처리 단계를 사용자에게 실시간으로 보여주어 대기 경험을 개선합니다.
 
-✨ 주요 개선 사항 (요약)
-1‑Pass 통합 검색 파이프라인: ChatService가 HybridRetriever를 통해 한 번만 검색→LLM 호출. 중복 호출 제거.
+"강화 기능" (Reinforcement Learning): 사용자의 좋아요/싫어요 피드백을 시스템의 장기 기억(Translation Memory)에 반영하여 점진적으로 성능을 개선합니다.
 
-세션 격리 & 공용 데이터 처리: META_SID 주입, RAG는 세션 일치/무세션/공용(*) 문서를 포함하도록 필터링.
-
-검색 유연성 확보: WebSearchRetriever의 과도한 하드 코딩 필터 제거로 후보 폭 확장.
-
-재랭킹 고도화: SimpleReranker(경량 교집합 기반) → 필요 시 Cross‑Encoder로 정밀 재정렬.
-
-안전 가드: FactVerifierService + 공식 도메인 가중치 + 고유명사 보존(별칭/사전/프롬프트 가드).
-
-🚀 주요 기능
-범주	설명
-하이브리드 검색	NaverSearchService(실시간 웹), AnalyzeWebSearchRetriever(형태소/키워드), Pinecone 기반 Vector RAG.
-동적 라우팅	요청별 모드 전환: Retrieval ON(기본) / RAG only / Retrieval OFF.
-2‑Pass 정제	LLM 초안 → FactVerifierService 추가검색·교차검증 → 최종 폴리시.
-세션 캐싱	세션별 ConversationalRetrievalChain을 Caffeine으로 캐싱.
-고성능 통신	Netty(WebSocket), WebFlux, @Async/CompletableFuture.
-안전장치	민감 토픽/비공식 도메인 시 억제·보류, 공식 도메인 보너스 가중치.
-
+✨ 주요 기능 및 컴포넌트
+범주	설명	핵심 컴포넌트
+질의 향상	사용자의 오타, 구어체를 교정하고 검색 의도에 맞게 키워드를 동적 확장합니다.	LLMQueryCorrectionService, QueryAugmentationService, QueryComplexityGate
+하이브리드 검색	Naver(웹), Lucene(형태소 분석), Pinecone(벡터 RAG)을 동시에 활용합니다.	HybridRetriever, NaverSearchService, AnalyzeWebSearchRetriever
+결과 융합/재정렬	여러 소스의 검색 결과를 RRF 알고리즘으로 융합하고 Cross-Encoder로 재정렬합니다.	ReciprocalRankFuser, EmbeddingModelCrossEncoderReranker
+2-Pass 검증	LLM 초안 답변을 생성한 뒤, 검색된 정보와 교차 검증하여 사실 기반 응답을 보장합니다.	FactVerifierService
+실시간 스트리밍	SSE를 통해 AI의 처리 과정을 프론트엔드로 실시간 전송합니다. ("생각하는 기능")	ChatApiController (/stream), chat.js
+강화 학습	사용자 피드백(👍/👎)을 시스템의 장기 기억 보상 점수에 반영합니다. ("강화 기능")	FeedbackController, MemoryReinforcementService
+세션 관리	META_SID 메타데이터를 통해 모든 파이프라인에서 세션을 격리하고 Caffeine으로 캐싱합니다.	ChatHistoryService, PersistentChatMemory
+고성능 통신	Netty(WebSocket), WebFlux(@Async/CompletableFuture)를 활용합니다.	NettyServerConfig, AdaptiveTranslationService
 🧠 아키텍처 & 흐름
-mermaid
-복사
+코드 스니펫
+
 flowchart TD
     U[User Request] --> R{Mode Routing<br/>(Retrieval ON | RAG only | Retrieval OFF)}
 
@@ -63,23 +60,24 @@ flowchart TD
     LLM --> D1[Draft Answer]
     D1 --> FV[FactVerifierService (2‑Pass Verification)]
     FV --> OUT2[Final Answer]
-핵심 컴포넌트
+로그 분석 예시: 원신에 에스코피에랑 어울리는 조합
+최근 로그에 기록된 SessionInfo[id=403, title=원신에 에스코피에랑 어울리는 조합이 ...]는 우리 시스템의 지능적 처리 과정을 잘 보여주는 사례입니다.
 
-HybridRetriever: Web/Analyze/Vector 결과 취합 → 재랭크 → 통합 컨텍스트.
+질의 의도: 사용자는 게임 **"원신(Genshin Impact)"**의 캐릭터 조합을 질문했습니다.
 
-ReciprocalRankFuser / Rerankers: 결과 융합 및 재순위화.
+키워드 오인: "에스코피에"는 원신 캐릭터가 아니며, 불 속성 신규 캐릭터 **"클로린드(Clorinde)"**의 오타일 가능성이 높습니다.
 
-LangChainRAGService: Pinecone 인덱스 질의.
+시스템의 대응:
 
-FactVerifierService: 생성 결과의 사실 검증.
+교정 (LLMQueryCorrectionService): "에스코피에"가 원신 컨텍스트에 맞지 않음을 인지하고 "클로린드"로 교정을 시도합니다.
 
-META_SID 전파: 세션 격리/일관성 확보.
+검색 (HybridRetriever): 교정된 키워드 "원신 클로린드 조합"으로 웹과 벡터 DB에서 관련 정보를 수집합니다.
 
-Caffeine Cache: 세션·쿼리 레벨 캐싱.
+생성 (ChatService + LLM): "원신에는 '에스코피에'라는 캐릭터가 없습니다. 혹시 '클로린드'를 찾으시나요? 클로린드와 어울리는 조합은 다음과 같습니다..." 와 같이 사용자의 실수를 바로잡으며 정확한 정보를 제공하는 답변을 생성합니다.
 
 ⚙️ 설정 예시 (application.yml)
-yaml
-복사
+YAML
+
 openai:
   api:
     key: "${OPENAI_API_KEY}"
@@ -114,32 +112,29 @@ abandonware:
   cache:
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=5m"
-필수 환경변수
-
-OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT (예: gcp-starter), 필요 시 NAVER_API_*
+필수 환경변수: OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT (예: gcp-starter), NAVER_API_*
 
 ▶️ 빠른 시작
-bash
-복사
+Bash
+
 # 1) 클론
 git clone https://github.com/<OWNER>/<REPO>.git
 cd <REPO>
 
-# 2) 설정 템플릿 복사
+# 2) 설정 템플릿 복사 및 키 입력
 cp src/main/resources/application.yml.example src/main/resources/application.yml
-vi src/main/resources/application.yml  # 키/환경값 설정
+vi src/main/resources/application.yml
 
 # 3) 실행 (JDK 17+)
 ./gradlew bootRun
-# 또는 IDE에서 Application.java 실행 → https://localhost:8080
-예시 요청
+# 또는 IDE에서 LmsApplication.java 실행 → https://localhost:8080
+예시 요청 (스트리밍)
+HTTP
 
-http
-복사
-POST /api/chat
+POST /api/chat/stream
 Content-Type: application/json
-json
-복사
+JSON
+
 {
   "sessionId": "demo-1234",
   "message": "LangChain4j의 장점은 무엇인가요?",
@@ -147,30 +142,22 @@ json
   "useRag": true
 }
 🗂️ 프로젝트 구조 (요약)
-bash
-복사
+Bash
+
 src/main/java/com/example/lms
+├─ api/             # API Controllers (Chat, Feedback, SSE)
 ├─ config/          # Bean/설정 (WebClientConfig, LangChainConfig, …)
-├─ controller/      # API (ChatApiController, …)
+├─ domain/          # JPA 엔티티 (LMS 관련)
 ├─ dto/             # 요청/응답 DTO (record 적극 활용)
-├─ entity/          # JPA 엔티티
+├─ entity/          # JPA 엔티티 (AI/LLM 관련)
 ├─ repository/      # 데이터 접근
 └─ service/
    ├─ rag/          # Retriever/Fuser/Reranker/RAG 서비스
-   ├─ quality/      # FactVerifierService 등 품질 검증
-   ├─ memory/       # TranslationMemory, Reinforcement
+   ├─ correction/   # 질의 교정 서비스
+   ├─ reinforcement/# 강화 학습 및 피드백 관련 서비스
    └─ ...
-
-Prompt 생성 위치 단일화: ChatService 내 문자열 직접 결합 금지 → PromptBuilder.build(ctx) 사용.
-
-세션 누수 방지: 모든 체인/저장소 호출에 META_SID 전파.
-
-웹 검색 오탐: 필요 이상 도메인 하드필터링 지양, 공식 도메인 가중치로 안전성 확보.
-
 🤝 기여 가이드
-저장소를 Fork → 2) 브랜치 생성(feature/*) → 3) 커밋 규칙(feat:, fix:, docs: …) 준수 →
-
-테스트 포함 PR 생성. 아키텍처 변경 시 Mermaid 다이어그램 업데이트 부탁!
+저장소를 Fork → 브랜치 생성(feature/*) → 커밋 규칙(feat:, fix:, docs: …) 준수 → 테스트 포함 PR 생성. 아키텍처 변경 시 Mermaid 다이어그램 업데이트 부탁드립니다.
 
 📄 라이선스
 MIT License (LICENSE 참조)
