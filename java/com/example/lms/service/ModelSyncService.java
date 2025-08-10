@@ -1,5 +1,10 @@
 // src/main/java/com/example/lms/service/ModelSyncService.java
 package com.example.lms.service;
+
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
@@ -18,19 +23,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.Instant;
-import java.time.ZoneId;
-import java.util.ArrayList;
-import java.util.List;
-
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class ModelSyncService {
 
     private final ModelEntityRepository modelRepo;
-    private final RestTemplate          restTemplate = new RestTemplate();
-    private final ObjectMapper          objectMapper = new ObjectMapper();
+    private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${openai.api.url:https://api.openai.com/v1}")
     private String apiUrl;
@@ -38,6 +38,7 @@ public class ModelSyncService {
     @Value("${openai.api.key}")
     private String apiKey;
 
+    // ※ 중복 호출이 싫으면 이 @PostConstruct는 지우고 스케줄러만 두세요.
     @PostConstruct
     public void init() {
         fetchAndStoreModels();
@@ -68,26 +69,56 @@ public class ModelSyncService {
                 log.warn("Unexpected response format: {}", data);
                 return;
             }
-// --- 기존 deleteAll() 로직 제거 ---
-/ ... 필요한 필드 업데이트 계속 ...
 
-            fetchedIds.add(modelId);
-            toSave.add(e);
-        });
+            // 1) 기존 전체 조회 → Map
+            List<ModelEntity> existing = modelRepo.findAll();
+            Map<String, ModelEntity> existingMap = existing.stream()
+                    .collect(Collectors.toMap(ModelEntity::getModelId, e -> e));
 
-// 3) 삭제 대상 산출 및 일괄 삭제
-        List<String> idsToDelete = existingMap.keySet().stream()
-                .filter(id -> !fetchedIds.contains(id))
-                .toList();
-        if (!idsToDelete.isEmpty()) {
-            modelRepo.deleteAllById(idsToDelete);
+            // 2) 업서트 대상 및 신규 ID 수집
+            List<ModelEntity> toSave = new ArrayList<>();
+            Set<String> fetchedIds = new HashSet<>();
+
+            for (JsonNode node : data) {
+                String modelId = node.path("id").asText(null);
+                if (modelId == null || modelId.isBlank()) {
+                    continue;
+                }
+                ModelEntity e = existingMap.getOrDefault(modelId, new ModelEntity());
+                e.setModelId(modelId);
+
+                long createdTs = node.path("created").asLong(0);
+                if (createdTs > 0) {
+                    e.setReleaseDate(
+                            Instant.ofEpochSecond(createdTs)
+                                    .atZone(ZoneId.systemDefault())
+                                    .toLocalDate()
+                    );
+                }
+
+                // 필요하면 여기서 추가 필드 매핑 (e.setOwner(...), e.setType(...), 등)
+
+                fetchedIds.add(modelId);
+                toSave.add(e);
+            }
+
+            // 3) 삭제 대상(ID 차집합) 계산 → 일괄 삭제
+            List<String> idsToDelete = existingMap.keySet().stream()
+                    .filter(id -> !fetchedIds.contains(id))
+                    .toList();
+            if (!idsToDelete.isEmpty()) {
+                modelRepo.deleteAllById(idsToDelete);
+            }
+
+            // 4) 일괄 업서트
+            if (!toSave.isEmpty()) {
+                modelRepo.saveAll(toSave);
+            }
+
+            log.info("📦 Fetched={}, Upserted={}, Deleted={}", fetchedIds.size(), toSave.size(), idsToDelete.size());
+
+        } catch (Exception e) {
+            log.error("Model sync 실패", e);
         }
-
-// 4) 일괄 업서트
-        if (!toSave.isEmpty()) {
-            modelRepo.saveAll(toSave);
-        }
-
-        log.info("📦 Fetched={}, Upserted={}, Deleted={}", fetchedIds.size(), toSave.size(), idsToDelete.size());
     }
 }
