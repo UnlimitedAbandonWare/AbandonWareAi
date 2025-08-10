@@ -1,7 +1,8 @@
-Got it. I'll combine the summary of code changes with the existing README.md content to create a comprehensive project overview suitable for GitHub.
+알겠습니다. 기존 README.md 내용에 제공해주신 상세한 수정 과정과 내역을 자연스럽게 통합하여 GitHub에 올리기 좋은 단일 문서로 만들어 드리겠습니다.
 
-Here is the updated README.md:
+프로젝트의 개요와 아키텍처를 먼저 소개하고, 그 아래에 이 시스템이 어떻게 발전해왔는지를 보여주는 "개발 과정 및 주요 변경 내역" 섹션을 추가하는 것이 가장 이상적인 구조입니다.
 
+최종 README.md
 <a href="https://github.com/anuraghazra/github-readme-stats"> <img height="200" align="center" src="https://github-readme-stats.vercel.app/api?username=UnlimitedAbandonWare" /> </a>
 
 (AbandonWare) 하이브리드 RAG AI 챗봇 서비스
@@ -60,20 +61,65 @@ flowchart TD
     LLM --> D1[Draft Answer]
     D1 --> FV[FactVerifierService (2‑Pass Verification)]
     FV --> OUT2[Final Answer]
-로그 분석 예시: 원신에 에스코피에랑 어울리는 조합
-최근 로그에 기록된 SessionInfo[id=403, title=원신에 에스코피에랑 어울리는 조합이 ...]는 우리 시스템의 지능적 처리 과정을 잘 보여주는 사례입니다.
+🚀 개발 과정 및 주요 변경 내역
+이 시스템은 초기 버전의 한계를 극복하고 점진적으로 고도화되었습니다. 개발 과정은 크게 4단계로 요약할 수 있습니다.
 
-질의 의도: 사용자는 게임 **"원신(Genshin Impact)"**의 캐릭터 조합을 질문했습니다.
+1단계: 환각 긴급 대응: '에스코피에' 환각(AI가 존재하지 않는 것을 사실처럼 말하는 현상)을 막기 위해 쿼리 재작성, 사실 검증, RAG 프롬프트를 강화하여 잘못된 추론을 원천 차단했습니다.
 
-키워드 오인: "에스코피에"는 원신 캐릭터가 아니며, 불 속성 신규 캐릭터 **"클로린드(Clorinde)"**의 오타일 가능성이 높습니다.
+2단계: 기능 구현 및 리팩토링: SSE 스트리밍('생각하는 기능'), 사용자 피드백('강화 기능')을 구현하면서 발생한 구조적 문제와 문법 오류를 해결했습니다.
 
-시스템의 대응:
+3단계: API 불일치 해결: 대규모 리팩토링 이후 발생한 16개의 컴파일 오류를 해결했습니다. 이는 여러 서비스가 변경된 MemoryReinforcementService의 예전 메서드를 호출하고 있었기 때문이며, 호환성 유지를 위한 임시 메서드(Shim)를 추가하여 해결했습니다.
 
-교정 (LLMQueryCorrectionService): "에스코피에"가 원신 컨텍스트에 맞지 않음을 인지하고 "클로린드"로 교정을 시도합니다.
+4단계: UX 고도화 (스마트 폴백): 단순히 "정보 없음"으로 응답하는 대신, 사용자의 의도를 파악하여 대안을 제시하는 지능형 응답 기능을 추가했습니다.
 
-검색 (HybridRetriever): 교정된 키워드 "원신 클로린드 조합"으로 웹과 벡터 DB에서 관련 정보를 수집합니다.
+클래스별 상세 변경 내역
+QueryDisambiguationService (1단계: 환각 1차 방어)
 
-생성 (ChatService + LLM): "원신에는 '에스코피에'라는 캐릭터가 없습니다. 혹시 '클로린드'를 찾으시나요? 클로린드와 어울리는 조합은 다음과 같습니다..." 와 같이 사용자의 실수를 바로잡으며 정확한 정보를 제공하는 답변을 생성합니다.
+변경점: buildPrompt()의 프롬프트를 수정하고 clarify()에 사전 차단 로직을 추가했습니다.
+
+상세: "게임에 존재하지 않는 고유명사가 있으면 질문을 재작성하지 말고 원본을 유지하라"는 규칙을 프롬프트에 추가했습니다. 또한 NonGameEntityHeuristics 유틸을 통해 "원신"과 "에스코피에"처럼 명백히 관련 없는 조합의 질문은 AI에게 보내기 전에 차단하도록 변경했습니다.
+
+DefaultDomainTermDictionary (1단계, 4단계: 지식 강화)
+
+변경점: DICTIONARY 맵 데이터를 보강했습니다.
+
+상세: "원신" 카테고리에 '다이루크', '클로린드' 등을, "요리/인물"이라는 새 카테고리에 '에스코피에'를 등록하여 AI가 단어의 맥락을 더 잘 파악하도록 했습니다.
+
+FactVerifierService (1단계: 환각 2차 방어)
+
+변경점: verify() 로직, TEMPLATE 프롬프트, extractEntities 정규식 패턴을 수정했습니다.
+
+상세: 답변의 핵심 단어들이 검색 결과에 실제로 존재하는지 확인하는 groundedInContext 로직을 추가하고, 검증 실패 시 **"정보 없음"**을 반환하도록 하여 안전성을 높였습니다.
+
+ChatApiController (2단계: 기능 구현 및 리팩토링)
+
+변경점: 클래스 구조를 개선하고 SSE 스트리밍 및 메시지 복원 로직을 안정화했습니다.
+
+상세: chat() 메서드 내부에 잘못 위치했던 @PostMapping("/stream")을 클래스 레벨로 분리하여 컴파일 오류를 해결하고, 이전 대화 내용을 불러올 때 모델 정보나 검색 패널이 누락되지 않도록 메타데이터 파싱 로직을 개선했습니다.
+
+MemoryReinforcementService (2단계, 3단계: 오류 해결 및 API 복구)
+
+변경점: 오타를 수정하고, 대규모 리팩토링으로 인해 발생한 16개의 컴파일 오류를 해결하기 위해 **호환성 메서드(Shim)**를 추가했습니다.
+
+상세: @Transactional 어노테이션 오타와 중복 정의된 applyFeedback 메서드를 수정했습니다. 가장 중요한 변경으로, reinforceWithSnippet, loadContext 등 여러 클래스에서 호출하던 예전 API를 임시로 복구하여 "cannot find symbol" 오류를 일괄 해결했습니다.
+
+FeedbackController & chat.js (2단계: 기능 구현 및 오류 수정)
+
+변경점: 피드백 API 호출부를 수정하고, 프론트엔드의 자바스크립트 문법 오류를 해결했습니다.
+
+상세: FeedbackController가 MemoryReinforcementService의 applyFeedback 메서드를 올바른 인자와 함께 호출하도록 수정했습니다. chat.js에서는 HTML 템플릿 문자열의 따옴표 오류를 수정하고, 피드백 버튼(좋아요/싫어요)과 SSE 스트리밍 로직을 안정화했습니다.
+
+ChatService (1단계, 4단계: RAG 강화 및 스마트 폴백 도입)
+
+변경점: RAG_PREFIX 프롬프트를 강화하고, "스마트 폴백(Smart Fallback)" 로직을 도입했습니다.
+
+상세: RAG 프롬프트에 "컨텍스트에 없는 존재를 주장하지 마라"는 규칙을 명시했습니다. 또한 FactVerifierService의 결과가 "정보 없음"일 때, 새로 추가된 SmartFallbackService를 호출하여 "에스코피에는 원신 캐릭터가 아닙니다. 혹시 다른 캐릭터를 찾으시나요?" 와 같이 더 유용한 안내를 제공하도록 개선했습니다.
+
+신규 클래스 (4단계: 스마트 폴백 기능)
+
+SmartFallbackService.java: "정보 없음" 상황에서 사용자의 의도를 교정해주는 더 나은 답변을 생성하기 위해 별도의 LLM을 호출하는 서비스입니다.
+
+FallbackHeuristics.java: 사용자의 질문에서 "원신" 같은 도메인과 "에스코피에" 같은 비도메인 키워드를 탐지하고, '클로린드', '향릉'과 같은 적절한 대안을 제시하는 규칙 기반 유틸리티 클래스입니다.
 
 ⚙️ 설정 예시 (application.yml)
 YAML
@@ -86,8 +132,8 @@ openai:
       default: 0.7
     top-p:
       default: 1.0
-    history:
-      max-messages: 10
+  history:
+    max-messages: 10
   web-context:
     max-tokens: 8000
   rag-context:
@@ -99,27 +145,23 @@ pinecone:
   index:
     name: "my-knowledge-base"
 
-search:
-  official:
-    domains: "company-blog.com,official-docs.com"
-
 abandonware:
   retrieval:
-    mode: RETRIEVAL_ON         # RETRIEVAL_ON | RAG_ONLY | RETRIEVAL_OFF
-    reranker: cross            # simple | cross
+    mode: RETRIEVAL_ON      # RETRIEVAL_ON | RAG_ONLY | RETRIEVAL_OFF
+    reranker: cross         # simple | cross
   session:
     metaKey: META_SID
   cache:
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=5m"
-필수 환경변수: OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT (예: gcp-starter), NAVER_API_*
 
+# 필수 환경변수: OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT, NAVER_API_*
 ▶️ 빠른 시작
 Bash
 
 # 1) 클론
-git clone https://github.com/<OWNER>/<REPO>.git
-cd <REPO>
+git clone https://github.com/UnlimitedAbandonWare/AbandonWareAi.git
+cd AbandonWareAi
 
 # 2) 설정 템플릿 복사 및 키 입력
 cp src/main/resources/application.yml.example src/main/resources/application.yml
@@ -128,33 +170,20 @@ vi src/main/resources/application.yml
 # 3) 실행 (JDK 17+)
 ./gradlew bootRun
 # 또는 IDE에서 LmsApplication.java 실행 → https://localhost:8080
-예시 요청 (스트리밍)
-HTTP
-
-POST /api/chat/stream
-Content-Type: application/json
-JSON
-
-{
-  "sessionId": "demo-1234",
-  "message": "LangChain4j의 장점은 무엇인가요?",
-  "useWebSearch": true,
-  "useRag": true
-}
 🗂️ 프로젝트 구조 (요약)
 Bash
 
 src/main/java/com/example/lms
-├─ api/             # API Controllers (Chat, Feedback, SSE)
-├─ config/          # Bean/설정 (WebClientConfig, LangChainConfig, …)
-├─ domain/          # JPA 엔티티 (LMS 관련)
-├─ dto/             # 요청/응답 DTO (record 적극 활용)
-├─ entity/          # JPA 엔티티 (AI/LLM 관련)
-├─ repository/      # 데이터 접근
+├─ api/              # API Controllers (Chat, Feedback, SSE)
+├─ config/           # Bean/설정 (WebClientConfig, LangChainConfig, …)
+├─ domain/           # JPA 엔티티 (LMS 관련)
+├─ dto/              # 요청/응답 DTO (record 적극 활용)
+├─ entity/           # JPA 엔티티 (AI/LLM 관련)
+├─ repository/       # 데이터 접근
 └─ service/
-   ├─ rag/          # Retriever/Fuser/Reranker/RAG 서비스
-   ├─ correction/   # 질의 교정 서비스
-   ├─ reinforcement/# 강화 학습 및 피드백 관련 서비스
+   ├─ rag/           # Retriever/Fuser/Reranker/RAG 서비스
+   ├─ correction/    # 질의 교정 서비스
+   ├─ reinforcement/ # 강화 학습 및 피드백 관련 서비스
    └─ ...
 🤝 기여 가이드
 저장소를 Fork → 브랜치 생성(feature/*) → 커밋 규칙(feat:, fix:, docs: …) 준수 → 테스트 포함 PR 생성. 아키텍처 변경 시 Mermaid 다이어그램 업데이트 부탁드립니다.
