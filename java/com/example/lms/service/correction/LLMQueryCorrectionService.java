@@ -12,7 +12,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
-
+import java.util.Locale;   // ★ 누락된 import 추가
 import java.util.List;
 import java.util.Set;
 
@@ -57,8 +57,9 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
 
             corrected = corrected.trim();
             if (!protectedTerms.isEmpty()) {
-                String outLower = corrected.toLowerCase();
-                boolean dropped = protectedTerms.stream().anyMatch(t -> !outLower.contains(t.toLowerCase()));
+                String outLower = corrected.toLowerCase(Locale.ROOT);
+                boolean dropped = protectedTerms.stream()
+                        .anyMatch(t -> !outLower.contains(t.toLowerCase(Locale.ROOT))); // ★ Locale 고정
                 if (dropped) return originalInput;
             }
             return corrected;
