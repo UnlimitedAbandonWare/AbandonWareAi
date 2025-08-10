@@ -12,10 +12,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 
@@ -43,6 +47,7 @@ import java.util.Objects;
 import java.util.Collections;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import java.util.Comparator;
+import com.example.lms.dto.ChatStreamEvent;   // ★ NEW
 
 @Slf4j
 @RestController
@@ -93,6 +98,8 @@ public class ChatApiController {
 
         // 2) LLM / DB 호출은 블로킹 → boundedElastic
 
+        // 2) LLM / DB 호출은 블로킹 → boundedElastic
+
         return Mono.fromCallable(() -> {
                     ChatResponseDto body = handleChat(req, username);
                     ResponseEntity.BodyBuilder ok = ResponseEntity.ok();
@@ -114,6 +121,83 @@ public class ChatApiController {
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                             .body(new ChatResponseDto("Error: " + ex.getMessage(), null, "error-model", false)));
                 });
+    }
+    /* ================================================================
+     * SSE 스트리밍 엔드포인트 (생각하는 기능)
+     * ================================================================ */
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<ChatStreamEvent>> chatStream(
+            @RequestBody @Valid ChatRequestDto req,
+            @AuthenticationPrincipal UserDetails principal) {
+        String username = (principal != null) ? principal.getUsername() : "anonymousUser";
+        Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink = Sinks.many().unicast().onBackpressureBuffer();
+
+        Mono.fromRunnable(() -> {
+            try {
+                ChatRequestDto dto = mergeWithSettings(req);
+                ChatSession session = req.getSessionId() == null
+                        ? historyService.startNewSession(dto.getMessage(), username)
+                        .orElseThrow(() -> new IllegalStateException("세션 생성 실패"))
+                        : historyService.getSessionWithMessages(req.getSessionId());
+                if (req.getSessionId() != null) {
+                    historyService.appendMessage(session.getId(), "user", dto.getMessage());
+                }
+                sink.tryEmitNext(sse(ChatStreamEvent.status("쿼리 분석 중…")));
+                sink.tryEmitNext(sse(ChatStreamEvent.status("웹/하이브리드 검색 준비…")));
+                NaverSearchService.SearchResult sr = dto.isUseWebSearch()
+                        ? searchService.searchWithTrace(dto.getMessage(), 5)
+                        : new NaverSearchService.SearchResult(List.of(), null);
+                if (sr.trace() != null) {
+                    String traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
+                    sink.tryEmitNext(sse(ChatStreamEvent.trace(traceHtml)));
+                }
+                sink.tryEmitNext(sse(ChatStreamEvent.status("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
+                ChatRequestDto dtoForCall = ChatRequestDto.builder()
+                        .sessionId(session.getId())
+                        .message(dto.getMessage())
+                        .history(dto.getHistory())
+                        .model(dto.getModel())
+                        .temperature(dto.getTemperature())
+                        .topP(dto.getTopP())
+                        .frequencyPenalty(dto.getFrequencyPenalty())
+                        .presencePenalty(dto.getPresencePenalty())
+                        .useRag(dto.isUseRag())
+                        .useWebSearch(dto.isUseWebSearch())
+                        .build();
+                sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
+                ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
+                String finalText = result.content();
+                for (String c : chunk(finalText, 60)) {
+                    sink.tryEmitNext(sse(ChatStreamEvent.token(c)));
+                }
+                historyService.appendMessage(session.getId(), "assistant", finalText);
+                String modelUsedFinal = (result.modelUsed() != null && !result.modelUsed().isBlank())
+                        ? result.modelUsed()
+                        : (dto.getModel() != null && !dto.getModel().isBlank() ? dto.getModel() : FALLBACK_MODEL);
+                historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
+                sink.tryEmitNext(sse(ChatStreamEvent.done(modelUsedFinal, result.ragUsed(), session.getId())));
+            } catch (Exception ex) {
+                log.error("chatStream() 처리 오류", ex);
+                sink.tryEmitNext(sse(ChatStreamEvent.error("오류: " + ex.getMessage())));
+            } finally {
+                sink.tryEmitComplete();
+            }
+        }).subscribeOn(Schedulers.boundedElastic()).subscribe();
+        return sink.asFlux();
+    }
+
+    // ──────────────── SSE 유틸 ────────────────
+    private static ServerSentEvent<ChatStreamEvent> sse(ChatStreamEvent e) {
+        return ServerSentEvent.<ChatStreamEvent>builder(e).event(e.type()).build();
+    }
+    private static List<String> chunk(String s, int size) {
+        if (s == null) return List.of();
+        int n = Math.max(1, size);
+        List<String> out = new java.util.ArrayList<>();
+        for (int i = 0; i < s.length(); i += n) {
+            out.add(s.substring(i, Math.min(s.length(), i + n)));
+        }
+        return out;
     }
 
     /* -------------------------------------------------------------- */

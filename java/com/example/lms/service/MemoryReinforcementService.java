@@ -147,6 +147,79 @@ public class MemoryReinforcementService {
         return hash(canon);
     }
 
+    // ★ NEW: 사용자의 좋아요/싫어요(+수정문) 피드백을 메모리에 반영
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void applyFeedback(String sessionId,
+                              String messageContent,
+                              boolean positive,
+                              String correctedText) {
+        // 0) 가드
+        if (!StringUtils.hasText(messageContent)) {
+            log.debug("[Feedback] empty message → skip");
+            return;
+        }
+        String sid = normalizeSessionId(sessionId);
+        if (!isStableSid(sid)) {
+            log.warn("[Feedback] unstable SID → skip (sid={})", sessionId);
+            return;
+        }
+
+        // 1) 원문 답변(assistant 출력) 해시
+        String msgHash = storageHashFromSnippet(messageContent);
+
+        try {
+            if (positive) {
+                // (1) 긍정: 우선 hitCount+1 시도
+                int rows = 0;
+                try {
+                    rows = memoryRepository.incrementHitCountBySourceHash(msgHash);
+                } catch (Exception e) {
+                    log.debug("[Feedback] incrementHitCount failed, will upsert: {}", e.toString());
+                }
+
+                // (2) 존재하지 않으면 upsert 로 보상값 기록(컷오프 회피)
+                //     ※ reinforceWithSnippet 은 lowScoreCutoff 때문에 음수/저점수 저장이 막힐 수 있어
+                //        피드백은 반드시 upsertViaRepository 로 직접 기록합니다.
+                double s = reward(0.95); // 높은 보상
+                String payload = "[SRC:FEEDBACK_POS] " + messageContent;
+                upsertViaRepository(sid, /*query*/ null, payload, "FEEDBACK_POS", s, msgHash);
+
+                // (3) 벡터 색인(긍정일 때만)
+                try {
+                    vectorStoreService.enqueue(sid, messageContent);
+                } catch (Exception ignore) { }
+            } else {
+                // 부정: 낮은 보상으로 명시 저장(컷오프 우회)
+                double s = reward(0.02);
+                String payload = "[SRC:FEEDBACK_NEG] " + messageContent;
+                upsertViaRepository(sid, /*query*/ null, payload, "FEEDBACK_NEG", s, msgHash);
+                // 벡터 색인은 하지 않음(오염 방지)
+            }
+
+            // 2) 수정문이 있으면 별도 레코드로 고품질 저장
+            if (StringUtils.hasText(correctedText) && !correctedText.equals(messageContent)) {
+                String refined = correctedText.trim();
+                if (refined.length() > maxContentLength) {
+                    refined = refined.substring(0, maxContentLength);
+                }
+                String corrHash = storageHashFromSnippet(refined);
+                double sCorr = reward(0.98); // 수정문은 강한 보상
+                String payloadCorr = "[SRC:USER_CORRECTION] " + refined;
+                upsertViaRepository(sid, /*query*/ null, payloadCorr, "USER_CORRECTION", sCorr, corrHash);
+
+                try {
+                    vectorStoreService.enqueue(sid, refined);
+                } catch (Exception ignore) { }
+            }
+
+            log.debug("[Feedback] applied (sid={}, pos={}, msgHash={})", sid, positive, msgHash.substring(0, 12));
+        } catch (Exception e) {
+            log.error("[Feedback] applyFeedback failed", e);
+            throw e;
+        }
+    }
+
+
     /* ════════════════ UPSERT 핵심 ════════════════ */
     @Transactional(propagation = Propagation.REQUIRED)
     private void upsertViaRepository(String sessionId,
