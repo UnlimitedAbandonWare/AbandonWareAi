@@ -41,28 +41,27 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
             return Collections.emptyList();
         }
 
-        // 1. 형태소 분석 기반으로 검색할 쿼리 목록 생성
-        List<String> queriesToSearch = createExpandedQueries(originalQuery);
-        log.debug("[Analyze] Expanded queries: {}", queriesToSearch);
+        // ...
+// 1. 기존처럼 검색어 목록 생성
+        List<String> queriesToSearch = expandQuery(query);
 
-        // 2. 생성된 모든 쿼리로 순차 검색 후, LinkedHashSet으로 중복 제거 및 순서 보장
-        LinkedHashSet<String> uniqueSnippets = new LinkedHashSet<>();
-        for (String q : queriesToSearch) {
-            try {
-                // 각 쿼리별로 topK만큼 검색하여 결과의 다양성 확보
-                List<String> snippets = searchService.searchSnippets(q, topK);
-                uniqueSnippets.addAll(snippets);
-            } catch (Exception e) {
-                log.warn("[Analyze] Failed to search for query '{}': {}", q, e.getMessage());
-            }
-        }
+// 2. 병렬 스트림으로 모든 검색어를 동시에 실행
+        List<String> mergedSnippets = queriesToSearch.parallelStream()
+                .flatMap(q -> {
+                    try {
+                        return searchService.searchSnippets(q, topK).stream();
+                    } catch (Exception e) {
+                        log.warn("[Analyze] Failed to search for query '{}': {}", q, e.getMessage());
+                        return Stream.empty();
+                    }
+                })
+                .toList();
 
-        // 3. 최종 결과를 topK만큼 제한하여 반환
-        return uniqueSnippets.stream()
+// 3. 중복을 제거하고 최종 결과 반환
+        return new LinkedHashSet<>(mergedSnippets).stream()
                 .limit(topK)
                 .map(Content::from)
                 .collect(Collectors.toList());
-    }
 
     /**
      * 원본 쿼리를 형태소 분석하여 여러 검색용 쿼리를 생성합니다.

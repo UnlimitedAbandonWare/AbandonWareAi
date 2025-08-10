@@ -64,9 +64,44 @@ public class ModelSyncService {
                 log.warn("Unexpected response format: {}", data);
                 return;
             }
+// --- 기존 deleteAll() 로직 제거 ---
 
-            modelRepo.deleteAll();
+// 1. 기존 데이터를 한 번에 조회하여 Map으로 변환
+            List<ModelEntity> existing = modelRepo.findAll();
+            Map<String, ModelEntity> existingMap = existing.stream()
+                    .collect(Collectors.toMap(ModelEntity::getModelId, e -> e));
 
+// 2. API 결과 기반으로 저장할 엔티티 목록과 최신 ID 집합 생성
+            List<ModelEntity> toSave = new ArrayList<>();
+            Set<String> fetchedIds = new HashSet<>();
+
+            data.forEach(node -> { // 'data'는 API 응답 JSON을 파싱한 결과입니다.
+                String modelId = node.path("id").asText();
+                fetchedIds.add(modelId);
+
+                // Map에서 기존 엔티티를 찾거나, 없으면 새로 생성
+                ModelEntity e = existingMap.getOrDefault(modelId, new ModelEntity());
+
+                // ... 엔티티 필드 업데이트 로직 ...
+                e.setModelId(modelId);
+                // ...
+
+                toSave.add(e);
+            });
+
+// 3. 더 이상 존재하지 않는 모델들을 한 번에 삭제
+            List<String> idsToDelete = existingMap.keySet().stream()
+                    .filter(id -> !fetchedIds.contains(id))
+                    .toList();
+
+            if (!idsToDelete.isEmpty()) {
+                modelRepo.deleteAllById(idsToDelete);
+            }
+
+// 4. 저장 및 업데이트를 한 번에 처리
+            modelRepo.saveAll(toSave);
+
+            log.info("📦 Fetched={}, Upserted={}, Deleted={}", fetchedIds.size(), toSave.size(), idsToDelete.size());
             List<ModelEntity> toSave = new ArrayList<>();
             data.forEach(node -> {
                 String modelId   = node.path("id").asText();

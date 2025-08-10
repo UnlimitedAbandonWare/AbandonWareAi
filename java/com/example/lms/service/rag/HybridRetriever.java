@@ -320,6 +320,25 @@ public class HybridRetriever implements ContentRetriever {
                                           List<String> officialDomains,
                                           String queryText) {
 
+        // 1. 경량 랭커로 1차 후보군 필터링
+        List<Content> firstPassCandidates = lightWeightRanker.rank(
+                new ArrayList<>(uniqueContents.values()), // 중복 제거된 후보들
+                query,
+                Math.max(topK * 2, 20) // 최소 20개 또는 topK의 2배수
+        );
+
+        List<Scored> scored = new ArrayList<>();
+        int rank = 0;
+
+// 2. 필터링된 후보군(firstPassCandidates)에 대해서만 정밀 재랭킹 수행
+        for (Content c : firstPassCandidates) {
+            rank++;
+            double baseScore = 1.0 / rank;
+            double relevance = relevanceScoringService.score(c, query); // 비용이 비싼 호출
+            double finalScore = (0.6 * relevance) + (0.4 * baseScore);
+            scored.add(new Scored(c, finalScore));
+        }
+
         // 1) 중복 제거
         Map<String, Content> uniq = new LinkedHashMap<>();
         for (Content c : raw) {
@@ -375,7 +394,7 @@ public class HybridRetriever implements ContentRetriever {
             } catch (Exception ignore) { /* 0.0 유지 */ }
             double finalScore = (0.6 * rel) + (0.4 * base);
             scored.add(new Scored(c, finalScore)); // 이제 정상적으로 사용 가능
-        
+
 
     }
         // 점수 내림차순 정렬 후 상위 topK 반환
