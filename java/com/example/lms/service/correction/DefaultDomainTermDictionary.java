@@ -1,10 +1,11 @@
 package com.example.lms.service.correction;
+
 import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;   // ✅ Service 임포트 추가
 import java.util.*;
-// 예: 기본으로 쓰고 싶은 구현체
-@Service
-@Primary
+
+@Service("defaultDomainTermDictionary")    // ✅ Qualifier에서 부르는 이름을 명시(안 써도 기본 네이밍이 같음)
+@Primary                                   // ✅ 이 구현을 기본으로 쓰고 싶으면 유지, 아니면 제거
 public class DefaultDomainTermDictionary implements DomainTermDictionary {
 
     private static final Map<String, Set<String>> DICTIONARY = Map.of(

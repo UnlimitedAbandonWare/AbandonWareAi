@@ -33,7 +33,7 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
     // --- @RequiredArgsConstructor 대신 생성자 직접 작성 ---
     public LLMQueryCorrectionService(
             ObjectProvider<OpenAiService> openAiProvider,
-            @Qualifier("defaultDomainTermDictionary") DomainTermDictionary dictionaryProvider
+            @Qualifier("defaultDomainTermDictionary") DomainTermDictionary dictionaryProvider // ✅ 특정 빈 선택
     ) {
         this.openAiProvider = openAiProvider;
         this.dictionaryProvider = dictionaryProvider;
