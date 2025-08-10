@@ -1,7 +1,9 @@
+
 package com.example.lms.service;
 import java.lang.reflect.Method;        // trySet/tryGet에서 사용 (IDE가 자동 추가해도 됩니다)
 import java.util.List;
 import java.util.Comparator;
+import org.springframework.dao.DataIntegrityViolationException; // ★ fix: noRollbackFor용
 
 import com.example.lms.service.reinforcement.RewardScoringEngine;
 import com.example.lms.repository.TranslationMemoryRepository;
@@ -115,6 +117,39 @@ public class MemoryReinforcementService {
                 .build(k -> Boolean.TRUE);
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = DataIntegrityViolationException.class)
+    public void reinforceWithSnippet(TranslationMemory t) {
+        try {
+
+            if (t == null || t.getSourceHash() == null) {
+                log.warn("[Memory] 강화할 데이터가 null이거나 해시 키가 없어 스킵합니다.");
+                return;
+            }
+
+            // 기본 저장 시도
+            memoryRepository.save(t);
+            log.debug("[Memory] SAVE ok (hash={})", safeHash(t.getSourceHash()));
+        } catch (DataIntegrityViolationException dup) {
+            // 중복이면 hitCount만 증가
+            log.debug("[Memory] duplicate; fallback to UPDATE");
+            try {
+                memoryRepository.incrementHitCountBySourceHash(t.getSourceHash());
+            } catch (Exception updateEx) {
+                log.warn("[Memory] hitCount UPDATE 실패: {}", updateEx.toString());
+            }
+        } catch (Exception e) {
+            log.warn("[Memory] soft-fail: {}", e.toString());
+        }
+    }
+
+    private String safeHash(String h) {
+        return (h == null || h.length() < 12) ? String.valueOf(h) : h.substring(0, 12);
+    }
+
+
+
+
     /* ─────────────── Reward helper ─────────────── */
     private double reward(double rawScore) {
         try {
@@ -166,7 +201,8 @@ public class MemoryReinforcementService {
     }
 
     // ★ NEW: 사용자의 좋아요/싫어요(+수정문) 피드백을 메모리에 반영
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRES_NEW,
+    noRollbackFor = DataIntegrityViolationException.class)
     public void applyFeedback(String sessionId,
                               String messageContent,
                               boolean positive,
