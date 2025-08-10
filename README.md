@@ -131,7 +131,7 @@ vi src/main/resources/application.yml  # 키/환경값 설정
 
 # 3) 실행 (JDK 17+)
 ./gradlew bootRun
-# 또는 IDE에서 Application.java 실행 → http://localhost:8080
+# 또는 IDE에서 Application.java 실행 → https://localhost:8080
 예시 요청
 
 http
