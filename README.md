@@ -160,8 +160,6 @@ src/main/java/com/example/lms
    ├─ quality/      # FactVerifierService 등 품질 검증
    ├─ memory/       # TranslationMemory, Reinforcement
    └─ ...
-🧪 트러블슈팅 (핵심 팁)
-LangChain4j 버전 순도: 0.2.x/0.3.x와 1.0.x 아티팩트 혼재 금지(클래스패스 확인).
 
 Prompt 생성 위치 단일화: ChatService 내 문자열 직접 결합 금지 → PromptBuilder.build(ctx) 사용.
 
