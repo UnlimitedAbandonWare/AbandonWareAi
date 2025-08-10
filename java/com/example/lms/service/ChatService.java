@@ -224,6 +224,8 @@ public class ChatService {
             - **Earlier sections have higher authority.**
               ↳ Web-search snippets come first and OVERRIDE any conflicting vector-RAG or memory info.
             - Cite the source titles when you answer.
+            - Do NOT guess or invent facts. If Context does not explicitly mention a named entity
+              (character/item/region), do NOT include it in the answer.
             - If the information is insufficient, reply "정보 없음".
             """;
     private static final String MEM_PREFIX = """
@@ -251,6 +253,9 @@ public class ChatService {
     private double mlLambda;
     @Value("${ml.correction.d0:0.0}")
     private double mlD0;
+    //  검증 기본 활성화 플래그 (application.yml: verification.enabled=true)
+    @org.springframework.beans.factory.annotation.Value("${verification.enabled:true}")
+    private boolean verificationEnabled;
 
     /* ═════════════════════ PUBLIC ENTRY ═════════════════════ */
 
@@ -493,7 +498,7 @@ public class ChatService {
             String joinedContext = Stream.of(unifiedCtx, hintWebCtx)
                     .filter(StringUtils::hasText)
                     .collect(Collectors.joining("\n"));
-            String verified = Boolean.TRUE.equals(req.isUseVerification())
+            String verified = shouldVerify(joinedContext, req)
                     ? verifier.verify(correctedMsg, joinedContext, draft, "gpt-4o")
                     : draft;
 
@@ -539,7 +544,16 @@ public class ChatService {
                     String.format(prefix, truncate(ctx, limit))
             ));
         }
+
     }
+    //  검증 여부 결정 헬퍼
+    private boolean shouldVerify(String joinedContext, com.example.lms.dto.ChatRequestDto req) {
+        boolean hasContext = org.springframework.util.StringUtils.hasText(joinedContext);
+        Boolean flag = req.isUseVerification(); // null 가능
+        boolean enabled = (flag == null) ? verificationEnabled : Boolean.TRUE.equals(flag);
+        return hasContext && enabled;
+    }
+
 
     /* ═════════ LangChain4j 파이프라인 (2‑Pass + 검증) ═════════ */
     private ChatResult invokeLangChain(ChatRequestDto req, String unifiedCtx) {
@@ -578,10 +592,9 @@ public class ChatService {
                     .filter(StringUtils::hasText)
                     .collect(Collectors.joining("\n\n"));
 
-            String verified = Boolean.TRUE.equals(req.isUseVerification())
+            String verified = shouldVerify(joinedContext, req)
                     ? verifier.verify(correctedMsg, joinedContext, draft, "gpt-4o") // gpt-4o를 검증기로 사용
                     : draft;
-
             /* ③ 경고 배너 추가 및 (선택적) 답변 폴리싱 */
             boolean insufficientContext = !StringUtils.hasText(joinedContext);
             boolean fallbackHappened = Boolean.TRUE.equals(req.isUseVerification())

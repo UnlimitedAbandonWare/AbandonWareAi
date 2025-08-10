@@ -1,15 +1,19 @@
 package com.example.lms.service.correction;
 
 import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Service;   // ✅ Service 임포트 추가
+import org.springframework.stereotype.Service;
 import java.util.*;
 
-@Service("defaultDomainTermDictionary")    // ✅ Qualifier에서 부르는 이름을 명시(안 써도 기본 네이밍이 같음)
-@Primary                                   // ✅ 이 구현을 기본으로 쓰고 싶으면 유지, 아니면 제거
+@Service("defaultDomainTermDictionary")
+@Primary
 public class DefaultDomainTermDictionary implements DomainTermDictionary {
 
     private static final Map<String, Set<String>> DICTIONARY = Map.of(
-            "원신", Set.of("스커크", "푸리나", "폰타인", "skirk"),
+            // - 기존
+            // + ‘원신’에 다이루크 추가
+            "원신", Set.of("스커크", "푸리나", "폰타인", "skirk", "다이루크"),
+            // + 실존 인물/요리사 도메인에 에스코피에 추가
+            "요리/인물", Set.of("에스코피에", "에스코피", "Auguste Escoffier", "escoffier"),
             "붕괴 스타레일", Set.of("페나코니", "아케론", "반디")
     );
 
