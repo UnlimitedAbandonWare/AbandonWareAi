@@ -4,7 +4,15 @@ import java.lang.reflect.Method;        // trySet/tryGet에서 사용 (IDE가 �
 import java.util.List;
 import java.util.Comparator;
 import org.springframework.dao.DataIntegrityViolationException; // ★ fix: noRollbackFor용
+// 수정 후 코드 (After)
 
+// ✅ 필요한 Exception import 추가
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import com.example.lms.service.reinforcement.RewardScoringEngine;
 import com.example.lms.repository.TranslationMemoryRepository;
 import com.example.lms.entity.TranslationMemory;
@@ -117,29 +125,37 @@ public class MemoryReinforcementService {
                 .build(k -> Boolean.TRUE);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW,
-            noRollbackFor = DataIntegrityViolationException.class)
+    @Transactional(
+            propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = DataIntegrityViolationException.class
+    )
     public void reinforceWithSnippet(TranslationMemory t) {
+        // 🛡️ Guard Clause: 잘못된 데이터는 미리 차단
+        if (t == null || t.getSourceHash() == null) {
+            log.warn("[Memory] 강화할 데이터가 null이거나 해시 키가 없어 스킵합니다.");
+            return;
+        }
+
+        // ✅ 단일 try-catch 구조로 단순화
         try {
-
-            if (t == null || t.getSourceHash() == null) {
-                log.warn("[Memory] 강화할 데이터가 null이거나 해시 키가 없어 스킵합니다.");
-                return;
-            }
-
-            // 기본 저장 시도
+            // 1. 기본적으로 저장(INSERT)을 시도합니다.
             memoryRepository.save(t);
-            log.debug("[Memory] SAVE ok (hash={})", safeHash(t.getSourceHash()));
+            log.debug("[Memory] INSERT 성공 (hash={})", t.getSourceHash().substring(0, 12));
+
         } catch (DataIntegrityViolationException dup) {
-            // 중복이면 hitCount만 증가
-            log.debug("[Memory] duplicate; fallback to UPDATE");
+            // 2. INSERT 실패 시 (source_hash 중복), UPDATE로 전환합니다.
+            log.debug("[Memory] 중복 해시 감지; UPDATE로 전환 (hash={})", t.getSourceHash().substring(0, 12));
             try {
+                // 기존 레코드의 hitCount를 1 증가시킵니다.
                 memoryRepository.incrementHitCountBySourceHash(t.getSourceHash());
             } catch (Exception updateEx) {
-                log.warn("[Memory] hitCount UPDATE 실패: {}", updateEx.toString());
+                // UPDATE 마저 실패할 경우 로그만 남기고 넘어갑니다.
+                log.warn("[Memory] hitCount 증가 UPDATE 실패: {}", updateEx.toString());
             }
+
         } catch (Exception e) {
-            log.warn("[Memory] soft-fail: {}", e.toString());
+            // 3. 그 외 예상치 못한 오류는 기록만 하고 전체 프로세스가 중단되지 않도록 합니다. (Soft-fail)
+            log.warn("[Memory] 강화 저장 중 예상치 못한 오류 발생 (soft-fail): {}", e.toString());
         }
     }
 
@@ -277,6 +293,7 @@ public class MemoryReinforcementService {
 // ===== ▼▼▼ Backward‑compat shim methods ▼▼▼ =====
 
     /** 과거 호출부 호환: 스니펫(웹/어시스턴트 답변 등)을 기억 저장소에 강화 저장 */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = DataIntegrityViolationException.class)
     public void reinforceWithSnippet(String sessionId,
                                      String query,
                                      String snippet,
@@ -355,41 +372,47 @@ public class MemoryReinforcementService {
         }
     }
 
-    /** 내부 업서트 헬퍼(엔티티 필드명이 달라도 반영되게 리플렉션 사용) */
     private void upsertViaRepository(String sid,
                                      String query,
                                      String payload,
                                      String source,
                                      double score,
                                      String sourceHash) {
+        // 1) 먼저 엔티티를 구성한다 (리플렉션으로 필드 호환)
+        TranslationMemory tm = new TranslationMemory();
+        trySet(tm, "setSourceHash", sourceHash, String.class);
+        trySet(tm, "setSid", sid, String.class);
+        trySet(tm, "setSessionId", sid, String.class);
+
+        trySet(tm, "setQuery", query, String.class);
+        trySet(tm, "setContent", payload, String.class);
+        trySet(tm, "setText", payload, String.class);
+        trySet(tm, "setBody", payload, String.class);
+
+        trySet(tm, "setSourceType", source, String.class);
+        trySet(tm, "setSource", source, String.class);
+
+        trySet(tm, "setScore", score, double.class, Double.class);
+        trySet(tm, "setStatus", STATUS_ACTIVE, int.class, Integer.class);
+        trySet(tm, "setHitCount", 1, int.class, Integer.class);
+
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        trySet(tm, "setCreatedAt", now, java.time.LocalDateTime.class);
+        trySet(tm, "setUpdatedAt", now, java.time.LocalDateTime.class);
+
+        // 2) INSERT → 중복이면 UPDATE(hitCount)
         try {
-            TranslationMemory tm = new TranslationMemory();
-
-            // setter 이름이 프로젝트마다 달라질 수 있어 리플렉션으로 유연 적용
-            trySet(tm, "setSourceHash", sourceHash, String.class);
-            trySet(tm, "setSid", sid, String.class);
-            trySet(tm, "setSessionId", sid, String.class);
-
-            trySet(tm, "setQuery", query, String.class);
-            trySet(tm, "setContent", payload, String.class);
-            trySet(tm, "setText", payload, String.class);
-            trySet(tm, "setBody", payload, String.class);
-
-            trySet(tm, "setSourceType", source, String.class);
-            trySet(tm, "setSource", source, String.class);
-
-            trySet(tm, "setScore", score, double.class, Double.class);
-            trySet(tm, "setStatus", STATUS_ACTIVE, int.class, Integer.class);
-            trySet(tm, "setHitCount", 1, int.class, Integer.class);
-
-            java.time.LocalDateTime now = java.time.LocalDateTime.now();
-            trySet(tm, "setCreatedAt", now, java.time.LocalDateTime.class);
-            trySet(tm, "setUpdatedAt", now, java.time.LocalDateTime.class);
-
             memoryRepository.save(tm);
+        } catch (org.springframework.dao.DataIntegrityViolationException dup) {
+            log.debug("[Memory] duplicate source_hash; switching to hitCount");
+            try {
+                memoryRepository.incrementHitCountBySourceHash(sourceHash);
+            } catch (Exception updateEx) {
+                log.warn("[Memory] hitCount UPDATE failed: {}", updateEx.toString());
+            }
         } catch (Exception e) {
-            // UNIQUE(source_hash) 충돌 등은 상위 레벨에서 hitCount++로 보정될 수 있으므로 소프트 실패
-            log.debug("[Memory] upsertViaRepository soft‑fail: {}", e.toString());
+            // soft-fail: 트랜잭션 전체를 깨지 않음
+            log.debug("[Memory] upsertViaRepository soft-fail: {}", e.toString());
         }
     }
 
