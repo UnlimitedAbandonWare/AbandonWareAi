@@ -216,6 +216,11 @@ public class MemoryReinforcementService {
         return hash(canon);
     }
 
+
+    private static String truncate(String s, int max) {
+        return (s != null && s.length() > max) ? s.substring(0, max) : s;
+    }
+
     // ★ NEW: 사용자의 좋아요/싫어요(+수정문) 피드백을 메모리에 반영
     @Transactional(propagation = Propagation.REQUIRES_NEW,
     noRollbackFor = DataIntegrityViolationException.class)
@@ -293,34 +298,33 @@ public class MemoryReinforcementService {
 // ===== ▼▼▼ Backward‑compat shim methods ▼▼▼ =====
 
     /** 과거 호출부 호환: 스니펫(웹/어시스턴트 답변 등)을 기억 저장소에 강화 저장 */
-    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = DataIntegrityViolationException.class)
-    public void reinforceWithSnippet(String sessionId,
-                                     String query,
-                                     String snippet,
-                                     String source,
-                                     double score) {
-        if (!StringUtils.hasText(snippet)) return;
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void reinforceWithSnippet(String sessionId, String query,
+                                     String content, String source, double rawScore) {
+        if (!StringUtils.hasText(content)) return;
 
-        // 세션키 정규화 + 컨텐츠 길이 가드
         String sid = normalizeSessionId(sessionId);
-        String text = snippet.trim();
+        String text = content.length() > maxContentLength ? content.substring(0, maxContentLength) : content;
+
+        // 최근중복/최소길이 가드
         if (text.length() < minContentLength) return;
-        if (text.length() > maxContentLength) text = text.substring(0, maxContentLength);
+        String canonicalHash = storageHashFromSnippet(text);
+        if (recentSnippetCache.getIfPresent(canonicalHash) != null) return;
+        recentSnippetCache.put(canonicalHash, Boolean.TRUE);
 
-        // 중복 방지(최근 캐시) + 품질 컷오프
-        String sourceHash = storageHashFromSnippet(text);
-        if (recentSnippetCache.getIfPresent(sourceHash) != null) return; // 최근에 본 스니펫
-        recentSnippetCache.put(sourceHash, Boolean.TRUE);
+        double finalScore = reward(rawScore);
+        if (finalScore < lowScoreCutoff) return;
 
-        double finalScore = reward(score);
-        if (finalScore < lowScoreCutoff) {
-            log.debug("[Memory] below cutoff → skip (score={})", finalScore);
-            return;
-        }
+        // ✅ 네이티브 UPSERT 단 한 번
+        memoryRepository.upsertByHash(
+                sid,
+                truncate(query, 500),
+                source,
+                text,
+                canonicalHash,
+                finalScore
+        );
 
-        // 저장(업서트) + 벡터 색인(가능하면)
-        String payload = (StringUtils.hasText(source) ? "[SRC:" + source + "] " : "") + text;
-        upsertViaRepository(sid, query, payload, source, finalScore, sourceHash);
         try { vectorStoreService.enqueue(sid, text); } catch (Exception ignore) {}
     }
 
