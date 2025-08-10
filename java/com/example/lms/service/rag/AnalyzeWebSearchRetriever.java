@@ -15,6 +15,7 @@ import org.springframework.util.StringUtils;
 import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Lucene 형태소 분석기를 사용하여 쿼리의 핵심 키워드를 추출하고,
@@ -42,8 +43,8 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
         }
 
         // ...
-// 1. 기존처럼 검색어 목록 생성
-        List<String> queriesToSearch = expandQuery(query);
+        // 1) 확장 검색어 생성
+        List<String> queriesToSearch = createExpandedQueries(originalQuery);
 
 // 2. 병렬 스트림으로 모든 검색어를 동시에 실행
         List<String> mergedSnippets = queriesToSearch.parallelStream()
@@ -57,12 +58,12 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
                 })
                 .toList();
 
-// 3. 중복을 제거하고 최종 결과 반환
+        // 3) 중복 제거 후 최종 반환
         return new LinkedHashSet<>(mergedSnippets).stream()
                 .limit(topK)
                 .map(Content::from)
                 .collect(Collectors.toList());
-
+    }
     /**
      * 원본 쿼리를 형태소 분석하여 여러 검색용 쿼리를 생성합니다.
      *
