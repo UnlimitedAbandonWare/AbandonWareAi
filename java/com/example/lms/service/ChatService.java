@@ -12,7 +12,7 @@ import java.util.Collections;
 import java.util.List;
 import com.example.lms.service.QueryAugmentationService;
 import com.example.lms.prompt.PromptEngine;
-
+import com.example.lms.service.fallback.SmartFallbackService;
  import com.example.lms.service.disambiguation.QueryDisambiguationService;
 import com.example.lms.service.disambiguation.DisambiguationResult;
 import com.example.lms.service.ChatHistoryService;
@@ -160,7 +160,7 @@ public class ChatService {
     @Qualifier("defaultPromptEngine")
     private final PromptEngine promptEngine;
 
-
+    private final SmartFallbackService fallbackSvc;
     @Value("${rag.hybrid.top-k:50}")
     private int hybridTopK;
     @Value("${rag.rerank.top-n:10}")
@@ -505,14 +505,18 @@ public class ChatService {
             /* ─── ② (선택) 폴리싱 ─── */
             /* ─── ② 경고‑배너 & (선택) 폴리싱 ─── */
             boolean insufficientContext = !StringUtils.hasText(joinedContext);
-            boolean fallbackHappened = Boolean.TRUE.equals(req.isUseVerification())
+
+            boolean verifiedUsed = shouldVerify(joinedContext, req);
+            boolean fallbackHappened = verifiedUsed
                     && StringUtils.hasText(joinedContext)
                     && verified.equals(draft);          // 검증이 변화 못 줌
 
             String warning = "\n\n⚠️ 본 답변은 검증된 정보가 부족하거나 부정확할 수 있습니다. 참고용으로 활용해 주세요.";
-            String toPolish = (insufficientContext || fallbackHappened)
-                    ? verified  +warning
-                    : verified;
+// ★ 스마트 폴백: '정보 없음' 또는 컨텍스트 빈약 시, 친절한 교정/대안 제시
+            String smart = fallbackSvc.maybeSuggest(correctedMsg, joinedContext, verified);
+            String toPolish = pickForPolish(smart, verified, insufficientContext, fallbackHappened, warning);
+
+
 
             String finalText = req.isPolish()
                     ? polishAnswerOai(toPolish, modelId,
@@ -593,18 +597,19 @@ public class ChatService {
                     .collect(Collectors.joining("\n\n"));
 
             String verified = shouldVerify(joinedContext, req)
-                    ? verifier.verify(correctedMsg, joinedContext, draft, "gpt-4o") // gpt-4o를 검증기로 사용
+                    ? verifier.verify(correctedMsg, joinedContext, draft, "gpt-4o") // gpt-4o 검증
                     : draft;
             /* ③ 경고 배너 추가 및 (선택적) 답변 폴리싱 */
             boolean insufficientContext = !StringUtils.hasText(joinedContext);
-            boolean fallbackHappened = Boolean.TRUE.equals(req.isUseVerification())
+            boolean verifiedUsed = shouldVerify(joinedContext, req);
+            boolean fallbackHappened = verifiedUsed
                     && StringUtils.hasText(joinedContext)
-                    && verified.equals(draft); // 검증 후에도 초안과 동일하면 사실상 검증 실패로 간주
+                    && verified.equals(draft);
 
             String warning = "\n\n⚠️ 본 답변은 검증된 정보가 부족하거나 부정확할 수 있습니다. 참고용으로 활용해 주세요.";
-            String toPolish = (insufficientContext || fallbackHappened)
-                    ? verified + warning
-                    : verified;
+// ★ 스마트 폴백: '정보 없음' 또는 컨텍스트 빈약 시, 친절한 교정/대안 제시
+            String smart = fallbackSvc.maybeSuggest(correctedMsg, joinedContext, verified);
+            String toPolish = pickForPolish(smart, verified, insufficientContext, fallbackHappened, warning);
 
             String finalText = req.isPolish()
                     ? polishAnswerLc(toPolish, dynamicChatModel) // 폴리싱 옵션 활성화 시 답변 다듬기
@@ -742,6 +747,13 @@ public class ChatService {
             l.add(SystemMessage.from(sys));
         }
     }
+    private static String pickForPolish(String smart, String verified,
+                                        boolean insufficientContext, boolean fallbackHappened, String warning) {
+        if (smart != null && !smart.isBlank()) return smart;
+        if (insufficientContext || fallbackHappened) return verified + warning;
+        return verified;
+    }
+
 
     private void addMemoryContextLc(List<ChatMessage> l, String memCtx, int limit) {
         if (StringUtils.hasText(memCtx)) {
