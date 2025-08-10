@@ -1,4 +1,7 @@
 package com.example.lms.service;
+import java.lang.reflect.Method;        // trySet/tryGet에서 사용 (IDE가 자동 추가해도 됩니다)
+import java.util.List;
+import java.util.Comparator;
 
 import com.example.lms.service.reinforcement.RewardScoringEngine;
 import com.example.lms.repository.TranslationMemoryRepository;
@@ -235,5 +238,169 @@ public class MemoryReinforcementService {
             throw e;
         }
     }
+// ===== ▼▼▼ Backward‑compat shim methods ▼▼▼ =====
+
+    /** 과거 호출부 호환: 스니펫(웹/어시스턴트 답변 등)을 기억 저장소에 강화 저장 */
+    public void reinforceWithSnippet(String sessionId,
+                                     String query,
+                                     String snippet,
+                                     String source,
+                                     double score) {
+        if (!StringUtils.hasText(snippet)) return;
+
+        // 세션키 정규화 + 컨텐츠 길이 가드
+        String sid = normalizeSessionId(sessionId);
+        String text = snippet.trim();
+        if (text.length() < minContentLength) return;
+        if (text.length() > maxContentLength) text = text.substring(0, maxContentLength);
+
+        // 중복 방지(최근 캐시) + 품질 컷오프
+        String sourceHash = storageHashFromSnippet(text);
+        if (recentSnippetCache.getIfPresent(sourceHash) != null) return; // 최근에 본 스니펫
+        recentSnippetCache.put(sourceHash, Boolean.TRUE);
+
+        double finalScore = reward(score);
+        if (finalScore < lowScoreCutoff) {
+            log.debug("[Memory] below cutoff → skip (score={})", finalScore);
+            return;
+        }
+
+        // 저장(업서트) + 벡터 색인(가능하면)
+        String payload = (StringUtils.hasText(source) ? "[SRC:" + source + "] " : "") + text;
+        upsertViaRepository(sid, query, payload, source, finalScore, sourceHash);
+        try { vectorStoreService.enqueue(sid, text); } catch (Exception ignore) {}
+    }
+
+    /** 과거 호출부 호환: 단순 텍스트를 GLOBAL 스코프로 강화 */
+    public void reinforceMemoryWithText(String text) {
+        if (!StringUtils.hasText(text)) return;
+        reinforceWithSnippet("GLOBAL", null, text, "TEXT", 0.50);
+    }
+
+    /** 과거 호출부 호환: 세션별 메모리 컨텍스트를 문자열로 반환 */
+    public String loadContext(String sessionId) {
+        try {
+            String sid = normalizeSessionId(sessionId);
+            // JpaRepository 기본 API에만 의존(특화 쿼리 없어도 컴파일/동작)
+            java.util.List<TranslationMemory> all = memoryRepository.findAll();
+            if (all == null || all.isEmpty()) return "";
+
+            // 세션 일치(또는 공용)만 추림
+            java.util.List<TranslationMemory> filtered = all.stream()
+                    .filter(tm -> {
+                        String mSid = tryGetString(tm, "getSid", "getSessionId");
+                        if (mSid == null || "*".equals(mSid)) return true;
+                        return sid != null && sid.equals(mSid);
+                    })
+                    .collect(java.util.stream.Collectors.toList());
+
+            if (filtered.isEmpty()) return "";
+
+            // 중요도(히트) → 최근순 정렬
+            java.util.Comparator<TranslationMemory> cmp =
+                    java.util.Comparator.<TranslationMemory, Integer>
+                                    comparing(tm -> tryGetInt(tm, "getHitCount"), java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))
+                            .reversed()
+                            .thenComparing(tm -> tryGetTime(tm, "getUpdatedAt", "getCreatedAt"),
+                                    java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder()));
+
+            java.util.List<String> lines = filtered.stream()
+                    .sorted(cmp)
+                    .limit(20) // 너무 길어지지 않게 상한
+                    .map(tm -> tryGetString(tm, "getContent", "getText", "getBody"))
+                    .filter(StringUtils::hasText)
+                    .map(s -> s.length() > maxContentLength ? s.substring(0, maxContentLength) : s)
+                    .collect(java.util.stream.Collectors.toList());
+
+            return String.join("\n\n---\n\n", lines);
+        } catch (Exception e) {
+            log.debug("[Memory] loadContext fallback: {}", e.toString());
+            return "";
+        }
+    }
+
+    /** 내부 업서트 헬퍼(엔티티 필드명이 달라도 반영되게 리플렉션 사용) */
+    private void upsertViaRepository(String sid,
+                                     String query,
+                                     String payload,
+                                     String source,
+                                     double score,
+                                     String sourceHash) {
+        try {
+            TranslationMemory tm = new TranslationMemory();
+
+            // setter 이름이 프로젝트마다 달라질 수 있어 리플렉션으로 유연 적용
+            trySet(tm, "setSourceHash", sourceHash, String.class);
+            trySet(tm, "setSid", sid, String.class);
+            trySet(tm, "setSessionId", sid, String.class);
+
+            trySet(tm, "setQuery", query, String.class);
+            trySet(tm, "setContent", payload, String.class);
+            trySet(tm, "setText", payload, String.class);
+            trySet(tm, "setBody", payload, String.class);
+
+            trySet(tm, "setSourceType", source, String.class);
+            trySet(tm, "setSource", source, String.class);
+
+            trySet(tm, "setScore", score, double.class, Double.class);
+            trySet(tm, "setStatus", STATUS_ACTIVE, int.class, Integer.class);
+            trySet(tm, "setHitCount", 1, int.class, Integer.class);
+
+            java.time.LocalDateTime now = java.time.LocalDateTime.now();
+            trySet(tm, "setCreatedAt", now, java.time.LocalDateTime.class);
+            trySet(tm, "setUpdatedAt", now, java.time.LocalDateTime.class);
+
+            memoryRepository.save(tm);
+        } catch (Exception e) {
+            // UNIQUE(source_hash) 충돌 등은 상위 레벨에서 hitCount++로 보정될 수 있으므로 소프트 실패
+            log.debug("[Memory] upsertViaRepository soft‑fail: {}", e.toString());
+        }
+    }
+
+    /* ───────────── 리플렉션 유틸 ───────────── */
+
+    private static void trySet(Object bean, String method, Object value, Class<?>... paramTypes) {
+        for (Class<?> p : paramTypes) {
+            try {
+                java.lang.reflect.Method m = bean.getClass().getMethod(method, p);
+                m.invoke(bean, value);
+                return;
+            } catch (Exception ignore) {}
+        }
+    }
+
+    private static String tryGetString(Object bean, String... getters) {
+        for (String g : getters) {
+            try {
+                java.lang.reflect.Method m = bean.getClass().getMethod(g);
+                Object v = m.invoke(bean);
+                if (v != null) return v.toString();
+            } catch (Exception ignore) {}
+        }
+        return null;
+    }
+
+    private static Integer tryGetInt(Object bean, String... getters) {
+        for (String g : getters) {
+            try {
+                java.lang.reflect.Method m = bean.getClass().getMethod(g);
+                Object v = m.invoke(bean);
+                if (v instanceof Number n) return n.intValue();
+            } catch (Exception ignore) {}
+        }
+        return null;
+    }
+
+    private static java.time.LocalDateTime tryGetTime(Object bean, String... getters) {
+        for (String g : getters) {
+            try {
+                java.lang.reflect.Method m = bean.getClass().getMethod(g);
+                Object v = m.invoke(bean);
+                if (v instanceof java.time.LocalDateTime t) return t;
+            } catch (Exception ignore) {}
+        }
+        return null;
+    }
+// ===== ▲▲▲ Backward‑compat shim methods ▲▲▲ =====
 
 }
