@@ -1,7 +1,7 @@
 package com.example.lms.service.correction;
 
 import com.example.lms.util.ProductAliasNormalizer;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+// import dev.langchain4j.model.chat.ChatLanguageModel; // ⛔ 의존성 잡히기 전까지 비활성
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
@@ -21,43 +21,25 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class LLMQueryCorrectionService implements QueryCorrectionService {
 
-    /** 우선 경로: LangChain4j ChatLanguageModel (존재 시) */
-    private final ObjectProvider<ChatLanguageModel> chatModelProvider;
-
-    /** 폴백 경로: theokanning OpenAiService */
+    // private final ObjectProvider<ChatLanguageModel> chatModelProvider; // ⛔ 임시 비활성
     private final ObjectProvider<OpenAiService> openAiProvider;
-
-    /** 보호어 사전 */
     private final DomainTermDictionary dictionaryProvider;
 
-    @Value("${query.correction.enabled:true}")
-    private boolean enabled;
-
-    @Value("${query.correction.model:gpt-4o-mini}")
-    private String openAiModel;
-
-    @Value("${query.correction.max-length:140}")
-    private int maxLength;
+    @Value("${query.correction.enabled:true}") private boolean enabled;
+    @Value("${query.correction.model:gpt-4o-mini}") private String openAiModel;
+    @Value("${query.correction.max-length:140}") private int maxLength;
 
     @Override
     public String correct(@Nullable String originalInput) {
-        if (!enabled) return originalInput;
-        if (originalInput == null || originalInput.isBlank()) return originalInput;
-        if (originalInput.length() > maxLength) return originalInput;
-
-        // 1) 별칭 정규화
-        String aliased = ProductAliasNormalizer.normalize(originalInput);
-        if (!aliased.equals(originalInput)) {
-            log.debug("[QC] Alias matched. Bypass LLM: '{}' -> '{}'", originalInput, aliased);
-            return aliased;
+        if (!enabled || originalInput == null || originalInput.isBlank() || originalInput.length() > maxLength) {
+            return originalInput;
         }
+        String aliased = ProductAliasNormalizer.normalize(originalInput);
+        if (!aliased.equals(originalInput)) return aliased;
 
-        // 2) 보호어 추출 + 프롬프트 가드
         Set<String> protectedTerms = extractProtectedTerms(originalInput);
-        String protectionInstruction = protectedTerms.isEmpty()
-                ? ""
-                : String.format("- 다음 '보호어'는 원문 그대로 유지해줘: [%s]%n",
-                String.join(", ", protectedTerms));
+        String protectionInstruction = protectedTerms.isEmpty() ? "" :
+                String.format("- 다음 '보호어'는 원문 그대로 유지해줘: [%s]%n", String.join(", ", protectedTerms));
 
         String systemPrompt = """
                 너는 한국어 검색어를 교정하는 똑똑한 AI야.
@@ -66,39 +48,24 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
                 %s- 추가 설명이나 따옴표 없이, 교정된 검색어만 한 줄로 출력해.
                 """.formatted(protectionInstruction);
 
-        String corrected;
         try {
-            ChatLanguageModel chatModel = chatModelProvider.getIfAvailable();
-            if (chatModel != null) {
-                // LangChain4j 1.0.x 권장 API: chat(...)
-                corrected = chatModel.chat(systemPrompt + "\n\n" + originalInput); // generate(...)도 동작은 함. :contentReference[oaicite:4]{index=4}
-            } else {
-                OpenAiService openAi = openAiProvider.getIfAvailable();
-                if (openAi == null) {
-                    log.debug("[QC] No LLM available. Passthrough.");
-                    return originalInput;
-                }
-                corrected = callOpenAiJava(openAi, openAiModel, systemPrompt, originalInput);
+            OpenAiService openAi = openAiProvider.getIfAvailable();
+            if (openAi == null) return originalInput;
+
+            String corrected = callOpenAiJava(openAi, openAiModel, systemPrompt, originalInput);
+            if (corrected == null || corrected.isBlank()) return originalInput;
+
+            corrected = corrected.trim();
+            if (!protectedTerms.isEmpty()) {
+                String outLower = corrected.toLowerCase();
+                boolean dropped = protectedTerms.stream().anyMatch(t -> !outLower.contains(t.toLowerCase()));
+                if (dropped) return originalInput;
             }
+            return corrected;
         } catch (Exception e) {
-            log.debug("[QC] Correction failed → passthrough: {}", e.toString());
-            return originalInput; // fail-open
+            log.debug("[QC] correction failed → passthrough: {}", e.toString());
+            return originalInput;
         }
-
-        if (corrected == null || corrected.isBlank()) return originalInput;
-        corrected = corrected.trim();
-
-        // 3) 사후 검증: 보호어 누락 방지
-        if (!protectedTerms.isEmpty()) {
-            String outLower = corrected.toLowerCase();
-            boolean dropped = protectedTerms.stream().anyMatch(t -> !outLower.contains(t.toLowerCase()));
-            if (dropped) {
-                log.warn("[QC] Over-correction detected. Rollback. orig='{}', corrected='{}'", originalInput, corrected);
-                return originalInput;
-            }
-        }
-        log.debug("[QC] Correction applied: '{}' -> '{}'", originalInput, corrected);
-        return corrected;
     }
 
     private Set<String> extractProtectedTerms(String text) {
@@ -116,7 +83,6 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
                 .temperature(0d)
                 .topP(0.05d)
                 .build();
-
         String out = openAi.createChatCompletion(req)
                 .getChoices().get(0).getMessage().getContent();
         return out == null ? "" : out.trim();
