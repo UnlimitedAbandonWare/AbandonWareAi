@@ -14,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+// imports
+import com.example.lms.service.rag.rerank.LightWeightRanker;
 
 import java.lang.reflect.Method;
 import java.util.*;
@@ -23,6 +25,8 @@ import java.util.concurrent.ForkJoinPool;
 @Component
 @RequiredArgsConstructor
 public class HybridRetriever implements ContentRetriever {
+    // fields (다른 final 필드들과 같은 위치)
+    private final LightWeightRanker lightWeightRanker;
 
     private static final double GAME_SIM_THRESHOLD = 0.3;
 
@@ -320,39 +324,23 @@ public class HybridRetriever implements ContentRetriever {
                                           List<String> officialDomains,
                                           String queryText) {
 
-        // 1. 경량 랭커로 1차 후보군 필터링
-        List<Content> firstPassCandidates = lightWeightRanker.rank(
-                new ArrayList<>(uniqueContents.values()), // 중복 제거된 후보들
-                query,
-                Math.max(topK * 2, 20) // 최소 20개 또는 topK의 2배수
-        );
-
-        List<Scored> scored = new ArrayList<>();
-        int rank = 0;
-
-// 2. 필터링된 후보군(firstPassCandidates)에 대해서만 정밀 재랭킹 수행
-        for (Content c : firstPassCandidates) {
-            rank++;
-            double baseScore = 1.0 / rank;
-            double relevance = relevanceScoringService.score(c, query); // 비용이 비싼 호출
-            double finalScore = (0.6 * relevance) + (0.4 * baseScore);
-            scored.add(new Scored(c, finalScore));
-        }
-
-        // 1) 중복 제거
+        // 1) 중복 제거 + 저관련 필터
         Map<String, Content> uniq = new LinkedHashMap<>();
         for (Content c : raw) {
             if (c == null) continue;
+
             String text = Optional.ofNullable(c.textSegment())
                     .map(TextSegment::text)
                     .orElse(c.toString());
-            // 관련도 필터 (임베딩 기반)
+
             double rel = 0.0;
             try {
-                rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
-            } catch (Exception ignore) {
-            }
-            if (rel < minRelatedness) continue; // 저관련 스니펫 제거
+                rel = relevanceScoringService.relatedness(
+                        Optional.ofNullable(queryText).orElse(""),
+                        text
+                );
+            } catch (Exception ignore) { }
+            if (rel < minRelatedness) continue;
 
             String key;
             switch (dedupeKey) {
@@ -360,49 +348,59 @@ public class HybridRetriever implements ContentRetriever {
                 case "hash" -> key = Integer.toHexString(text.hashCode());
                 default -> key = text; // "text"
             }
-            uniq.putIfAbsent(key, c); // 첫 등장만 유지
+            uniq.putIfAbsent(key, c);
         }
 
-        // 2) 점수 계산(간단한 역순위 + 공식 도메인 보너스)
+        // 2) 경량 1차 랭킹 (없으면 candidates 그대로 사용)
+        List<Content> candidates = new ArrayList<>(uniq.values());
+        List<Content> firstPass = (lightWeightRanker != null)
+                ? lightWeightRanker.rank(
+                candidates,
+                Optional.ofNullable(queryText).orElse(""),
+                Math.max(topK * 2, 20)
+        )
+                : candidates;
+
+        // 3) 정밀 스코어링 + 정렬
         class Scored {
             final Content content;
             final double score;
-
-            Scored(Content content, double score) {
-                this.content = content;
-                this.score = score;
-            }
+            Scored(Content content, double score) { this.content = content; this.score = score; }
         }
-
-        int rank = 0;
-        // ✅ 'scored' 리스트를 여기서 선언하고 초기화합니다.
         List<Scored> scored = new ArrayList<>();
-        for (Content c : uniq.values()) {
+        int rank = 0;
+
+        for (Content c : firstPass) {
             rank++;
             double base = 1.0 / rank;
 
             String text = Optional.ofNullable(c.textSegment())
                     .map(TextSegment::text)
                     .orElse(c.toString());
+
             String url = extractUrl(text);
             if (isOfficial(url, officialDomains)) {
-                base += 0.20;
+                base += 0.20; // 공식 도메인 보너스
             }
+
             double rel = 0.0;
             try {
-                rel = relevanceScoringService.relatedness(Optional.ofNullable(queryText).orElse(""), text);
-            } catch (Exception ignore) { /* 0.0 유지 */ }
+                rel = relevanceScoringService.relatedness(
+                        Optional.ofNullable(queryText).orElse(""),
+                        text
+                );
+            } catch (Exception ignore) { }
+
             double finalScore = (0.6 * rel) + (0.4 * base);
-            scored.add(new Scored(c, finalScore)); // 이제 정상적으로 사용 가능
+            scored.add(new Scored(c, finalScore));
+        }
 
-
-    }
-        // 점수 내림차순 정렬 후 상위 topK 반환
         scored.sort((a, b) -> Double.compare(b.score, a.score));
         return scored.stream()
                 .limit(topK)
                 .map(s -> s.content)
                 .collect(Collectors.toList());
     }
+
 
 }
