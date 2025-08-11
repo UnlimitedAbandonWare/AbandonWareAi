@@ -254,6 +254,154 @@ feat: 메타 강화 루프 도입 및 전략 선택 고도화
 시스템이 스스로 최적의 검색 전략을 학습/평가하는 메타-학습 강화 루프 핵심 기능을 구현.
 이 과정에서 발생한 ChatService의 컴파일 오류(연산자 누락)를 수정:
 0.5*score 0.5*contextualScore → 0.5 * score + 0.5 * contextualScore
+버그리포트:
+변경 배경(Why)
+FactVerifierService의 2-인자 생성자 제거 이후에도 OpenAiConfig가 여전히 2-인자 생성자를 호출하여 컴파일 에러 발생.
 
+LightWeightRanker가 클래스였고 DefaultLightWeightRanker implements LightWeightRanker에서 “interface expected” 충돌.
+
+하이브리드 검색 경로에 소소한 타입/필드 불일치(임베딩 float[], 병렬 변수명 등)와 로깅 필드 누락.
+
+주요 변경(What)
+1) OpenAiConfig – FactVerifierService 빈 정의 수정
+2-인자 호출을 3-인자 호출로 교체하여 주 생성자에 맞춤.
+
+누락된 @Bean 추가(있다면 유지), FactStatusClassifier를 파라미터로 주입.
+
+diff
+복사
+편집
+ // src/main/java/com/example/lms/config/OpenAiConfig.java
+@@
+ import com.example.lms.service.FactVerifierService;
++import com.example.lms.service.verification.FactStatusClassifier;
+ import com.theokanning.openai.service.OpenAiService;
+@@
+-    /** 사실 검증용 서비스 */
+-    public FactVerifierService factVerifierService(OpenAiService openAiService,
+-                                                   SourceAnalyzerService sourceAnalyzer) {
+-        // 2-인자 생성자: FactStatusClassifier는 내부에서 new 로 생성됨
+-        return new FactVerifierService(openAiService, sourceAnalyzer);
+-    }
++    /** 사실 검증 서비스 빈 */
++    @Bean
++    public FactVerifierService factVerifierService(OpenAiService openAiService,
++                                                   FactStatusClassifier classifier,
++                                                   SourceAnalyzerService sourceAnalyzer) {
++        return new FactVerifierService(openAiService, classifier, sourceAnalyzer);
++    }
+대안: FactVerifierService가 @Service로 이미 컴포넌트 스캔된다면, 위 @Bean 메서드 자체를 삭제해도 됩니다(중복 빈 방지). 이번 PR에서는 명시적 @Bean 유지안을 적용했습니다.
+
+2) 경량 랭커 인터페이스화(컴파일 오류 해소)
+LightWeightRanker를 interface로 전환.
+
+토큰 교집합 로직은 DefaultLightWeightRanker 구현체로 이전(빈 등록 @Component).
+
+diff
+복사
+편집
+// src/main/java/com/example/lms/service/rag/rerank/LightWeightRanker.java
+-@Component
+-public class LightWeightRanker { ... }
++public interface LightWeightRanker {
++    List<Content> rank(List<Content> candidates, String query, int limit);
++}
+java
+복사
+편집
+// src/main/java/com/example/lms/service/rag/rerank/DefaultLightWeightRanker.java
+@Component
+public class DefaultLightWeightRanker implements LightWeightRanker {
+    // 기존 토큰 교집합 점수화 알고리즘 그대로 이전
+}
+3) EmbeddingCrossEncoderReranker – 임베딩 타입 정합성
+double[] → float[]로 시그니처 및 내부 계산 정리.
+
+diff
+복사
+편집
+- double[] qv = embeddingModel.embed(query).content().vector();
++ float[]  qv = embeddingModel.embed(query).content().vector();
+- double[] dv = embeddingModel.embed(text).content().vector();
++ float[]  dv = embeddingModel.embed(text).content().vector();
+- private static double cosine(double[] a, double[] b)
++ private static double cosine(float[] a, float[] b)
+4) HybridRetriever – 병렬 변수명 오용 수정
+존재하지 않는 maxParallelOverride 참조 제거, 클래스 필드 this.maxParallel 사용.
+
+diff
+복사
+편집
+- ForkJoinPool pool = new ForkJoinPool(Math.max(1, maxParallelOverride));
++ ForkJoinPool pool = new ForkJoinPool(Math.max(1, this.maxParallel));
+5) ChatApiController – 로거 미정의 오류 해결
+Lombok 사용 시: @Slf4j 추가.
+
+Lombok 미사용 시: private static final Logger log = LoggerFactory.getLogger(...); 추가.
+
+SSE 스트림에 doOnCancel, doOnError 로깅 연결.
+
+6) 기타 안정화/정리
+SourceAnalyzerService: 중복 애너테이션/상수 병합 및 안전 폴백.
+
+MLCalibrationUtil: 시그모이드/다항식 모델 주석 및 중복 메서드 시그니처 정돈.
+
+DefaultQueryCorrectionService: 제로폭/스마트쿼트/대시 통일, 공백 정규화 추가.
+
+MemoryReinforcementService: 최근 스니펫 캐시 getIfPresent 사용으로 중복 필터 정확도 개선.
+
+파일별 변경 목록(Files Changed)
+config/OpenAiConfig.java ✅ constructor mismatch fix, @Bean 보강
+
+service/rag/rerank/LightWeightRanker.java ✅ class → interface
+
+service/rag/rerank/DefaultLightWeightRanker.java ✅ 신규 구현체 추가(@Component)
+
+service/rag/rerank/EmbeddingCrossEncoderReranker.java ✅ float[] 정합성 & cosine 시그니처
+
+service/rag/HybridRetriever.java ✅ 병렬 변수 참조 수정
+
+api/ChatApiController.java ✅ 로거 필드/애너테이션 추가 및 SSE 로깅
+
+service/verification/SourceAnalyzerService.java ✅ 안전 폴백·정리
+
+util/MLCalibrationUtil.java ✅ 시그니처/주석 정리
+
+service/correction/DefaultQueryCorrectionService.java ✅ 전처리 개선
+
+service/reinforcement/MemoryReinforcementService.java ✅ 캐시 사용법 수정
+
+테스트 플랜(How to Test)
+컴파일
+
+bash
+복사
+편집
+./gradlew clean build
+에러였던
+constructor FactVerifierService(...) cannot be applied to given types 사라져야 함.
+
+부트 실행 & 기본 흐름
+
+/api/chat 및 /api/chat/stream 호출 → 응답/스트림 정상.
+
+로그에 SSE stream cancelled by client.../SSE stream error... 발생 시 정상 로깅 확인.
+
+랭커 주입 확인
+
+DefaultLightWeightRanker가 빈으로 주입되어 HybridRetriever 경로에서 1차 랭킹 수행.
+
+Reranker 타입 확인
+
+EmbeddingCrossEncoderReranker에서 임베딩 추출/코사인 계산 시 타입 예외 없음.
+
+회귀(Regression)
+
+RAG 검색 + 융합 + 검증 2-Pass 전체 파이프라인 호출 시 예외 없음.
+
+마이그레이션 노트(Breaking Changes)
+FactVerifierService의 2-인자 생성자 제거: 구성 코드나 수동 new 사용처가 있다면 3-인자( OpenAiService, FactStatusClassifier, SourceAnalyzerService)로 교체하거나, 스프링 빈 자동주입을 사용하세요.
+
+LightWeightRanker가 interface로 전환: 기존에 직접 new LightWeightRanker() 하던 곳이 있었다면 DefaultLightWeightRanker 사용 또는 빈 주입으로 교체.
 📄 라이선스
 MIT License (상세는 LICENSE 참조)
