@@ -2,7 +2,9 @@ package com.example.lms.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.ToString;
 import org.hibernate.annotations.UpdateTimestamp;
+// import org.hibernate.annotations.CreationTimestamp; // (선택) Hibernate @CreationTimestamp 사용 가능
 import org.apache.commons.codec.digest.DigestUtils;
 
 import java.time.LocalDateTime;
@@ -14,7 +16,8 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_tm_source_hash", columnList = "source_hash"),
                 @Index(name = "idx_tm_session",     columnList = "session_id"),
                 // [추가] 볼츠만 강화 검색 최적화를 위해 에너지 컬럼에 인덱스 추가
-                @Index(name = "idx_tm_energy",      columnList = "energy")
+                @Index(name = "idx_tm_energy",      columnList = "energy"),
+                @Index(name = "idx_tm_last_used_at", columnList = "last_used_at") //  최근 사용 정렬 최적화
         }
 )
 @Getter @Setter @Builder
@@ -38,6 +41,7 @@ public class TranslationMemory {
     private Integer hitCount = 0;
 
     @Column(name = "created_at", nullable = false)
+    // @CreationTimestamp //  Hibernate 사용 시 자동 생성시간 주입(선택) :contentReference[oaicite:0]{index=0}
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at")
@@ -56,9 +60,10 @@ public class TranslationMemory {
     private String source;
 
     @Lob
+    @ToString.Exclude //  대용량 로그/GC 보호
     private String content;
-
     @Lob
+    @ToString.Exclude //  대용량 로그/GC 보호
     private String corrected;
 
     /* ===== 점수/유사도 ===== */
@@ -83,6 +88,10 @@ public class TranslationMemory {
     /** [추가] 담금질(Annealing) 스케줄에 사용될 온도 */
     @Column(name = "temperature")
     private Double temperature;
+
+    /* ===== 신뢰도(검증 단계) ===== */
+    @Column(name = "confidence_score")
+    private Double confidenceScore; //  FactVerify/ContextScore 집계값 저장
 
     /* ===== 상태 ===== */
     @Enumerated(EnumType.ORDINAL)
@@ -129,6 +138,10 @@ public class TranslationMemory {
         this.rewardMean = mean1;
         this.rewardM2   = m2_1;
         this.qValue     = mean1;
+                // + 보상 관측과 함께 confidence 희석(EMA) 업데이트(있으면)
+                        if (this.confidenceScore != null) {
+                        this.confidenceScore = 0.8 * this.confidenceScore + 0.2 * Math.max(0.0, Math.min(1.0, reward));
+                    }
     }
 
 

@@ -26,8 +26,8 @@ public class DefaultPromptEngine implements PromptEngine {
             %s
 
             ### INSTRUCTIONS
-            - You are a helpful AI assistant.
-            - Based on the CONTEXT above, answer the QUESTION.
+                       - You are a helpful AI assistant.
+                                                                          - Answer the QUESTION strictly and solely using the CONTEXT above. Do not invent facts.
             - Earlier context items have higher authority.
             - Answer in Korean.
             - If you can find the source, cite its number like [1], [2].
@@ -52,7 +52,6 @@ public class DefaultPromptEngine implements PromptEngine {
         StringBuilder sb = new StringBuilder();
         int i = 0;
         for (Content doc : docs) {
-// src/main/java/com/example/lms/prompt/DefaultPromptEngine.java
 
             String text = Optional.ofNullable(doc.textSegment())
                     .map(TextSegment::text)

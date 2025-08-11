@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import com.example.lms.service.QueryAugmentationService;
 import com.example.lms.prompt.PromptEngine;
+
 import com.example.lms.service.fallback.SmartFallbackService;
  import com.example.lms.service.disambiguation.QueryDisambiguationService;
 import com.example.lms.service.disambiguation.DisambiguationResult;
@@ -79,7 +80,7 @@ import com.example.lms.transform.QueryTransformer;            // ⬅️ 추가
 //  hybrid retrieval content classes
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
-
+import com.example.lms.service.rag.ContextOrchestrator;
 // 🔹 NEW: ML correction util
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.correction.QueryCorrectionService;   // ★ 추가
@@ -166,6 +167,9 @@ public class ChatService {
     private final PromptEngine promptEngine;
 
     private final SmartFallbackService fallbackSvc;
+    // 🔧 신규 오케스트레이터 주입 (RequiredArgsConstructor로 자동 주입)
+    private final ContextOrchestrator contextOrchestrator;
+    
     @Value("${rag.hybrid.top-k:50}")
     private int hybridTopK;
     @Value("${rag.rerank.top-n:10}")
@@ -454,11 +458,10 @@ public class ChatService {
                     "lc:" + chatModel.getClass().getSimpleName(), true);
         }
 
-        // 🔸 4) 최종 프롬프트/컨텍스트 구성
-        // 🔸 4) 최종 프롬프트/컨텍스트 구성
-        String webCtx = promptEngine.createPrompt(finalQuery, topDocs); // 웹/벡터 문서 컨텍스트
-        String unifiedCtx = buildUnifiedContext(webCtx, ragCtx, memCtx); // web → rag → mem 우선순위 합성
-
+        // 🔸 4) 최종 컨텍스트 생성(룰 기반) — 오케스트레이터로 이관
+        String unifiedCtx = contextOrchestrator.orchestrate(finalQuery,
+                ragSvc.asContentRetriever(pineconeIndexName).retrieve(Query.from(finalQuery)), // vector
+                topDocs);
 
         // 🔸 5) 단일 LLM 호출로 답변 생성
         // 🔸 5) 모델/온도 준비 → 위험 질의면 온도 하향

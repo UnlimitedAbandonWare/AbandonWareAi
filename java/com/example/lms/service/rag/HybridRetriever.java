@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 import java.util.concurrent.ForkJoinPool;
 
 import com.example.lms.service.rag.auth.AuthorityScorer;
-import com.example.lms.util.SoftmaxUtil;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -72,12 +72,9 @@ public class HybridRetriever implements ContentRetriever {
     @Value("${hybrid.max-parallel:3}")
     private int maxParallel;
 
-
-    // ★ softmax 융합 온도
-    @Value("${hybrid.min-relatedness:0.4}")
+    @Value("${hybrid.min-relatedness:0.4}")  //  관련도 필터 컷오프
     private double minRelatedness;
     // ★ 융합 모드: rrf(기본) | softmax
-    @Value("${retrieval.fusion.mode:rrf}")
     private String fusionMode;
     // ★ softmax 융합 온도
     @Value("${retrieval.fusion.softmax.temperature:1.0}")
@@ -187,8 +184,7 @@ public class HybridRetriever implements ContentRetriever {
                 }
                 buckets.add(acc);
             }
-            // 융합 및 최종 정제 후 상위 top 반환
-            // 융합 및 최종 정제 후 상위 top 반환
+
 
             // 융합 및 최종 정제 후 상위 top 반환
             List<Content> fused = "softmax".equalsIgnoreCase(fusionMode)

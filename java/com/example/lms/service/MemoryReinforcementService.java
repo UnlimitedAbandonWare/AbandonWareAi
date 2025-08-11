@@ -1,8 +1,6 @@
 package com.example.lms.service;
 import java.util.regex.Pattern;
-import com.example.lms.service.VectorStoreService; // 실제 위치가 다르면 패키지 경로만 맞춰주세요
-import java.util.regex.Pattern;
-import com.example.lms.service.VectorStoreService; // 실제 패키지 맞게 유지
+import com.example.lms.service.VectorStoreService;
 
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.repository.TranslationMemoryRepository;
@@ -259,7 +257,11 @@ public class MemoryReinforcementService {
                                      String sourceTag,
                                      double score) {
         if (!StringUtils.hasText(snippet)) return;
-
+        //  +과적합 방지 1: 저품질 컷오프
+        if (score < lowScoreCutoff || !shouldStore(snippet)) {
+            log.debug("[Reinforce] skip store (score < cutoff or bad snippet). score={}, cutoff={}", score, lowScoreCutoff);
+            return;
+        }
         String sid  = StringUtils.hasText(sessionId) ? sessionId : "*";
         String hash = sha1(snippet);
 
@@ -289,6 +291,12 @@ public class MemoryReinforcementService {
         // Q-value 업데이트(0~1로 클램프)
         double q = Math.max(0.0, Math.min(1.0, score));
         tm.setQValue(q);
+// + 검증 단계에서 전달된 신뢰도(있다면) 반영 — 없으면 q로 초기화
+        if (tm.getConfidenceScore() == null) {
+            tm.setConfidenceScore(q);
+        } else {
+            tm.setConfidenceScore(0.8 * tm.getConfidenceScore() + 0.2 * q);
+        }
 
         // 에너지/온도 계산
         double energy = computeBoltzmannEnergy(tm);
@@ -305,6 +313,8 @@ public class MemoryReinforcementService {
             // 최초 생성 등으로 업데이트가 0이면 저장
             memoryRepository.save(tm);
         }
+        // + 벡터 색인 큐에 적재(예외 무시)
+        try { vectorStoreService.enqueue(sessionId != null ? sessionId : "*", snippet); } catch (Exception ignore) {}
     }
 
     /**
@@ -398,7 +408,17 @@ public class MemoryReinforcementService {
         return sha1(s.trim());
     }
 
-/** 보상**
+    //  간단한 보관 전 품질 게이트(너무 짧은/중복성 높은 스니펫 차단)
+    private boolean shouldStore(String text) {
+        String s = text.trim();
+        if (s.length() < 40) return false;               // 너무 짧음 → 노이즈
+        if (recentSnippetCache != null) {                // 최근 중복 방지(있으면)
+            String h = storageHashFromSnippet(s);
+            Boolean seen = recentSnippetCache.get(h);
+            if (Boolean.TRUE.equals(seen)) return false;
+        }
+        return true;
+    }
 
     /* =========================================================
      *  이하, 기존 서비스 내부 유틸/메서드 유지
