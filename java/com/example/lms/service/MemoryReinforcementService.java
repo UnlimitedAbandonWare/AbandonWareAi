@@ -150,6 +150,9 @@ public class MemoryReinforcementService {
      * ========================================================= */
     @Transactional(propagation = Propagation.REQUIRES_NEW,
             noRollbackFor = DataIntegrityViolationException.class)
+    public int bumpOnly(String hash) {
+        return repository.incrementHitCountBySourceHash(hash);
+    }
     public void applyFeedback(String sessionId,
                               String messageContent,
                               boolean positive,

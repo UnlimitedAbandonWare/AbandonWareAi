@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-
+import org.springframework.beans.factory.annotation.Value;
 /**
  * ① 모든 하이퍼파라미터를 {@link HyperparameterService} 로부터 **동적**으로 가져온다.
  * ② TEXT 컬럼과 utf8mb4 설정을 통해 한글/이모지 문제를 해결했다.
@@ -27,7 +27,14 @@ public class BanditSelector {
     private final MemoryRepository    memoryRepo;
     private final TextSimilarityUtil  simUtil;
     private final HyperparameterService hp;   // ← 핵심 변경
+    @Value("${bandit.temperature.energy:1.0}")
+    private double Teng;
 
+    @Value("${bandit.temperature.softmax:1.0}")
+    private double Tsoft;
+
+    @Value("${bandit.beta.cosine:1.0}")
+    private double betaCos;
     /* 동적으로 흔들리는 유사도 임계값 (jitter 반영) */
     private final AtomicReference<Double> dynThreshold = new AtomicReference<>();
 

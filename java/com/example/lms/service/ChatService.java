@@ -16,7 +16,7 @@ import com.example.lms.service.fallback.SmartFallbackService;
  import com.example.lms.service.disambiguation.QueryDisambiguationService;
 import com.example.lms.service.disambiguation.DisambiguationResult;
 import com.example.lms.service.ChatHistoryService;
-
+import com.example.lms.service.fallback.FallbackHeuristics;
 import static com.example.lms.service.rag.LangChainRAGService.META_SID;
 import com.example.lms.service.rag.QueryComplexityGate;
 import jakarta.annotation.PostConstruct;
@@ -419,21 +419,23 @@ public class ChatService {
 
 
         // 🔸 5) 단일 LLM 호출로 답변 생성
-        String cleanModel = chooseModel(req.getModel(), true);
         ChatModel dynamic = chatModelFactory.lc(
                 cleanModel,
                 llmTemp,
-                Optional.ofNullable(req.getTemperature()).orElse(defaultTemp),
                 Optional.ofNullable(req.getTopP()).orElse(defaultTopP),
                 req.getMaxTokens()
+        );
                 // [추가] FallbackHeuristics로 위험 질의 감지 시, 온도를 0.05 이하로 강제
+        // 위험 질의 감지 시 온도 낮추기
+        double llmTemp = Optional.ofNullable(req.getTemperature()).orElse(defaultTemp);
         if (FallbackHeuristics.detect(finalQuery) != null) {
-            llmTemp = Math.min(llmTemp, 0.05); // 탐색(창의성) 억제
+            llmTemp = Math.min(llmTemp, 0.05); // 탐색 억제
         }
 
         List<ChatMessage> msgs = buildLcMessages(req, unifiedCtx);
         String answer = dynamic.chat(msgs).aiMessage().text();
         String out = ruleEngine.apply(answer, "ko", RulePhase.POST);
+
 
         reinforceAssistantAnswer(sessionKey, correctedMsg, out);
         return ChatResult.of(out, "lc:" + cleanModel, true);
@@ -532,8 +534,9 @@ public class ChatService {
 
             /* ─── ③ 후처리 & 메모리 ─── */
             String out = ruleEngine.apply(finalText, "ko", RulePhase.POST);
+
             reinforceAssistantAnswer(sessionKey, correctedMsg, out);
-            return ChatResult.of(out, modelId, req.isUseRag());
+            return ChatResult.of(out, "lc:" + cleanModel, true);
 
         } catch (Exception ex) {
             log.error("[OpenAI-Java] 호출 실패", ex);
@@ -570,6 +573,7 @@ public class ChatService {
         // OFF 경로(단독 호출)에서는 여기서 교정 1회 적용
         final String originalMsg = Optional.ofNullable(req.getMessage()).orElse("");
         final String correctedMsg = correctionSvc.correct(originalMsg);
+// 🔸 5) 단일 LLM 호출로 답변 생성
         String cleanModel = chooseModel(req.getModel(), true);
         List<ChatMessage> msgs = buildLcMessages(req, unifiedCtx); // (히스토리는 원문 유지)
 

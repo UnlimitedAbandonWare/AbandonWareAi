@@ -35,7 +35,7 @@ public interface MemoryRepository extends JpaRepository<TranslationMemory, Long>
      */
     @Transactional
     @Modifying
-    @Query("UPDATE TranslationMemory tm SET tm.hitCount = tm.hitCount + 1 WHERE tm.sourceHash = :hash")
+    @Query("update TranslationMemory tm set tm.hitCount = tm.hitCount + 1 where tm.sourceHash = :hash")
     int incrementHitCountBySourceHash(@Param("hash") String hash);
 
     /*
