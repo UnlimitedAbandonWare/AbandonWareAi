@@ -289,7 +289,17 @@ feat: Softmax 기반 전략 선택 및 융합 기능 도입
   점수 융합 및 재정렬(Re-ranking) 모드를 옵션으로 추가.
 - 신규 컴포넌트: 수치적으로 안정적인 SoftmaxUtil 및 하이퍼파라미터
   제어를 위한 StrategyHyperparams 추가.
-* **README 업데이트**
-    * 새로운 아키텍처 다이어그램과 메타-학습 루프에 대한 설명을 반영하여 프로젝트 문서를 최신화합니다.
+커밋 본문 (Body)
+TranslationMemoryRepository 수정
+
+MemoryReinforcementService의 호출로 인한 컴파일 오류를 해결하기 위해 incrementHitCountBySourceHash 메서드를 복원했습니다.
+
+@Modifying 어노테이션을 사용해 hit_count 필드만 정확히 업데이트하도록 하여, 불필요한 DB 쓰기 부하를 줄이고 성능을 개선합니다.
+
+RestTemplateConfig 개선
+
+Spring Boot 3.x에서 deprecated 된 setConnectTimeout, setReadTimeout 메서드를 최신 API(connectTimeout, readTimeout)로 교체했습니다.
+
+향후 API 제거로 인한 문제를 예방하고 빌드 경고를 제거합니다.
 📄 라이선스
 MIT License (LICENSE 참조)
