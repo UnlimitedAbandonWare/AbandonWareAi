@@ -151,7 +151,11 @@ public class ChatService {
     private final NaverSearchService searchService;
     private final ChatMemoryProvider chatMemoryProvider; // 세션 메모리 Bean
     private final QueryTransformer queryTransformer;
-    private final HybridRetriever hybridRetriever; // ★ 하이브리드 리트리버 DI 복구
+    private final HybridRetriever hybridRetriever; // ★ 하이브리드 리트리버
+    // ▼▼ 신규 DI
+    private final com.example.lms.strategy.StrategySelectorService strategySelector;
+    private final com.example.lms.strategy.StrategyDecisionTracker strategyTracker;
+    private final com.example.lms.scoring.ContextualScorer contextualScorer;
     private final QueryAugmentationService augmentationSvc; // ★ 질의 향상 서비스
     private final QueryCorrectionService correctionSvc;             // ★ 추가
     // 🔹 NEW: 다차원 누적·보강·합성기
@@ -361,7 +365,7 @@ public class ChatService {
                     : invokeOpenAiJava(req, memCtx);
         }
 
-        /* C. Retrieval ON (Hybrid)
+        /* C. Retrieval ON (Hybrid + Meta‑Strategy)
          *    ▶▶ 하나의 세션키(sessionKey)만 생성·전파 ◀◀
          */
         String sessionKey = Optional.ofNullable(req.getSessionId())
@@ -392,15 +396,46 @@ public class ChatService {
             ragCtx = null;
         }
 
-        // 🔸 프리플라이트 웹검색 제거 → 이중 호출 방지(하이브리드 단일 패스)
+        // ❶ 메타‑전략 선택
+        var chosen = strategySelector.selectForQuestion(finalQuery, req);
+        strategyTracker.associate(sessionKey, chosen); // 피드백 집계용
 
-// ❷ 체인 캐싱 역시 동일 키 사용
-        // 🔸 Progressive Retrieval (로컬 RAG → 필요 시 Self‑Ask → 웹) 으로 검색 로직 일원화
-        List<String> augmented = augmentationSvc.augment(finalQuery);
-        List<String> queries = QueryHygieneFilter.sanitize(augmented, 4, 0.80);
-        List<Content> fused = (queries != null && queries.size() > 1) ?
-                hybridRetriever.retrieveAll(queries, hybridTopK) :
-                hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
+        // ❷ 전략별 수집 경로
+        List<Content> fused;
+        switch (chosen) {
+            case WEB_FIRST -> {
+                // 웹 우선 → 스니펫을 Content로 래핑, 부족하면 벡터 보강
+                List<String> sn = searchService.searchSnippets(finalQuery, hybridTopK);
+                List<Content> webOnly = sn.stream().map(Content::from).toList();
+                if (webOnly.size() < Math.max(3, hybridTopK/2)) {
+                    var pine = ragSvc.asContentRetriever(pineconeIndexName);
+                    var vec  = pine.retrieve(Query.from(finalQuery));
+                    fused = new java.util.ArrayList<>(webOnly); fused.addAll(vec);
+                } else fused = webOnly;
+            }
+            case VECTOR_FIRST -> {
+                var pine = ragSvc.asContentRetriever(pineconeIndexName);
+                fused = pine.retrieve(Query.from(finalQuery));
+                if (fused.size() < Math.max(3, hybridTopK/2)) {
+                    List<String> sn = searchService.searchSnippets(finalQuery, hybridTopK/2);
+                    fused = new java.util.ArrayList<>(fused);
+                    fused.addAll(sn.stream().map(Content::from).toList());
+                }
+            }
+            case DEEP_DIVE_SELF_ASK -> {
+                fused = hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
+            }
+            case WEB_VECTOR_FUSION -> {
+                List<String> augmented = augmentationSvc.augment(finalQuery);
+                List<String> queries = QueryHygieneFilter.sanitize(augmented, 4, 0.80);
+                fused = (queries != null && queries.size() > 1)
+                        ? hybridRetriever.retrieveAll(queries, hybridTopK)
+                        : hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
+            }
+            default -> {
+                fused = hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
+            }
+        }
 
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
@@ -439,8 +474,11 @@ public class ChatService {
         String answer = dynamic.chat(msgs).aiMessage().text();
         String out = ruleEngine.apply(answer, "ko", RulePhase.POST);
 
+        // 컨텍스트 스코어(사실성/품질/신규성) 산출 → 강화 점수 보정
+        var scoreReport = contextualScorer.score(correctedMsg, unifiedCtx, out);
 
-        reinforceAssistantAnswer(sessionKey, correctedMsg, out);
+
+        reinforceAssistantAnswer(sessionKey, correctedMsg, out, scoreReport.overall(), chosen);
         return ChatResult.of(out, "lc:" + cleanModel, true);
     }   // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 // ------------------------------------------------------------------------
@@ -918,7 +956,9 @@ public class ChatService {
     }
 
     /** 세션 스코프  가중치 보존 정책 준수 */
-    private void reinforceAssistantAnswer(String sessionKey, String query, String answer) {
+    private void reinforceAssistantAnswer(String sessionKey, String query, String answer,
+                                          double contextualScore,
+                                          com.example.lms.strategy.StrategySelectorService.Strategy chosen) {
         if (!StringUtils.hasText(answer) || "정보 없음".equals(answer.trim())) return;
         /*
          * 기존에는 고정된 감쇠 가중치(예: 0.18)를 적용했습니다.  이제는
@@ -939,9 +979,11 @@ public class ChatService {
                 mlLambda,
                 add);
         // 점수를 0과 1 사이로 정규화하여 메모리 서비스에 넘깁니다.
-        double normalizedScore = Math.max(0.0, Math.min(1.0, score));
+        // ML 보정값과 컨텍스트 스코어를 절충(0.5:0.5)
+        double normalizedScore = Math.max(0.0, Math.min(1.0, 0.5*score  0.5*contextualScore));
         try {
             memorySvc.reinforceWithSnippet(sessionKey, query, answer, "ASSISTANT", normalizedScore);
+            // 세션‑전략 추적은 위 associate()에서 이미 수행됨(피드백 시 집계)
         } catch (Throwable t) {
             log.debug("[Memory] reinforceWithSnippet 실패: {}", t.toString());
         }

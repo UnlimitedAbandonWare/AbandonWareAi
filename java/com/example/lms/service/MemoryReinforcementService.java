@@ -53,12 +53,20 @@ public class MemoryReinforcementService {
 
     private LoadingCache<String, Boolean> recentSnippetCache;
 
+    // ▼▼ 신규 DI
+    private final com.example.lms.strategy.StrategyPerformanceRepository perfRepo;
+    private final com.example.lms.strategy.StrategyDecisionTracker strategyTracker;
+
     public MemoryReinforcementService(TranslationMemoryRepository memoryRepository,
                                       VectorStoreService vectorStoreService,
-                                      SnippetPruner snippetPruner) {
+                                      SnippetPruner snippetPruner,
+                                      com.example.lms.strategy.StrategyPerformanceRepository perfRepo,
+                                      com.example.lms.strategy.StrategyDecisionTracker strategyTracker) {
         this.memoryRepository   = memoryRepository;
         this.vectorStoreService = vectorStoreService;
         this.snippetPruner      = snippetPruner;
+        this.perfRepo           = perfRepo;
+        this.strategyTracker    = strategyTracker;
     }
 
     @PostConstruct
@@ -194,6 +202,18 @@ public class MemoryReinforcementService {
             }
 
             log.debug("[Feedback] applied (sid={}, pos={}, msgHash={})", sid, positive, safeHash(msgHash));
+
+            // ▼ 전략 성과 집계: 최근 세션 전략을 읽어 Success/Failure 누적
+            var maybeStrategy = strategyTracker.getLastStrategyForSession(sid);
+            maybeStrategy.ifPresent(st -> {
+                try {
+                    perfRepo.upsertAndAccumulate(st.name(), /*category*/ "default",
+                            positive ? 1 : 0, positive ? 0 : 1,
+                            positive ? 1.0 : 0.0);
+                } catch (Exception e) {
+                    log.debug("[StrategyPerf] update skipped: {}", e.toString());
+                }
+            });
         } catch (Exception e) {
             log.error("[Feedback] applyFeedback failed", e);
             throw e;
