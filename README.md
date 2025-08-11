@@ -261,5 +261,26 @@ feat: 메타 강화 루프 도입 및 전략 선택 고도화
 - StrategySelectorService/ContextualScorer/DynamicHyperparameterTuner 추가
 - StrategyPerformance 엔티티 및 레포지토리 도입
 - AuthorityScorer 가중 반영 및 2-Pass Meta-Check 명시화
+시스템이 스스로 최적의 검색 전략을 학습하고 평가하는 '메타-학습 강화 루프'의 핵심 기능을 구현합니다. 이 과정에서 발생한 ChatService의 컴파일 오류를 수정합니다.
+
+### 주요 변경 내역
+
+* **신규 서비스 및 엔티티 추가 (메타-학습)**
+    * `StrategySelectorService`: 과거 성과 기반으로 최적 검색 전략(WEB_FIRST, VECTOR_FIRST 등)을 동적으로 선택합니다.
+    * `ContextualScorer`: 답변의 사실성, 품질, 신규성을 다차원적으로 평가하여 보상 점수를 고도화합니다.
+    * `StrategyPerformance`: 각 전략의 성과(성공/실패, 평균 보상)를 기록하는 엔티티 및 Repository를 추가합니다.
+    * `DynamicHyperparameterTuner`: `@Scheduled`를 통해 매일 시스템의 학습 파라미터를 자동 튜닝합니다.
+
+* **기존 서비스 연동 및 수정**
+    * `ChatService`: 검색 전 `StrategySelectorService`를 호출하여 전략을 결정하고, 답변 생성 후 `ContextualScorer`의 평가 점수를 `reinforceAssistantAnswer` 메서드에 반영합니다.
+    * `MemoryReinforcementService`: 사용자 피드백 수신 시, `TranslationMemory` 강화와 더불어 `StrategyPerformance` 성적표를 함께 업데이트합니다.
+
+* **버그 수정**
+    * `ChatService`: `reinforceAssistantAnswer` 메서드 내 강화 점수 계산식에서 누락되었던 `+` 연산자를 추가하여 컴파일 오류를 해결합니다.
+      (수정 전: `0.5*score 0.5*contextualScore`)
+      (수정 후: `0.5 * score + 0.5 * contextualScore`)
+
+* **README 업데이트**
+    * 새로운 아키텍처 다이어그램과 메타-학습 루프에 대한 설명을 반영하여 프로젝트 문서를 최신화합니다.
 📄 라이선스
 MIT License (LICENSE 참조)
