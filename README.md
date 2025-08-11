@@ -290,7 +290,46 @@ feat: Softmax 기반 전략 선택 및 융합 기능 도입
 - 신규 컴포넌트: 수치적으로 안정적인 SoftmaxUtil 및 하이퍼파라미터
   제어를 위한 StrategyHyperparams 추가.
 커밋 본문 (Body)
-TranslationMemoryRepository 수정
+TranslationMemoryRepository 수정refactor(repository): TranslationMemoryRepository 업데이트 로직 원자적 통합 및 최적화
+
+commit 본문:
+
+본 커밋은 MemoryReinforcementService와 TranslationMemory 엔티티에 분산되어 있던 강화 학습 관련 데이터 업데이트 로직을 TranslationMemoryRepository의 단일 네이티브 쿼리로 통합하여, 데이터 정합성을 보장하고 성능을 최적화하는 리팩토링을 진행합니다.
+
+1. 문제점 및 수정 배경
+데이터 경쟁 상태 (Race Condition) 가능성: 기존 MemoryReinforcementService는 SELECT로 TranslationMemory 엔티티를 조회한 후, Java 애플리케이션단에서 hit_count, q_value, energy 등 복잡한 보상 값을 계산하고 여러 UPDATE 쿼리로 다시 저장했습니다. 이 '읽기-수정-쓰기' 패턴은 동시 요청 발생 시 데이터 유실 또는 부정확한 업데이트를 유발할 수 있습니다.
+
+서비스 로직 복잡성: 강화 학습의 핵심 계산 로직이 서비스 계층에 노출되어 있어, Repository의 역할을 단순 데이터 접근 이상으로 확장할 필요가 있었습니다.
+
+불필요한 DB 왕복: 여러 번의 SELECT와 UPDATE로 인해 발생하는 네트워크 오버헤드를 줄여야 합니다.
+
+2. 핵심 수정 전략
+TranslationMemoryRepository 인터페이스에 upsertAndReinforce 라는 새로운 네이티브 쿼리 메서드를 추가하여, 관련된 모든 업데이트를 단 한 번의 원자적(Atomic) DB 호출로 처리하도록 변경합니다.
+
+INSERT ... ON DUPLICATE KEY UPDATE 활용:
+
+source_hash를 기준으로 신규 데이터는 INSERT하고, 기존 데이터는 UPDATE하여 'UPSERT' 로직을 구현합니다.
+
+핵심 강화 로직을 SQL로 통합:
+
+hit_count, success_count, failure_count를 SQL 레벨에서 안전하게 + 1 증가시킵니다.
+
+q_value 업데이트를 위해 지수이동평균(EMA) 계산식 (q_value * 0.8 + :newReward * 0.2)을 UPDATE 구문에 직접 통합합니다.
+
+MemoryReinforcementService의 computeBoltzmannEnergy와 annealTemperature 메서드 로직을 SQL 함수(예: LOG, SQRT)로 변환하여 energy와 temperature 필드를 한 번에 업데이트합니다.
+
+세션 ID 및 출처 태그(Source Tag) 업데이트:
+
+최초 INSERT 시에만 session_id와 source_tag를 설정하고, UPDATE 시에는 last_used_at과 같은 타임스탬프와 핵심 지표만 갱신하도록 SQL 쿼리를 설계합니다.
+
+3. 기대 효과 및 후속 조치
+데이터 정합성 보장: 모든 업데이트가 단일 트랜잭션 내에서 원자적으로 처리되어 동시성 문제를 원천적으로 해결합니다.
+
+성능 향상: DB와의 통신 횟수를 획기적으로 줄여 시스템의 전반적인 응답 속도를 개선합니다.
+
+코드 단순화: MemoryReinforcementService는 복잡한 계산 로직 대신, 파라미터를 준비하여 upsertAndReinforce 메서드를 호출하는 역할만 담당하게 되어 코드가 간결해지고 유지보수성이 향상됩니다.
+
+후속 조치: 이 변경에 맞춰 MemoryReinforcementService의 reinforceWithSnippet, applyFeedback 등의 관련 메서드 내부 로직을 새로운 Repository 메서드 호출 코드로 수정해야 합니다. 기존의 updateEnergyByHash, incrementHitCountBySourceHash 등 개별 업데이트 메서드는 새로운 통합 메서드로 대체되므로 점진적으로 제거(deprecated)할 수 있습니다.
 
 MemoryReinforcementService의 호출로 인한 컴파일 오류를 해결하기 위해 incrementHitCountBySourceHash 메서드를 복원했습니다.
 
