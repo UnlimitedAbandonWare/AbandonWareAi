@@ -21,8 +21,8 @@ public class RestTemplateConfig {
     @Primary
     public RestTemplate restTemplate(RestTemplateBuilder builder) {
         return builder
-                .connectTimeout(Duration.ofSeconds(3))
-                .readTimeout(Duration.ofSeconds(6))
+                .connectTimeout(Duration.ofSeconds(3)) // setConnectTimeout → connectTimeout
+                .readTimeout(Duration.ofSeconds(6))    // setReadTimeout   → readTimeout
                 .build();
     }
 

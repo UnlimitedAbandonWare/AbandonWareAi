@@ -43,8 +43,9 @@ public interface StrategyPerformanceRepository extends JpaRepository<StrategyPer
         LIMIT 1
         """)
     Optional<BestRow> findBestStrategyFor(@Param("qc") String queryCategory);
+    interface BestRow { String getStrategyName(); }
 
-    /** Softmax 전략 선택용 집계 */
+    /** 소프트맥스 선택용 집계(성공/실패/보상) */
     @Query(nativeQuery = true, value = """
         SELECT strategy_name  AS strategyName,
                success_count  AS success,
@@ -52,18 +53,13 @@ public interface StrategyPerformanceRepository extends JpaRepository<StrategyPer
                average_reward AS reward
         FROM strategy_performance
         WHERE query_category = :qc
-        """)
+    """)
     List<StatsRow> findStatsByCategory(@Param("qc") String queryCategory);
-
-    // Spring Data interface projection은 getter 규칙(getXxx) 필요
-    interface BestRow {
-        String getStrategyName();
-    }
 
     interface StatsRow {
         String getStrategyName();
-        Long   getSuccess();
-        Long   getFailure();
-        Double getReward();
+        Long   getSuccess();   // ← 이름 일치
+        Long   getFailure();   // ← 이름 일치
+        Double getReward();    // ← 이름 일치
     }
 }
