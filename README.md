@@ -254,7 +254,33 @@ feat: 메타 강화 루프 도입 및 전략 선택 고도화
 시스템이 스스로 최적의 검색 전략을 학습/평가하는 메타-학습 강화 루프 핵심 기능을 구현.
 이 과정에서 발생한 ChatService의 컴파일 오류(연산자 누락)를 수정:
 0.5*score 0.5*contextualScore → 0.5 * score + 0.5 * contextualScore
-버그리포트:
+버그리포트: Bugfix Report: 빌드 실패(생성자/타입 불일치, 인터페이스 선언, 로깅 필드) 일괄 수정
+요약
+원인
+
+FactVerifierService의 보조(2-인자) 생성자가 ObjectProvider<OpenAiService> 기반 구성과 충돌
+
+HybridRetriever가 존재하지 않는 변수 maxParallelOverride 참조
+
+EmbeddingCrossEncoderReranker가 LangChain4j 1.0.1의 float[] 벡터 타입과 불일치
+
+LightWeightRanker가 클래스로 선언되어 있어 구현체에서 implements 시 “interface expected” 발생
+
+ChatApiController에서 log 필드 미정의
+
+OpenAiConfig가 FactVerifierService/FactStatusClassifier를 잘못 생성(시그니처 불일치)
+
+조치
+생성자/타입/로깅/빈 구성을 정렬하고, 경량 랭커를 인터페이스화 + 기본 구현체를 분리하여 컴파일 오류 제거.
+
+영향 범위
+빌드/런타임 안정성 (컴파일 실패 제거)
+
+RAG 경로의 재랭킹/병렬 처리 안정성
+
+Bean 생성 충돌/중복 제거
+
+
 변경 배경(Why)
 FactVerifierService의 2-인자 생성자 제거 이후에도 OpenAiConfig가 여전히 2-인자 생성자를 호출하여 컴파일 에러 발생.
 
