@@ -5,7 +5,7 @@ import com.example.lms.domain.enums.RulePhase;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
-
+import com.example.lms.service.fallback.FallbackResult;
 import com.example.lms.service.NaverSearchService;
 import com.example.lms.service.rag.CrossEncoderReranker;   // ★ 누락된 import 추가
 import java.util.LinkedHashSet;
@@ -169,7 +169,7 @@ public class ChatService {
     private final SmartFallbackService fallbackSvc;
     // 🔧 신규 오케스트레이터 주입 (RequiredArgsConstructor로 자동 주입)
     private final ContextOrchestrator contextOrchestrator;
-    
+
     @Value("${rag.hybrid.top-k:50}")
     private int hybridTopK;
     @Value("${rag.rerank.top-n:10}")
@@ -574,7 +574,8 @@ public class ChatService {
 
             String warning = "\n\n⚠️ 본 답변은 검증된 정보가 부족하거나 부정확할 수 있습니다. 참고용으로 활용해 주세요.";
 // ★ 스마트 폴백: '정보 없음' 또는 컨텍스트 빈약 시, 친절한 교정/대안 제시
-            String smart = fallbackSvc.maybeSuggest(correctedMsg, joinedContext, verified);
+            FallbackResult fb = fallbackSvc.maybeSuggestDetailed(correctedMsg, joinedContext, verified);
+            String smart = (fb != null ? fb.suggestion() : null);
             String toPolish = pickForPolish(smart, verified, insufficientContext, fallbackHappened, warning);
 
 
@@ -587,8 +588,9 @@ public class ChatService {
 
             /* ─── ③ 후처리 & 메모리 ─── */
             String out = ruleEngine.apply(finalText, "ko", RulePhase.POST);
-
-            reinforceAssistantAnswer(sessionKey, correctedMsg, out);
+            //  폴백 여부에 따라 태깅하여 강화
+            String srcTag = (fb != null && fb.isFallback()) ? "SMART_FALLBACK" : "ASSISTANT";
+            try { memorySvc.reinforceWithSnippet(sessionKey, correctedMsg, out, srcTag, /*score*/ 0.5); } catch (Throwable ignore) {}
             return ChatResult.of(out, modelId, req.isUseRag());
 
         } catch (Exception ex) {
@@ -671,7 +673,8 @@ public class ChatService {
 
             String warning = "\n\n⚠️ 본 답변은 검증된 정보가 부족하거나 부정확할 수 있습니다. 참고용으로 활용해 주세요.";
 // ★ 스마트 폴백: '정보 없음' 또는 컨텍스트 빈약 시, 친절한 교정/대안 제시
-            String smart = fallbackSvc.maybeSuggest(correctedMsg, joinedContext, verified);
+            FallbackResult fb = fallbackSvc.maybeSuggestDetailed(correctedMsg, joinedContext, verified);
+            String smart = (fb != null ? fb.suggestion() : null);
             String toPolish = pickForPolish(smart, verified, insufficientContext, fallbackHappened, warning);
 
             String finalText = req.isPolish()

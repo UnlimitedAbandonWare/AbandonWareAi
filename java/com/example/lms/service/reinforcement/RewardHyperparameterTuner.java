@@ -62,33 +62,37 @@ public class RewardHyperparameterTuner {
         double wRec = builder.getWeightRec();
 
         for (int i = 0; i < iterations; i++) {
-            RewardScoringEngine engine = builder.build();
-            double loss = loss(engine, samples);
-
-            // gradient for wSim
+            // 중앙 차분 수치미분 (더 낮은 바이어스)
+// d/dw ≈ [L(w+h) - L(w-h)] / (2h)
             builder.weights(wSim + step, wHit, wRec);
-            double lossSim = loss(builder.build(), samples);
-            double gradSim = (lossSim - loss) / step;
+            double lossSimPlus  = loss(builder.build(), samples);
+            builder.weights(wSim - step, wHit, wRec);
+            double lossSimMinus = loss(builder.build(), samples);
+            double gradSim = (lossSimPlus - lossSimMinus) / (2 * step);
 
-            // gradient for wHit
             builder.weights(wSim, wHit + step, wRec);
-            double lossHit = loss(builder.build(), samples);
-            double gradHit = (lossHit - loss) / step;
+            double lossHitPlus  = loss(builder.build(), samples);
+            builder.weights(wSim, wHit - step, wRec);
+            double lossHitMinus = loss(builder.build(), samples);
+            double gradHit = (lossHitPlus - lossHitMinus) / (2 * step);
 
-            // gradient for wRec
             builder.weights(wSim, wHit, wRec + step);
-            double lossRec = loss(builder.build(), samples);
-            double gradRec = (lossRec - loss) / step;
+            double lossRecPlus  = loss(builder.build(), samples);
+            builder.weights(wSim, wHit, wRec - step);
+            double lossRecMinus = loss(builder.build(), samples);
+            double gradRec = (lossRecPlus - lossRecMinus) / (2 * step);
 
-            // restore original weights
+// 복구
             builder.weights(wSim, wHit, wRec);
 
-            // update weights
-            wSim = wSim - learningRate * gradSim;
-            wHit = wHit - learningRate * gradHit;
-            wRec = wRec - learningRate * gradRec;
+            // L2 규제(작은 λ) 포함한 경사하강
+            double lambda = 1e-4;
+            wSim = wSim - learningRate * (gradSim + 2 * lambda * wSim);
+            wHit = wHit - learningRate * (gradHit + 2 * lambda * wHit);
+            wRec = wRec - learningRate * (gradRec + 2 * lambda * wRec);
             builder.weights(wSim, wHit, wRec);
         }
+        builder.normaliseWeights(true); // 최종 정규화 복원
         return builder.build();
     }
 

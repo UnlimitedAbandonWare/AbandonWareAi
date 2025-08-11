@@ -1,4 +1,5 @@
-package com.example.lms.service.fallback;
+
+        package com.example.lms.service.fallback;
 
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
@@ -97,6 +98,21 @@ public class SmartFallbackService {
             log.debug("[SmartFallback] OpenAI 호출 실패 → 템플릿 폴백 사용: {}", e.toString());
             return templateFallback(det, candidates, userQuery);
         }
+    }
+
+    /**
+     * 상세 결과를 돌려주는 신규 API.
+     * 기존 maybeSuggest(...) 로부터 제안 텍스트를 얻고,
+     * 컨텍스트 부족/제안 존재 여부를 바탕으로 isFallback을 산출.
+     */
+    public FallbackResult maybeSuggestDetailed(String query,
+                                               String joinedContext,
+                                               String answerDraft) {
+        String suggestion = maybeSuggest(query, joinedContext, answerDraft);
+        boolean ctxEmpty  = !StringUtils.hasText(joinedContext) ||
+                "정보 없음".equalsIgnoreCase(String.valueOf(answerDraft).trim());
+        boolean isFallback = ctxEmpty || (StringUtils.hasText(suggestion));
+        return new FallbackResult(suggestion, isFallback);
     }
 
     /** OpenAI 비가용 시 최소한의 예의바른 안내 텍스트 */

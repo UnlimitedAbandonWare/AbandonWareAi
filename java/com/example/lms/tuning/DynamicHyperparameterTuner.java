@@ -6,7 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-
+import com.example.lms.tuning.StrategyWeightTuner; // NEW
 /** 매일 자정에 최근 성과를 바탕으로 하이퍼파라미터를 미세 조정 */
 @Slf4j
 @Component
@@ -15,6 +15,7 @@ public class DynamicHyperparameterTuner {
 
     private final HyperparameterService hp;
     private final StrategyPerformanceRepository perfRepo;
+    private final StrategyWeightTuner strategyWeightTuner; // NEW
 
     /** 매일 00:05 */
     @Scheduled(cron = "0 5 0 * * *")
@@ -33,6 +34,9 @@ public class DynamicHyperparameterTuner {
             hp.set("bandit.threshold.base", newTh);
 
             log.info("[Tuner] explore={} threshold={}", newExplore, newTh);
+
+            // NEW: 전략 가중치(성공률/보상) 중앙차분 경사상승 1스텝
+            strategyWeightTuner.tuneOnce(); // 내부에서 objective 중앙차분 및 저장 수행
         } catch (Exception e) {
             log.warn("[Tuner] retune failed: {}", e.toString());
         }

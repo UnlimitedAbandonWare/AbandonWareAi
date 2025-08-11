@@ -58,6 +58,10 @@ public class TranslationMemory {
 
     private String query;
     private String source;
+    //  답변/스니펫 출처 태그(ASSISTANT, USER_CORRECTION, SMART_FALLBACK 등)
+    @Column(name = "source_tag", length = 32)
+    private String sourceTag;
+
 
     @Lob
     @ToString.Exclude //  대용량 로그/GC 보호

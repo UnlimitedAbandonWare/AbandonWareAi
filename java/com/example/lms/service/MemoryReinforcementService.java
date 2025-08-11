@@ -35,6 +35,7 @@ public class MemoryReinforcementService {
     private static final double W_Q    = 0.25;
     private static final double W_SR   = 0.50;
     private static final double W_EXPL = 0.10;
+    private static final double W_TAG  = 0.10; //  출처 태그 보너스(낮을수록 에너지↓)
     private static final double T0     = 1.0;
 
     private static final int STATUS_ACTIVE = 1;
@@ -97,9 +98,13 @@ public class MemoryReinforcementService {
             tm.setSuccessCount(0);
             tm.setFailureCount(0);
             tm.setCosineSimilarity(0.0);
+            tm.setSourceTag(sourceTag); // + 최초 생성 시 출처 태그 보존
             tm.setQValue(0.0);
         }
-
+        //  기존 엔티티에도 최신 태그를 반영(옵션)
+        if (sourceTag != null && !sourceTag.isBlank()) {
+            tm.setSourceTag(sourceTag);
+        }
 
         // 관측 1회
         tm.setHitCount(tm.getHitCount() + 1);
@@ -145,7 +150,17 @@ public class MemoryReinforcementService {
             double successRatio = (hit <= 0) ? 0.0 : (double) (success - failure) / hit;
             double exploreTerm  = 1.0 / Math.sqrt(hit + 1.0);
 
-            return -(W_SIM * cosSim + W_Q * qValue + W_SR * successRatio) + W_EXPL * exploreTerm;
+        // SMART_FALLBACK 태그 보너스(선호도↑ → 에너지↓)
+        double tagBonus = 0.0;
+        try {
+            String tag = tm.getSourceTag();
+            if (tag != null && "SMART_FALLBACK".equalsIgnoreCase(tag)) {
+                tagBonus = W_TAG; // 0.10 가중치
+            }
+        } catch (Exception ignore) {}
+
+        return -(W_SIM * cosSim + W_Q * qValue + W_SR * successRatio + tagBonus)
+                + W_EXPL * exploreTerm;
         }
     private static double annealTemperature(int hit) {
         return T0 / Math.sqrt(hit + 1.0);

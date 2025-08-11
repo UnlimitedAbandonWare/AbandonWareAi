@@ -81,6 +81,12 @@ public class AdaptiveTranslationService {
 
     /* 코사인 유사도 Threshold(동적) */
     private volatile double similarityThreshold = 0.85;
+    // ===== Temperature tuning (3‑phase central‑difference) =====
+    private volatile double tCenter;                   // 기준 온도
+    private volatile int     tempTuningPhase = 0;      // 0:probe → 1:-probe → 2:update
+    private volatile Double  ewmaPlus = null;
+    private volatile Double  ewmaMinus = null;
+
 
     /* 포맷터 */
     private static final DecimalFormat DF = new DecimalFormat("#.####");
@@ -98,6 +104,7 @@ public class AdaptiveTranslationService {
     void loadPersisted() {
         boltzmannTemperature = configRepo.findDouble("boltzmannTemperature")
                 .orElse(boltzmannTemperature);
+        tCenter = boltzmannTemperature; // 기준값 동기화
         similarityThreshold  = configRepo.findDouble("similarityThreshold")
                 .orElse(similarityThreshold);
 
@@ -250,23 +257,43 @@ public class AdaptiveTranslationService {
         log.info("🔄 similarityThreshold → {}", DF.format(similarityThreshold));
     }
 
-    /** 간단한 hill-climb 튜닝(중앙 차분) – demo */
+    /** 실측 EWMA 기반 3‑phase 중앙 차분 T 튜닝 */
     @Scheduled(fixedRate = 7_200_000, initialDelay = 1_800_000)
-    public void tuneTemperature() {
-        double q0 = metrics.getRewardEwma();
-        double q1 = simulateQuality(boltzmannTemperature + h);
-        double grad = (q1 - q0) / h;
-
-        boltzmannTemperature = Math.max(0.01,
-                Math.min(0.5, boltzmannTemperature + temperatureLR * grad));
-        configRepo.save("boltzmannTemperature", boltzmannTemperature);
-        log.warn("⚙️ T tuned → {}", DF.format(boltzmannTemperature));
+    public synchronized void tuneTemperature() {
+        switch (tempTuningPhase) {
+            case 0 -> { // +probe
+                double tPlus = clamp(tCenter + h, 0.01, 0.50);
+                boltzmannTemperature = tPlus;
+                configRepo.save("boltzmannTemperature", boltzmannTemperature);
+                tempTuningPhase = 1;
+                log.info("🔎 [TUNE‑T] probe+ → T={}", DF.format(boltzmannTemperature));
+            }
+            case 1 -> { // +측정, -probe
+                ewmaPlus = metrics.getRewardEwma(); // EWMA 실측
+                double tMinus = clamp(tCenter - h, 0.01, 0.50);
+                boltzmannTemperature = tMinus;
+                configRepo.save("boltzmannTemperature", boltzmannTemperature);
+                tempTuningPhase = 2;
+                log.info("🔎 [TUNE‑T] probe‑ → T={}", DF.format(boltzmannTemperature));
+            }
+            default -> { // 2: -측정, 중앙값 업데이트
+                ewmaMinus = metrics.getRewardEwma(); // EWMA 실측
+                if (ewmaPlus != null && ewmaMinus != null) {
+                    double grad = (ewmaPlus - ewmaMinus) / (2 * h); // 중앙 차분
+                    tCenter = clamp(tCenter + temperatureLR * grad, 0.01, 0.50);
+                }
+                boltzmannTemperature = tCenter;
+                configRepo.save("boltzmannTemperature", boltzmannTemperature);
+                ewmaPlus = ewmaMinus = null;
+                tempTuningPhase = 0;
+                log.warn("⚙️ T tuned → {} (center)", DF.format(boltzmannTemperature));
+            }
+        }
     }
 
-    /* (데모용) 품질 시뮬레이터 – 실제 서비스에서는 metrics EWMA 직접 활용 */
-    private double simulateQuality(double t) {
-        double opt = 0.08;
-        return Math.exp(-Math.pow(t - opt, 2) / (2 * Math.pow(0.1, 2)));
+    // 공용 clamp
+    private static double clamp(double v, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 
     /* ═════════════ 내부 Outcome 레코드 ═════════════ */

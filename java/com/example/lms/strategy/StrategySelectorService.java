@@ -4,7 +4,9 @@ import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.strategy.StrategyPerformanceRepository.StatsRow;
 import com.example.lms.service.rag.QueryComplexityGate;
 import com.example.lms.util.SoftmaxUtil;
+import com.example.lms.service.config.HyperparameterService; // + 동적 가중치 주입
 import lombok.RequiredArgsConstructor;
+import com.example.lms.service.config.HyperparameterService; // NEW
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -15,10 +17,10 @@ import java.util.concurrent.ThreadLocalRandom;
 public class StrategySelectorService {
 
     public enum Strategy { WEB_FIRST, VECTOR_FIRST, DEEP_DIVE_SELF_ASK, WEB_VECTOR_FUSION }
-
     private final QueryComplexityGate gate;
     private final StrategyPerformanceRepository perfRepo;
     private final StrategyHyperparams hyper;
+    private final HyperparameterService hp; // NEW
 
     /** 질문 특성과 과거 성과를 반영해 전략 선택 */
     public Strategy selectForQuestion(String question, ChatRequestDto req) {
@@ -49,9 +51,12 @@ public class StrategySelectorService {
             double trials = Math.max(1.0, succ + fail);
             double sr = succ / trials;                               // 성공률
             double rw = Optional.ofNullable(r.getReward()).orElse(0.0); // 평균 보상(0~1)
-            double prior = (s == base ? 0.10 : 0.0);                  // 난이도 기반 약한 prior
-
-            logits.put(s, 0.65 * sr + 0.30 * rw + prior);
+            double prior = (s == base ? 0.10 : 0.0); // 난이도 기반 약한 prior
+            // 동적 가중치 (DB/Config 관리). 기본값은 과거 하드코딩 값 유지.
+            double wSr = hp.getDouble("strategy.weight.success_rate", 0.65);
+            double wRw = hp.getDouble("strategy.weight.reward",      0.30);
+            // FIX: 누락된 '+' 연산자 보수
+            logits.put(s, (wSr * sr) + (wRw * rw) + prior);
         }
 
         if (logits.isEmpty()) return base;
