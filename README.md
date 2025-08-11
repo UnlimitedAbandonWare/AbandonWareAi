@@ -313,7 +313,63 @@ SmartFallbackService를 도입하여, 컨텍스트가 부족하거나 답변이 
 ChatService의 역할을 검색, 조합, 생성을 지시하는 오케스트레이터(Orchestrator)로 명확히 분리하여 복잡도를 낮췄습니다.
 
 HybridRetriever, SelfAskWebSearchRetriever 등 검색 관련 컴포넌트를 service.rag 패키지로 모아 모듈성을 강화하고 역할과 책임을 명확히 했습니다.
+feat(AI): 메타 학습 강화를 위한 볼츠만 탐색 및 동적 보상 시스템 도입
 
+시스템의 단순 방어 로직을 '지능형 제안 및 학습'으로 진화시키기 위해, 사용자 피드백의 '맥락'을 이해하고 AI의 행동 전략 자체를 강화하는 메타 학습 루프를 도입합니다. 이를 위해 볼츠만 연산 로직을 고도화하고, 답변 출처에 따른 차등 보상 시스템을 적용하며, 위험 질문에 대한 동적 온도 조절 기능을 추가합니다.
+
+1. MemoryReinforcementService & FeedbackController: 차등 보상 시스템 적용
+
+FeedbackDto 수정:
+
+답변의 출처(sourceTag)를 추적하는 필드를 추가합니다. (ASSISTANT, SMART_FALLBACK 등)
+
+applyFeedback 메서드 수정:
+
+sourceTag를 인자로 받아, '스마트 폴백'에 대한 긍정 피드백에는 높은 보상(1.2 이상)을, '환각'으로 의심되는 일반 답변에 대한 부정 피드백에는 강한 페널티(-1.0)를 부여하도록 로직을 수정합니다.
+
+computeBoltzmannEnergy 메서드 수정:
+
+sourceTag가 SMART_FALLBACK인 메모리의 에너지 값에 보너스 점수를 부여하여, 해당 메모리가 선택될 확률을 높입니다.
+
+2. TranslationMemory 엔티티: 답변 출처 추적 기능 추가
+
+필드 추가:
+
+답변의 출처(ASSISTANT, USER_CORRECTION, SMART_FALLBACK 등)를 저장하기 위해 private String sourceTag; 컬럼을 추가합니다.
+
+3. ChatService: 동적 제어 및 전략 오케스트레이션 강화
+
+'스마트 폴백' 답변 태깅:
+
+SmartFallbackService 호출 결과가 실제 폴백 답변일 경우, sourceTag를 "SMART_FALLBACK"으로 지정하여 메모리 강화 로직에 전달합니다.
+
+동적 온도 조절 (Dynamic Temperature) 도입:
+
+FallbackHeuristics.detect()를 사용하여 환각 위험이 높은 질문(예: "원신 + 에스코피에")을 감지합니다.
+
+위험 감지 시, 해당 요청에 한해 LLM의 temperature를 매우 낮은 값(예: 0.05)으로 동적으로 오버라이드하여 답변의 안정성을 확보합니다.
+
+reinforceAssistantAnswer 메서드 수정:
+
+sourceTag를 파라미터로 받도록 시그니처를 변경하고, MemoryReinforcementService 호출 시 태그를 그대로 전달합니다.
+
+4. SmartFallbackService: 폴백 답변 식별 기능 추가
+
+신규 DTO/Record 생성:
+
+FallbackResult(String suggestion, boolean isFallback)와 같은 반환 타입을 새로 정의합니다.
+
+maybeSuggest 메서드 수정:
+
+반환 타입을 기존 String에서 FallbackResult로 변경하여, ChatService가 폴백 답변 여부를 명확히 식별할 수 있도록 합니다.
+
+5. BanditSelector: 외부 제어를 위한 리팩토링
+
+decideWithBoltzmann 메서드 수정:
+
+decideWithBoltzmann(TranslationMemory tm, double temperature)와 같이 온도를 외부에서 파라미터로 주입받도록 시그니처를 변경합니다.
+
+이를 통해 ChatService에서 동적으로 조절된 온도를 직접 전달할 수 있는 구조를 마련합니다.
 DynamicChatModelFactory를 도입하여 런타임에 모델, 온도(temperature) 등의 파라미터를 동적으로 설정할 수 있도록 유연성을 확보했습니다.
 RestTemplateConfig 개선
 
