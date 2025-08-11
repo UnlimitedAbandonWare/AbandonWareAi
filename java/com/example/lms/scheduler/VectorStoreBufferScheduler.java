@@ -1,5 +1,4 @@
-// src/main/java/com/example/lms/scheduler/VectorStoreBufferScheduler.java
-        package com.example.lms.scheduler;
+package com.example.lms.scheduler;
 
 import com.example.lms.service.VectorStoreService;
 import lombok.RequiredArgsConstructor;
@@ -8,9 +7,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Flushes the VectorStoreService buffer every 30 seconds.
+ * VectorStoreService 버퍼를 30초마다 flush 합니다.
  * cron 값은 application.yml 의 indexing.cron 과 별도로
- * `vector.flush.cron` 으로 오버라이드 가능.
+ * `vector.flush.cron` 으로 오버라이드 가능합니다.
  */
 @Slf4j
 @Component

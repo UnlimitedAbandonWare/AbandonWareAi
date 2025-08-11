@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -42,6 +43,27 @@ public interface StrategyPerformanceRepository extends JpaRepository<StrategyPer
         LIMIT 1
         """)
     Optional<BestRow> findBestStrategyFor(@Param("qc") String queryCategory);
-    // Spring Data 인터페이스 프로젝션은 getter 규칙(getXxx)이어야 함
-    interface BestRow { String getStrategyName(); }
+
+    /** Softmax 전략 선택용 집계 */
+    @Query(nativeQuery = true, value = """
+        SELECT strategy_name  AS strategyName,
+               success_count  AS success,
+               failure_count  AS failure,
+               average_reward AS reward
+        FROM strategy_performance
+        WHERE query_category = :qc
+        """)
+    List<StatsRow> findStatsByCategory(@Param("qc") String queryCategory);
+
+    // Spring Data interface projection은 getter 규칙(getXxx) 필요
+    interface BestRow {
+        String getStrategyName();
+    }
+
+    interface StatsRow {
+        String getStrategyName();
+        Long   getSuccess();
+        Long   getFailure();
+        Double getReward();
+    }
 }
