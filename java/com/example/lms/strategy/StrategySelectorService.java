@@ -26,7 +26,7 @@ public class StrategySelectorService {
 
         // 2) 최근 성과 우위 전략이 있으면 교체(간단 Epsilon‑Greedy)
         Strategy best = perfRepo.findBestStrategyFor("default")
-                .map(StrategyPerformanceRepository.BestRow::strategyName)
+                                .map(StrategyPerformanceRepository.BestRow::getStrategyName)
                 .map(Strategy::valueOf)
                 .orElse(base);
 

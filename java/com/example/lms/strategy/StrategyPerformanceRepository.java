@@ -42,6 +42,6 @@ public interface StrategyPerformanceRepository extends JpaRepository<StrategyPer
         LIMIT 1
         """)
     Optional<BestRow> findBestStrategyFor(@Param("qc") String queryCategory);
-
-    interface BestRow { String strategyName(); }
+    // Spring Data 인터페이스 프로젝션은 getter 규칙(getXxx)이어야 함
+    interface BestRow { String getStrategyName(); }
 }
