@@ -108,10 +108,11 @@ public class SmartFallbackService {
     public FallbackResult maybeSuggestDetailed(String query,
                                                String joinedContext,
                                                String answerDraft) {
-        String suggestion = maybeSuggest(query, joinedContext, answerDraft);
-        boolean ctxEmpty  = !StringUtils.hasText(joinedContext) ||
-                "정보 없음".equalsIgnoreCase(String.valueOf(answerDraft).trim());
-        boolean isFallback = ctxEmpty || (StringUtils.hasText(suggestion));
+        final String safeAnswer = (answerDraft == null) ? "" : answerDraft.trim();
+        final boolean ctxEmpty  = !StringUtils.hasText(joinedContext)
+                || "정보 없음".equalsIgnoreCase(safeAnswer);
+        final String suggestion = maybeSuggest(query, joinedContext, safeAnswer);
+        final boolean isFallback = ctxEmpty || StringUtils.hasText(suggestion);
         return new FallbackResult(suggestion, isFallback);
     }
 

@@ -48,7 +48,18 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
     private final ExecutorService searchExecutor =
             Executors.newFixedThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors()));
-
+    /** 간이 복잡도 추정 → Self-Ask 깊이(1..3) */
+    private int estimateDepthByComplexity(String q) {
+        if (!StringUtils.hasText(q)) return 1;
+        int len = q.codePointCount(0, q.length());
+        long spaces = q.chars().filter(ch -> ch == ' ').count();
+        boolean hasWh = q.matches(".*(누가|언제|어디|무엇|왜|어떻게|비교|차이|원리).*");
+        int score = 0;
+        if (len > 30) score++;
+        if (spaces > 6) score++;
+        if (hasWh) score++;
+        return Math.min(3, Math.max(1, score)); // 1..3
+    }
     /**
      * 편의 생성자(Bean 기본형)
      */
@@ -105,11 +116,20 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         // 질의 복잡도 간단 판정
         boolean enableSelfAsk = qText.length() > 25
                 || qText.chars().filter(ch -> ch == ' ').count() > 3;
+        // 질의 복잡도 기반 동적 깊이(1..maxDepth)
+        final int depthLimit = Math.max(1, Math.min(maxDepth, estimateDepthByComplexity(qText)));
 
         /* 1‑B) Self‑Ask 조기 종료 결정 (품질 평가는 LLM 키워드 확장에서 수행) */
         if (!enableSelfAsk) {
             if (firstSnippets.isEmpty()) return List.of(Content.from("[검색 결과 없음]"));
-            return firstSnippets.stream().limit(overallTopK).map(Content::from).toList();
+            // 단순 질의면서 1차에서 충분히 많이 맞으면(=조기 종료)
+            if (firstSnippets.size() >= firstHitStopThreshold) {
+                return firstSnippets.stream().limit(overallTopK).map(Content::from).toList();
+            }
+            // 아니면 얕게 한 번만 확장
+            if (depthLimit <= 1) {
+                return firstSnippets.stream().limit(overallTopK).map(Content::from).toList();
+            }
         }
 
         // 2) 휴리스틱 키워드 시드 구성 → BFS 확장
@@ -134,13 +154,14 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         int depth = 0;
         int apiCalls = 0; // ✅ 호출 상한 제어
 
-        while (!queue.isEmpty() && snippets.size() < overallTopK && depth <= maxDepth) {
+        while (!queue.isEmpty() && snippets.size() < overallTopK && depth < depthLimit) {
             int levelSize = queue.size();
             List<String> currentKeywords = new ArrayList<>();
             while (levelSize-- > 0) {
                 String kw = normalize(queue.poll());
                 if (StringUtils.hasText(kw)) currentKeywords.add(kw);
             }
+
 
             // 해당 depth의 키워드들을 병렬 검색 (상한 적용)
             List<CompletableFuture<List<String>>> futures = new ArrayList<>();
