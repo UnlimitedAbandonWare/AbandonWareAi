@@ -75,8 +75,12 @@ public class MemoryReinforcementService {
 
     @PostConstruct
     private void initRecentSnippetCache() {
-        // ... (기존 초기화 로직 유지)
-        // 예시) recentSnippetCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofMinutes(10)).build(k -> Boolean.TRUE);
+        // 캐시를 실제 초기화 (10분 유지, 최대 10k건)
+        // 중복 판정은 getIfPresent로만 수행 → put으로 ‘본 것’을 마킹
+        this.recentSnippetCache = Caffeine.newBuilder()
+                .expireAfterWrite(Duration.ofMinutes(10))
+                .maximumSize(10_000)
+                .build(key -> Boolean.TRUE); // 로더는 사용하지 않지만 타입상 LoadingCache 유지
     }
     /** 0~1 보상값 클램프 */
     private double reward(double base) {
@@ -349,6 +353,12 @@ public class MemoryReinforcementService {
             // 최초 생성 등으로 업데이트가 0이면 저장
             memoryRepository.save(tm);
         }
+        // 저장 후에는 “봤다”로 마킹 → 이후 동일 스니펫은 shouldStore에서 중복으로 필터
+        try {
+            if (recentSnippetCache != null) {
+                recentSnippetCache.put(hash, Boolean.TRUE);
+            }
+        } catch (Exception ignore) {}
         // + 벡터 색인 큐에 적재(예외 무시)
         try { vectorStoreService.enqueue(sessionId != null ? sessionId : "*", snippet); } catch (Exception ignore) {}
     }
@@ -450,8 +460,8 @@ public class MemoryReinforcementService {
         if (s.length() < 40) return false;               // 너무 짧음 → 노이즈
         if (recentSnippetCache != null) {                // 최근 중복 방지(있으면)
             String h = storageHashFromSnippet(s);
-            Boolean seen = recentSnippetCache.get(h);
-            if (Boolean.TRUE.equals(seen)) return false;
+            // 캐시에 "이미 본" 기록이 있을 때만 중복으로 간주
+            if (Boolean.TRUE.equals(recentSnippetCache.getIfPresent(h))) return false;
         }
         return true;
     }

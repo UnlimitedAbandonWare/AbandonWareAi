@@ -1,6 +1,5 @@
 package com.example.lms.config;
 
-import com.example.lms.service.FactVerifierService;
 import com.theokanning.openai.service.OpenAiService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -8,7 +7,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import com.example.lms.service.verification.SourceAnalyzerService;
 import java.time.Duration;
-
+import com.example.lms.service.verification.FactStatusClassifier;
+import com.example.lms.service.FactVerifierService;
+import org.springframework.beans.factory.ObjectProvider;   // ✅ 추가
 @Configuration
 public class OpenAiConfig {
 
@@ -26,10 +27,10 @@ public class OpenAiConfig {
         return new OpenAiService(openAiKey, Duration.ofSeconds(60));
     }
 
-    /** 사실 검증용 서비스 */
-    public FactVerifierService factVerifierService(OpenAiService openAiService,
-                                                   SourceAnalyzerService sourceAnalyzer) {
-        // 2-인자 생성자: FactStatusClassifier는 내부에서 new 로 생성됨
-        return new FactVerifierService(openAiService, sourceAnalyzer);
+    /** FactStatusClassifier 빈 제공 (FactVerifierService에서 주입받음) */
+    @Bean
+    public FactStatusClassifier factStatusClassifier(ObjectProvider<OpenAiService> openAiProvider) {
+        // FactStatusClassifier 생성자가 ObjectProvider<OpenAiService>를 받도록 맞춤
+        return new FactStatusClassifier(openAiProvider);
     }
 }

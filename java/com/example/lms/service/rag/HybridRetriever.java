@@ -78,11 +78,12 @@ public class HybridRetriever implements ContentRetriever {
     @Value("${hybrid.min-relatedness:0.4}")  //  관련도 필터 컷오프
     private double minRelatedness;
     // ★ 융합 모드: rrf(기본) | softmax
+    @Value("${retrieval.fusion.mode:rrf}")
     private String fusionMode;
     // ★ softmax 융합 온도
     @Value("${retrieval.fusion.softmax.temperature:1.0}")
     private double fusionTemperature;
-        @Value("${retrieval.rank.use-ml-correction:true}")
+    @Value("${retrieval.rank.use-ml-correction:true}")
     private boolean useMlCorrection;  // ★ NEW: ML 보정 온/오프
 
     @Override
@@ -108,7 +109,8 @@ public class HybridRetriever implements ContentRetriever {
         List<String> officialDomains =
                 (List<String>) md.getOrDefault(META_OFFICIAL_DOMAINS, allowedDomains);
 
-        int maxParallel = Optional.ofNullable((Integer) md.get(META_MAX_PARALLEL)).orElse(3);
+        // 메타에 들어온 병렬 상한(없으면 기본설정 사용)
+        int maxParallelOverride = Optional.ofNullable((Integer) md.get(META_MAX_PARALLEL)).orElse(this.maxParallel);
         String dedupeKey = (String) md.getOrDefault(META_DEDUPE_KEY, "text");
 
         LinkedHashSet<Content> mergedContents = new LinkedHashSet<>();
@@ -236,7 +238,7 @@ public class HybridRetriever implements ContentRetriever {
                 }
             } else {
                 // 기본: 제한 병렬 실행 (공용 풀 사용 금지)
-                ForkJoinPool pool = new ForkJoinPool(Math.max(1, maxParallel));
+                ForkJoinPool pool = new ForkJoinPool(Math.max(1, this.maxParallel));
                 try {
                     results = pool.submit(() ->
                             queries.parallelStream()

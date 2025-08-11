@@ -1,109 +1,99 @@
 package com.example.lms.util;
 
 /**
- * Utility class implementing a set of machine‑learning inspired
- * calibration functions used to correct, reinforce, refine and augment
- * numerical values.  These methods are based on the optical
- * compensation equations described in the specification.  The
- * definitions provided here mirror the mathematical formulation
- * presented in the narrative: a basic quadratic correction curve is
- * combined with a distance‑dependent weighting function to produce a
- * final, optionally additive or subtractive, correction.
+ * ML 보정 유틸리티 (통합판).
  *
- * <p>The functions are deliberately kept in a standalone utility
- * separate from the core {@code ChatService} so that they can be
- * reused or tested independently.  In a real deployment you might
- * supply the coefficients (α, β, γ, μ, λ, d₀) via external
- * configuration or tune them empirically based on training data.  For
- * brevity no external dependencies are required; the implementation
- * relies solely on {@link Math} from the JDK.</p>
+ * <p><b>① 시그모이드 정규화 모델</b> — 기존 코드 호환:</p>
+ * finalScore = σ( λ * (α + βx + γ·tanh(x - d0) - μ) )
+ * add=true  → s 반환, add=false → x와 s를 0.5씩 혼합 후 [0,1]로 클램프
+ *
+ * <p><b>② 다항식 ± 증강항 모델</b> — 원시 스코어(비정규화):</p>
+ * F(d) = f(d) ± φ(d)
+ *   f(d)  = α·d² + β·d + γ
+ *   W(d)  = 1 − exp(−λ·|d − d0|)
+ *   φ(d)  = μ·(d − d0)·W(d)
+ *
+ * <p>참고: 기존 호출부 호환을 위해 {@link #finalCorrection(double, double, double, double, double, double, double, boolean)}
+ * 는 시그모이드 정규화 버전을 유지합니다. 비정규화 스코어가 필요하면
+ * {@link #rawFinalCorrection(double, double, double, double, double, double, double, boolean)} 를 사용하세요.</p>
  */
 public final class MLCalibrationUtil {
 
     private MLCalibrationUtil() {
-        // Prevent instantiation
+        // no-op
     }
 
+    // ------------------------------------------------------------
+    // ① 시그모이드 정규화 모델 (기존 시그니처/동작 유지)
+    // ------------------------------------------------------------
     /**
-     * Compute the basic quadratic correction curve
-     * {@code f(d) = α·d² + β·d + γ}.
-     *
-     * @param d the distance measure (for example, a position in cm)
-     * @param alpha the quadratic coefficient α
-     * @param beta the linear coefficient β
-     * @param gamma the constant offset γ
-     * @return the value of the base correction function f(d)
+     * 시그모이드 기반 최종 보정값(정규화)을 계산합니다.
+     * finalScore = σ( λ * (α + βx + γ·tanh(x - d0) - μ) )
+     * add=true  → s 반환
+     * add=false → 0.5*x + 0.5*s 블렌딩 후 [0,1] 클램프
      */
+    public static double finalCorrection(double x,
+                                         double alpha,
+                                         double beta,
+                                         double gamma,
+                                         double d0,
+                                         double mu,
+                                         double lambda,
+                                         boolean add) {
+        double z = alpha + beta * x + gamma * Math.tanh(x - d0);
+        double s = sigmoid(lambda * (z - mu));
+        return add ? clamp01(s) : clamp01(0.5 * x + 0.5 * s);
+    }
+
+    // ------------------------------------------------------------
+    // ② 다항식 ± 증강항 모델 (원시 스코어; 필요시 외부에서 정규화)
+    // ------------------------------------------------------------
+    /**
+     * F(d) = f(d) ± φ(d) (비정규화 원시 스코어).
+     * add=true면 f+φ, false면 f−φ.
+     */
+    public static double rawFinalCorrection(double d,
+                                            double alpha,
+                                            double beta,
+                                            double gamma,
+                                            double d0,
+                                            double mu,
+                                            double lambda,
+                                            boolean add) {
+        double f = baseCorrection(d, alpha, beta, gamma);
+        double phi = correctionTerm(d, d0, mu, lambda);
+        return add ? f + phi : f - phi;
+    }
+
+    // ------------------------------------------------------------
+    // 재사용 가능한 보조 함수들
+    // ------------------------------------------------------------
+    /** f(d) = α·d² + β·d + γ */
     public static double baseCorrection(double d, double alpha, double beta, double gamma) {
         return alpha * d * d + beta * d + gamma;
     }
 
-    /**
-     * Compute the weighting function {@code W(d) = 1 − exp(−λ·|d − d₀|)}
-     * which attenuates or amplifies the correction based on the
-     * difference between the current position {@code d} and a
-     * reference point {@code d0}.  The parameter {@code lambda}
-     * controls how quickly the function approaches one; larger values
-     * cause a faster rise and thus more aggressive reinforcement for
-     * large distance differences.
-     *
-     * @param d the distance at which to evaluate the weighting
-     * @param d0 the reference distance (for example, the point where the mirror is most misaligned)
-     * @param lambda the attenuation constant λ (must be positive)
-     * @return the weight W(d) in the range [0, 1)
-     */
+    /** W(d) = 1 − exp(−λ·|d − d0|),  0 ≤ W(d) < 1 */
     public static double weightFunction(double d, double d0, double lambda) {
         return 1.0 - Math.exp(-lambda * Math.abs(d - d0));
     }
 
-    /**
-     * Compute the distance dependent augmentation term
-     * {@code φ(d) = μ·(d − d₀)·W(d)}.  This term is added to or
-     * subtracted from the base correction depending on the desired
-     * direction of compensation.  See {@link #finalCorrection(double, double, double, double, double, double, double, boolean)}
-     * for details on how this term is combined.
-     *
-     * @param d the distance at which to evaluate the term
-     * @param d0 the reference distance d₀
-     * @param mu the scaling factor μ controlling the strength of the augmentation
-     * @param lambda the attenuation constant λ used in the weighting function
-     * @return the value of φ(d)
-     */
+    /** φ(d) = μ·(d − d0)·W(d) */
     public static double correctionTerm(double d, double d0, double mu, double lambda) {
         double weight = weightFunction(d, d0, lambda);
         return mu * (d - d0) * weight;
     }
 
-    /**
-     * Combine the base correction {@code f(d)} and the augmentation term
-     * {@code φ(d)} to produce the final corrected value
-     * {@code F(d) = f(d) ± φ(d)}.  When {@code add} is {@code true}
-     * the augmentation is added to the base; when {@code add} is
-     * {@code false} the augmentation is subtracted, e.g. when the
-     * existing system tends to overcompensate.
-     *
-     * @param d the distance or input value
-     * @param alpha the quadratic coefficient
-     * @param beta the linear coefficient
-     * @param gamma the constant offset
-     * @param d0 the reference distance
-     * @param mu the scaling factor for the augmentation
-     * @param lambda the attenuation constant
-     * @param add whether to add (true) or subtract (false) the augmentation term
-     * @return the final corrected value F(d)
-     */
-    public static double finalCorrection(
-            double d,
-            double alpha,
-            double beta,
-            double gamma,
-            double d0,
-            double mu,
-            double lambda,
-            boolean add
-    ) {
-        double f = baseCorrection(d, alpha, beta, gamma);
-        double phi = correctionTerm(d, d0, mu, lambda);
-        return add ? f + phi : f - phi;
+    // ------------------------------------------------------------
+    // 내부 유틸
+    // ------------------------------------------------------------
+    private static double sigmoid(double v) {
+        if (v > 30) return 1.0;
+        if (v < -30) return 0.0;
+        return 1.0 / (1.0 + Math.exp(-v));
+    }
+
+    private static double clamp01(double v) {
+        return Math.max(0.0, Math.min(1.0, v));
     }
 }

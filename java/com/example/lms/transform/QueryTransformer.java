@@ -9,7 +9,9 @@ import dev.langchain4j.data.message.UserMessage;
 import org.springframework.lang.Nullable;
 import java.util.regex.Matcher;
 import java.time.Duration;
-
+import org.springframework.lang.Nullable;
+import org.springframework.stereotype.Component;
+import lombok.RequiredArgsConstructor;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.stream.Collectors;
@@ -23,6 +25,8 @@ import java.util.Arrays;
 /**
  * 쿼리 오타를 교정해 주는 Transformer
  */
+@Component
+@RequiredArgsConstructor
 public class QueryTransformer {
 
 

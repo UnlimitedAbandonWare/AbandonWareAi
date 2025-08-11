@@ -176,9 +176,13 @@ public class ChatApiController {
             } finally {
                 sink.tryEmitComplete();
             }
-        }).subscribeOn(Schedulers.boundedElastic()).subscribe();
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .subscribe();
 
-        return sink.asFlux();
+        return sink.asFlux()
+                .doOnCancel(() -> log.info("SSE stream cancelled by client for session {}", req.getSessionId()))
+                .doOnError(e -> log.warn("SSE stream error for session {}: {}", req.getSessionId(), e.getMessage()));
     }
 
     private static ServerSentEvent<ChatStreamEvent> sse(ChatStreamEvent e) {

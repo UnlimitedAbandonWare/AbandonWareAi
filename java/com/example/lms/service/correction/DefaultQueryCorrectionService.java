@@ -1,18 +1,46 @@
+// src/main/java/com/example/lms/service/correction/DefaultQueryCorrectionService.java
 package com.example.lms.service.correction;
 
 import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
-@Component
+/**
+ * 아주 가벼운 전처리:
+ * - 따옴표/백틱/스마트쿼트 제거(공백으로 치환)
+ * - 유니코드 제로폭 문자 제거
+ * - 다양한 대시 문자 통일(– — − → -)
+ * - 양끝 특수문자 정리
+ * - 공백 정규화
+ */
+@Service
 @Primary
 public class DefaultQueryCorrectionService implements QueryCorrectionService {
 
     @Override
     public String correct(String input) {
         if (input == null) return "";
-        // 아주 가벼운 교정만: 공백/양끝 트림
-        String s = input.replaceAll("\\s+", " ").trim();
-        // 필요시 도메인 교정 규칙을 더 추가
+
+        String s = input;
+
+        // 1) 제로폭/비가시 문자 제거
+        s = s.replaceAll("[\\u200B-\\u200D\\uFEFF]", "");
+
+        // 2) 따옴표/백틱/스마트쿼트 → 공백
+        s = s.replaceAll("[\"'`“”‘’]+", " ");
+
+        // 3) 다양한 대시 통일
+        s = s.replaceAll("[–—−]+", "-");
+
+        // 4) 양끝 특수문자 정리(문장 내부는 보존)
+        //    Punct(구두점), Sm(수학기호), Sk(수정기호) 범주를 양쪽 끝에서만 제거
+        s = s.replaceAll("^[\\p{Punct}\\p{Sm}\\p{Sk}]+", "");
+        s = s.replaceAll("[\\p{Punct}\\p{Sm}\\p{Sk}]+$", "");
+
+        // 5) 공백 정규화
+        s = s.replace('\u00A0', ' ')        // NBSP → SPACE
+                .replaceAll("\\s+", " ")
+                .trim();
+
         return s;
     }
 }

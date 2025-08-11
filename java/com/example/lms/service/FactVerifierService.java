@@ -7,7 +7,7 @@ import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
 import com.theokanning.openai.service.OpenAiService;
 import java.util.Objects;
-import org.springframework.beans.factory.annotation.Autowired;         // ★ 추가
+
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -32,11 +32,7 @@ public class FactVerifierService {
         this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
     }
 
-    @Autowired
-    public FactVerifierService(OpenAiService openAi,
-                               SourceAnalyzerService sourceAnalyzer) {
-        this(openAi, new FactStatusClassifier(openAi), sourceAnalyzer);
-    }
+
 
     private static final int MIN_CONTEXT_CHARS = 80;
     /** 컨텍스트가 질문과 같은 ‘도메인/개체’인지 먼저 점검하는 메타 단계 */
