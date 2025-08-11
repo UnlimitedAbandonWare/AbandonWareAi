@@ -10,6 +10,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import java.time.Duration;                    // ★ NEW
+import java.time.LocalDateTime;              // ★ NEW
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -49,6 +51,7 @@ public class MemoryReinforcementService {
     private final RewardScoringEngine rewardEngine = RewardScoringEngine.DEFAULT;
     private final VectorStoreService vectorStoreService;
     private final SnippetPruner snippetPruner;
+    private final com.example.lms.service.config.HyperparameterService hp; // ★ NEW
 
     private LoadingCache<String, Boolean> recentSnippetCache;
 
@@ -60,12 +63,14 @@ public class MemoryReinforcementService {
                                       VectorStoreService vectorStoreService,
                                       SnippetPruner snippetPruner,
                                       com.example.lms.strategy.StrategyPerformanceRepository perfRepo,
-                                      com.example.lms.strategy.StrategyDecisionTracker strategyTracker) {
+                                      com.example.lms.strategy.StrategyDecisionTracker strategyTracker,
+                                      com.example.lms.service.config.HyperparameterService hp) {
         this.memoryRepository   = memoryRepository;
         this.vectorStoreService = vectorStoreService;
         this.snippetPruner      = snippetPruner;
         this.perfRepo           = perfRepo;
         this.strategyTracker    = strategyTracker;
+        this.hp                 = hp;   // ★ NEW
     }
 
     @PostConstruct
@@ -116,8 +121,8 @@ public class MemoryReinforcementService {
         tm.setQValue(prevQ + 0.2 * (reward(score) - prevQ));
 
         // 에너지/온도 계산 및 반영
-        double energy = computeBoltzmannEnergy(tm);
-        double temp   = annealTemperature(tm.getHitCount());
+        double energy = this.computeBoltzmannEnergy(tm);        // ★ CHG
+        double temp   = this.annealTemperature(tm.getHitCount());// ★ CHG
         tm.setEnergy(energy);
         tm.setTemperature(temp);
 
@@ -136,7 +141,8 @@ public class MemoryReinforcementService {
      *  볼츠만 에너지 & 담금질 (기존 시그니처 유지)
      * ========================================================= */
 
-    private static double computeBoltzmannEnergy(TranslationMemory tm) {
+   // ★ CHG: 인스턴스 메서드로 전환하여 동적 하이퍼파라미터 반영
+            private double computeBoltzmannEnergy(TranslationMemory tm) {
             if (tm == null) return 0.0;
 
             double cosSim = (tm.getCosineSimilarity() == null ? 0.0 : tm.getCosineSimilarity());
@@ -159,8 +165,23 @@ public class MemoryReinforcementService {
             }
         } catch (Exception ignore) {}
 
-        return -(W_SIM * cosSim + W_Q * qValue + W_SR * successRatio + tagBonus)
-                + W_EXPL * exploreTerm;
+                // ★ NEW: 신뢰도/재사용 최신성(Recency) 반영
+                double conf = (tm.getConfidenceScore() == null ? 0.0 : tm.getConfidenceScore());
+                double wConf = hp.getDouble("energy.weight.confidence", 0.20);
+// 최근 사용할수록 recTerm↑ → 에너지↓
+                double tauH = hp.getDouble("energy.recency.tauHours", 72.0);
+                double recTerm = 0.0;
+                LocalDateTime lu = tm.getLastUsedAt();
+                if (lu != null) {
+                    double ageH = Math.max(0.0, Duration.between(lu, LocalDateTime.now()).toHours());
+                    recTerm = Math.exp(-ageH / Math.max(1e-6, tauH));
+                }
+                double wRec = hp.getDouble("energy.weight.recency", 0.15);
+
+// 에너지는 "낮을수록 좋음": 혜택항은 음수, 탐험항은 양수
+                return -(W_SIM * cosSim + W_Q * qValue + W_SR * successRatio + tagBonus
+                        + wConf * conf + wRec * recTerm)
+                        + W_EXPL * exploreTerm;
         }
     private static double annealTemperature(int hit) {
         return T0 / Math.sqrt(hit + 1.0);
@@ -238,8 +259,8 @@ public class MemoryReinforcementService {
      */
     private void updateEnergyAndTemperature(String sourceHash) {
         memoryRepository.findBySourceHash(sourceHash).ifPresent(tm -> {
-            double energy = computeBoltzmannEnergy(tm);
-            double temp   = annealTemperature(tm.getHitCount());
+                        double energy = this.computeBoltzmannEnergy(tm);   // ★ CHG
+                        double temp   = this.annealTemperature(tm.getHitCount()); // ★ CHG
 
             int updatedRows = memoryRepository.updateEnergyByHash(tm.getSourceHash(), energy, temp);
             if (updatedRows > 0) {
@@ -314,8 +335,8 @@ public class MemoryReinforcementService {
         }
 
         // 에너지/온도 계산
-        double energy = computeBoltzmannEnergy(tm);
-        double temp   = annealTemperature(tm.getHitCount());
+        double energy = this.computeBoltzmannEnergy(tm);   // ★ CHG
+        double temp   = this.annealTemperature(tm.getHitCount()); // ★ CHG
         tm.setEnergy(energy);
         tm.setTemperature(temp);
 

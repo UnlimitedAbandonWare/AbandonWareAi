@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import com.example.lms.service.config.HyperparameterService; // NEW
 import org.springframework.stereotype.Service;
 
+import lombok.RequiredArgsConstructor;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -51,11 +52,12 @@ public class StrategySelectorService {
             double trials = Math.max(1.0, succ + fail);
             double sr = succ / trials;                               // 성공률
             double rw = Optional.ofNullable(r.getReward()).orElse(0.0); // 평균 보상(0~1)
-            double prior = (s == base ? 0.10 : 0.0); // 난이도 기반 약한 prior
+            // ★ NEW: 난이도 기반 prior 동적화
+            double prior = (s == base ? hp.getDouble("strategy.prior.base", 0.10) : 0.0);
             // 동적 가중치 (DB/Config 관리). 기본값은 과거 하드코딩 값 유지.
             double wSr = hp.getDouble("strategy.weight.success_rate", 0.65);
             double wRw = hp.getDouble("strategy.weight.reward",      0.30);
-            // FIX: 누락된 '+' 연산자 보수
+
             logits.put(s, (wSr * sr) + (wRw * rw) + prior);
         }
 
@@ -74,10 +76,12 @@ public class StrategySelectorService {
             if (r <= cum) return order.get(i);
         }
 
-        // 안전망 + ε-탐험
+        // ★ NEW: 안전망 + ε-탐험(완전 랜덤)
         Strategy picked = order.get(order.size() - 1);
-        if (ThreadLocalRandom.current().nextDouble() < hyper.epsilon()) {
-            return Strategy.VECTOR_FIRST;
+        double eps = hp.getDouble("strategy.epsilon", hyper.epsilon());
+        if (ThreadLocalRandom.current().nextDouble() < eps) {
+            Strategy[] all = Strategy.values();
+            return all[ThreadLocalRandom.current().nextInt(all.length)];
         }
         return picked;
     }

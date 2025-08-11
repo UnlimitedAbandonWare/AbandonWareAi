@@ -25,6 +25,8 @@ import java.util.concurrent.ForkJoinPool;
 
 import com.example.lms.service.rag.auth.AuthorityScorer;
 
+import com.example.lms.service.config.HyperparameterService;   // ★ NEW
+import com.example.lms.util.MLCalibrationUtil;
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -49,6 +51,7 @@ public class HybridRetriever implements ContentRetriever {
     private final AnswerQualityEvaluator qualityEvaluator;
     private final SelfAskPlanner selfAskPlanner;
     private final RelevanceScoringService relevanceScoringService;
+    private final HyperparameterService hp; // ★ NEW: 동적 가중치 로더
     // 리트리버들
     private final SelfAskWebSearchRetriever selfAskRetriever;
     private final AnalyzeWebSearchRetriever analyzeRetriever;
@@ -79,6 +82,8 @@ public class HybridRetriever implements ContentRetriever {
     // ★ softmax 융합 온도
     @Value("${retrieval.fusion.softmax.temperature:1.0}")
     private double fusionTemperature;
+        @Value("${retrieval.rank.use-ml-correction:true}")
+    private boolean useMlCorrection;  // ★ NEW: ML 보정 온/오프
 
     @Override
     public List<Content> retrieve(Query query) {
@@ -389,6 +394,19 @@ public class HybridRetriever implements ContentRetriever {
         }
         List<Scored> scored = new ArrayList<>();
         int rank = 0;
+        // ★ NEW: 동적 랭킹 가중치/보너스
+        final double wRel  = hp.getDouble("retrieval.rank.w.rel",  0.60);
+        final double wBase = hp.getDouble("retrieval.rank.w.base", 0.30);
+        final double wAuth = hp.getDouble("retrieval.rank.w.auth", 0.10);
+        final double bonusOfficial = hp.getDouble("retrieval.rank.bonus.official", 0.20);
+
+        // ★ NEW: ML 보정 계수
+        final double alpha  = hp.getDouble("ml.correction.alpha",  0.0);
+        final double beta   = hp.getDouble("ml.correction.beta",   0.0);
+        final double gamma  = hp.getDouble("ml.correction.gamma",  0.0);
+        final double d0     = hp.getDouble("ml.correction.d0",     0.0);
+        final double mu     = hp.getDouble("ml.correction.mu",     0.0);
+        final double lambda = hp.getDouble("ml.correction.lambda", 1.0);
 
         for (Content c : firstPass) {
             rank++;
@@ -399,7 +417,7 @@ public class HybridRetriever implements ContentRetriever {
                     .orElse(c.toString());
 
             String url = extractUrl(text);
-            // NEW: Authority weight (0.0 ~ 1.0), 도메인 테이블  +휴리스틱
+
             double authority = authorityScorer != null ? authorityScorer.weightFor(url) : 0.5;
 
             double rel = 0.0;
@@ -410,8 +428,15 @@ public class HybridRetriever implements ContentRetriever {
                 );
             } catch (Exception ignore) { }
 
-                        // NEW: 최종 점수 = 0.6*관련도 + 0.3*기본랭크 + 0.1*Authority
-                               double finalScore = (0.6 * rel) + (0.3 * base) + (0.1 * authority);
+            // ★ NEW: 최종 점수 = wRel*관련도 + wBase*기본랭크 + wAuth*Authority (+공식도메인 보너스)
+            double score0 = (wRel * rel) + (wBase * base) + (wAuth * authority);
+            if (isOfficial(url, officialDomains)) {
+                score0 += bonusOfficial;
+            }
+// ★ NEW: ML 비선형 보정(옵션) – 값域 보정 및 tail 제어
+            double finalScore = useMlCorrection
+                    ? MLCalibrationUtil.finalCorrection(score0, alpha, beta, gamma, d0, mu, lambda, true)
+                    : score0;
             scored.add(new Scored(c, finalScore));
         }
 

@@ -1,4 +1,4 @@
-// 경로: com.example/lms/service/config/HyperparameterService.java
+// 경로: com/example/lms/service/config/HyperparameterService.java
 package com.example.lms.service.config;
 
 import com.example.lms.domain.Hyperparameter;
