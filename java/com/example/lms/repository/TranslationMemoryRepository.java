@@ -18,39 +18,15 @@ public interface TranslationMemoryRepository extends JpaRepository<TranslationMe
     /** 원문(sourceHash)으로 번역 메모리 한 건 조회 */
     Optional<TranslationMemory> findBySourceHash(String sourceHash);
 
-    // ⚠️ updatedAt 참조 제거: 부트 업 먼저 복구
-    @Modifying
-    @Query(value = """
-INSERT INTO translation_memory
-  (session_id, query, source, content, source_hash, score,
-   hit_count, success_count, failure_count, status,
-   rewardm2, reward_mean, q_value,
-   created_at, last_used_at, version)
-VALUES
-  (:sid, :q, :src, :content, :hash, :score,
-   1, 0, 0, 0,
-   0, 0, 0,
-   NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE
-  hit_count    = hit_count + 1,
-  last_used_at = NOW(),
-  score        = GREATEST(score, VALUES(score))
-""", nativeQuery = true)
-    int upsertByHash(@Param("sid") String sid,
-                     @Param("q")   String q,
-                     @Param("src") String src,
-                     @Param("content") String content,
-                     @Param("hash") String hash,
-                     @Param("score") double score);
-
-
-
-
     /** 특정 점수 이상인 모든 메모리 조회 */
     List<TranslationMemory> findAllByScoreNotNullAndScoreGreaterThan(double minScore);
 
     /** 세션 ID로 전체 조회 (레거시 호환용) */
     List<TranslationMemory> findBySessionId(String sessionId);
+
+    /** [추가] 세션 내에서 에너지가 낮은(품질 좋은) 상위 후보 10개 조회 */
+    List<TranslationMemory> findTop10BySessionIdAndEnergyNotNullOrderByEnergyAsc(String sessionId);
+
 
     /* ======================================================================
      * 복합 조회 (네이티브 쿼리)
@@ -103,10 +79,6 @@ ON DUPLICATE KEY UPDATE
      * 수정 (UPDATE) 쿼리
      * ==================================================================== */
 
-    /** source_hash 일치 행의 hit_count 를 1 증가 */
-
-
-    /** hit_count 증가 및 score 업데이트 */
     @Modifying
     @Transactional
     @Query(value = """
@@ -119,9 +91,58 @@ ON DUPLICATE KEY UPDATE
     int incrementHitAndBumpLastUsed(@Param("hash") String hash,
                                     @Param("score") double score);
 
+    @Modifying
+    @Transactional
+    @Query(value = """
+    UPDATE translation_memory
+       SET hit_count = COALESCE(hit_count, 0) + 1,
+           last_used_at = NOW()
+     WHERE source_hash = :hash
+    """, nativeQuery = true)
+    int incrementHitCountBySourceHash(@Param("hash") String hash);
+
+    /** [추가] 에너지/온도 갱신 (볼츠만 강화 경로) */
+    @Modifying
+    @Transactional
+    @Query(value = """
+        UPDATE translation_memory
+        SET energy = :energy,
+            temperature = :temp,
+            updated_at = NOW()
+        WHERE source_hash = :hash
+    """, nativeQuery = true)
+    int updateEnergyByHash(@Param("hash") String hash,
+                           @Param("energy") double energy,
+                           @Param("temp") double temp);
+
+
     /* ======================================================================
      * UPSERT (INSERT ... ON DUPLICATE KEY UPDATE) 쿼리
      * ==================================================================== */
+
+    @Modifying
+    @Query(value = """
+        INSERT INTO translation_memory
+          (session_id, query, source, content, source_hash, score,
+           hit_count, success_count, failure_count, status,
+           rewardm2, reward_mean, q_value,
+           created_at, last_used_at, version)
+        VALUES
+          (:sid, :q, :src, :content, :hash, :score,
+           1, 0, 0, 0,
+           0, 0, 0,
+           NOW(), NOW(), 0)
+        ON DUPLICATE KEY UPDATE
+          hit_count    = hit_count + 1,
+          last_used_at = NOW(),
+          score        = GREATEST(score, VALUES(score))
+    """, nativeQuery = true)
+    int upsertByHash(@Param("sid") String sid,
+                     @Param("q")   String q,
+                     @Param("src") String src,
+                     @Param("content") String content,
+                     @Param("hash") String hash,
+                     @Param("score") double score);
 
     /** 기본 UPSERT: 히트 카운트 및 점수 갱신 */
     @Modifying
@@ -170,15 +191,7 @@ ON DUPLICATE KEY UPDATE
                      @Param("status") int status,
                      @Param("cosSim") Double cosSim,
                      @Param("cosCorr") Double cosCorr);
-    @Modifying
-    @Transactional
-    @Query(value = """
-    UPDATE translation_memory
-       SET hit_count = COALESCE(hit_count, 0) + 1,
-           last_used_at = NOW()
-     WHERE source_hash = :hash
-""", nativeQuery = true)
-    int incrementHitCountBySourceHash(@Param("hash") String hash);
+
     /** 신뢰도(Trust Level) 포함 UPSERT (V2) */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional

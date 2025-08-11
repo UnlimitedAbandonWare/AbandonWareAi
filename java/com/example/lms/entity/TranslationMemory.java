@@ -12,7 +12,9 @@ import java.time.LocalDateTime;
         name = "translation_memory",
         indexes = {
                 @Index(name = "idx_tm_source_hash", columnList = "source_hash"),
-                @Index(name = "idx_tm_session",     columnList = "session_id")
+                @Index(name = "idx_tm_session",     columnList = "session_id"),
+                // [추가] 볼츠만 강화 검색 최적화를 위해 에너지 컬럼에 인덱스 추가
+                @Index(name = "idx_tm_energy",      columnList = "energy")
         }
 )
 @Getter @Setter @Builder
@@ -74,6 +76,14 @@ public class TranslationMemory {
     @Builder.Default private int    successCount = 0;
     @Builder.Default private int    failureCount = 0;
 
+    /** [추가] 볼츠만 에너지 (낮을수록 좋음) */
+    @Column(name = "energy")
+    private Double energy;
+
+    /** [추가] 담금질(Annealing) 스케줄에 사용될 온도 */
+    @Column(name = "temperature")
+    private Double temperature;
+
     /* ===== 상태 ===== */
     @Enumerated(EnumType.ORDINAL)
     @Column(columnDefinition = "tinyint(1)", nullable = false)
@@ -95,6 +105,8 @@ public class TranslationMemory {
         if (sourceHash == null && content != null) {
             this.sourceHash = DigestUtils.sha256Hex(content);
         }
+        // [추가] 온도의 기본값 설정
+        if (temperature == null) temperature = 1.0;
     }
 
     @PreUpdate
@@ -123,28 +135,37 @@ public class TranslationMemory {
     /* ================= 9. 헬퍼 메서드 (Transient) ================= */
 
     /** (score × cosine) 빠른 계산용 헬퍼 */
-        @Transient
-        public double relevance(double cosSim) {
-            return (this.score != null ? this.score : 0.0) * cosSim;
-        }
+    @Transient
+    public double relevance(double cosSim) {
+        return (this.score != null ? this.score : 0.0) * cosSim;
+    }
 
-        @Transient
-        public double getUcbScore(double exploration) {
-            int h = (this.hitCount == null ? 0 : this.hitCount);
-            if (h == 0) return Double.MAX_VALUE;
-            return qValue + exploration * Math.sqrt(Math.log(h + 1.0) / h);
-        }
+    @Transient
+    public double getUcbScore(double exploration) {
+        int h = (this.hitCount == null ? 0 : this.hitCount);
+        if (h == 0) return Double.MAX_VALUE;
+        return qValue + exploration * Math.sqrt(Math.log(h + 1.0) / h);
+    }
 
-        @Transient
-        public double getRewardVariance() {
-            int h = (this.hitCount == null ? 0 : this.hitCount);
-            return (h < 2) ? 0.0 : rewardM2 / (h - 1);
-        }
+    /** [추가] 볼츠만 가중치 w = exp(-E/T) 계산 메서드 */
+    @Transient
+    public double getBoltzmannWeight() {
+        double e = (energy == null ? 0.0 : energy);
+        double t = (temperature == null || temperature <= 0.0) ? 1.0 : temperature;
+        return Math.exp(-e / t);
+    }
 
-        @Transient
-        public double getRewardStdDev() {
-            return Math.sqrt(getRewardVariance());
-        }
+    @Transient
+    public double getRewardVariance() {
+        int h = (this.hitCount == null ? 0 : this.hitCount);
+        return (h < 2) ? 0.0 : rewardM2 / (h - 1);
+    }
+
+    @Transient
+    public double getRewardStdDev() {
+        return Math.sqrt(getRewardVariance());
+    }
+
     public TranslationMemory(String sourceHash) {
         this.sourceHash = sourceHash;
         this.hitCount   = 0;
@@ -153,5 +174,4 @@ public class TranslationMemory {
         this.updatedAt  = now;
         this.status     = MemoryStatus.ACTIVE;
     }
-
 }
