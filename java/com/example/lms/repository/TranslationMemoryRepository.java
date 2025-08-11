@@ -45,8 +45,7 @@ public interface TranslationMemoryRepository extends JpaRepository<TranslationMe
     /** 세션 ID로 전체 조회 (레거시 호환용) */
     List<TranslationMemory> findBySessionId(String sessionId);
 
-    /** [추가] 세션 내에서 에너지가 낮은(품질 좋은) 상위 후보 10개 조회 */
-    List<TranslationMemory> findTop10BySessionIdAndEnergyNotNullOrderByEnergyAsc(String sessionId);
+
 
 
     /* ======================================================================
