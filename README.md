@@ -1,178 +1,166 @@
 (AbandonWare) 하이브리드 RAG AI 챗봇 서비스
 <a href="https://github.com/anuraghazra/github-readme-stats"><img height="180" align="center" src="https://github-readme-stats.vercel.app/api?username=UnlimitedAbandonWare" /></a>
 
-Java 17 · Spring Boot · LangChain4j 1.0.1 (BOM/core/starter/OpenAI)
+Java 17 · Spring Boot · LangChain4j 1.0.1 (BOM/core/starter/OpenAI 고정)
 
-단순 LLM 호출을 넘어서 검색/추론으로 스스로 생각하고, 사용자 피드백으로 강화되는 지능형 RAG 시스템입니다. 실시간 웹 검색, 벡터 DB, 책임 연쇄(Chain of Responsibility) 기반 검색 파이프라인, 재랭킹과 2-Pass 검증을 통해 환각(Hallucination)을 최소화합니다. 또한 세션 격리, 캐싱, SSE 스트리밍, 동적 설정 등 운영환경 필수 기능을 제공합니다.
+단순 LLM 호출을 넘어, 실시간 웹 검색 + 벡터 DB + 재랭킹 + 2-Pass 검증으로 스스로 생각하고 사용자 피드백으로 강화되는 지능형 RAG 시스템입니다. 세션 격리, 캐싱, SSE 스트리밍, 동적 설정 등 운영 필수 기능을 기본 제공합니다.
 
 📑 프로젝트 개요
-하이브리드 검색: 실시간 웹(Web/Naver), 형태소 분석(Analyze), 벡터 RAG(Pinecone)를 동시·선택적으로 결합해 신뢰도 높은 컨텍스트를 구성
+하이브리드 검색: 실시간 웹(Web/Naver), 형태소 분석(Analyze), 벡터 RAG(Pinecone)를 동시·선택적 결합하여 신뢰도 높은 컨텍스트를 구성합니다.
 
-결과 융합/재정렬	다원 소스 **RRF/Softmax** 융합 + Cross-Encoder 재정렬 + Authority 가중	ReciprocalRankFuser, **SoftmaxUtil**, EmbeddingModelCrossEncoderReranker, AuthorityScorer
-강화 & 메타-학습: 👍/👎 피드백으로 **전략 성적표(StrategyPerformance)**를 축적, **Softmax(볼츠만 탐색)** 기반으로 다음 질의에서 최적 전략을 **확률적으로 탐색/선택**합니다
+결과 융합/재정렬: 다원 소스 RRF/Softmax 융합 → (Simple|Cross) Re-rank → Authority 가중으로 환각(Hallucination)을 억제합니다.
 
-실시간 UX: SSE(Server-Sent Events)로 단계별 진행 상황 스트리밍
+강화 & 메타-학습: 👍/👎 피드백을 **전략 성적표(StrategyPerformance)**로 축적하고, Softmax(볼츠만 탐색) 기반으로 다음 질의에서 최적 전략을 확률적으로 탐색/선택합니다.
 
-강화 & 메타-학습: 👍/👎 피드백은 장기 기억(TranslationMemory)뿐 아니라 **전략 성적표(StrategyPerformance)**로 축적되어, 다음 질의에서 최적 전략을 스스로 선택합니다
+실시간 UX: 처리 과정을 **SSE(Server-Sent Events)**로 스트리밍하여 “생각하는 과정”을 가시화합니다.
 
 ✨ 주요 기능 및 컴포넌트
 범주	설명	핵심 컴포넌트
-질의 향상	오타/구어체 교정, 의도 기반 키워드 동적 확장	LLMQueryCorrectionService, QueryAugmentationService, QueryComplexityGate
+질의 향상	오타/구어 교정, 의도 기반 키워드 동적 확장	LLMQueryCorrectionService, QueryAugmentationService, QueryComplexityGate
 하이브리드 검색	Naver(웹), Analyze(형태소), Pinecone(벡터 RAG)	HybridRetriever, NaverSearchService, AnalyzeWebSearchRetriever
-결과 융합/재정렬	다원 소스 RRF 융합 + Cross-Encoder 재정렬 + Authority 가중	ReciprocalRankFuser, EmbeddingModelCrossEncoderReranker, AuthorityScorer
+결과 융합/재정렬	다원 소스 RRF/Softmax 융합 + Cross-Encoder 재정렬 + Authority 가중	ReciprocalRankFuser, SoftmaxUtil, EmbeddingModelCrossEncoderReranker, AuthorityScorer
 2-Pass 검증	Meta-Check(주제 일치) → Fact-Check(근거 교차검증)	FactVerifierService
-실시간 스트리밍	처리 과정을 SSE로 실시간 전송 (“생각하는 기능”)	ChatApiController(/stream), chat.js
-강화 학습	피드백을 보상 점수로 반영 (“강화 기능”)	FeedbackController, MemoryReinforcementService
-세션 관리	META_SID 기반 전 파이프라인 세션 격리 + 캐싱	ChatHistoryService, PersistentChatMemory, Caffeine
+실시간 스트리밍	처리 단계 SSE 전송(“생각하는 기능”)	ChatApiController(/stream), chat.js
+강화 학습	피드백을 보상 점수로 반영(“강화 기능”)	FeedbackController, MemoryReinforcementService
+세션 관리	META_SID 기반 파이프라인 세션 격리 + 캐싱	ChatHistoryService, PersistentChatMemory, Caffeine
 고성능 통신	Netty/WebFlux 비동기	NettyServerConfig
-메타 강화 학습	전략을 스스로 학습/선택, 시스템 파라미터 자동 튜닝	StrategySelectorService, ContextualScorer, DynamicHyperparameterTuner, StrategyPerformance(엔티티)
-
+메타 강화 학습	전략 자가 학습/선택, 시스템 파라미터 자동 튜닝	StrategySelectorService, ContextualScorer, DynamicHyperparameterTuner, StrategyPerformance
 🧠 아키텍처 & 흐름
 1) 검색·생성 파이프라인 (안전장치/신뢰도 반영)
-mermaid
-코드 복사
+코드 스니펫
+
 flowchart TD
     U[User Request] --> R{Mode Routing<br/>(Retrieval ON | RAG only | Retrieval OFF)}
-
     R -->|Retrieval ON| HR(HybridRetriever)
     R -->|RAG only| RG[LangChainRAGService]
     R -->|Retrieval OFF| MC[memSvc.loadContext]
-
     subgraph HybridRetriever
       W[NaverSearchService<br/>Web Search] --> HR
       A[AnalyzeWebSearchRetriever] --> HR
       V[Vector RAG (Pinecone)] --> HR
     end
-
-    HR --> RNK[RRF + (Simple/Cross) Rerank]
+    HR --> RNK[RRF / Softmax<br/>+ (Simple | Cross) Re-rank]
     RNK --> AUTH[Rank by Authority Score]
     AUTH --> CTX[Build Unified Context]
     MC --> CTX
     RG --> CTX
-
     subgraph ChatService
       CTX --> LLM{LLM Call}
     end
-
     LLM --> D1[Draft Answer]
     D1 --> FV[Meta-Check & Fact-Check]
     FV --> FB{Smart Fallback?}
     FB -- N --> OUT[Final Answer]
     FB -- Y --> SUGGEST[Suggest Alternatives]
-2) 메타-학습 & 전략 선택 루프（자가 진화）
-mermaid
-코드 복사
+2) 메타-학습 & 전략 선택 루프 (자가 진화)
+코드 스니펫
+
 flowchart TD
     subgraph User Interaction
         U[User Request] --> ChatService
     end
-
     subgraph "Meta-Learning & Strategy"
         style "Meta-Learning & Strategy" fill:#f9f9f9,stroke:#ddd,stroke-dasharray: 5 5
         SP[(StrategyPerformance DB)]
         HT(DynamicHyperparameterTuner) -.->|Tune| Params[(Hyperparameter DB)]
     end
-
     subgraph ChatService
         SS(StrategySelectorService) -- Reads --> SP
         ChatService -- "1. 어떤 전략?" --> SS
         SS -- "2. 최적 전략 반환" --> R{Dynamic Routing}
-
         R -- "전략 A" --> HR(HybridRetriever)
         R -- "전략 B" --> RG[RAG-Only]
         R -- "전략 C" --> MC[Memory-Only]
-
         HR --> CTX[Build Unified Context]
         RG --> CTX
         MC --> CTX
-
         CTX --> LLM{LLM Call}
         LLM --> Answer[Final Answer]
     end
-
     subgraph "Reinforcement Loop"
         style "Reinforcement Loop" fill:#e8f4ff,stroke:#aed6f1
         Answer --> Feedback[User Feedback (👍/👎)]
         Feedback --> CS(ContextualScorer)
         CS -- "다차원 평가(Factuality/Quality/Novelty)" --> MRS(MemoryReinforcementService)
-
         MRS -- "기억 강화" --> TM[(TranslationMemory DB)]
         MRS -- "전략 성과 기록" --> SP
     end
 🚀 개발 과정 & 주요 변경 내역
-환각 긴급 대응
-– 쿼리 재작성·사실 검증·RAG 프롬프트 강화로 잘못된 추론 차단
+환각 긴급 대응: 쿼리 재작성, 사실 검증, RAG 프롬프트 강화를 통해 잘못된 추론을 차단했습니다.
 
-핵심 기능 구현
-– SSE 스트리밍(생각하는 기능), 사용자 피드백(강화 기능) 운영 안정화
+핵심 기능 구현: SSE 스트리밍(생각하는 기능)과 사용자 피드백(강화 기능)을 안정적으로 운영할 수 있도록 구현했습니다.
 
-컴파일 오류 해결 & 구조 개선(리팩토링)
-– MemoryReinforcementService API 정리(Shim 유지), DB 쿼리 TranslationMemoryRepository로 이관, 누락된 log 변수/스코프/중복 선언 정리
+컴파일 오류 해결 & 구조 개선: MemoryReinforcementService의 API를 정리하고(Shim 유지), DB 쿼리를 TranslationMemoryRepository로 이관했으며, 누락된 의존성 및 중복 선언을 정리했습니다.
 
-UX 고도화(스마트 폴백)
-– “정보 없음” 대신 의도 추정과 대안 제시
+UX 고도화 (스마트 폴백): "정보 없음" 대신 사용자의 의도를 추정하고 대안을 제시하는 기능을 추가했습니다.
 
-메타 강화 루프 도입(시스템 자가 진화)
+메타 강화 루프 도입 (시스템 자가 진화):
 
-전략적 행동 선택: StrategySelectorService가 과거 성과 기반으로 가장 성공률 높은 검색 전략을 동적으로 선택
+전략적 행동 선택: StrategySelectorService가 과거 성과에 기반하여 성공률 높은 검색 전략을 동적으로 선택합니다.
 
-다차원 성과 측정: ContextualScorer가 사실성/품질/정보가치를 종합 평가해 보상(Reward)을 고도화
+다차원 성과 측정: ContextualScorer가 사실성, 품질, 정보가치(신규성)를 종합 평가하여 보상(Reward)을 고도화합니다.
 
-자동 파라미터 튜닝: DynamicHyperparameterTuner가 주기적으로 탐험/활용 비율, 가중치 등 하이퍼파라미터를 조정
+자동 파라미터 튜닝: DynamicHyperparameterTuner가 탐험/활용 비율, 가중치 등 하이퍼파라미터를 주기적으로 조정합니다.
+
+DynamicChatModelFactory 도입: 런타임에 모델, 온도(temperature) 등 파라미터를 동적으로 설정할 수 있도록 개선했습니다.
+
+RestTemplateConfig 개선: Spring Boot 3.x 기준에 맞춰 deprecated된 API를 최신 connectTimeout/readTimeout 설정으로 교체했습니다.
 
 🧩 도메인 & 서비스 (신규 포함)
 신규 엔티티: StrategyPerformance
-strategyName (e.g., WEB_FIRST, VECTOR_FIRST, DEEP_DIVE_SELF_ASK, WEB_VECTOR_FUSION)
+strategyName: WEB_FIRST, VECTOR_FIRST, DEEP_DIVE_SELF_ASK, WEB_VECTOR_FUSION 등
 
-queryCategory (예: “제품 스펙 문의”, “단순 사실 질문”)
+queryCategory: "제품 스펙 문의", "단순 사실 질문" 등
 
-successCount, failureCount
+successCount, failureCount: 성공 및 실패 횟수
 
-averageReward (피드백 기반 평균 점수)
+averageReward: 피드백 기반 평균 점수
 
-용도: FeedbackController → MemoryReinforcementService 경유로 전략 성적 집계/업데이트
+용도: FeedbackController → MemoryReinforcementService를 통해 전략 성적을 집계하고 업데이트합니다.
 
 신규 서비스
-StrategySelectorService: 질의 특징(길이, 키워드, 의도 등) + StrategyPerformance 통계 기반 최적 전략 선택, ChatService가 HybridRetriever 호출 전 질의
+StrategySelectorService: 질의 특징(길이, 키워드, 의도)과 StrategyPerformance 통계를 기반으로 최적 전략을 선택하며, ChatService가 HybridRetriever 호출 전에 사용합니다.
 
 ContextualScorer:
 
-Factuality – FactVerifierService로 RAG 근거 충실도
+Factuality: FactVerifierService로 RAG 근거의 충실도를 평가합니다.
 
-Answer Quality – LLM-as-a-Judge 자체 평가
+Answer Quality: LLM-as-a-Judge 방식으로 자체 평가합니다.
 
-Novelty – ChatHistoryService 대비 신규 정보 기여도
+Novelty: ChatHistoryService 대비 신규 정보 기여도를 측정합니다.
 
-DynamicHyperparameterTuner: @Scheduled(예: 매일 00:00)로 TM/StrategyPerformance 통계 분석 → HyperparameterService 통해 Bandit 탐험/활용, Reward 가중치 등 조정
+DynamicHyperparameterTuner: @Scheduled를 통해 주기적으로(예: 매일 00:00) 통계를 분석하고, HyperparameterService를 통해 Bandit 탐험/활용 비율 및 Reward 가중치 등을 조정합니다.
 
 🛠 클래스별 주요 변경 요약
 ChatService.java
-
-DI: HybridRetriever, QueryCorrectionService, CrossEncoderReranker, SmartFallbackService, StrategySelectorService(신규)
+DI: HybridRetriever, QueryCorrectionService, CrossEncoderReranker, SmartFallbackService, StrategySelectorService 등 신규 의존성 추가
 
 흐름: 질문 교정 → 전략 선택 → 하이브리드 검색 → 재정렬/Authority → 컨텍스트 통합 → 단일 LLM 호출
 
-프롬프트 정책: 모든 LLM 프롬프트는 PromptBuilder.build(PromptContext) 경유(문자열 직접 연결 금지)
+프롬프트 정책: 모든 LLM 프롬프트는 PromptBuilder.build(PromptContext)를 통해 생성 (문자열 직접 연결 금지)
 
-안정성: @Slf4j 도입
+안정성: @Slf4j 도입 및 동적 온도 제어, 폴백 태깅 등 안정성 강화
 
 MemoryReinforcementService.java
+TM 업데이트와 전략 성적표 StrategyPerformance 동시 강화
 
-TM 업데이트 + 전략 성적표 StrategyPerformance 동시 강화
+@Transactional(noRollbackFor = DataIntegrityViolationException.class) 적용
 
-트랜잭션: @Transactional(noRollbackFor = DataIntegrityViolationException.class)
+볼츠만 에너지 계산 및 냉각 스케줄을 인스턴스 메서드로 전환하고, HyperparameterService의 동적 가중치 사용
 
 TranslationMemoryRepository.java
+중복 메서드 정리 및 명시적 파라미터 네이밍
 
-중복 메서드 제거(incrementHitCountBySourceHash(...)), 명시적 파라미터 네이밍, 업데이트/집계 쿼리 정리
+업데이트/집계 쿼리를 원자화하여(upsertAndReinforce(...)) DB 왕복 최소화
 
 BanditSelector.java
+미선언 파라미터를 @Value 주입으로 정리
 
-미선언 파라미터를 @Value 주입으로 정리(Teng, Tsoft, betaCos 등)
+decideWithBoltzmann(TranslationMemory tm, double temperature) 시그니처 변경
 
 ⚙️ 설정 예시 (application.yml)
-yaml
-코드 복사
+YAML
+
 openai:
   api:
     key: "${OPENAI_API_KEY}"
@@ -206,8 +194,8 @@ abandonware:
 필수 환경변수: OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT, NAVER_API_*
 
 ▶️ 빠른 시작
-bash
-코드 복사
+Bash
+
 # 1) 클론
 git clone https://github.com/UnlimitedAbandonWare/AbandonWareAi.git
 cd AbandonWareAi
@@ -220,8 +208,8 @@ vi src/main/resources/application.yml
 ./gradlew bootRun
 # 또는 IDE에서 LmsApplication.java 실행 → http://localhost:8080
 🗂️ 프로젝트 구조(요약)
-bash
-코드 복사
+Bash
+
 src/main/java/com/example/lms
 ├─ api/               # API Controllers (Chat, Feedback, SSE)
 ├─ config/            # Bean/설정 (WebClientConfig, LangChainConfig, …)
@@ -235,185 +223,211 @@ src/main/java/com/example/lms
    ├─ reinforcement/  # 강화 학습 및 피드백
    └─ strategy/       # ★ 메타-학습(Selector/Scorer/Tuner)
 ✅ 운영 원칙
-버전 고정 원칙: 런타임/API 오류 시 가장 먼저 LangChain4j 혼합 버전(0.2.x vs 1.0.x) 존재 여부 점검. 프로젝트는 1.0.1 단일 라인에 고정
+버전 고정: LangChain4j 버전은 1.0.1로 단일 고정하여 API 불일치 문제를 방지합니다.
 
-세션 격리: 각 sessionId별 DefaultConversationalRetrievalChain 분리, 교차 누수 금지
+세션 격리: 각 sessionId별로 DefaultConversationalRetrievalChain을 분리하여 메모리 및 컨텍스트 교차 누수를 금지합니다.
 
-프롬프트 정책: 모든 프롬프트는 **PromptBuilder.build(PromptContext)**에서 생성(중앙화된 null-check/테스트/포맷 관리)
+프롬프트 정책: 모든 프롬프트는 PromptBuilder.build(PromptContext)에서 중앙 관리하며, RAG 프롬프트는 "### INSTRUCTIONS: ..."로 시작하고, 근거가 불충분하면 "정보 없음"을 반환합니다.
 
 🤝 기여 가이드
-Fork → 브랜치 생성(feature/*) → 커밋 규칙(feat:, fix:, docs: …) → 테스트 포함 PR
+Fork → 브랜치 생성 (feature/*)
+
+커밋 규칙 준수 (feat:, fix:, docs: …)
+
+테스트 포함하여 PR
 
 아키텍처 변경 시 Mermaid 다이어그램 업데이트 필수
 
-커밋 예시
+📝 커밋 예시
+Diff
 
-diff
-코드 복사
 refactor: 서비스 계층 구조 리팩토링 및 컴파일 오류 수정
 - MemoryReinforcementService API 하위호환 Shim 추가
 - TranslationMemoryRepository로 DB 쿼리 이관
 - ChatService 파이프라인 일원화 및 @Slf4j 도입
-- 중복/오타/스코프 오류 정리
+Diff
 
 feat: 메타 강화 루프 도입 및 전략 선택 고도화
 - StrategySelectorService/ContextualScorer/DynamicHyperparameterTuner 추가
 - StrategyPerformance 엔티티 및 레포지토리 도입
 - AuthorityScorer 가중 반영 및 2-Pass Meta-Check 명시화
-시스템이 스스로 최적의 검색 전략을 학습하고 평가하는 '메타-학습 강화 루프'의 핵심 기능을 구현합니다. 이 과정에서 발생한 ChatService의 컴파일 오류를 수정합니다.
+시스템이 스스로 최적의 검색 전략을 학습/평가하는 메타-학습 강화 루프 핵심 기능을 구현.
+이 과정에서 발생한 ChatService의 컴파일 오류(연산자 누락)를 수정:
+0.5*score 0.5*contextualScore → 0.5 * score + 0.5 * contextualScore
+버그리포트: Bugfix Report: 빌드 실패(생성자/타입 불일치, 인터페이스 선언, 로깅 필드) 일괄 수정
+요약
+원인
 
-### 주요 변경 내역
+FactVerifierService의 보조(2-인자) 생성자가 ObjectProvider<OpenAiService> 기반 구성과 충돌
 
-* **신규 서비스 및 엔티티 추가 (메타-학습)**
-    * `StrategySelectorService`: 과거 성과 기반으로 최적 검색 전략(WEB_FIRST, VECTOR_FIRST 등)을 동적으로 선택합니다.
-    * `ContextualScorer`: 답변의 사실성, 품질, 신규성을 다차원적으로 평가하여 보상 점수를 고도화합니다.
-    * `StrategyPerformance`: 각 전략의 성과(성공/실패, 평균 보상)를 기록하는 엔티티 및 Repository를 추가합니다.
-    * `DynamicHyperparameterTuner`: `@Scheduled`를 통해 매일 시스템의 학습 파라미터를 자동 튜닝합니다.
+HybridRetriever가 존재하지 않는 변수 maxParallelOverride 참조
 
-* **기존 서비스 연동 및 수정**
-    * `ChatService`: 검색 전 `StrategySelectorService`를 호출하여 전략을 결정하고, 답변 생성 후 `ContextualScorer`의 평가 점수를 `reinforceAssistantAnswer` 메서드에 반영합니다.
-    * `MemoryReinforcementService`: 사용자 피드백 수신 시, `TranslationMemory` 강화와 더불어 `StrategyPerformance` 성적표를 함께 업데이트합니다.
+EmbeddingCrossEncoderReranker가 LangChain4j 1.0.1의 float[] 벡터 타입과 불일치
 
-* **버그 수정**
-    * `ChatService`: `reinforceAssistantAnswer` 메서드 내 강화 점수 계산식에서 누락되었던 `+` 연산자를 추가하여 컴파일 오류를 해결합니다.
-      (수정 전: `0.5*score 0.5*contextualScore`)
-      (수정 후: `0.5 * score + 0.5 * contextualScore`)
-feat: Softmax 기반 전략 선택 및 융합 기능 도입
+LightWeightRanker가 클래스로 선언되어 있어 구현체에서 implements 시 “interface expected” 발생
 
-기존의 Epsilon-Greedy 및 RRF 방식을 고도화하여, Softmax(볼츠만 탐색)
-기반의 지능형 전략 선택 및 결과 융합 메커니즘을 도입합니다.
+ChatApiController에서 log 필드 미정의
 
-- StrategySelectorService: Epsilon-Greedy 로직을 Softmax 기반의
-  확률적 선택으로 변경하여, 탐험과 활용의 균형을 최적화.
-- HybridRetriever: 기존 RRF 방식에 더해, Softmax 기반의 정교한
-  점수 융합 및 재정렬(Re-ranking) 모드를 옵션으로 추가.
-- 신규 컴포넌트: 수치적으로 안정적인 SoftmaxUtil 및 하이퍼파라미터
-  제어를 위한 StrategyHyperparams 추가.
-커밋 본문 (Body)
-TranslationMemoryRepository 수정refactor(repository): TranslationMemoryRepository 업데이트 로직 원자적 통합 및 최적화
+OpenAiConfig가 FactVerifierService/FactStatusClassifier를 잘못 생성(시그니처 불일치)
 
-commit 본문:
+조치
+생성자/타입/로깅/빈 구성을 정렬하고, 경량 랭커를 인터페이스화 + 기본 구현체를 분리하여 컴파일 오류 제거.
 
-본 커밋은 MemoryReinforcementService와 TranslationMemory 엔티티에 분산되어 있던 강화 학습 관련 데이터 업데이트 로직을 TranslationMemoryRepository의 단일 네이티브 쿼리로 통합하여, 데이터 정합성을 보장하고 성능을 최적화하는 리팩토링을 진행합니다.
+영향 범위
+빌드/런타임 안정성 (컴파일 실패 제거)
 
-1. 문제점 및 수정 배경
-데이터 경쟁 상태 (Race Condition) 가능성: 기존 MemoryReinforcementService는 SELECT로 TranslationMemory 엔티티를 조회한 후, Java 애플리케이션단에서 hit_count, q_value, energy 등 복잡한 보상 값을 계산하고 여러 UPDATE 쿼리로 다시 저장했습니다. 이 '읽기-수정-쓰기' 패턴은 동시 요청 발생 시 데이터 유실 또는 부정확한 업데이트를 유발할 수 있습니다.
+RAG 경로의 재랭킹/병렬 처리 안정성
 
-서비스 로직 복잡성: 강화 학습의 핵심 계산 로직이 서비스 계층에 노출되어 있어, Repository의 역할을 단순 데이터 접근 이상으로 확장할 필요가 있었습니다.
+Bean 생성 충돌/중복 제거
 
-불필요한 DB 왕복: 여러 번의 SELECT와 UPDATE로 인해 발생하는 네트워크 오버헤드를 줄여야 합니다.
 
-2. 핵심 수정 전략
-TranslationMemoryRepository 인터페이스에 upsertAndReinforce 라는 새로운 네이티브 쿼리 메서드를 추가하여, 관련된 모든 업데이트를 단 한 번의 원자적(Atomic) DB 호출로 처리하도록 변경합니다.
+변경 배경(Why)
+FactVerifierService의 2-인자 생성자 제거 이후에도 OpenAiConfig가 여전히 2-인자 생성자를 호출하여 컴파일 에러 발생.
 
-INSERT ... ON DUPLICATE KEY UPDATE 활용:
+LightWeightRanker가 클래스였고 DefaultLightWeightRanker implements LightWeightRanker에서 “interface expected” 충돌.
 
-source_hash를 기준으로 신규 데이터는 INSERT하고, 기존 데이터는 UPDATE하여 'UPSERT' 로직을 구현합니다.
+하이브리드 검색 경로에 소소한 타입/필드 불일치(임베딩 float[], 병렬 변수명 등)와 로깅 필드 누락.
 
-핵심 강화 로직을 SQL로 통합:
+주요 변경(What)
+1) OpenAiConfig – FactVerifierService 빈 정의 수정
+2-인자 호출을 3-인자 호출로 교체하여 주 생성자에 맞춤.
 
-hit_count, success_count, failure_count를 SQL 레벨에서 안전하게 + 1 증가시킵니다.
+누락된 @Bean 추가(있다면 유지), FactStatusClassifier를 파라미터로 주입.
 
-q_value 업데이트를 위해 지수이동평균(EMA) 계산식 (q_value * 0.8 + :newReward * 0.2)을 UPDATE 구문에 직접 통합합니다.
+diff
+복사
+편집
+ // src/main/java/com/example/lms/config/OpenAiConfig.java
+@@
+ import com.example.lms.service.FactVerifierService;
++import com.example.lms.service.verification.FactStatusClassifier;
+ import com.theokanning.openai.service.OpenAiService;
+@@
+-    /** 사실 검증용 서비스 */
+-    public FactVerifierService factVerifierService(OpenAiService openAiService,
+-                                                   SourceAnalyzerService sourceAnalyzer) {
+-        // 2-인자 생성자: FactStatusClassifier는 내부에서 new 로 생성됨
+-        return new FactVerifierService(openAiService, sourceAnalyzer);
+-    }
++    /** 사실 검증 서비스 빈 */
++    @Bean
++    public FactVerifierService factVerifierService(OpenAiService openAiService,
++                                                   FactStatusClassifier classifier,
++                                                   SourceAnalyzerService sourceAnalyzer) {
++        return new FactVerifierService(openAiService, classifier, sourceAnalyzer);
++    }
+대안: FactVerifierService가 @Service로 이미 컴포넌트 스캔된다면, 위 @Bean 메서드 자체를 삭제해도 됩니다(중복 빈 방지). 이번 PR에서는 명시적 @Bean 유지안을 적용했습니다.
 
-MemoryReinforcementService의 computeBoltzmannEnergy와 annealTemperature 메서드 로직을 SQL 함수(예: LOG, SQRT)로 변환하여 energy와 temperature 필드를 한 번에 업데이트합니다.
+2) 경량 랭커 인터페이스화(컴파일 오류 해소)
+LightWeightRanker를 interface로 전환.
 
-세션 ID 및 출처 태그(Source Tag) 업데이트:
+토큰 교집합 로직은 DefaultLightWeightRanker 구현체로 이전(빈 등록 @Component).
 
-최초 INSERT 시에만 session_id와 source_tag를 설정하고, UPDATE 시에는 last_used_at과 같은 타임스탬프와 핵심 지표만 갱신하도록 SQL 쿼리를 설계합니다.
+diff
+복사
+편집
+// src/main/java/com/example/lms/service/rag/rerank/LightWeightRanker.java
+-@Component
+-public class LightWeightRanker { ... }
++public interface LightWeightRanker {
++    List<Content> rank(List<Content> candidates, String query, int limit);
++}
+java
+복사
+편집
+// src/main/java/com/example/lms/service/rag/rerank/DefaultLightWeightRanker.java
+@Component
+public class DefaultLightWeightRanker implements LightWeightRanker {
+    // 기존 토큰 교집합 점수화 알고리즘 그대로 이전
+}
+3) EmbeddingCrossEncoderReranker – 임베딩 타입 정합성
+double[] → float[]로 시그니처 및 내부 계산 정리.
 
-3. 기대 효과 및 후속 조치
-데이터 정합성 보장: 모든 업데이트가 단일 트랜잭션 내에서 원자적으로 처리되어 동시성 문제를 원천적으로 해결합니다.
+diff
+복사
+편집
+- double[] qv = embeddingModel.embed(query).content().vector();
++ float[]  qv = embeddingModel.embed(query).content().vector();
+- double[] dv = embeddingModel.embed(text).content().vector();
++ float[]  dv = embeddingModel.embed(text).content().vector();
+- private static double cosine(double[] a, double[] b)
++ private static double cosine(float[] a, float[] b)
+4) HybridRetriever – 병렬 변수명 오용 수정
+존재하지 않는 maxParallelOverride 참조 제거, 클래스 필드 this.maxParallel 사용.
 
-성능 향상: DB와의 통신 횟수를 획기적으로 줄여 시스템의 전반적인 응답 속도를 개선합니다.
+diff
+복사
+편집
+- ForkJoinPool pool = new ForkJoinPool(Math.max(1, maxParallelOverride));
++ ForkJoinPool pool = new ForkJoinPool(Math.max(1, this.maxParallel));
+5) ChatApiController – 로거 미정의 오류 해결
+Lombok 사용 시: @Slf4j 추가.
 
-코드 단순화: MemoryReinforcementService는 복잡한 계산 로직 대신, 파라미터를 준비하여 upsertAndReinforce 메서드를 호출하는 역할만 담당하게 되어 코드가 간결해지고 유지보수성이 향상됩니다.
+Lombok 미사용 시: private static final Logger log = LoggerFactory.getLogger(...); 추가.
 
-후속 조치: 이 변경에 맞춰 MemoryReinforcementService의 reinforceWithSnippet, applyFeedback 등의 관련 메서드 내부 로직을 새로운 Repository 메서드 호출 코드로 수정해야 합니다. 기존의 updateEnergyByHash, incrementHitCountBySourceHash 등 개별 업데이트 메서드는 새로운 통합 메서드로 대체되므로 점진적으로 제거(deprecated)할 수 있습니다.
+SSE 스트림에 doOnCancel, doOnError 로깅 연결.
 
-MemoryReinforcementService의 호출로 인한 컴파일 오류를 해결하기 위해 incrementHitCountBySourceHash 메서드를 복원했습니다.
+6) 기타 안정화/정리
+SourceAnalyzerService: 중복 애너테이션/상수 병합 및 안전 폴백.
 
-@Modifying 어노테이션을 사용해 hit_count 필드만 정확히 업데이트하도록 하여, 불필요한 DB 쓰기 부하를 줄이고 성능을 개선합니다.
-1. 메타 학습 및 동적 전략 선택 아키텍처 도입
-StrategySelectorService 및 StrategyPerformance 엔티티를 신설하여, 시스템이 사용자 피드백을 통해 각 검색 전략(예: WEB_FIRST, DEEP_DIVE_SELF_ASK)의 성공률과 평균 보상을 학습하도록 구현했습니다.
+MLCalibrationUtil: 시그모이드/다항식 모델 주석 및 중복 메서드 시그니처 정돈.
 
-이제 시스템은 매 질문마다 과거의 성과 데이터를 기반으로 가장 성공 확률이 높은 검색 전략을 동적으로 선택하여, 스스로 성능을 최적화하는 메타 학습(Meta-Learning) 루프의 기반을 마련했습니다.
+DefaultQueryCorrectionService: 제로폭/스마트쿼트/대시 통일, 공백 정규화 추가.
 
-피드백을 단순 점수가 아닌 다차원적으로 평가하는 ContextualScorer를 도입하여, 답변의 사실성, 품질, 신규 정보량을 종합적으로 측정하고 이를 강화 학습 보상 점수에 반영했습니다.
+MemoryReinforcementService: 최근 스니펫 캐시 getIfPresent 사용으로 중복 필터 정확도 개선.
 
-2. 2-Pass 검증 및 스마트 폴백을 통한 답변 신뢰도 강화
-ChatService 내에 2-Pass 검증 파이프라인을 구축했습니다. 1차로 LLM이 초안(draft)을 생성하면, 2차로 FactVerifierService가 웹 검색 결과와 RAG 컨텍스트를 교차 검증하여 답변의 사실성을 높이고 환각(Hallucination)을 억제합니다.
+파일별 변경 목록(Files Changed)
+config/OpenAiConfig.java ✅ constructor mismatch fix, @Bean 보강
 
-SmartFallbackService를 도입하여, 컨텍스트가 부족하거나 답변이 "정보 없음"일 경우, 사용자의 의도를 추정하고 대안 키워드를 제시하는 스마트 폴백(Smart Fallback) 기능을 구현했습니다.
+service/rag/rerank/LightWeightRanker.java ✅ class → interface
 
-답변의 최종 품질을 높이기 위해, 사용자가 선택할 수 있는 2-Pass 폴리싱(Polishing) 옵션을 추가했습니다.
+service/rag/rerank/DefaultLightWeightRanker.java ✅ 신규 구현체 추가(@Component)
 
-3. 아키텍처 개선 및 코드 리팩토링
-ChatService의 역할을 검색, 조합, 생성을 지시하는 오케스트레이터(Orchestrator)로 명확히 분리하여 복잡도를 낮췄습니다.
+service/rag/rerank/EmbeddingCrossEncoderReranker.java ✅ float[] 정합성 & cosine 시그니처
 
-HybridRetriever, SelfAskWebSearchRetriever 등 검색 관련 컴포넌트를 service.rag 패키지로 모아 모듈성을 강화하고 역할과 책임을 명확히 했습니다.
-feat(AI): 메타 학습 강화를 위한 볼츠만 탐색 및 동적 보상 시스템 도입
+service/rag/HybridRetriever.java ✅ 병렬 변수 참조 수정
 
-시스템의 단순 방어 로직을 '지능형 제안 및 학습'으로 진화시키기 위해, 사용자 피드백의 '맥락'을 이해하고 AI의 행동 전략 자체를 강화하는 메타 학습 루프를 도입합니다. 이를 위해 볼츠만 연산 로직을 고도화하고, 답변 출처에 따른 차등 보상 시스템을 적용하며, 위험 질문에 대한 동적 온도 조절 기능을 추가합니다.
+api/ChatApiController.java ✅ 로거 필드/애너테이션 추가 및 SSE 로깅
 
-1. MemoryReinforcementService & FeedbackController: 차등 보상 시스템 적용
+service/verification/SourceAnalyzerService.java ✅ 안전 폴백·정리
 
-FeedbackDto 수정:
+util/MLCalibrationUtil.java ✅ 시그니처/주석 정리
 
-답변의 출처(sourceTag)를 추적하는 필드를 추가합니다. (ASSISTANT, SMART_FALLBACK 등)
+service/correction/DefaultQueryCorrectionService.java ✅ 전처리 개선
 
-applyFeedback 메서드 수정:
+service/reinforcement/MemoryReinforcementService.java ✅ 캐시 사용법 수정
 
-sourceTag를 인자로 받아, '스마트 폴백'에 대한 긍정 피드백에는 높은 보상(1.2 이상)을, '환각'으로 의심되는 일반 답변에 대한 부정 피드백에는 강한 페널티(-1.0)를 부여하도록 로직을 수정합니다.
+테스트 플랜(How to Test)
+컴파일
 
-computeBoltzmannEnergy 메서드 수정:
+bash
+복사
+편집
+./gradlew clean build
+에러였던
+constructor FactVerifierService(...) cannot be applied to given types 사라져야 함.
 
-sourceTag가 SMART_FALLBACK인 메모리의 에너지 값에 보너스 점수를 부여하여, 해당 메모리가 선택될 확률을 높입니다.
+부트 실행 & 기본 흐름
 
-2. TranslationMemory 엔티티: 답변 출처 추적 기능 추가
+/api/chat 및 /api/chat/stream 호출 → 응답/스트림 정상.
 
-필드 추가:
+로그에 SSE stream cancelled by client.../SSE stream error... 발생 시 정상 로깅 확인.
 
-답변의 출처(ASSISTANT, USER_CORRECTION, SMART_FALLBACK 등)를 저장하기 위해 private String sourceTag; 컬럼을 추가합니다.
+랭커 주입 확인
 
-3. ChatService: 동적 제어 및 전략 오케스트레이션 강화
+DefaultLightWeightRanker가 빈으로 주입되어 HybridRetriever 경로에서 1차 랭킹 수행.
 
-'스마트 폴백' 답변 태깅:
+Reranker 타입 확인
 
-SmartFallbackService 호출 결과가 실제 폴백 답변일 경우, sourceTag를 "SMART_FALLBACK"으로 지정하여 메모리 강화 로직에 전달합니다.
+EmbeddingCrossEncoderReranker에서 임베딩 추출/코사인 계산 시 타입 예외 없음.
 
-동적 온도 조절 (Dynamic Temperature) 도입:
+회귀(Regression)
 
-FallbackHeuristics.detect()를 사용하여 환각 위험이 높은 질문(예: "원신 + 에스코피에")을 감지합니다.
+RAG 검색 + 융합 + 검증 2-Pass 전체 파이프라인 호출 시 예외 없음.
 
-위험 감지 시, 해당 요청에 한해 LLM의 temperature를 매우 낮은 값(예: 0.05)으로 동적으로 오버라이드하여 답변의 안정성을 확보합니다.
+마이그레이션 노트(Breaking Changes)
+FactVerifierService의 2-인자 생성자 제거: 구성 코드나 수동 new 사용처가 있다면 3-인자( OpenAiService, FactStatusClassifier, SourceAnalyzerService)로 교체하거나, 스프링 빈 자동주입을 사용하세요.
 
-reinforceAssistantAnswer 메서드 수정:
-
-sourceTag를 파라미터로 받도록 시그니처를 변경하고, MemoryReinforcementService 호출 시 태그를 그대로 전달합니다.
-
-4. SmartFallbackService: 폴백 답변 식별 기능 추가
-
-신규 DTO/Record 생성:
-
-FallbackResult(String suggestion, boolean isFallback)와 같은 반환 타입을 새로 정의합니다.
-
-maybeSuggest 메서드 수정:
-
-반환 타입을 기존 String에서 FallbackResult로 변경하여, ChatService가 폴백 답변 여부를 명확히 식별할 수 있도록 합니다.
-
-5. BanditSelector: 외부 제어를 위한 리팩토링
-
-decideWithBoltzmann 메서드 수정:
-
-decideWithBoltzmann(TranslationMemory tm, double temperature)와 같이 온도를 외부에서 파라미터로 주입받도록 시그니처를 변경합니다.
-
-이를 통해 ChatService에서 동적으로 조절된 온도를 직접 전달할 수 있는 구조를 마련합니다.
-DynamicChatModelFactory를 도입하여 런타임에 모델, 온도(temperature) 등의 파라미터를 동적으로 설정할 수 있도록 유연성을 확보했습니다.
-RestTemplateConfig 개선
-
-Spring Boot 3.x에서 deprecated 된 setConnectTimeout, setReadTimeout 메서드를 최신 API(connectTimeout, readTimeout)로 교체했습니다.
-
-향후 API 제거로 인한 문제를 예방하고 빌드 경고를 제거합니다.
+LightWeightRanker가 interface로 전환: 기존에 직접 new LightWeightRanker() 하던 곳이 있었다면 DefaultLightWeightRanker 사용 또는 빈 주입으로 교체.
 📄 라이선스
-MIT License (LICENSE 참조)
+MIT License (상세는 LICENSE 참조)
