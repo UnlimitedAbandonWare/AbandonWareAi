@@ -11,6 +11,27 @@ import java.util.Optional;
 
 public interface TranslationMemoryRepository extends JpaRepository<TranslationMemory, Long> {
 
+    // 이미 있으리라 예상: updateEnergyByHash(...)
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query(value = """
+        UPDATE translation_memory
+           SET energy = :energy,
+               temperature = :temp,
+               updated_at = NOW()
+         WHERE source_hash = :hash
+           AND session_id = :sid
+        """, nativeQuery = true)
+    int updateEnergyByHashAndSession(@Param("hash") String hash,
+                                     @Param("sid") String sessionId,
+                                     @Param("energy") double energy,
+                                     @Param("temp") double temp);
+
+    // 에너지가 설정된 전체 레코드 중 상위 10
+    List<TranslationMemory> findTop10ByEnergyNotNullOrderByEnergyAsc();
+
+    // 세션 내 상위 10 — 기존에 없다면 참고
+    List<TranslationMemory> findTop10BySessionIdAndEnergyNotNullOrderByEnergyAsc(String sessionId);
     /* ======================================================================
      * 단순 조회 (JPA 쿼리 메서드)
      * ==================================================================== */

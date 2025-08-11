@@ -93,23 +93,7 @@ public class MemoryReinforcementService {
             tm.setCosineSimilarity(0.0);
             tm.setQValue(0.0);
         }
-        @Modifying(clearAutomatically = true, flushAutomatically = true)
-        @Transactional
-        @Query(value = """
-    UPDATE translation_memory
-       SET energy = :energy,
-           temperature = :temp,
-           updated_at = NOW()
-     WHERE source_hash = :hash
-       AND session_id = :sid
-    """, nativeQuery = true)
-        int updateEnergyByHashAndSession(@Param("hash") String hash,
-                @Param("sid") String sessionId,
-        @Param("energy") double energy,
-        @Param("temp") double temp);
 
-/** 에너지가 설정된 레코드에서 전체 상위 10 */
-        List<TranslationMemory> findTop10ByEnergyNotNullOrderByEnergyAsc();
 
         // 관측 1회
         tm.setHitCount(tm.getHitCount() + 1);
