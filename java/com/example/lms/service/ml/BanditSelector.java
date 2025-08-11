@@ -64,10 +64,15 @@ public class BanditSelector {
         double T       = hp.getDouble("bandit.temperature", 0.1);
         double sigma   = hp.getDouble("memory.aug-sigma", 0.03);
 
-        double[] logits = topK.stream()
-                .mapToDouble(tm -> (tm.getCosineSimilarity() +
-                        ThreadLocalRandom.current().nextGaussian() * sigma) / T)
-                .toArray();
+        // 개선된 로직: (유사도 가중치 + 에너지 텀 + 노이즈) / 온도
+        double[] logits = topK.stream().mapToDouble(tm -> {
+            double cos = tm.getCosineSimilarity();
+            double e   = (tm.getEnergy() == null ? 0.0 : tm.getEnergy());
+            // [핵심] 낮은 에너지(e)일수록 점수가 높아지는 항 추가
+            double energyTerm = -e / Math.max(1e-6, Teng);
+            double noise = ThreadLocalRandom.current().nextGaussian() * sigma;
+            return (betaCos * cos + energyTerm + noise) / Math.max(1e-6, Tsoft);
+        }).toArray();
 
         int idx = softmaxSample(logits);
         return Optional.of(topK.get(idx));

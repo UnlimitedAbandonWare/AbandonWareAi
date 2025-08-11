@@ -422,10 +422,15 @@ public class ChatService {
         String cleanModel = chooseModel(req.getModel(), true);
         ChatModel dynamic = chatModelFactory.lc(
                 cleanModel,
+                llmTemp,
                 Optional.ofNullable(req.getTemperature()).orElse(defaultTemp),
                 Optional.ofNullable(req.getTopP()).orElse(defaultTopP),
                 req.getMaxTokens()
-        );
+                // [추가] FallbackHeuristics로 위험 질의 감지 시, 온도를 0.05 이하로 강제
+        if (FallbackHeuristics.detect(finalQuery) != null) {
+            llmTemp = Math.min(llmTemp, 0.05); // 탐색(창의성) 억제
+        }
+
         List<ChatMessage> msgs = buildLcMessages(req, unifiedCtx);
         String answer = dynamic.chat(msgs).aiMessage().text();
         String out = ruleEngine.apply(answer, "ko", RulePhase.POST);
