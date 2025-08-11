@@ -162,6 +162,36 @@ src/main/java/com/example/lms
    └─ ...
 🤝 기여 가이드
 저장소를 Fork → 브랜치 생성(feature/*) → 커밋 규칙(feat:, fix:, docs: …) 준수 → 테스트 포함 PR 생성. 아키텍처 변경 시 Mermaid 다이어그램 업데이트 부탁드립니다.
+Git 커밋 메시지
+refactor: 서비스 계층 구조 리팩토링 및 컴파일 오류 수정
 
+대규모 리팩토링 이후 발생했던 16개 이상의 심각한 컴파일 오류를 해결하고, 서비스와 리포지토리의 역할을 명확히 분리하여 아키텍처 안정성을 확보합니다.
+
+### 주요 수정 내용
+
+#### 1. API 불일치 및 컴파일 오류 해결 (Hotfix)
+- **문제:** `ChatService`가 변경된 `MemoryReinforcementService`의 예전 API를 호출하여 `NoSuchMethodError` 및 `cannot find symbol` 오류 다수 발생.
+- **해결:**
+    - `MemoryReinforcementService`에 하위 호환성을 위한 **어댑터(Shim) 메서드**(`reinforceWithSnippet`, `loadContext` 등)를 추가하여 API 호출부를 수정하지 않고도 문제를 해결했습니다.
+    - 컴파일에 누락되었던 내부 **헬퍼 메서드**(`normalizeSessionId`, `storageHashFromSnippet`, `reward` 등)를 추가했습니다.
+
+#### 2. 서비스-리포지토리 역할 분리 (구조 리팩토링)
+- **문제:** 데이터베이스 쿼리 로직(`@Query`, `@Modifying`)이 `MemoryReinforcementService`에 위치하여 Spring Data JPA 원칙에 위배되고 유지보수가 어려운 구조였습니다.
+- **해결:**
+    - `MemoryReinforcementService`에 있던 모든 **DB 쿼리 정의를 `TranslationMemoryRepository` 인터페이스로 이전**했습니다.
+    - 이제 Service는 비즈니스 로직에만 집중하고, 데이터 접근은 Repository가 전담하도록 역할을 명확히 분리했습니다.
+
+#### 3. 기타 문법 및 타입 오류 수정
+- **`bad operand types`:** primitive 타입(`double`)을 `null`과 비교하던 오류를 수정했습니다.
+- **`<identifier> expected`:** `private` 키워드 오타(`ivate`)를 수정했습니다.
+- 코드 병합 과정에서 발생한 중복 `import` 구문과 잘못된 `package` 선언을 정리했습니다.
+
+### 수정한 주요 클래스
+- `ChatService.java`: 신규 서비스(Reranker, Fallback 등) DI 추가 및 핵심 로직 파이프라인 개편.
+- `MemoryReinforcementService.java`: 어댑터 메서드 추가, 쿼리 로직 제거, 트랜잭션 롤백 방지 설정 추가.
+- `TranslationMemoryRepository.java`: 서비스에서 이전된 쿼리 메서드 추가 및 중복 선언 정리.
+- `chat.js`: 프론트엔드 UX 버그(Enter 키 전송, 로딩 아이콘 멈춤) 수정.
+
+이번 리팩토링을 통해 빌드 안정성을 확보하고, 각 컴포넌트의 책임과 역할을 명확히 하여 향후 기능 확장 및 유지보수성을 크게 개선했습니다.
 📄 라이선스
 MIT License (LICENSE 참조)
