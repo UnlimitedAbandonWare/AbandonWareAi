@@ -6,7 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-
+import com.example.lms.service.verification.SourceAnalyzerService;
 import java.time.Duration;
 
 @Configuration
@@ -27,8 +27,9 @@ public class OpenAiConfig {
     }
 
     /** 사실 검증용 서비스 */
-    @Bean
-    public FactVerifierService factVerifierService(OpenAiService openAiService) {
-        return new FactVerifierService(openAiService);
+    public FactVerifierService factVerifierService(OpenAiService openAiService,
+                                                   SourceAnalyzerService sourceAnalyzer) {
+        // 2-인자 생성자: FactStatusClassifier는 내부에서 new 로 생성됨
+        return new FactVerifierService(openAiService, sourceAnalyzer);
     }
 }

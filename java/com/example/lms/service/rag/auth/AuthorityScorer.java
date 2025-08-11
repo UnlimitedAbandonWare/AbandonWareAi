@@ -20,8 +20,18 @@ public class AuthorityScorer {
     private final Map<String, Double> table;
 
     public AuthorityScorer(
-            @Value("${search.authority.weights:}") String csv) {
-        this.table = parse(csv);
+            @Value("${search.authority.weights:}") String legacyCsv,
+            @Value("${search.authority.weights.official:}") String officialCsv,
+            @Value("${search.authority.weights.wiki:}") String wikiCsv,
+            @Value("${search.authority.weights.community:}") String communityCsv,
+            @Value("${search.authority.weights.blog:}") String blogCsv) {
+        LinkedHashMap<String, Double> merged = new LinkedHashMap<>();
+        merged.putAll(parse(officialCsv));
+        merged.putAll(parse(wikiCsv));
+        merged.putAll(parse(communityCsv));
+        merged.putAll(parse(blogCsv));
+        if (merged.isEmpty()) merged.putAll(parse(legacyCsv)); // fallback
+        this.table = java.util.Collections.unmodifiableMap(merged);
         if (table.isEmpty()) {
             log.info("[AuthorityScorer] weights empty → using heuristics only");
         } else {

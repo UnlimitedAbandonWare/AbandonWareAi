@@ -1,11 +1,13 @@
 package com.example.lms.service;
-
+import com.example.lms.domain.enums.SourceCredibility;                // ★ 추가
+import com.example.lms.service.verification.SourceAnalyzerService;    // ★ 추가
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
 /* 🔴 기타 import 유지 */
 import com.theokanning.openai.completion.chat.ChatMessageRole;
 import com.theokanning.openai.service.OpenAiService;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;         // ★ 추가
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -18,17 +20,22 @@ import com.example.lms.service.verification.FactStatusClassifier;
 @Slf4j
 @Service
 public class FactVerifierService {
+    private final SourceAnalyzerService sourceAnalyzer;   // ★ 신규 의존성
     private final OpenAiService openAi;
     private final FactStatusClassifier classifier;
 
     public FactVerifierService(OpenAiService openAi,
-                               FactStatusClassifier classifier) {
+                               FactStatusClassifier classifier,
+                               SourceAnalyzerService sourceAnalyzer) {
         this.openAi = Objects.requireNonNull(openAi, "openAi");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
+        this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
     }
 
-    public FactVerifierService(OpenAiService openAi) {
-        this(openAi, new FactStatusClassifier(openAi));
+    @Autowired
+    public FactVerifierService(OpenAiService openAi,
+                               SourceAnalyzerService sourceAnalyzer) {
+        this(openAi, new FactStatusClassifier(openAi), sourceAnalyzer);
     }
 
     private static final int MIN_CONTEXT_CHARS = 80;
@@ -85,6 +92,19 @@ public class FactVerifierService {
         if (!StringUtils.hasText(context) || context.length() < MIN_CONTEXT_CHARS) return draft;
         if (context.contains("[검색 결과 없음]")) return draft;
         // ── 0) META‑CHECK: 컨텍스트가 아예 다른 대상을 가리키는지(또는 부족한지) 1차 판별 ──
+
+        // ★ 0) 소스 신뢰도 메타 점검: 팬 추측/상충이면 즉시 차단
+        try {
+            SourceCredibility cred = sourceAnalyzer.analyze(question, context);
+            if (cred == SourceCredibility.FAN_MADE_SPECULATION
+                    || cred == SourceCredibility.CONFLICTING) {
+                log.warn("[Meta-Verify] 낮은 신뢰도({}) 탐지 → 답변 차단", cred);
+                return "웹에서 찾은 정보는 공식 발표가 아닌 팬 커뮤니티의 추측일 가능성이 높습니다. "
+               + "이에 기반한 답변은 부정확할 수 있어 제공하지 않습니다.";
+            }
+        } catch (Exception e) {
+            log.debug("[Meta-Verify] source analysis 실패: {}", e.toString());
+        }
         try {
             String metaPrompt = String.format(META_TEMPLATE, question, context);
             ChatCompletionRequest metaReq = ChatCompletionRequest.builder()
