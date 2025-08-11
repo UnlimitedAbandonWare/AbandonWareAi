@@ -18,7 +18,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
-
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.repository.query.Param;
 import java.lang.reflect.Method;                 // NEW
 import java.nio.charset.StandardCharsets;       // NEW
 import java.security.MessageDigest;             // NEW
@@ -90,6 +93,23 @@ public class MemoryReinforcementService {
             tm.setCosineSimilarity(0.0);
             tm.setQValue(0.0);
         }
+        @Modifying(clearAutomatically = true, flushAutomatically = true)
+        @Transactional
+        @Query(value = """
+    UPDATE translation_memory
+       SET energy = :energy,
+           temperature = :temp,
+           updated_at = NOW()
+     WHERE source_hash = :hash
+       AND session_id = :sid
+    """, nativeQuery = true)
+        int updateEnergyByHashAndSession(@Param("hash") String hash,
+                @Param("sid") String sessionId,
+        @Param("energy") double energy,
+        @Param("temp") double temp);
+
+/** 에너지가 설정된 레코드에서 전체 상위 10 */
+        List<TranslationMemory> findTop10ByEnergyNotNullOrderByEnergyAsc();
 
         // 관측 1회
         tm.setHitCount(tm.getHitCount() + 1);
@@ -97,7 +117,7 @@ public class MemoryReinforcementService {
         else              tm.setFailureCount(tm.getFailureCount() + 1);
 
         // Q-value: 지수이동평균(EMA) 형태로 업데이트 (0.2 반영률)
-        double prevQ = (tm.getQValue() == null ? 0.0 : tm.getQValue());
+        double prevQ = tm.getQValue();
         tm.setQValue(prevQ + 0.2 * (reward(score) - prevQ));
 
         // 에너지/온도 계산 및 반영
@@ -121,7 +141,7 @@ public class MemoryReinforcementService {
      *  볼츠만 에너지 & 담금질 (기존 시그니처 유지)
      * ========================================================= */
 
-        ivate static double computeBoltzmannEnergy(TranslationMemory tm) {
+    private static double computeBoltzmannEnergy(TranslationMemory tm) {
             if (tm == null) return 0.0;
 
             double cosSim = (tm.getCosineSimilarity() == null ? 0.0 : tm.getCosineSimilarity());
