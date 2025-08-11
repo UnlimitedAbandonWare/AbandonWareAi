@@ -79,7 +79,7 @@ import com.example.lms.transform.QueryTransformer;            // ⬅️ 추가
 //  hybrid retrieval content classes
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
-import com.example.lms.service.disambiguation.QueryDisambiguationService;
+
 // 🔹 NEW: ML correction util
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.correction.QueryCorrectionService;   // ★ 추가
@@ -170,7 +170,9 @@ public class ChatService {
     private int hybridTopK;
     @Value("${rag.rerank.top-n:10}")
     private int rerankTopN;
-    /** 하이브리드 우회(진단용): true면 HybridRetriever를 건너뛰고 단일패스로 처리 */
+    /**
+     * 하이브리드 우회(진단용): true면 HybridRetriever를 건너뛰고 단일패스로 처리
+     */
     @Value("${debug.hybrid.bypass:false}")
     private boolean bypassHybrid;
 
@@ -212,7 +214,7 @@ public class ChatService {
     private static final String WEB_PREFIX = """
             ### LIVE WEB RESULTS
             %s
-
+            
             - Extract concrete dates (YYYY-MM-DD) if present.
             - Cite site titles in parentheses.
             """;
@@ -224,7 +226,7 @@ public class ChatService {
     private static final String RAG_PREFIX = """
             ### CONTEXT
             %s
-
+            
             ### INSTRUCTIONS
             - Synthesize an answer from all available sections (web, vector‑RAG, memory).
             - When sources conflict, give higher weight to **official domains** (e.g., *.hoyoverse.com, hoyolab.com)
@@ -277,14 +279,15 @@ public class ChatService {
      * RAG · WebSearch · Stand-Alone · Retrieval OFF 모두 처리하는 통합 메서드
      */
     // ① 1-인자 래퍼 ─ 컨트롤러가 호출
-
     public ChatResult continueChat(ChatRequestDto req) {
         Function<String, List<String>> defaultProvider =
                 q -> searchService.searchSnippets(q, 5);   // 네이버 Top-5
         return continueChat(req, defaultProvider);         // ↓ ②로 위임
     }
 
-    /** 의도 분석을 통해 최종 검색 쿼리를 결정한다. */
+    /**
+     * 의도 분석을 통해 최종 검색 쿼리를 결정한다.
+     */
     private String decideFinalQuery(String originalQuery, Long sessionId) {
         if (originalQuery == null || originalQuery.isBlank()) return originalQuery;
         List<String> history = (sessionId != null)
@@ -316,7 +319,7 @@ public class ChatService {
         boolean ragStandalone = req.isUseRag() && Boolean.TRUE.equals(req.getRagStandalone());
 
         /* 0-1) 사용자 입력 교정 (한 번만) */
-        final String originalMsg  = Optional.ofNullable(req.getMessage()).orElse("");
+        final String originalMsg = Optional.ofNullable(req.getMessage()).orElse("");
         final String correctedMsg = correctionSvc.correct(originalMsg);
         if (!originalMsg.equals(correctedMsg)) {
             log.debug("[QC] corrected '{}' -> '{}'", originalMsg, correctedMsg);
@@ -334,7 +337,7 @@ public class ChatService {
             String sid = Optional.ofNullable(req.getSessionId())
                     .map(String::valueOf)
                     .map(s -> s.startsWith("chat-") ? s           // 이미 정규화
-                            : (s.matches("\\d+")     ? "chat-"+s   // 205 → chat-205
+                            : (s.matches("\\d+") ? "chat-" + s   // 205 → chat-205
                             : s))                                  // UUID 등
                     .orElse(UUID.randomUUID().toString());
 
@@ -350,7 +353,7 @@ public class ChatService {
         if (!useRetrieval) {
             String sessionId = Optional.ofNullable(req.getSessionId())
                     .map(String::valueOf)
-                    .map(s -> s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-"+s : s))
+                    .map(s -> s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-" + s : s))
                     .orElse(UUID.randomUUID().toString());
 
             String memCtx = memorySvc.loadContext(sessionId);
@@ -370,7 +373,7 @@ public class ChatService {
          */
         String sessionKey = Optional.ofNullable(req.getSessionId())
                 .map(String::valueOf)
-                .map(s -> s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-"+s : s))
+                .map(s -> s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-" + s : s))
                 .orElse(UUID.randomUUID().toString());
 
         /* ── 세션별 메모리 / RAG 컨텍스트 로드 ───────────────── */
@@ -407,17 +410,18 @@ public class ChatService {
                 // 웹 우선 → 스니펫을 Content로 래핑, 부족하면 벡터 보강
                 List<String> sn = searchService.searchSnippets(finalQuery, hybridTopK);
                 List<Content> webOnly = sn.stream().map(Content::from).toList();
-                if (webOnly.size() < Math.max(3, hybridTopK/2)) {
+                if (webOnly.size() < Math.max(3, hybridTopK / 2)) {
                     var pine = ragSvc.asContentRetriever(pineconeIndexName);
-                    var vec  = pine.retrieve(Query.from(finalQuery));
-                    fused = new java.util.ArrayList<>(webOnly); fused.addAll(vec);
+                    var vec = pine.retrieve(Query.from(finalQuery));
+                    fused = new java.util.ArrayList<>(webOnly);
+                    fused.addAll(vec);
                 } else fused = webOnly;
             }
             case VECTOR_FIRST -> {
                 var pine = ragSvc.asContentRetriever(pineconeIndexName);
                 fused = pine.retrieve(Query.from(finalQuery));
-                if (fused.size() < Math.max(3, hybridTopK/2)) {
-                    List<String> sn = searchService.searchSnippets(finalQuery, hybridTopK/2);
+                if (fused.size() < Math.max(3, hybridTopK / 2)) {
+                    List<String> sn = searchService.searchSnippets(finalQuery, hybridTopK / 2);
                     fused = new java.util.ArrayList<>(fused);
                     fused.addAll(sn.stream().map(Content::from).toList());
                 }
@@ -440,13 +444,14 @@ public class ChatService {
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
         List<Content> topDocs = reranker.rerank(finalQuery, fused, rerankTopN);
-        if (log.isDebugEnabled()) log.debug("[Hybrid] fused={}, topN={} (sid={})", (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
+        if (log.isDebugEnabled())
+            log.debug("[Hybrid] fused={}, topN={} (sid={})", (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
         /* 🔴 컨텍스트 부족 가드레일(하이브리드 이후로 이동)
          *   웹/벡터 문서(topDocs)와 RAG가 모두 비면 즉시 종료 */
         if ((topDocs == null || topDocs.isEmpty()) && !org.springframework.util.StringUtils.hasText(ragCtx)) {
             log.warn("[Guard] no web/vector docs & no ragCtx → stop LLM (sid={}, q='{}')", sessionKey, finalQuery);
             return ChatResult.of("정보 없음",
-                    "lc:"+  chatModel.getClass().getSimpleName(), true);
+                    "lc:" + chatModel.getClass().getSimpleName(), true);
         }
 
         // 🔸 4) 최종 프롬프트/컨텍스트 구성
@@ -488,7 +493,10 @@ public class ChatService {
 
 
     /* ───────────────────────── BACKWARD-COMPAT ───────────────────────── */
-    /** (호환용) 외부 컨텍스트 없이 사용하던 기존 시그니처 */
+
+    /**
+     * (호환용) 외부 컨텍스트 없이 사용하던 기존 시그니처
+     */
 
 
 
@@ -501,13 +509,15 @@ public class ChatService {
 
     /* ═════════ OpenAI‑Java 파이프라인 (2‑Pass + 검증) ═════════ */
 
-    /** OpenAI‑Java 파이프라인 – 단일 unifiedCtx 인자 사용 */
+    /**
+     * OpenAI‑Java 파이프라인 – 단일 unifiedCtx 인자 사용
+     */
     private ChatResult invokeOpenAiJava(ChatRequestDto req, String unifiedCtx) {
 
         /* 세션 키 일관 전파 – 메모리 강화에서 필수 */
         String sessionKey = extractSessionKey(req);
         // OFF 경로(단독 호출)에서는 여기서 교정 1회 적용
-        final String originalMsg  = Optional.ofNullable(req.getMessage()).orElse("");
+        final String originalMsg = Optional.ofNullable(req.getMessage()).orElse("");
         final String correctedMsg = correctionSvc.correct(originalMsg);
 
         String modelId = chooseModel(req.getModel(), false);
@@ -515,7 +525,7 @@ public class ChatService {
         List<com.theokanning.openai.completion.chat.ChatMessage> msgs = new ArrayList<>();
         addSystemPrompt(msgs, req.getSystemPrompt());
         /* 병합된 컨텍스트 한 번만 주입 */
-        addContextOai(msgs, "%s", unifiedCtx, defaultWebCtxMaxTokens + defaultRagCtxMaxTokens  +defaultMemCtxMaxTokens);
+        addContextOai(msgs, "%s", unifiedCtx, defaultWebCtxMaxTokens + defaultRagCtxMaxTokens + defaultMemCtxMaxTokens);
         appendHistoryOai(msgs, req.getHistory());
         appendUserOai(msgs, correctedMsg);
 
@@ -565,7 +575,6 @@ public class ChatService {
             String toPolish = pickForPolish(smart, verified, insufficientContext, fallbackHappened, warning);
 
 
-
             String finalText = req.isPolish()
                     ? polishAnswerOai(toPolish, modelId,
                     req.getMaxTokens(),
@@ -599,6 +608,7 @@ public class ChatService {
         }
 
     }
+
     //  검증 여부 결정 헬퍼
     private boolean shouldVerify(String joinedContext, com.example.lms.dto.ChatRequestDto req) {
         boolean hasContext = org.springframework.util.StringUtils.hasText(joinedContext);
@@ -709,7 +719,6 @@ public class ChatService {
     /* ════════════════ 메시지 빌더 – OpenAI‑Java ════════════════ */
 
 
-
     private void addSystemPrompt(List<com.theokanning.openai.completion.chat.ChatMessage> l, String custom) {
         String sys = Optional.ofNullable(custom).filter(StringUtils::hasText).orElseGet(promptSvc::getSystemPrompt);
         if (StringUtils.hasText(sys)) {
@@ -734,7 +743,6 @@ public class ChatService {
         String user = ruleEngine.apply(msg, "ko", RulePhase.PRE);
         l.add(new com.theokanning.openai.completion.chat.ChatMessage(ChatMessageRole.USER.value(), user));
     }
-
 
 
     private void appendHistoryLc(List<dev.langchain4j.data.message.ChatMessage> l, List<ChatRequestDto.Message> hist) {
@@ -797,6 +805,7 @@ public class ChatService {
             l.add(SystemMessage.from(sys));
         }
     }
+
     private static String pickForPolish(String smart, String verified,
                                         boolean insufficientContext, boolean fallbackHappened, String warning) {
         if (smart != null && !smart.isBlank()) return smart;
@@ -821,7 +830,6 @@ public class ChatService {
     }
 
 
-
     private void appendUserLc(List<ChatMessage> l, String msg) {
         String user = ruleEngine.apply(msg, "ko", RulePhase.PRE);
         l.add(UserMessage.from(user));
@@ -829,7 +837,9 @@ public class ChatService {
 
     /* ════════════════ Utility & Helper ════════════════ */
 
-    /** 애플리케이션 기동 시 한 번만 로드해서 캐싱 */
+    /**
+     * 애플리케이션 기동 시 한 번만 로드해서 캐싱
+     */
     private volatile String defaultModelCached;
 
     @PostConstruct
@@ -853,7 +863,10 @@ public class ChatService {
     /* ─────────────────────── 새 헬퍼 메서드 ─────────────────────── */
 
     // ChatService.java (헬퍼 메서드 모음 근처)
-    /** 패치/공지/배너/버전 질의 간단 판별 */
+
+    /**
+     * 패치/공지/배너/버전 질의 간단 판별
+     */
     private static boolean isLivePatchNewsQuery(String s) {
         if (!org.springframework.util.StringUtils.hasText(s)) return false;
         return java.util.regex.Pattern
@@ -863,7 +876,9 @@ public class ChatService {
     }
 
 
-    /** 모든 컨텍스트(web → rag → mem)를 우선순위대로 합산한다. */
+    /**
+     * 모든 컨텍스트(web → rag → mem)를 우선순위대로 합산한다.
+     */
     private String buildUnifiedContext(String webCtx, String ragCtx, String memCtx) {
         List<String> parts = new ArrayList<>();
         if (StringUtils.hasText(webCtx)) {
@@ -878,7 +893,9 @@ public class ChatService {
         return parts.isEmpty() ? null : String.join("\n\n", parts);
     }
 
-    /** 간단 휴리스틱: 사람/의료진 질의 여부 */
+    /**
+     * 간단 휴리스틱: 사람/의료진 질의 여부
+     */
     private static boolean isPersonQuery(String s) {
         if (s == null) return false;
         return Pattern.compile("(교수|의사|의료진|전문의|님)").matcher(s).find();
@@ -936,11 +953,16 @@ public class ChatService {
     }
 
 
-    /** RAG 컨텍스트를 길이 제한(RAG_CTX_MAX_TOKENS)까지 잘라 준다. */
+    /**
+     * RAG 컨텍스트를 길이 제한(RAG_CTX_MAX_TOKENS)까지 잘라 준다.
+     */
     private static String truncate(String text, int max) {
         return text != null && text.length() > max ? text.substring(0, max) : text;
     }
-    /** ② 히스토리(OAI 전용) – 최근 maxHistory 개만 전송 */
+
+    /**
+     * ② 히스토리(OAI 전용) – 최근 maxHistory 개만 전송
+     */
     private void appendHistoryOai(
             List<com.theokanning.openai.completion.chat.ChatMessage> l,
             List<ChatRequestDto.Message> hist) {
@@ -955,7 +977,9 @@ public class ChatService {
         }
     }
 
-    /** 세션 스코프  가중치 보존 정책 준수 */
+    /**
+     * 세션 스코프  가중치 보존 정책 준수
+     */
     private void reinforceAssistantAnswer(String sessionKey, String query, String answer,
                                           double contextualScore,
                                           com.example.lms.strategy.StrategySelectorService.Strategy chosen) {
@@ -968,26 +992,21 @@ public class ChatService {
          * 거리 측정값을 입력하여 더욱 정교한 가중치를 얻을 수 있습니다.
          */
         double d = (query != null ? query.length() : 0);
-        boolean add = true; // 예시로 항상 덧셈; 필요에 따라 조건부로 변경 가능
-        double score = MLCalibrationUtil.finalCorrection(
-                d,
-                mlAlpha,
-                mlBeta,
-                mlGamma,
-                mlD0,
-                mlMu,
-                mlLambda,
-                add);
-        // 점수를 0과 1 사이로 정규화하여 메모리 서비스에 넘깁니다.
-        // ML 보정값과 컨텍스트 스코어를 절충(0.5:0.5)
-        double normalizedScore = Math.max(0.0, Math.min(1.0, 0.5*score  0.5*contextualScore));
+        boolean add = true;
+        double score = com.example.lms.util.MLCalibrationUtil.finalCorrection(
+                d, mlAlpha, mlBeta, mlGamma, mlD0, mlMu, mlLambda, add);
+
+        // ML 보정값과 컨텍스트 스코어 절충(0.5:0.5)
+        double normalizedScore = Math.max(0.0, Math.min(1.0, 0.5 * score + 0.5 * contextualScore));
+
         try {
             memorySvc.reinforceWithSnippet(sessionKey, query, answer, "ASSISTANT", normalizedScore);
-            // 세션‑전략 추적은 위 associate()에서 이미 수행됨(피드백 시 집계)
         } catch (Throwable t) {
             log.debug("[Memory] reinforceWithSnippet 실패: {}", t.toString());
         }
     }
+
+
 
     /** 세션 키 정규화 유틸 */
     private static String extractSessionKey(ChatRequestDto req) {
@@ -996,5 +1015,11 @@ public class ChatService {
                 .map(s -> s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-"+s : s))
                 .orElse(UUID.randomUUID().toString());
     }
+    // 기존 호출부(3-인자)와의 하위호환을 위한 오버로드
+    private void reinforceAssistantAnswer(String sessionKey, String query, String answer) {
+        // 기본값: 컨텍스트 점수 0.5, 전략 정보는 아직 없으므로 null
+        reinforceAssistantAnswer(sessionKey, query, answer, 0.5, null);
+    }
+
 
 }
