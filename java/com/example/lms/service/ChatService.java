@@ -5,6 +5,7 @@ import com.example.lms.domain.enums.RulePhase;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
+
 import com.example.lms.service.NaverSearchService;
 import com.example.lms.service.rag.CrossEncoderReranker;   // ★ 누락된 import 추가
 import java.util.LinkedHashSet;
@@ -205,7 +206,7 @@ public class ChatService {
     // WEB 스니펫은 이미 HTML 링크 형태(- <a href="...">제목</a>: 요약)로 전달됨.
     // 아래 프리픽스는 모델용 컨텍스트 힌트이며, 실제 화면에는 ChatApiController가 따로 '검색 과정' 패널을 붙인다.
     private static final String WEB_PREFIX = """
-            ### LIVE WEB RESULTS (highest priority)
+            ### LIVE WEB RESULTS
             %s
 
             - Extract concrete dates (YYYY-MM-DD) if present.
@@ -217,16 +218,17 @@ public class ChatService {
             "다음 초안을 더 자연스럽고 전문적인 한국어로 다듬어 주세요. 새로운 정보는 추가하지 마세요.";
     /* ──────────────── RAG 패치: 프롬프트 강화 ──────────────── */
     private static final String RAG_PREFIX = """
-            ### CONTEXT (ordered by priority)
+            ### CONTEXT
             %s
-            
+
             ### INSTRUCTIONS
-            - **Earlier sections have higher authority.**
-              ↳ Web-search snippets come first and OVERRIDE any conflicting vector-RAG or memory info.
+            - Synthesize an answer from all available sections (web, vector‑RAG, memory).
+            - When sources conflict, give higher weight to **official domains** (e.g., *.hoyoverse.com, hoyolab.com)
+              and be cautious with **community/fan sites** (e.g., fandom.com, personal blogs).
             - Cite the source titles when you answer.
-            - Do NOT guess or invent facts. If Context does not explicitly mention a named entity
+            - Do NOT guess or invent facts. If the Context does not explicitly mention a named entity
               (character/item/region), do NOT include it in the answer.
-            - If the information is insufficient, reply "정보 없음".
+            - If the information is insufficient or conflicting from low‑authority sources only, reply "정보 없음".
             """;
     private static final String MEM_PREFIX = """
             ### LONG-TERM MEMORY

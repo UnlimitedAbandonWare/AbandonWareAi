@@ -32,8 +32,11 @@ public class WebSearchRetriever implements ContentRetriever {
 
     /* ✅ 선호 도메인: 제거가 아닌 '우선 정렬'만 수행 */
     private static final List<String> PREFERRED = List.of(
-            "namu.wiki", "wikipedia.org", "blog.naver.com",
-            "eulji.ac.kr", "ac.kr", "go.kr"
+            // 공식/권위
+            "genshin.hoyoverse.com", "hoyoverse.com", "hoyolab.com",
+            "wikipedia.org", "eulji.ac.kr", "ac.kr", "go.kr",
+            // 한국 커뮤니티·블로그(삭제 X, 단지 후순위)
+            "namu.wiki", "blog.naver.com"
     );
     private static boolean containsPreferred(String s) {
         return PREFERRED.stream().anyMatch(s::contains);

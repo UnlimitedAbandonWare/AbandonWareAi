@@ -32,6 +32,19 @@ public class FactVerifierService {
     }
 
     private static final int MIN_CONTEXT_CHARS = 80;
+    /** 컨텍스트가 질문과 같은 ‘도메인/개체’인지 먼저 점검하는 메타 단계 */
+    private static final String META_TEMPLATE = """
+            You are a meta fact-checker.
+            Decide if the CONTEXT can safely answer the QUESTION without hallucination.
+            Output exactly one of: CONSISTENT | MISMATCH | INSUFFICIENT
+            and a one-sentence reason (in Korean).
+
+            QUESTION:
+            %s
+
+            CONTEXT:
+            %s
+            """;
 
     private static final String TEMPLATE = """
             You are a senior investigative journalist and fact‑checker.
@@ -71,6 +84,28 @@ public class FactVerifierService {
         if (!StringUtils.hasText(draft)) return "";
         if (!StringUtils.hasText(context) || context.length() < MIN_CONTEXT_CHARS) return draft;
         if (context.contains("[검색 결과 없음]")) return draft;
+        // ── 0) META‑CHECK: 컨텍스트가 아예 다른 대상을 가리키는지(또는 부족한지) 1차 판별 ──
+        try {
+            String metaPrompt = String.format(META_TEMPLATE, question, context);
+            ChatCompletionRequest metaReq = ChatCompletionRequest.builder()
+                    .model(model)
+                    .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), metaPrompt)))
+                    .temperature(0d)
+                    .topP(0.05d)
+                    .build();
+            String metaRaw = openAi.createChatCompletion(metaReq)
+                    .getChoices().get(0).getMessage().getContent();
+            String verdict = (metaRaw == null ? "" : metaRaw).trim().toUpperCase();
+            if (verdict.startsWith("MISMATCH")) {
+                // 예: 질문은 ‘게임 캐릭터’, 컨텍스트는 ‘요리사’일 때
+                log.debug("[Verify] META‑CHECK=MISMATCH → 정보 없음");
+                return "정보 없음";
+            }
+            // INSUFFICIENT은 아래 일반 검증 단계로 이어서 처리
+        } catch (Exception e) {
+            log.debug("[Verify] META‑CHECK failed: {}", e.toString());
+        }
+
 
         FactVerificationStatus status = classifier.classify(question, context, draft, model);
 

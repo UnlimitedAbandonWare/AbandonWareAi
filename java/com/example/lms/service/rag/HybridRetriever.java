@@ -21,13 +21,15 @@ import java.lang.reflect.Method;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.concurrent.ForkJoinPool;
+import com.example.lms.service.rag.rerank.LightWeightRanker;
+import com.example.lms.service.rag.auth.AuthorityScorer;
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class HybridRetriever implements ContentRetriever {
     // fields (다른 final 필드들과 같은 위치)
     private final LightWeightRanker lightWeightRanker;
-
+    private final AuthorityScorer authorityScorer;
     private static final double GAME_SIM_THRESHOLD = 0.3;
 
     // 메타키 (필요 시 Query.metadata에 실어 전달)
@@ -379,9 +381,8 @@ public class HybridRetriever implements ContentRetriever {
                     .orElse(c.toString());
 
             String url = extractUrl(text);
-            if (isOfficial(url, officialDomains)) {
-                base += 0.20; // 공식 도메인 보너스
-            }
+            // NEW: Authority weight (0.0 ~ 1.0), 도메인 테이블  +휴리스틱
+            double authority = authorityScorer != null ? authorityScorer.weightFor(url) : 0.5;
 
             double rel = 0.0;
             try {
@@ -391,7 +392,8 @@ public class HybridRetriever implements ContentRetriever {
                 );
             } catch (Exception ignore) { }
 
-            double finalScore = (0.6 * rel) + (0.4 * base);
+                        // NEW: 최종 점수 = 0.6*관련도 + 0.3*기본랭크 + 0.1*Authority
+                               double finalScore = (0.6 * rel) + (0.3 * base) + (0.1 * authority);
             scored.add(new Scored(c, finalScore));
         }
 
