@@ -197,5 +197,83 @@ refactor: 서비스 계층 구조 리팩토링 및 컴파일 오류 수정
 - TranslationMemoryRepository로 DB 쿼리 이관
 - ChatService 파이프라인 일원화 및 @Slf4j 도입
 - 중복/오타/스코프 오류 정리
+feat: AI 환각 방지를 위한 다층적 방어 전략 도입
+
+- 신뢰도 기반 검색(Source Authority) 시스템을 추가하여 검증되지 않은 웹 정보의 영향을 줄임.
+- LLM 프롬프트를 수정하여 비판적 사고를 유도하고, 맹신적 답변 생성을 억제함.
+- FactVerifier, SmartFallback 등 기존 안전장치를 고도화하여 컨텍스트-질문 간 불일치를 탐지하고 더 나은 사용자 경험을 제공하도록 개선.
+README.md 파일 업데이트 전략
+README.md 파일을 다음 세 부분으로 나누어 업데이트하는 것을 제안합니다.
+
+1. 📑 프로젝트 개요 및 ✨ 주요 기능 및 컴포넌트 섹션 보강
+기존 설명에 환각 방지와 정보 신뢰도에 대한 내용을 명시적으로 추가하여 프로젝트의 차별점을 부각합니다.
+
+[프로젝트 개요] 문단에 다음 내용을 추가하거나 수정합니다.
+
+"...재랭킹과 2-Pass 검증을 통해 환각(Hallucination)을 최소화합니다. 특히, 출처 신뢰도 평가(Source Authority) 시스템을 도입하여 공식 정보와 팬 창작물을 구분하고, 잘못된 정보를 AI가 맹신하는 문제를 구조적으로 방지합니다."
+
+[주요 기능 및 컴포넌트] 표에 다음 항목을 수정하거나 추가합니다.
+
+결과 융합/재정렬: 설명에 "출처 신뢰도 점수 반영" 추가
+
+2-Pass 검증: 설명에 "답변 생성 전 컨텍스트-질문 주제 일치 여부 메타 체크(Meta-Check) 기능 추가" 강조
+
+강화 학습: 설명에 "스마트 폴백 답변에 대한 긍정 피드백 가중치 부여" 추가
+
+2. 🧠 아키텍처 & 흐름 섹션 고도화
+Mermaid 다이어그램을 수정하여 새로운 안전장치와 신뢰도 평가 단계를 명확히 보여줍니다.
+
+[아키텍처 & 흐름] Mermaid 차트를 아래와 같이 수정합니다.
+
+HybridRetriever 다음에 AuthorityScorer를 활용하는 Rank by Authority 단계를 추가합니다.
+
+FactVerifierService의 설명을 **Meta-Check & Fact-Check**로 변경하여 사전 검증 단계를 명시합니다.
+
+Final Answer가 나오기 전에 SmartFallback? 분기점을 추가하여 UX 고도화 흐름을 보여줍니다.
+
+코드 스니펫
+
+flowchart TD
+    U[User Request] --> R{Mode Routing}
+
+    R -->|Retrieval ON| HR(HybridRetriever)
+    subgraph HybridRetriever
+      W[Web Search] --> HR
+      A[Analyze] --> HR
+      V[Vector RAG] --> HR
+    end
+
+    HR --> AUTH[Rank by Authority Score]
+    AUTH --> CTX[Build Unified Context]
+
+    subgraph ChatService
+      CTX --> LLM{LLM Call}
+    end
+
+    LLM --> D1[Draft Answer]
+    D1 --> FV[Meta-Check & Fact-Check]
+
+    FV --> FB{Smart Fallback?}
+    FB -- N --> FINAL[Final Answer]
+    FB -- Y --> SUGGEST[Suggest Alternatives]
+
+    R -->|Retrieval OFF| RG[LangChainRAGService]
+    RG --> FINAL
+3. 🚀 개발 과정 & 주요 변경 내역 섹션 업데이트
+환각 대응을 위한 구체적인 개선 사항을 명시하여 프로젝트의 발전 과정을 보여줍니다.
+
+[개발 과정 & 주요 변경 내역] 목록에 다음 항목을 추가합니다.
+
+5) 환각 방지 시스템 고도화 (Source Authority & Meta-Check)
+
+출처 신뢰도 평가: AuthorityScorer를 도입, 검색 결과의 출처(공식, 위키, 커뮤니티 등)에 따라 가중치를 차등 부여하여 랭킹 정확도 향상.
+
+비판적 프롬프팅: LLM이 웹 검색 결과를 맹신하지 않고, 출처 신뢰도에 따라 비판적으로 정보를 종합하도록 시스템 프롬프트 수정.
+
+컨텍스트 사전 검증: FactVerifierService에 질문과 컨텍스트의 주제 일치 여부를 먼저 확인하는 '메타 체크' 로직을 추가하여 관련 없는 정보 기반의 답변 생성을 원천 차단.
+
+지능형 실패 처리: SmartFallbackService가 발동된 답변을 "SMART_FALLBACK"으로 태깅, MemoryReinforcementService가 해당 답변에 긍정 피드백을 받을 시 더 높은 보상 점수를 부여하여 AI의 자가 교정 학습을 유도.
+
+이와 같이 문서를 부분적으로 수정하면, Git 커밋 내역과 프로젝트 문서가 일관성을 유지하며 AI 시스템의 핵심 개선 사항을 명확하게 전달할 수 있습니다.
 📄 라이선스
 MIT License (LICENSE 참조)
