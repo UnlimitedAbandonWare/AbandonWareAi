@@ -8,9 +8,8 @@ Java 17 · Spring Boot · LangChain4j 1.0.1 (BOM/core/starter/OpenAI)
 📑 프로젝트 개요
 하이브리드 검색: 실시간 웹(Web/Naver), 형태소 분석(Analyze), 벡터 RAG(Pinecone)를 동시·선택적으로 결합해 신뢰도 높은 컨텍스트를 구성
 
-결과 융합/재정렬: 병렬 수집 → RRF 융합 → Cross-Encoder 재정렬 → Authority(출처 신뢰도) 가중
-
-검증 기반 생성: 초안 → Meta-Check & Fact-Check(2-Pass) → 사실성 보장
+결과 융합/재정렬	다원 소스 **RRF/Softmax** 융합 + Cross-Encoder 재정렬 + Authority 가중	ReciprocalRankFuser, **SoftmaxUtil**, EmbeddingModelCrossEncoderReranker, AuthorityScorer
+강화 & 메타-학습: 👍/👎 피드백으로 **전략 성적표(StrategyPerformance)**를 축적, **Softmax(볼츠만 탐색)** 기반으로 다음 질의에서 최적 전략을 **확률적으로 탐색/선택**합니다
 
 실시간 UX: SSE(Server-Sent Events)로 단계별 진행 상황 스트리밍
 
@@ -279,7 +278,17 @@ feat: 메타 강화 루프 도입 및 전략 선택 고도화
     * `ChatService`: `reinforceAssistantAnswer` 메서드 내 강화 점수 계산식에서 누락되었던 `+` 연산자를 추가하여 컴파일 오류를 해결합니다.
       (수정 전: `0.5*score 0.5*contextualScore`)
       (수정 후: `0.5 * score + 0.5 * contextualScore`)
+feat: Softmax 기반 전략 선택 및 융합 기능 도입
 
+기존의 Epsilon-Greedy 및 RRF 방식을 고도화하여, Softmax(볼츠만 탐색)
+기반의 지능형 전략 선택 및 결과 융합 메커니즘을 도입합니다.
+
+- StrategySelectorService: Epsilon-Greedy 로직을 Softmax 기반의
+  확률적 선택으로 변경하여, 탐험과 활용의 균형을 최적화.
+- HybridRetriever: 기존 RRF 방식에 더해, Softmax 기반의 정교한
+  점수 융합 및 재정렬(Re-ranking) 모드를 옵션으로 추가.
+- 신규 컴포넌트: 수치적으로 안정적인 SoftmaxUtil 및 하이퍼파라미터
+  제어를 위한 StrategyHyperparams 추가.
 * **README 업데이트**
     * 새로운 아키텍처 다이어그램과 메타-학습 루프에 대한 설명을 반영하여 프로젝트 문서를 최신화합니다.
 📄 라이선스
