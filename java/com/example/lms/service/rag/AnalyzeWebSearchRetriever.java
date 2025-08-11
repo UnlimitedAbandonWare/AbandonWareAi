@@ -85,8 +85,15 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
                 expandedQueries.add(joinedCoreTokens);
             }
             // c) 핵심 토큰에 보조 키워드를 붙여 확장
-            expandedQueries.add(joinedCoreTokens + " 정리");
-            expandedQueries.add(joinedCoreTokens + " 요약");
+            // 인물 질의면 "정리/요약" 대신 프로필/경력에 집중
+            boolean person = joinedCoreTokens.matches(".*(교수|의사|의료진|전문의|박사|님|씨).*");
+            if (person) {
+                expandedQueries.add(joinedCoreTokens + " 프로필");
+                expandedQueries.add(joinedCoreTokens  +" 경력");
+            } else {
+                expandedQueries.add(joinedCoreTokens  +" 정리");
+                expandedQueries.add(joinedCoreTokens + " 요약");
+            }
         }
 
         return expandedQueries;

@@ -179,7 +179,7 @@ public class NaverSearchService {
     private int ragTopK;   // 벡터 RAG top‑k
     /** (NEW) 네이버 API에서 한 번에 받아올 검색 결과 수(1‑100) */
 
-    @Value("${naver.search.display:5}")
+    @Value("${naver.search.display:20}")
     private int display;
     @Value("${naver.search.query-suffix:}")
     private String querySuffix;

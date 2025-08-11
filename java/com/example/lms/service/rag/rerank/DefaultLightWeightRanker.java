@@ -24,22 +24,28 @@ public class DefaultLightWeightRanker implements LightWeightRanker {
         for (Content c : candidates) {
             String text = (c.textSegment() != null) ? c.textSegment().text() : String.valueOf(c);
             Set<String> t = tokens(text);
-
             if (qTokens.isEmpty() || t.isEmpty()) {
-                // 질의/문서 토큰이 없으면 원순서 보존 가중
+                // 질의/문서 토큰이 비어 있으면 임시로만 보관(폴백 대비)
                 scored.add(new Scored(c, 1.0 / (++pos)));
                 continue;
             }
             long matches = t.stream().filter(qTokens::contains).count();
-            double score = matches / (double) (qTokens.size() + 5.0); // 간단 스무딩
+            if (matches == 0) {
+                // 핵심어 0 교집합 → 1차에서 제외
+                continue;
+            }
+            double score = matches / (double) (qTokens.size() + 5.0);
             scored.add(new Scored(c, score));
         }
 
+        if (scored.isEmpty()) {
+            // 전부 탈락했으면 안전 폴백(원순서 상위)
+            int k = Math.max(1, limit);
+            List<Content> fallback = new ArrayList<>(candidates);
+            return fallback.subList(0, Math.min(k, fallback.size()));
+        }
         scored.sort((a, b) -> Double.compare(b.s(), a.s()));
-        return scored.stream()
-                .map(Scored::c)
-                .limit(Math.max(1, limit))
-                .collect(Collectors.toList());
+        return scored.stream().map(Scored::c).limit(Math.max(1, limit)).collect(Collectors.toList());
     }
 
     private Set<String> tokens(String s) {
