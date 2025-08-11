@@ -289,7 +289,36 @@ feat: Softmax 기반 전략 선택 및 융합 기능 도입
   점수 융합 및 재정렬(Re-ranking) 모드를 옵션으로 추가.
 - 신규 컴포넌트: 수치적으로 안정적인 SoftmaxUtil 및 하이퍼파라미터
   제어를 위한 StrategyHyperparams 추가.
-* **README 업데이트**
-    * 새로운 아키텍처 다이어그램과 메타-학습 루프에 대한 설명을 반영하여 프로젝트 문서를 최신화합니다.
+커밋 본문 (Body)
+TranslationMemoryRepository 수정
+
+MemoryReinforcementService의 호출로 인한 컴파일 오류를 해결하기 위해 incrementHitCountBySourceHash 메서드를 복원했습니다.
+
+@Modifying 어노테이션을 사용해 hit_count 필드만 정확히 업데이트하도록 하여, 불필요한 DB 쓰기 부하를 줄이고 성능을 개선합니다.
+1. 메타 학습 및 동적 전략 선택 아키텍처 도입
+StrategySelectorService 및 StrategyPerformance 엔티티를 신설하여, 시스템이 사용자 피드백을 통해 각 검색 전략(예: WEB_FIRST, DEEP_DIVE_SELF_ASK)의 성공률과 평균 보상을 학습하도록 구현했습니다.
+
+이제 시스템은 매 질문마다 과거의 성과 데이터를 기반으로 가장 성공 확률이 높은 검색 전략을 동적으로 선택하여, 스스로 성능을 최적화하는 메타 학습(Meta-Learning) 루프의 기반을 마련했습니다.
+
+피드백을 단순 점수가 아닌 다차원적으로 평가하는 ContextualScorer를 도입하여, 답변의 사실성, 품질, 신규 정보량을 종합적으로 측정하고 이를 강화 학습 보상 점수에 반영했습니다.
+
+2. 2-Pass 검증 및 스마트 폴백을 통한 답변 신뢰도 강화
+ChatService 내에 2-Pass 검증 파이프라인을 구축했습니다. 1차로 LLM이 초안(draft)을 생성하면, 2차로 FactVerifierService가 웹 검색 결과와 RAG 컨텍스트를 교차 검증하여 답변의 사실성을 높이고 환각(Hallucination)을 억제합니다.
+
+SmartFallbackService를 도입하여, 컨텍스트가 부족하거나 답변이 "정보 없음"일 경우, 사용자의 의도를 추정하고 대안 키워드를 제시하는 스마트 폴백(Smart Fallback) 기능을 구현했습니다.
+
+답변의 최종 품질을 높이기 위해, 사용자가 선택할 수 있는 2-Pass 폴리싱(Polishing) 옵션을 추가했습니다.
+
+3. 아키텍처 개선 및 코드 리팩토링
+ChatService의 역할을 검색, 조합, 생성을 지시하는 오케스트레이터(Orchestrator)로 명확히 분리하여 복잡도를 낮췄습니다.
+
+HybridRetriever, SelfAskWebSearchRetriever 등 검색 관련 컴포넌트를 service.rag 패키지로 모아 모듈성을 강화하고 역할과 책임을 명확히 했습니다.
+
+DynamicChatModelFactory를 도입하여 런타임에 모델, 온도(temperature) 등의 파라미터를 동적으로 설정할 수 있도록 유연성을 확보했습니다.
+RestTemplateConfig 개선
+
+Spring Boot 3.x에서 deprecated 된 setConnectTimeout, setReadTimeout 메서드를 최신 API(connectTimeout, readTimeout)로 교체했습니다.
+
+향후 API 제거로 인한 문제를 예방하고 빌드 경고를 제거합니다.
 📄 라이선스
 MIT License (LICENSE 참조)
