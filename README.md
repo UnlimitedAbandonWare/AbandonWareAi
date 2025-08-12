@@ -434,7 +434,50 @@ EmbeddingCrossEncoderReranker에서 임베딩 추출/코사인 계산 시 타입
 
 RAG 검색 + 융합 + 검증 2-Pass 전체 파이프라인 호출 시 예외 없음.
 
+ver1.
+제목:
+feat(Memory): 메모리 보강 로직 고도화 및 안정성 개선
+
+본문:
+
+MemoryReinforcementService의 핵심 기능인 메모리 보강(Reinforcement) 로직을 대폭 개선하고 리팩토링했습니다. 이번 변경으로 시스템의 안정성, 유연성, 성능이 향상되었습니다.
+
+주요 개선 사항
+reinforceWithSnippet 메서드 오버로딩 및 기능 강화
+
+어떻게 개선했는가: 기존의 여러 파라미터를 받던 방식 대신 TranslationMemory 엔티티 객체를 직접 처리하는 새로운 reinforceWithSnippet(TranslationMemory t) 메서드를 추가했습니다.
+
+개선 효과:
+
+안정성 향상: tryGetString, tryGetDouble과 같은 리플렉션(Reflection) 기반의 안전한 헬퍼 메서드를 도입하여 content, score 등 다양한 필드명을 가진 객체에서도 예외 없이 안전하게 데이터를 추출할 수 있습니다.
+
+데이터 정제: 스니펫(Snippet)의 최소/최대 길이를 검사하는 로직을 추가하여, 너무 짧거나 긴 저품질 데이터가 시스템에 저장되는 것을 사전에 방지합니다.
+
+중복 처리 최적화: 데이터를 삽입하기 전, 해시(Hash) 값으로 존재 여부를 먼저 확인하고, 존재할 경우 hit 카운트만 증가시켜 불필요한 UPSERT 연산을 줄였습니다.
+
+볼츠만 에너지(Boltzmann Energy) 계산 로직 고도화
+
+어떻게 개선했는가: computeBoltzmannEnergy 메서드를 static에서 인스턴스 메서드로 전환했습니다. 이를 통해 HyperparameterService 같은 외부 설정 값을 주입받아 동적으로 계산할 수 있도록 구조를 변경했습니다.
+
+개선 효과:
+
+정교한 스코어링: 기존의 성공률, 탐험항 외에 **신뢰도(Confidence Score)**와 **최신성(Recency)**을 에너지 계산의 새로운 변수로 추가했습니다.
+
+유연한 제어: 각 변수의 가중치(W_CONF, W_REC)와 시쇠(Decay) 기준 시간(tauHours)을 HyperparameterService를 통해 외부에서 동적으로 제어할 수 있어, 코드 변경 없이 메모리 평가 전략을 튜닝할 수 있습니다.
+
+유지보수성 및 코드 일관성 향상
+
+어떻게 개선했는가:
+
+중복되던 DataIntegrityViolationException 처리 로직을 통합하고, 불필요한 import 구문을 정리했습니다.
+
+reinforceWithSnippet의 기존 버전과 신규 오버로드 메서드 모두 개선된 computeBoltzmannEnergy 로직을 호출하도록 통일하여, 어떤 경로로 데이터가 들어오든 일관된 기준으로 평가받도록 수정했습니다.
+
+개선 효과: 코드의 가독성과 유지보수성이 향상되었으며, 기능 변경 시 수정 범위를 최소화할 수 있습니다.
+
 마이그레이션 노트(Breaking Changes)
 FactVerifierService의 2-인자 생성자 제거: 구성 코드나 수동 new 사용처가 있다면 3-인자( OpenAiService, FactStatusClassifier, SourceAnalyzerService)로 교체하거나, 스프링 빈 자동주입을 사용하세요.
+
+
 📄 라이선스
 MIT License (상세는 LICENSE 참조)
