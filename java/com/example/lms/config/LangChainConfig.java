@@ -24,7 +24,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-
+import com.example.lms.service.rag.extract.PageContentScraper;
+import com.example.lms.service.rag.pre.QueryContextPreprocessor;
 import java.time.Duration;
 
 @Configuration
@@ -111,8 +112,10 @@ public class LangChainConfig {
     @Bean
     public WebSearchRetriever webSearchRetriever(
             NaverSearchService svc,
-            @Value("${search.web.top-k:3}") int topK) {
-        return new WebSearchRetriever(svc, topK);
+            PageContentScraper scraper
+    ) {
+        // topK는 WebSearchRetriever 필드에 @Value 로 주입됨
+        return new WebSearchRetriever(svc, scraper);
     }
 
     // (선택) 유틸 ChatModel — 기본 chatModel과 함께 존재. 이걸 Primary로 써도 됨.
@@ -136,8 +139,10 @@ public class LangChainConfig {
     public AnalyzeWebSearchRetriever analyzeWebSearchRetriever(
             Analyzer koreanAnalyzer,
             NaverSearchService svc,
-            @Value("${search.morph.max-tokens:5}") int maxTokens) {
-        return new AnalyzeWebSearchRetriever(koreanAnalyzer, svc, maxTokens);
+            @Value("${search.morph.max-tokens:5}") int maxTokens,
+            QueryContextPreprocessor preprocessor
+    ) {
+        return new AnalyzeWebSearchRetriever(koreanAnalyzer, svc, maxTokens, preprocessor);
     }
 
     /* ═════════ 4. 벡터-RAG 서비스 ═════════ */

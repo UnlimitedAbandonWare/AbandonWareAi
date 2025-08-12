@@ -11,11 +11,13 @@ import java.util.List;
 import java.util.regex.Pattern;             /* 🔴 NEW */
 @Slf4j
 @RequiredArgsConstructor
-//@Component // ← 빈 자동 등록이 필요할 때 주석 해제
+@org.springframework.stereotype.Component
 public class WebSearchRetriever implements ContentRetriever {
-
     private final NaverSearchService searchSvc;
-    private final int                topK;
+    // 스프링 프로퍼티로 주입(생성자 주입의 int 빈 문제 회피)
+    @org.springframework.beans.factory.annotation.Value("${rag.search.top-k:5}")
+    private int topK;
+    private final com.example.lms.service.rag.extract.PageContentScraper pageScraper;
     private static final int MIN_SNIPPETS = 2;
 
     /* 🔴 노이즈 제거 패턴 */
@@ -70,6 +72,71 @@ public class WebSearchRetriever implements ContentRetriever {
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] selected={} (topK={})", finalSnippets.size(), topK);
         }
-        return finalSnippets.stream().map(Content::from).toList();
+        // 3) 각 결과의 URL 본문을 읽어 ‘질문-유사도’로 핵심 문단 추출
+        java.util.List<Content> out = new java.util.ArrayList<>();
+        for (String s : finalSnippets) {
+            String url = extractUrl(s);   // ⬅️ 없던 util 메서드 추가(아래)
+            if (url == null) {
+                out.add(Content.from(s)); // URL 없음 → 기존 스니펫 사용
+                continue;
+            }
+            try {
+                String body = pageScraper.fetchText(url, /*timeoutMs*/6000);
+                // SnippetPruner는 (String, String) 시그니처만 존재 → 단일 결과로 처리
+                // 🔵 우리 쪽 간단 딥 스니펫 추출(임베딩 없이 키워드/길이 기반)
+                String picked = pickByHeuristic(query.text(), body, 480);
+                if (picked == null || picked.isBlank()) {
+                    out.add(Content.from(s));
+                } else {
+                    out.add(Content.from(picked + "\n\n[출처] " + url));
+                }
+            } catch (Exception e) {
+                log.debug("[WebSearchRetriever] scrape fail {} → fallback snippet", url);
+                out.add(Content.from(s));
+            }
+        }
+        return out.stream().limit(topK).toList();
+    }
+
+    // ── NEW: 스니펫 문자열에서 URL을 뽑아내는 간단 파서(프로젝트 전반 동일 규칙과 일치)
+    private static String extractUrl(String text) {
+        if (text == null) return null;
+        int a = text.indexOf("href=\"");
+        if (a >= 0) {
+            int s = a + 6, e = text.indexOf('"', s);
+            if (e > s) return text.substring(s, e);
+        }
+        int http = text.indexOf("http");
+        if (http >= 0) {
+            int sp = text.indexOf(' ', http);
+            return sp > http ? text.substring(http, sp) : text.substring(http);
+        }
+        return null;
+    }
+    // ── NEW: SnippetPruner 없이도 동작하는 경량 딥 스니펫 추출기
+    private static String pickByHeuristic(String q, String body, int maxLen) {
+        if (body == null || body.isBlank()) return "";
+        if (q == null) q = "";
+        String[] toks = q.toLowerCase().split("\\s+");
+        String[] sents = body.split("(?<=[\\.\\?\\!。！？])\\s+");
+        String best = "";
+        int bestScore = -1;
+        for (String s : sents) {
+            if (s == null || s.isBlank()) continue;
+            String ls = s.toLowerCase();
+            int score = 0;
+            for (String t : toks) {
+                if (t.isBlank()) continue;
+                if (ls.contains(t)) score += 2;      // 질의 토큰 포함 가중
+            }
+            score += Math.min(s.length(), 300) / 60;   // 문장 길이 가중(너무 짧은 문장 패널티)
+            if (score > bestScore) { bestScore = score; best = s.trim(); }
+        }
+        if (best.isEmpty()) {
+            best = body.length() > maxLen ? body.substring(0, maxLen) : body;
+        } else if (best.length() > maxLen) {
+            best = best.substring(0, maxLen) + "…";
+        }
+        return best;
     }
 }

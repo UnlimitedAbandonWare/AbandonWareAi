@@ -7,7 +7,7 @@ import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.service.fallback.FallbackResult;
 import com.example.lms.service.NaverSearchService;
-import com.example.lms.service.rag.CrossEncoderReranker;    // ★ 누락된 import 추가
+import com.example.lms.service.rag.rerank.CrossEncoderReranker;
 import java.util.LinkedHashSet;
 import java.util.Collections;
 import java.util.List;
@@ -87,7 +87,9 @@ import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.correction.QueryCorrectionService;   // ★ 추가
 import org.springframework.beans.factory.annotation.Qualifier; // Qualifier import 추가
 import com.example.lms.search.SmartQueryPlanner;
-
+import org.springframework.beans.factory.annotation.Autowired;   // ← 추가
+import org.springframework.beans.factory.annotation.Qualifier;
+import com.example.lms.service.rag.rerank.CrossEncoderReranker;
 /**
  * 중앙 허브 – OpenAI-Java · LangChain4j · RAG 통합. (v7.2, RAG 우선 패치 적용)
  * <p>
@@ -111,6 +113,9 @@ import com.example.lms.search.SmartQueryPlanner;
 @RequiredArgsConstructor
 public class ChatService {
     private final @Qualifier("queryTransformer") QueryTransformer queryTransformer;
+    @Autowired
+    @Qualifier("embeddingCrossEncoderReranker")
+    private CrossEncoderReranker reranker;
 
     /* ───────────────────────────── DTO ───────────────────────────── */
 
@@ -167,7 +172,7 @@ public class ChatService {
     private final QueryCorrectionService correctionSvc;         // ★ 추가
     // 🔹 NEW: 다차원 누적·보강·합성기
     // 🔹 단일 패스 오케스트레이션을 위해 체인 캐시는 제거
-    private final CrossEncoderReranker reranker;
+
 
     @Qualifier("defaultPromptEngine")
     private final PromptEngine promptEngine;
@@ -410,13 +415,13 @@ public class ChatService {
         }
 
 
-                       // ❶ "지능형 다중 쿼리" 계획: 단일 책임 원칙에 따라 쿼리 생성을 SmartQueryPlanner에 위임.
-                       List<String> smartQueries = smartQueryPlanner.plan(finalQuery, /*assistantDraft*/ null, 2);
-               if (smartQueries.isEmpty()) smartQueries = List.of(finalQuery);
+        // ❶ "지능형 다중 쿼리" 계획: 단일 책임 원칙에 따라 쿼리 생성을 SmartQueryPlanner에 위임.
+        List<String> smartQueries = smartQueryPlanner.plan(finalQuery, /*assistantDraft*/ null, 2);
+        if (smartQueries.isEmpty()) smartQueries = List.of(finalQuery);
 
-                       // ❷ 병렬 검색 + RRF 융합: HybridRetriever가 모든 소스(Web, Vector, Memory 등)를 단일 End-point로 처리.
-                              //    - 복잡한 switch 분기를 제거하여 코드가 간결해지고 응집도가 높아짐.
-                                      List<Content> fused = hybridRetriever.retrieveAll(smartQueries, hybridTopK);
+        // ❷ 병렬 검색 + RRF 융합: HybridRetriever가 모든 소스(Web, Vector, Memory 등)를 단일 End-point로 처리.
+        //    - 복잡한 switch 분기를 제거하여 코드가 간결해지고 응집도가 높아짐.
+        List<Content> fused = hybridRetriever.retrieveAll(smartQueries, hybridTopK);
 
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
@@ -458,10 +463,10 @@ public class ChatService {
         // 컨텍스트 스코어(사실성/품질/신규성) 산출 → 강화 점수 보정
         var scoreReport = contextualScorer.score(correctedMsg, unifiedCtx, out);
 
-               // [+] 전략 태깅 없이 간단한 오버로드 메서드를 호출하여 메모리 강화 로직을 단순화.
-                       //     - 복잡한 파라미터 전달을 피하고, reinforceAssistantAnswer 내부에서 점수 계산을 캡슐화.
-                               reinforceAssistantAnswer(sessionKey, correctedMsg, out);
-              return ChatResult.of(out, "lc:" + cleanModel, true);
+        // [+] 전략 태깅 없이 간단한 오버로드 메서드를 호출하여 메모리 강화 로직을 단순화.
+        //     - 복잡한 파라미터 전달을 피하고, reinforceAssistantAnswer 내부에서 점수 계산을 캡슐화.
+        reinforceAssistantAnswer(sessionKey, correctedMsg, out);
+        return ChatResult.of(out, "lc:" + cleanModel, true);
     }   // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 // ------------------------------------------------------------------------
 

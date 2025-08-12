@@ -4,7 +4,8 @@ import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.search.QueryHygieneFilter;
 import com.example.lms.util.SoftmaxUtil;
-
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.rag.content.Content;
@@ -52,6 +53,9 @@ public class HybridRetriever implements ContentRetriever {
     private final SelfAskPlanner selfAskPlanner;
     private final RelevanceScoringService relevanceScoringService;
     private final HyperparameterService hp; // ★ NEW: 동적 가중치 로더
+    // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
+    @Autowired(required = false)
+    private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
     // 리트리버들
     private final SelfAskWebSearchRetriever selfAskRetriever;
     private final AnalyzeWebSearchRetriever analyzeRetriever;
@@ -388,6 +392,16 @@ public class HybridRetriever implements ContentRetriever {
                 Math.max(topK * 2, 20)
         )
                 : candidates;
+
+        // 2‑B) 🔴 (옵션) 교차엔코더 재정렬: 질문과의 의미 유사도 정밀 재계산
+        if (crossEncoderReranker != null && !candidates.isEmpty()) {
+            try {
+                candidates = crossEncoderReranker.rerank(
+                        Optional.ofNullable(queryText).orElse(""), candidates, Math.max(topK * 2, 20));
+            } catch (Exception e) {
+                log.debug("[Hybrid] cross-encoder rerank skipped: {}", e.toString());
+            }
+        }
 
         // 3) 정밀 스코어링 + 정렬
         class Scored {

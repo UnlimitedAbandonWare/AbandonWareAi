@@ -10,6 +10,7 @@ import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.util.StringUtils;
 
 import java.io.IOException;
@@ -34,17 +35,21 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
     private final Analyzer analyzer; // 한국어 형태소 분석기 (e.g., Nori)
     private final NaverSearchService searchService;
     private final int topK;
+    @Qualifier("guardrailQueryPreprocessor")
+    private final com.example.lms.service.rag.pre.QueryContextPreprocessor preprocessor;
 
     @Override
     public List<Content> retrieve(Query query) {
         String originalQuery = (query != null && query.text() != null) ? query.text().trim() : "";
+        originalQuery = preprocessor.enrich(originalQuery);
         if (!StringUtils.hasText(originalQuery)) {
             return Collections.emptyList();
         }
 
         // ...
         // 1) 확장 검색어 생성
-        List<String> queriesToSearch = createExpandedQueries(originalQuery);
+        List<String> queriesToSearch = com.example.lms.search.QueryHygieneFilter
+                .sanitize(createExpandedQueries(originalQuery), /*max*/4, /*minSim*/0.80);
 
 // 2. 병렬 스트림으로 모든 검색어를 동시에 실행
         List<String> mergedSnippets = queriesToSearch.parallelStream()

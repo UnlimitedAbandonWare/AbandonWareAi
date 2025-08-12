@@ -14,7 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.stereotype.Component;                       // 🆕 @Component 찾도록 추가
+import org.springframework.stereotype.Component;
 
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
 
@@ -101,10 +101,11 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     @Override
     public List<Content> retrieve(Query query) {
         // 입력 검증
-        String qText = (query != null) ? query.text() : null;
 
-        // ① Guardrail 전처리 적용 ------------------------------------------------
-        qText = preprocessor.enrich(qText);          // ➊ null-safe 보장은 PreProcessor 내부 책임
+
+        String qText = (query != null) ? query.text() : null;
+        // ① Guardrail: 오타 교정/금칙어/중복 정리 (중복 호출 제거 + NPE 가드)
+        qText = (preprocessor != null) ? preprocessor.enrich(qText) : qText;
         if (!StringUtils.hasText(qText)) {
             log.debug("[SelfAsk] empty query -> []");
             return List.of();
