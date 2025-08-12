@@ -1,5 +1,5 @@
 package com.example.lms.api;
-
+import com.example.lms.util.StreamUtils;
 import com.example.lms.domain.ChatSession;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.dto.ChatResponseDto;
@@ -102,80 +102,83 @@ public class ChatApiController {
         Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink = Sinks.many().unicast().onBackpressureBuffer();
 
         Mono.fromRunnable(() -> {
-            try {
-                // 1) 설정 병합
-                ChatRequestDto dto = mergeWithSettings(req);
+                    try {
+                        // 1) 설정 병합
+                        ChatRequestDto dto = mergeWithSettings(req);
 
-                // 2) 세션 upsert
-                ChatSession session = (req.getSessionId() == null)
-                        ? historyService.startNewSession(dto.getMessage(), username)
-                        .orElseThrow(() -> new IllegalStateException("세션 생성 실패"))
-                        : historyService.getSessionWithMessages(req.getSessionId());
+                        // 2) 세션 upsert
+                        ChatSession session = (req.getSessionId() == null)
+                                ? historyService.startNewSession(dto.getMessage(), username)
+                                .orElseThrow(() -> new IllegalStateException("세션 생성 실패"))
+                                : historyService.getSessionWithMessages(req.getSessionId());
 
-                if (req.getSessionId() != null) {
-                    historyService.appendMessage(session.getId(), "user", dto.getMessage());
-                }
+                        if (req.getSessionId() != null) {
+                            historyService.appendMessage(session.getId(), "user", dto.getMessage());
+                        }
 
-                // 3) 상태
-                sink.tryEmitNext(sse(ChatStreamEvent.status("쿼리 분석 중…")));
-                sink.tryEmitNext(sse(ChatStreamEvent.status("웹/하이브리드 검색 준비…")));
+                        // 3) 상태
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("쿼리 분석 중…")));
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("웹/하이브리드 검색 준비…")));
 
-                // 4) 웹 검색(추적)
-                NaverSearchService.SearchResult sr = dto.isUseWebSearch()
-                        ? searchService.searchWithTrace(dto.getMessage(), 5)
-                        : new NaverSearchService.SearchResult(List.of(), null);
+                        // 4) 웹 검색(추적)
+                        NaverSearchService.SearchResult sr = dto.isUseWebSearch()
+                                ? searchService.searchWithTrace(dto.getMessage(), 5)
+                                : new NaverSearchService.SearchResult(List.of(), null);
 
-                String traceHtml = null;
-                if (sr.trace() != null) {
-                    traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
-                    sink.tryEmitNext(sse(ChatStreamEvent.trace(traceHtml)));
-                }
+                        String traceHtml = null;
+                        if (sr.trace() != null) {
+                            traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
 
-                // 5) 본 호출
-                sink.tryEmitNext(sse(ChatStreamEvent.status("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
-                ChatRequestDto dtoForCall = ChatRequestDto.builder()
-                        .sessionId(session.getId())
-                        .message(dto.getMessage())
-                        .history(dto.getHistory())
-                        .model(dto.getModel())
-                        .temperature(dto.getTemperature())
-                        .topP(dto.getTopP())
-                        .frequencyPenalty(dto.getFrequencyPenalty())
-                        .presencePenalty(dto.getPresencePenalty())
-                        .useRag(dto.isUseRag())
-                        .useWebSearch(dto.isUseWebSearch())
-                        .build();
+                        }
 
-                sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
-                ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
-                String finalText = result.content();
+                        // 5) 본 호출
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
+                        ChatRequestDto dtoForCall = ChatRequestDto.builder()
+                                .sessionId(session.getId())
+                                .message(dto.getMessage())
+                                .history(dto.getHistory())
+                                .model(dto.getModel())
+                                .temperature(dto.getTemperature())
+                                .topP(dto.getTopP())
+                                .frequencyPenalty(dto.getFrequencyPenalty())
+                                .presencePenalty(dto.getPresencePenalty())
+                                .useRag(dto.isUseRag())
+                                .useWebSearch(dto.isUseWebSearch())
+                                .build();
 
-                // 6) 토큰 스트리밍(청크)
-                for (String c : chunk(finalText, 60)) {
-                    sink.tryEmitNext(sse(ChatStreamEvent.token(c)));
-                }
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
+                        ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
+                        String finalText = result.content();
+                        // ✅ 검색 스니펫을 같은 assistant 말풍선의 "첫 토큰"으로 흘림
+                        StreamUtils.emitHtmlAsFirstTokens(sink, traceHtml + "\n\n", 400);
 
-                // 7) 세션 저장 + 모델/트레이스 메타
-                historyService.appendMessage(session.getId(), "assistant", finalText);
 
-                String modelUsedFinal = (result.modelUsed() != null && !result.modelUsed().isBlank())
-                        ? result.modelUsed()
-                        : (dto.getModel() != null && !dto.getModel().isBlank() ? dto.getModel() : FALLBACK_MODEL);
+                        // 6) 토큰 스트리밍(청크)
+                        for (String c : chunk(finalText, 60)) {
+                            sink.tryEmitNext(sse(ChatStreamEvent.token(c)));
+                        }
 
-                historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
+                        // 7) 세션 저장 + 모델/트레이스 메타
+                        historyService.appendMessage(session.getId(), "assistant", finalText);
 
-                if (traceHtml != null) {
-                    // ※ 여기에서 + 누락했던 부분
-                    historyService.appendMessage(session.getId(), "system", TRACE_META_PREFIX + traceHtml);
-                }
+                        String modelUsedFinal = (result.modelUsed() != null && !result.modelUsed().isBlank())
+                                ? result.modelUsed()
+                                : (dto.getModel() != null && !dto.getModel().isBlank() ? dto.getModel() : FALLBACK_MODEL);
 
-                sink.tryEmitNext(sse(ChatStreamEvent.done(modelUsedFinal, result.ragUsed(), session.getId())));
-            } catch (Exception ex) {
-                log.error("chatStream() 처리 오류", ex);
-                sink.tryEmitNext(sse(ChatStreamEvent.error("오류: " + ex.getMessage())));
-            } finally {
-                sink.tryEmitComplete();
-            }
+                        historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
+
+                        if (traceHtml != null) {
+                            // ※ 여기에서 + 누락했던 부분
+                            historyService.appendMessage(session.getId(), "system", TRACE_META_PREFIX + traceHtml);
+                        }
+
+                        sink.tryEmitNext(sse(ChatStreamEvent.done(modelUsedFinal, result.ragUsed(), session.getId())));
+                    } catch (Exception ex) {
+                        log.error("chatStream() 처리 오류", ex);
+                        sink.tryEmitNext(sse(ChatStreamEvent.error("오류: " + ex.getMessage())));
+                    } finally {
+                        sink.tryEmitComplete();
+                    }
                 })
                 .subscribeOn(Schedulers.boundedElastic())
                 .subscribe();
@@ -344,15 +347,7 @@ public class ChatApiController {
             String content = m.getContent();
 
             if ("system".equals(role)) {
-                String mdl = extractModelUsed(content);
-                if (mdl != null && lastAssistantIdx >= 0) {
-                    MessageDto prev = messages.get(lastAssistantIdx);
-                    String body = (prev.content() == null ? "" : prev.content());
-                    if (!body.startsWith("model: ")) {
-                        messages.set(lastAssistantIdx,
-                                new MessageDto(prev.role(), "model: " + mdl + "\n" + body, prev.timestamp()));
-                    }
-                }
+
                 String trace = extractTraceHtml(content);
                 if (trace != null && lastAssistantIdx >= 0) {
                     MessageDto prev = messages.get(lastAssistantIdx);
@@ -376,19 +371,7 @@ public class ChatApiController {
                 .orElse(null);
         String effectiveModel = (modelUsed == null || modelUsed.isBlank()) ? FALLBACK_MODEL : modelUsed;
 
-        if (!messages.isEmpty()) {
-            for (int i = messages.size() - 1; i >= 0; i--) {
-                MessageDto msg = messages.get(i);
-                if ("assistant".equals(msg.role())) {
-                    String current = msg.content() == null ? "" : msg.content();
-                    if (!current.startsWith("model: ")) {
-                        String merged = "model: " + effectiveModel + "\n" + current;
-                        messages.set(i, new MessageDto(msg.role(), merged, msg.timestamp()));
-                    }
-                    break;
-                }
-            }
-        }
+
 
         SessionDetail detail = new SessionDetail(
                 session.getId(),
