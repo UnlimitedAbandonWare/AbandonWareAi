@@ -371,7 +371,7 @@
 
     <div class="mt-auto">
       <div class="input-group">
-        <textarea id="messageInput" class="form-control" placeholder="무엇이든 물어보세요. (Shift+Enter로 전송)" rows="1" style="resize:none"></textarea>
+        <textarea id="messageInput" class="form-control" placeholder="무엇이든 물어보세요. (Enter 전송 · Shift+Enter 줄바꿈)" rows="1" style="resize:none"></textarea>
         <button id="sendBtn" class="btn btn-primary px-3">
           <i class="bi bi-send-fill"></i>
         </button>
@@ -408,45 +408,6 @@
 <script type="module" src="/js/chat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-<script>
-  document.addEventListener('DOMContentLoaded', () => {
-    const textarea = document.getElementById('messageInput');
-    const sendButton = document.getElementById('sendBtn');
-
-    if (textarea && sendButton) {
-
-      // --- 키보드 이벤트 처리 ---
-      textarea.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-          event.stopPropagation();
-          return;
-        }
-
-        if (event.key === 'Enter' && event.shiftKey) {
-          event.preventDefault();
-          sendButton.click();
-        }
-      }, true);
-
-      // --- Textarea 자동 높이 조절 ---
-      const initialHeight = textarea.scrollHeight;
-      const maxHeight = 200;
-
-      textarea.addEventListener('input', () => {
-        textarea.style.height = 'auto';
-        let newHeight = textarea.scrollHeight;
-
-        if (newHeight > maxHeight) {
-            textarea.style.height = maxHeight + 'px';
-            textarea.style.overflowY = 'auto';
-        } else {
-            textarea.style.height = newHeight + 'px';
-            textarea.style.overflowY = 'hidden';
-        }
-      });
-    }
-  });
-</script>
 <div class="offcanvas offcanvas-end" tabindex="-1" id="aiSettingsOffcanvas" aria-labelledby="aiSettingsLabel">
   <div class="offcanvas-header border-bottom">
     <h5 class="offcanvas-title" id="aiSettingsLabel"><i class="bi bi-gear-wide-connected"></i> AI 코어 설정</h5>
