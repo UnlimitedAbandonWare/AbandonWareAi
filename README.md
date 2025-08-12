@@ -427,7 +427,15 @@ RAG 검색 + 융합 + 검증 2-Pass 전체 파이프라인 호출 시 예외 없
 
 마이그레이션 노트(Breaking Changes)
 FactVerifierService의 2-인자 생성자 제거: 구성 코드나 수동 new 사용처가 있다면 3-인자( OpenAiService, FactStatusClassifier, SourceAnalyzerService)로 교체하거나, 스프링 빈 자동주입을 사용하세요.
-
+### 🔎 검증·강화 파이프라인 (요약)
+- FactVerifierService: RAG 근거에 대해 커버리지/모순 스코어 산출.
+- QualityMetricService: 2차 품질 메트릭(품질/일관성) 계산.
+- 강화 루프: 사용자 피드백 → MemoryReinforcementService → ReinforcementQueue로 적재 → MLCalibrationUtil로 점수 정규화/보정.
+- 하이브리드 RAG 재검색: HybridRetriever  
+  `SelfAsk → Analyze(QueryHygieneFilter) → Web(NaverSearchService) → VectorDb(Pinecone)` 경로로 재검색·정제.
+- 재랭킹 & 융합: EmbeddingCrossEncoderReranker(크로스엔코더) 재랭크 → RRF 풀링 + 보르다 결합으로 최종 순위 합의.
+- 안전판정: 최종 검증에서 유사도/근거 커버리지 임계값 미달이면 “정보 없음”으로 명시(유사 패턴 매칭 없음 표시).  
+  ↳ 이 가드레일이 풀리면 환각(Hallucination)이 발생할 수 있어, 위 단계들로 강하게 차단.
 LightWeightRanker가 interface로 전환: 기존에 직접 new LightWeightRanker() 하던 곳이 있었다면 DefaultLightWeightRanker 사용 또는 빈 주입으로 교체.
 📄 라이선스
 MIT License (상세는 LICENSE 참조)
