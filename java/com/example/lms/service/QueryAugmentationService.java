@@ -48,9 +48,7 @@ public class QueryAugmentationService {
             addIfAbsent(out, base, " 성능 순위");
             addIfAbsent(out, base, " 벤치마크");
         } else {
-            // 일반: 가벼운 확장만
-            addIfAbsent(out, base, " 최신");
-            addIfAbsent(out, base, " 정리");
+            // 일반: 노이즈 생성 금지 — 원본만 유지
         }
 
         // 상한 적용

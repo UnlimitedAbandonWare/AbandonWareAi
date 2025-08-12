@@ -13,14 +13,15 @@ import lombok.extern.slf4j.Slf4j;
 import java.time.Duration;                    // ★ NEW
 import java.time.LocalDateTime;              // ★ NEW
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataIntegrityViolationException;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.transaction.annotation.Transactional;
+
 import org.springframework.data.repository.query.Param;
 import java.lang.reflect.Method;                 // NEW
 import java.nio.charset.StandardCharsets;       // NEW
@@ -45,6 +46,12 @@ public class MemoryReinforcementService {
     /* ────── 점수 가중치/컷오프 ────── */
     @Value("${memory.reinforce.score.low-quality-threshold:0.3}")
     private double lowScoreCutoff;
+
+    // ⬅️ 누락된 길이 정책 필드 추가
+    @Value("${memory.snippet.min-length:40}")
+    private int minContentLength;
+    @Value("${memory.snippet.max-length:4000}")
+    private int maxContentLength;
 
     /* ─────────────── DI ─────────────── */
     private final TranslationMemoryRepository memoryRepository;
@@ -187,6 +194,7 @@ public class MemoryReinforcementService {
                         + wConf * conf + wRec * recTerm)
                         + W_EXPL * exploreTerm;
         }
+
     private static double annealTemperature(int hit) {
         return T0 / Math.sqrt(hit + 1.0);
     }
@@ -281,9 +289,56 @@ public class MemoryReinforcementService {
         return (h == null || h.length() < 12) ? String.valueOf(h) : h.substring(0, 12);
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = DataIntegrityViolationException.class)
+    public void reinforceWithSnippet(TranslationMemory t) {
+        try {
+            // 0) 안전 추출
+            String content = tryGetString(t, "getContent", "getText", "getBody");
+            if (!StringUtils.hasText(content)) return;
+            String text = content.trim();
+            if (text.length() < minContentLength) return;
+            if (text.length() > maxContentLength) text = text.substring(0, maxContentLength);
+
+            String sid    = normalizeSessionId(tryGetString(t, "getSid", "getSessionId"));
+            String query  = tryGetString(t, "getQuery");
+            String source = tryGetString(t, "getSourceType", "getSource");
+            Double rawSc  = tryGetDouble(t, "getScore");
+            double finalScore = reward(rawSc != null ? rawSc : 0.5);
+
+            // 1) 중복 키: 본문 기반 해시
+            String sourceHash = storageHashFromSnippet(text);
+
+            // 2) 존재하면 hit++ (리포지토리에 있는 메서드 이름 맞춰 사용)
+            int rows = 0;
+            try {
+                rows = memoryRepository.incrementHitCountBySourceHash(sourceHash);
+            } catch (Exception ignore) { }
+
+            // 3) 없으면 업서트
+            if (rows == 0) {
+                String payload = (StringUtils.hasText(source) ? "[SRC:" + source + "] " : "") + text;
+                upsertViaRepository(sid, query, payload, source, finalScore, sourceHash);
+            }
+
+            // 4) 긍정 데이터만 벡터 색인(여기서는 일단 색인)
+            try { vectorStoreService.enqueue(sid, text); } catch (Exception ignore) {}
+        } catch (DataIntegrityViolationException dup) {
+            log.debug("[Memory] duplicate; fallback to UPDATE", dup);
+            // 중복이면 hit++만 시도
+            try {
+                String content = tryGetString(t, "getContent", "getText", "getBody");
+                if (StringUtils.hasText(content)) {
+                    memoryRepository.incrementHitCountBySourceHash(storageHashFromSnippet(content));
+                }
+            } catch (Exception ignore) {}
+        } catch (Exception e) {
+            log.warn("[Memory] soft-fail: {}", e.toString());
+        }
+    }
+
     /* =========================================================
-     *  ▼▼▼ Backward-Compat Adapter API (호환 레이어) ▼▼▼
-     *  기존 호출부가 참조하는 시그니처를 그대로 제공
+     * ▼▼▼ Backward-Compat Adapter API (호환 레이어) ▼▼▼
+     * 기존 호출부가 참조하는 시그니처를 그대로 제공
      * ========================================================= */
 
     /**
@@ -426,6 +481,32 @@ public class MemoryReinforcementService {
                     if (StringUtils.hasText(s)) return s;
                 }
             } catch (Exception ignored) {}
+        }
+        return null;
+    }
+    // ⬅️ 누락된 문자열 리플렉션 헬퍼 추가
+    private static String tryGetString(Object bean, String... getters) {
+        for (String g : getters) {
+            try {
+                java.lang.reflect.Method m = bean.getClass().getMethod(g);
+                Object v = m.invoke(bean);
+                if (v != null) {
+                    String s = v.toString();
+                    if (org.springframework.util.StringUtils.hasText(s)) return s;
+                }
+            } catch (Exception ignore) {}
+        }
+        return null;
+    }
+
+    private static Double tryGetDouble(Object bean, String... getters) { //
+        for (String g : getters) {
+            try {
+                java.lang.reflect.Method m = bean.getClass().getMethod(g);
+                Object v = m.invoke(bean);
+                if (v instanceof Number n) return n.doubleValue();
+                if (v != null) return Double.valueOf(v.toString());
+            } catch (Exception ignore) {}
         }
         return null;
     }

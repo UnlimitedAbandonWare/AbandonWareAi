@@ -9,7 +9,6 @@ import dev.langchain4j.data.message.UserMessage;
 import org.springframework.lang.Nullable;
 import java.util.regex.Matcher;
 import java.time.Duration;
-import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import lombok.RequiredArgsConstructor;
 import com.github.benmanes.caffeine.cache.LoadingCache;
@@ -19,14 +18,13 @@ import java.util.stream.Stream;
 import java.util.Locale;
 import java.util.Set;
 import java.util.Arrays;
-
+import com.example.lms.search.SmartQueryPlanner;
 
 
 /**
  * 쿼리 오타를 교정해 주는 Transformer
  */
 @Component
-@RequiredArgsConstructor
 public class QueryTransformer {
 
 

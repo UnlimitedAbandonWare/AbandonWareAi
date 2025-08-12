@@ -7,7 +7,7 @@ import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.service.fallback.FallbackResult;
 import com.example.lms.service.NaverSearchService;
-import com.example.lms.service.rag.CrossEncoderReranker;   // ★ 누락된 import 추가
+import com.example.lms.service.rag.CrossEncoderReranker;    // ★ 누락된 import 추가
 import java.util.LinkedHashSet;
 import java.util.Collections;
 import java.util.List;
@@ -15,7 +15,7 @@ import com.example.lms.service.QueryAugmentationService;
 import com.example.lms.prompt.PromptEngine;
 
 import com.example.lms.service.fallback.SmartFallbackService;
- import com.example.lms.service.disambiguation.QueryDisambiguationService;
+import com.example.lms.service.disambiguation.QueryDisambiguationService;
 import com.example.lms.service.disambiguation.DisambiguationResult;
 import com.example.lms.service.ChatHistoryService;
 import com.example.lms.service.fallback.FallbackHeuristics;
@@ -27,7 +27,7 @@ import com.example.lms.service.rag.HybridRetriever;
 import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.PromptService;
 import com.example.lms.service.RuleEngine;
-import java.util.function.Function;   // ✅ 새로 추가
+import java.util.function.Function;    // ✅ 새로 추가
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatCompletionResult;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
@@ -43,7 +43,7 @@ import com.example.lms.llm.DynamicChatModelFactory;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 // import 블록
-import java.util.stream.Stream;          // buildUnifiedContext 사용
+import java.util.stream.Stream;          // buildUnifiedContext 사용
 import java.util.stream.Collectors;
 // (정리) 미사용 OpenAiChatModel import 제거
 import dev.langchain4j.data.message.SystemMessage;
@@ -53,7 +53,7 @@ import dev.langchain4j.model.chat.ChatModel;
 
 /* ---------- RAG ---------- */
 import com.example.lms.service.rag.LangChainRAGService;
-import dev.langchain4j.memory.chat.ChatMemoryProvider;   // OK
+import dev.langchain4j.memory.chat.ChatMemoryProvider;    // OK
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -76,8 +76,8 @@ import java.util.regex.Pattern;
 
 // import 블록 맨 아래쯤
 import dev.langchain4j.memory.ChatMemory;        // ✔ 실제 버전에 맞게 교정
-import com.example.lms.transform.QueryTransformer;            // ⬅️ 추가
-import com.example.lms.search.SmartQueryPlanner;              // ⬅️ NEW: 지능형 쿼리 플래너
+import com.example.lms.transform.QueryTransformer;          // ⬅️ 추가
+import com.example.lms.search.SmartQueryPlanner;          // ⬅️ NEW: 지능형 쿼리 플래너
 //  hybrid retrieval content classes
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
@@ -86,6 +86,7 @@ import com.example.lms.service.rag.ContextOrchestrator;
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.correction.QueryCorrectionService;   // ★ 추가
 import org.springframework.beans.factory.annotation.Qualifier; // Qualifier import 추가
+import com.example.lms.search.SmartQueryPlanner;
 
 /**
  * 중앙 허브 – OpenAI-Java · LangChain4j · RAG 통합. (v7.2, RAG 우선 패치 적용)
@@ -162,8 +163,8 @@ public class ChatService {
     private final com.example.lms.scoring.ContextualScorer contextualScorer;
     private final QueryAugmentationService augmentationSvc; // ★ 질의 향상 서비스
 
-    private final SmartQueryPlanner smartQueryPlanner;      // ⬅️ NEW DI
-    private final QueryCorrectionService correctionSvc;             // ★ 추가
+    private final SmartQueryPlanner smartQueryPlanner;     // ⬅️ NEW DI
+    private final QueryCorrectionService correctionSvc;         // ★ 추가
     // 🔹 NEW: 다차원 누적·보강·합성기
     // 🔹 단일 패스 오케스트레이션을 위해 체인 캐시는 제거
     private final CrossEncoderReranker reranker;
@@ -189,7 +190,7 @@ public class ChatService {
     // 기존 상수 지워도 되고 그대로 둬도 상관없음
 
     @Value("${openai.web-context.max-tokens:8000}")
-    private int defaultWebCtxMaxTokens;        // 🌐 Live-Web 최대 토큰
+    private int defaultWebCtxMaxTokens;         // 🌐 Live-Web 최대 토큰
 
     @Value("${openai.mem-context.max-tokens:7500}")
     private int defaultMemCtxMaxTokens;     // ★
@@ -221,34 +222,34 @@ public class ChatService {
     // WEB 스니펫은 이미 HTML 링크 형태(- <a href="...">제목</a>: 요약)로 전달됨.
     // 아래 프리픽스는 모델용 컨텍스트 힌트이며, 실제 화면에는 ChatApiController가 따로 '검색 과정' 패널을 붙인다.
     private static final String WEB_PREFIX = """
-            ### LIVE WEB RESULTS
-            %s
-            
-            - Extract concrete dates (YYYY-MM-DD) if present.
-            - Cite site titles in parentheses.
-            """;
+                  ### LIVE WEB RESULTS
+                  %s
+                 
+                  - Extract concrete dates (YYYY-MM-DD) if present.
+                  - Cite site titles in parentheses.
+                  """;
 
     /* 폴리싱용 시스템 프롬프트 (단일 정의) */
     private static final String POLISH_SYS_PROMPT =
             "다음 초안을 더 자연스럽고 전문적인 한국어로 다듬어 주세요. 새로운 정보는 추가하지 마세요.";
     /* ──────────────── RAG 패치: 프롬프트 강화 ──────────────── */
     private static final String RAG_PREFIX = """
-            ### CONTEXT
-            %s
-            
-            ### INSTRUCTIONS
-            - Synthesize an answer from all available sections (web, vector‑RAG, memory).
-            - When sources conflict, give higher weight to **official domains** (e.g., *.hoyoverse.com, hoyolab.com)
-              and be cautious with **community/fan sites** (e.g., fandom.com, personal blogs).
-            - Cite the source titles when you answer.
-            - Do NOT guess or invent facts. If the Context does not explicitly mention a named entity
-              (character/item/region), do NOT include it in the answer.
-            - If the information is insufficient or conflicting from low‑authority sources only, reply "정보 없음".
-            """;
+                  ### CONTEXT
+                  %s
+                 
+                  ### INSTRUCTIONS
+                  - Synthesize an answer from all available sections (web, vector‑RAG, memory).
+                  - When sources conflict, give higher weight to **official domains** (e.g., *.hoyoverse.com, hoyolab.com)
+                    and be cautious with **community/fan sites** (e.g., fandom.com, personal blogs).
+                  - Cite the source titles when you answer.
+                  - Do NOT guess or invent facts. If the Context does not explicitly mention a named entity
+                    (character/item/region), do NOT include it in the answer.
+                  - If the information is insufficient or conflicting from low‑authority sources only, reply "정보 없음".
+                  """;
     private static final String MEM_PREFIX = """
-            ### LONG-TERM MEMORY
-            %s
-            """;
+                  ### LONG-TERM MEMORY
+                  %s
+                  """;
 
     /* ═════════════════════ ML 보정 파라미터 ═════════════════════ */
     /**
@@ -290,8 +291,8 @@ public class ChatService {
     // ① 1-인자 래퍼 ─ 컨트롤러가 호출
     public ChatResult continueChat(ChatRequestDto req) {
         Function<String, List<String>> defaultProvider =
-                q -> searchService.searchSnippets(q, 5);   // 네이버 Top-5
-        return continueChat(req, defaultProvider);         // ↓ ②로 위임
+                q -> searchService.searchSnippets(q, 5);    // 네이버 Top-5
+        return continueChat(req, defaultProvider);        // ↓ ②로 위임
     }
 
     /**
@@ -336,7 +337,7 @@ public class ChatService {
         /* 0-2) 의미 확정(Ser8 ↔ S8 등) 적용 */
         Long sidNum = Optional.ofNullable(req.getSessionId())
                 .map(Object::toString)
-                .filter(s -> s.matches("\\d+"))   // ✔ 다자리 숫자 허용
+                .filter(s -> s.matches("\\d+"))    // ✔ 다자리 숫자 허용
                 .map(Long::valueOf)
                 .orElse(null);
         final String finalQuery = decideFinalQuery(correctedMsg, sidNum);
@@ -345,9 +346,9 @@ public class ChatService {
         if (ragStandalone) {
             String sid = Optional.ofNullable(req.getSessionId())
                     .map(String::valueOf)
-                    .map(s -> s.startsWith("chat-") ? s           // 이미 정규화
-                            : (s.matches("\\d+") ? "chat-" + s   // 205 → chat-205
-                            : s))                                  // UUID 등
+                    .map(s -> s.startsWith("chat-") ? s        // 이미 정규화
+                            : (s.matches("\\d+") ? "chat-" + s    // 205 → chat-205
+                            : s))                                 // UUID 등
                     .orElse(UUID.randomUUID().toString());
 
             // ✅ RAG Stand-alone에도 교정된 쿼리 사용
@@ -378,7 +379,7 @@ public class ChatService {
         }
 
         /* C. Retrieval ON (Hybrid + Meta‑Strategy)
-         *    ▶▶ 하나의 세션키(sessionKey)만 생성·전파 ◀◀
+         * ▶▶ 하나의 세션키(sessionKey)만 생성·전파 ◀◀
          */
         String sessionKey = Optional.ofNullable(req.getSessionId())
                 .map(String::valueOf)
@@ -386,7 +387,7 @@ public class ChatService {
                 .orElse(UUID.randomUUID().toString());
 
         /* ── 세션별 메모리 / RAG 컨텍스트 로드 ───────────────── */
-        String memCtx = memorySvc.loadContext(sessionKey);   // ✅ 세션‑스코프
+        String memCtx = memorySvc.loadContext(sessionKey);    // ✅ 세션‑스코프
         String ragCtx = req.isUseRag()
                 ? ragSvc.getAnswer(finalQuery, sessionKey)
                 : null;
@@ -403,17 +404,19 @@ public class ChatService {
         }
 
 
-        /* ❶ "정보 없음" 은 의미 없는 컨텍스트 → null 로 치환 */
+        /* ❶ "정보 없음" 은 의미 없는 컨텍스트 → null 로 치환 */
         if ("정보 없음".equals((ragCtx != null ? ragCtx.trim() : ""))) {
             ragCtx = null;
         }
 
-        // ❶ "지능형 다중 쿼리" 계획: transformEnhanced → 위생 → 상한(≤2)
-        List<String> smartQueries = smartQueryPlanner.plan(finalQuery, /*assistantDraft*/ null, 2);
-        if (smartQueries.isEmpty()) smartQueries = List.of(finalQuery);
 
-        // ❷ 병렬 검색  RRF 융합(하이브리드 리트리버 단일 경로)
-        List<Content> fused = hybridRetriever.retrieveAll(smartQueries, hybridTopK);
+                       // ❶ "지능형 다중 쿼리" 계획: 단일 책임 원칙에 따라 쿼리 생성을 SmartQueryPlanner에 위임.
+                       List<String> smartQueries = smartQueryPlanner.plan(finalQuery, /*assistantDraft*/ null, 2);
+               if (smartQueries.isEmpty()) smartQueries = List.of(finalQuery);
+
+                       // ❷ 병렬 검색 + RRF 융합: HybridRetriever가 모든 소스(Web, Vector, Memory 등)를 단일 End-point로 처리.
+                              //    - 복잡한 switch 분기를 제거하여 코드가 간결해지고 응집도가 높아짐.
+                                      List<Content> fused = hybridRetriever.retrieveAll(smartQueries, hybridTopK);
 
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
@@ -421,7 +424,7 @@ public class ChatService {
         if (log.isDebugEnabled())
             log.debug("[Hybrid] fused={}, topN={} (sid={})", (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
         /* 🔴 컨텍스트 부족 가드레일(하이브리드 이후로 이동)
-         *   웹/벡터 문서(topDocs)와 RAG가 모두 비면 즉시 종료 */
+         * 웹/벡터 문서(topDocs)와 RAG가 모두 비면 즉시 종료 */
         if ((topDocs == null || topDocs.isEmpty()) && !org.springframework.util.StringUtils.hasText(ragCtx)) {
             log.warn("[Guard] no web/vector docs & no ragCtx → stop LLM (sid={}, q='{}')", sessionKey, finalQuery);
             return ChatResult.of("정보 없음",
@@ -455,10 +458,10 @@ public class ChatService {
         // 컨텍스트 스코어(사실성/품질/신규성) 산출 → 강화 점수 보정
         var scoreReport = contextualScorer.score(correctedMsg, unifiedCtx, out);
 
-
-        // 간단 오버로드로 기록(전략 없음)
-        reinforceAssistantAnswer(sessionKey, correctedMsg, out);
-        return ChatResult.of(out, "lc:" + cleanModel, true);
+               // [+] 전략 태깅 없이 간단한 오버로드 메서드를 호출하여 메모리 강화 로직을 단순화.
+                       //     - 복잡한 파라미터 전달을 피하고, reinforceAssistantAnswer 내부에서 점수 계산을 캡슐화.
+                               reinforceAssistantAnswer(sessionKey, correctedMsg, out);
+              return ChatResult.of(out, "lc:" + cleanModel, true);
     }   // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 // ------------------------------------------------------------------------
 
