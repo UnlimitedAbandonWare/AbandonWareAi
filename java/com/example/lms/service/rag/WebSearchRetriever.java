@@ -19,7 +19,8 @@ public class WebSearchRetriever implements ContentRetriever {
     private int topK;
     private final com.example.lms.service.rag.extract.PageContentScraper pageScraper;
     private static final int MIN_SNIPPETS = 2;
-
+    //  도메인 신뢰도 점수로 정렬 가중
+    private final com.example.lms.service.rag.auth.AuthorityScorer authorityScorer;
     /* 🔴 노이즈 제거 패턴 */
     private static final Pattern META_TAG = Pattern.compile("\\[[^\\]]+\\]");
     private static final Pattern TIME_TAG = Pattern.compile("\\b\\d{1,2}:\\d{2}\\b");
@@ -52,10 +53,17 @@ public class WebSearchRetriever implements ContentRetriever {
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] first raw={} (q='{}')", first.size(), normalized);
         }
-        // 선호 도메인 우선 정렬(삭제 아님)
+        // 선호+ 도메인  Authority 가중 정렬(삭제 아님)
         List<String> ranked = first.stream()
-                .sorted((a,b) -> Boolean.compare(containsPreferred(b), containsPreferred(a)))
                 .distinct()
+                .sorted((a, b) -> {
+                    double aw = authorityScorer.weightFor(extractUrl(a));
+                    double bw = authorityScorer.weightFor(extractUrl(b));
+                    int cmp = Double.compare(bw, aw); // high first
+                    if (cmp != 0) return cmp;
+                    // 동률이면 선호 도메인 우선
+                    return Boolean.compare(containsPreferred(b), containsPreferred(a));
+                })
                 .limit(topK)
                 .toList();
 

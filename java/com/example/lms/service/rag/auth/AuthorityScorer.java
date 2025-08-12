@@ -69,9 +69,9 @@ public class AuthorityScorer {
         // 2) 휴리스틱
         if (isGovOrEdu(h)) return 0.95;
         if (h.contains("hoyoverse.com") || h.contains("hoyolab.com")) return 1.0;
-        if (h.contains("wikipedia.org")) return 0.90;
-        if (h.contains("namu.wiki")) return 0.75;
-        if (h.contains("blog.naver.com")) return 0.55;
+        if (h.contains("wikipedia.org")) return 0.92;
+        if (h.contains("namu.wiki")) return 0.85; // 게임/서브컬처 가중 상향
+        if (h.contains("blog.naver.com")) return 0.60;
         if (h.contains("fandom.com")) return 0.50;
         if (h.contains("arca.live")) return 0.20;
 

@@ -10,6 +10,7 @@ import com.example.lms.service.rag.LangChainRAGService;
 import com.example.lms.service.rag.WebSearchRetriever;
 import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import com.example.lms.transform.QueryTransformer;
+import com.example.lms.service.rag.auth.AuthorityScorer;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.chat.ChatModel;
@@ -112,10 +113,11 @@ public class LangChainConfig {
     @Bean
     public WebSearchRetriever webSearchRetriever(
             NaverSearchService svc,
-            PageContentScraper scraper
+            PageContentScraper scraper,
+            AuthorityScorer authorityScorer
     ) {
         // topK는 WebSearchRetriever 필드에 @Value 로 주입됨
-        return new WebSearchRetriever(svc, scraper);
+        return new WebSearchRetriever(svc, scraper, authorityScorer);
     }
 
     // (선택) 유틸 ChatModel — 기본 chatModel과 함께 존재. 이걸 Primary로 써도 됨.

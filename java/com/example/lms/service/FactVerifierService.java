@@ -7,7 +7,7 @@ import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
 import com.theokanning.openai.service.OpenAiService;
 import java.util.Objects;
-
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -16,13 +16,16 @@ import java.util.List;
 import java.util.regex.Pattern;
 import com.example.lms.service.verification.FactVerificationStatus;
 import com.example.lms.service.verification.FactStatusClassifier;
-
+import org.springframework.beans.factory.annotation.Autowired;
 @Slf4j
 @Service
 public class FactVerifierService {
     private final SourceAnalyzerService sourceAnalyzer;   // ★ 신규 의존성
     private final OpenAiService openAi;
     private final FactStatusClassifier classifier;
+    // 개체 추출기(선택 주입). 없으면 기존 정규식 폴백.
+    @Autowired(required = false)
+    private com.example.lms.service.ner.NamedEntityExtractor entityExtractor;
 
     public FactVerifierService(OpenAiService openAi,
                                FactStatusClassifier classifier,
@@ -124,8 +127,8 @@ public class FactVerifierService {
 
 
         FactVerificationStatus status = classifier.classify(question, context, draft, model);
-
-        var entities = extractEntities(draft);
+        // LLM 기반 개체 추출 사용(없으면 정규식 폴백)
+        var entities = (entityExtractor != null) ? entityExtractor.extract(draft) : extractEntities(draft);
         boolean grounded = groundedInContext(context, entities, 2);
 
         switch (status) {
@@ -168,7 +171,7 @@ public class FactVerifierService {
         }
     }
 
-    /** 간단 개체 추출(모델/제품/버전/캐릭터 등; KO/EN 혼용) */
+    /** 간단 개체 추출(LLM 추출기 없을 시 폴백용) */
     private static List<String> extractEntities(String text) {
         List<String> out = new ArrayList<>();
         if (text == null || text.isBlank()) return out;

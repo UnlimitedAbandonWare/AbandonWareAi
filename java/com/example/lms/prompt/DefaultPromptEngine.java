@@ -31,7 +31,9 @@ public class DefaultPromptEngine implements PromptEngine {
             - Earlier context items have higher authority.
             - Answer in Korean.
             - If you can find the source, cite its number like [1], [2].
-            - If the context is insufficient to answer, respond with "정보 없음".
+            +            - If the context is clearly insufficient, reply: "확실한 정보를 찾지 못했습니다."
+            +            - If multiple sources consistently hint at an answer, you may carefully say
+            +              "자료에 따르면 ~일 가능성이 있습니다" and cite [1], [2].
             """;
 
     @Override
