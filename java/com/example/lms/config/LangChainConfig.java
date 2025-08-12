@@ -5,6 +5,7 @@ import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.ChatSessionRepository;
 import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.NaverSearchService;
+import com.example.lms.service.rag.auth.AuthorityScorer;
 import com.example.lms.service.rag.AnalyzeWebSearchRetriever;
 import com.example.lms.service.rag.LangChainRAGService;
 import com.example.lms.service.rag.WebSearchRetriever;

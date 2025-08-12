@@ -62,6 +62,10 @@ public class HybridRetriever implements ContentRetriever {
     private final WebSearchRetriever webSearchRetriever;
     private final QueryComplexityGate gate;
 
+    // (옵션) 타사 검색기 – 있으면 부족분 보강에 사용
+    @Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Qualifier("tavilyWebSearchRetriever")
+    private ContentRetriever tavilyWebSearchRetriever;
     // RAG/임베딩
     private final LangChainRAGService ragService;
     private final EmbeddingModel embeddingModel;
@@ -132,6 +136,10 @@ public class HybridRetriever implements ContentRetriever {
                     ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
                     mergedContents.addAll(pine.retrieve(query));
                 }
+                if (mergedContents.size() < topK && tavilyWebSearchRetriever != null) {
+                    try { mergedContents.addAll(tavilyWebSearchRetriever.retrieve(query)); }
+                    catch (Exception e) { log.debug("[Hybrid] Tavily fallback skipped: {}", e.toString()); }
+                }
             }
             case AMBIGUOUS -> {
                 mergedContents.addAll(analyzeRetriever.retrieve(query));
@@ -139,6 +147,10 @@ public class HybridRetriever implements ContentRetriever {
                 if (mergedContents.size() < topK) {
                     ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
                     mergedContents.addAll(pine.retrieve(query));
+                }
+                if (mergedContents.size() < topK && tavilyWebSearchRetriever != null) {
+                    try { mergedContents.addAll(tavilyWebSearchRetriever.retrieve(query)); }
+                    catch (Exception e) { log.debug("[Hybrid] Tavily fallback skipped: {}", e.toString()); }
                 }
             }
             case COMPLEX -> {
@@ -149,6 +161,11 @@ public class HybridRetriever implements ContentRetriever {
                     ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
                     mergedContents.addAll(pine.retrieve(query));
                 }
+                if (mergedContents.size() < topK && tavilyWebSearchRetriever != null) {
+                    try { mergedContents.addAll(tavilyWebSearchRetriever.retrieve(query)); }
+                    catch (Exception e) { log.debug("[Hybrid] Tavily fallback skipped: {}", e.toString()); }
+                }
+
             }
         }
 

@@ -1,6 +1,6 @@
 // src/main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java
 package com.example.lms.service.rag;
-
+import org.springframework.beans.factory.annotation.Value;
 import com.example.lms.service.NaverSearchService;
 
 import dev.langchain4j.data.message.SystemMessage;
@@ -33,14 +33,16 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     @Qualifier("guardrailQueryPreprocessor")
     private final QueryContextPreprocessor preprocessor;
 
-    /* ---------- 튜닝 가능한 기본값 (중복 선언 제거) ---------- */
-    private int maxDepth  = 2;   // Self-Ask 재귀 깊이
-    private int webTopK   = 5;   // 키워드당 검색 스니펫 수
 
-    private int overallTopK            = 10;  // 최종 반환 상한
-    private int maxApiCallsPerQuery    = 8;   // 질의당 최대 호출
-    private int followupsPerLevel      = 2;   // 레벨별 추가 키워드
-    private int firstHitStopThreshold  = 3;   // 1차 검색이 n개 이상이면 종료
+    /* ---------- 튜닝 가능한 기본값(프로퍼티 주입) ---------- */
+    @Value("${selfask.max-depth:2}")                private int maxDepth;                 // Self-Ask 재귀 깊이
+    @Value("${selfask.web-top-k:5}")                private int webTopK;                  // 키워드당 검색 스니펫 수
+    @Value("${selfask.overall-top-k:10}")           private int overallTopK;              // 최종 반환 상한
+    @Value("${selfask.max-api-calls-per-query:8}")  private int maxApiCallsPerQuery;      // 질의당 최대 호출
+    @Value("${selfask.followups-per-level:2}")      private int followupsPerLevel;        // 레벨별 추가 키워드
+    @Value("${selfask.first-hit-stop-threshold:3}") private int firstHitStopThreshold;    // 1차 검색이 n개 이상이면 종료
+    @Value("${selfask.timeout-seconds:12}")         private int selfAskTimeoutSec;        // 레벨 타임박스(초)
+    @Value("${selfask.per-request-timeout-ms:5000}")private int perRequestTimeoutMs;      // 개별 검색 타임아웃(ms)
 
     /**
      * Executor for parallel Naver searches
@@ -153,7 +155,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         // 3) BFS(Self-Ask) + 네이버 검색
         LinkedHashSet<String> snippets = new LinkedHashSet<>(firstSnippets);
         int depth = 0;
-        int apiCalls = 0; // ✅ 호출 상한 제어
+        SearchBudget budget = new SearchBudget(maxApiCallsPerQuery); // ✅ 호출 상한 제어
 
         while (!queue.isEmpty() && snippets.size() < overallTopK && depth < depthLimit) {
             int levelSize = queue.size();
@@ -167,32 +169,40 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             // 해당 depth의 키워드들을 병렬 검색 (상한 적용)
             List<CompletableFuture<List<String>>> futures = new ArrayList<>();
             for (String kw : currentKeywords) {
-                if (apiCalls >= maxApiCallsPerQuery) break; // ✅ 상한
+                if (!budget.tryConsume()) break; // ✅ 상한
                 log.debug("[SelfAsk][d{}] 검색어: {}", depth, kw);
                 CompletableFuture<List<String>> f =
                         CompletableFuture.supplyAsync(() -> {
                                     try {
                                         return searchSvc.searchSnippets(kw, webTopK);
                                     } catch (Exception e) {
-                                        log.warn("Naver 검색 실패: {}", kw, e);
+                                        log.warn("[SelfAsk] 검색 실패(kw={}): {}", kw, e.toString());
                                         return List.<String>of();
                                     }
                                 }, searchExecutor)
-                                .orTimeout(7, TimeUnit.SECONDS);
+                                .completeOnTimeout(List.of(), perRequestTimeoutMs, TimeUnit.MILLISECONDS)
+                                .exceptionally(ex -> {
+                                    log.debug("[SelfAsk] future 실패: {}", ex.toString());
+                                    return List.of();
+                                });
                 futures.add(f);
-                apiCalls++; // ✅ 호출 카운트 증가
+
+            }
+
+            // (레벨 타임박스) 모든 future 완료 대기(부분 실패/타임아웃은 무시하고 병합 계속)
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .orTimeout(selfAskTimeoutSec, TimeUnit.SECONDS)
+                        .exceptionally(ex -> null)
+                        .join();
+            } catch (Exception ignore) {
+                log.debug("[SelfAsk] level={} 타임아웃 — partial merge 진행", depth);
             }
 
             // 결과 병합 및 다음 레벨 키워드 생성
             for (int i = 0; i < futures.size(); i++) {
                 String kw = i < currentKeywords.size() ? currentKeywords.get(i) : "";
-                List<String> results;
-                try {
-                    results = futures.get(i).join();
-                } catch (Exception e) {
-                    log.warn("검색 결과 병합 실패: {}", kw, e);
-                    results = List.of();
-                }
+                List<String> results = futures.get(i).getNow(List.of()); // 🔒 비차단/예외 無
                 results.forEach(snippets::add);
 
                 if (depth + 1 <= maxDepth && snippets.size() < overallTopK) {
@@ -211,7 +221,16 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             depth++;
         }
 
-        // 4) Content 변환
+        // 4) Content 변환(비어있을 경우 안전 폴백)
+        if (snippets.isEmpty()) {
+            if (!firstSnippets.isEmpty()) {
+                return firstSnippets.stream()
+                        .limit(Math.max(1, Math.min(overallTopK, webTopK)))
+                        .map(Content::from)
+                        .toList();
+            }
+            return List.of(Content.from("[검색 결과 없음]"));
+        }
         return snippets.stream()
                 .limit(overallTopK)
                 .map(Content::from)

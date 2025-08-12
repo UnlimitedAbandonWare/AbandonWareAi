@@ -24,7 +24,9 @@ public class WebSearchRetriever implements ContentRetriever {
     /* 🔴 노이즈 제거 패턴 */
     private static final Pattern META_TAG = Pattern.compile("\\[[^\\]]+\\]");
     private static final Pattern TIME_TAG = Pattern.compile("\\b\\d{1,2}:\\d{2}\\b");
-
+    /* 🔵 봇/캡차 페이지 힌트 */
+    private static final Pattern CAPTCHA_HINT = Pattern.compile(
+            "(?i)(captcha|봇을|로봇|are you (a )?robot|unusual\\straffic|verify you are human|duckduckgo\\.com/captcha)");
     private static String normalize(String raw) {        /* 🔴 NEW */
         if (raw == null) return "";
 
@@ -49,7 +51,10 @@ public class WebSearchRetriever implements ContentRetriever {
     public List<Content> retrieve(Query query) {
         String normalized = normalize(query.text());
         // 1) 1차 수집: topK*2 → 중복/정렬 후 topK
-        List<String> first = searchSvc.searchSnippets(normalized, Math.max(topK, 1) * 2);
+        List<String> first = searchSvc.searchSnippets(normalized, Math.max(topK, 1) * 2)
+                .stream()
+                .filter(s -> !CAPTCHA_HINT.matcher(s).find())  // 🔒 캡차 노이즈 컷
+                .toList();
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] first raw={} (q='{}')", first.size(), normalized);
         }
@@ -84,7 +89,7 @@ public class WebSearchRetriever implements ContentRetriever {
         java.util.List<Content> out = new java.util.ArrayList<>();
         for (String s : finalSnippets) {
             String url = extractUrl(s);   // ⬅️ 없던 util 메서드 추가(아래)
-            if (url == null) {
+            if (url == null || CAPTCHA_HINT.matcher(s).find()) { // 🔒 의심 라인 스킵
                 out.add(Content.from(s)); // URL 없음 → 기존 스니펫 사용
                 continue;
             }

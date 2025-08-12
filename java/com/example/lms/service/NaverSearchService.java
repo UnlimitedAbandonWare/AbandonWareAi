@@ -404,6 +404,7 @@ public class NaverSearchService {
                 .defaultHeader(HttpHeaders.USER_AGENT,
                         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                                 + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+                .defaultHeader(HttpHeaders.ACCEPT_LANGUAGE, "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
                 .filter(logFilter)
                 .build();
 
@@ -922,7 +923,13 @@ public class NaverSearchService {
                 .retrieve()
                 .bodyToMono(String.class)
                 .timeout(Duration.ofMillis(Math.max(1200, hedgeTimeoutMs)))
-                .map(html -> parseDuckDuckGoHtml(rawQuery, html))
+                .map(html -> {
+                    if (isCaptchaHtml(html)) {
+                        log.warn("DuckDuckGo CAPTCHA/봇 차단 감지 → 빈 결과 반환");
+                        return List.<String>of();
+                    }
+                    return parseDuckDuckGoHtml(rawQuery, html);
+                })
                 .onErrorResume(e -> {
                     log.warn("DuckDuckGo fallback failed: {}", e.toString());
                     return Mono.just(Collections.emptyList());
@@ -1051,6 +1058,8 @@ public class NaverSearchService {
     private List<String> parseDuckDuckGoHtml(String originalQuery, String html) {
         if (isBlank(html)) return Collections.emptyList();
         try {
+            // 빠른 차단: CAPTCHA/봇 페이지라면 즉시 빈 결과
+            if (isCaptchaHtml(html)) return Collections.emptyList();
             Document doc = Jsoup.parse(html);
             // 마크업이 종종 바뀌므로 넉넉한 셀렉터
             Elements results = doc.select("div.result, div.results_links, div.result__body, div.web-result");
@@ -1072,7 +1081,9 @@ public class NaverSearchService {
                                     link = URLDecoder.decode(p[1], StandardCharsets.UTF_8);
                                     break;
                                 }
+
                             }
+
                         }
                     } catch (Exception ignore) {
                     }
@@ -1102,6 +1113,16 @@ public class NaverSearchService {
             log.error("DuckDuckGo HTML parse error", e);
             return Collections.emptyList();
         }
+    }  /** DuckDuckGo 등에서 반환되는 CAPTCHA/봇 차단 페이지 감지 */
+    private boolean isCaptchaHtml(String html) {
+        if (html == null) return false;
+        String s = html.toLowerCase(Locale.ROOT);
+        return s.contains("captcha")
+                || s.contains("are you a robot")
+                || s.contains("verify you are human")
+                || s.contains("bot detection")
+                || s.contains("unusual traffic")
+                || s.contains("enable javascript");
     }
 
     //  DuckDuckGo(HTML) 동기 폴백 (trace 지원)
@@ -1113,6 +1134,13 @@ public class NaverSearchService {
             String html = duck.get().uri(uri).retrieve()
                     .bodyToMono(String.class)
                     .block(Duration.ofSeconds(3));
+            if (isCaptchaHtml(html)) {
+                if (trace != null) {
+                    trace.steps.add(new SearchStep("Fallback: DuckDuckGo CAPTCHA detected", 0, 0,
+                            Duration.between(t0, Instant.now()).toMillis()));
+                }
+                return Collections.emptyList();
+            }
             List<String> lines = parseDuckDuckGoHtml(rawQuery, html);
             if (trace != null) {
                 long took = Duration.between(t0, Instant.now()).toMillis();
