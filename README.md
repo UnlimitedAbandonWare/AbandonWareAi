@@ -509,7 +509,44 @@ reinforceWithSnippet 메서드 오버로딩 및 기능 강화
 볼츠만 에너지(Boltzmann Energy) 계산 로직 고도화
 
 어떻게 개선했는가: computeBoltzmannEnergy 메서드를 static에서 인스턴스 메서드로 전환했습니다. 이를 통해 HyperparameterService 같은 외부 설정 값을 주입받아 동적으로 계산할 수 있도록 구조를 변경했습니다.
+feat: RAG 파이프라인 개선 및 고유명사 검색 정확도 향상
 
+'푸리나'와 같은 알려진 고유명사 검색 시, 시스템이 이를 '존재하지 않는 요소'로 오판하여 검색에 실패하는 문제를 해결하고 전반적인 RAG 파이프라인의 안정성을 강화했습니다.
+
+### 1. 문제 원인 (The Problem)
+
+- **과잉 교정 및 쿼리 오염**: `QueryDisambiguationService`가 환각을 방지하려는 LLM 프롬프트 규칙을 과하게 해석하여, `DomainTermDictionary`에 이미 등록된 '푸리나' 같은 명확한 고유명사조차 의심하고 쿼리를 `(존재하지 않는 요소 가능성)`과 같이 오염시키는 문제가 발생했습니다.
+- **지식 단절 (Knowledge Silo)**: 오타 교정(`LLMQueryCorrectionService`) 단계에서는 `DomainTermDictionary`를 참조했지만, 정작 중요한 의도 분석(`QueryDisambiguationService`) 단계에서는 이를 활용하지 않아 시스템 내에서 정보가 단절되었습니다.
+- **경직된 사실 검증**: `FactVerifierService`가 하드코딩된 정규식(Regex)에 의존하여 개체(Entity)를 추출했기 때문에, '푸리나'와 같은 새로운 고유명사에 대한 유연한 대처가 어려웠습니다.
+- **단순한 검색 결과 정렬**: `WebSearchRetriever`가 검색 결과의 출처 신뢰도를 고려하지 않고 단순 정렬하여, 컨텍스트의 질이 저하될 가능성이 있었습니다.
+
+### 2. 개선 내용 (Improvements)
+
+#### 가. `QueryDisambiguationService` 가드레일 강화
+- **'선(先) 사전 조회, 후(後) LLM 호출'** 원칙을 적용했습니다.
+- LLM 호출 전 `DomainTermDictionary`를 먼저 조회하여, 사용자 질문에 '푸리나'와 같이 사전에 등록된 보호 용어가 포함된 경우 LLM을 통한 중의성 해소 과정을 건너뛰도록 로직을 수정했습니다.
+- 이를 통해 불필요한 API 호출을 줄이고, 알려진 고유명사가 포함된 쿼리가 오염되는 것을 원천 차단했습니다.
+
+#### 나. `FactVerifierService`의 유연성 확보 (LLM 기반 개체 추출 도입)
+- 텍스트에서 동적으로 개체명을 추출하는 `NamedEntityExtractor` 인터페이스와 그 구현체인 `LLMNamedEntityExtractor`를 **새로 생성**했습니다.
+- `FactVerifierService`가 이 새로운 NER 컴포넌트를 사용하도록 수정하여, 정규식에 의존하지 않고도 최신 게임 캐릭터나 도메인 고유명사를 유연하게 식별하고 검증할 수 있도록 개선했습니다. (컴포넌트 미주입 시 기존 정규식으로 폴백)
+
+#### 다. `WebSearchRetriever`의 정렬 로직 고도화
+- 신규 컴포넌트인 `AuthorityScorer`를 `WebSearchRetriever`에 통합했습니다.
+- 이제 검색 결과는 단순 선호도뿐만 아니라, `application.properties`에 정의된 출처별 신뢰도 점수(`weight`)에 따라 가중 정렬됩니다.
+- 이를 통해 `namu.wiki`와 같은 특정 도메인에서 신뢰도가 높은 정보 소스가 우선적으로 컨텍스트에 포함될 확률을 높였습니다.
+
+#### 라. `AuthorityScorer` 휴리스틱 미세 조정
+- 게임 및 서브컬처 도메인에서 중요한 정보 소스인 `namu.wiki` 등의 기본 신뢰도 점수를 상향 조정하여, 관련 질문에 대한 답변 품질을 높였습니다.
+
+### 3. 수정된 파일 목록
+
+- **Modified**: `src/main/java/com/example/lms/service/disambiguation/QueryDisambiguationService.java`
+- **Modified**: `src/main/java/com/example/lms/service/FactVerifierService.java`
+- **Modified**: `src/main/java/com/example/lms/service/rag/WebSearchRetriever.java`
+- **Modified**: `src/main/java/com/example/lms/service/rag/auth/AuthorityScorer.java`
+- **Added**: `src/main/java/com/example/lms/service/ner/NamedEntityExtractor.java`
+- **Added**: `src/main/java/com/example/lms/service/ner/LLMNamedEntityExtractor.java`
 개선 효과:
 
 정교한 스코어링: 기존의 성공률, 탐험항 외에 **신뢰도(Confidence Score)**와 **최신성(Recency)**을 에너지 계산의 새로운 변수로 추가했습니다.
@@ -525,7 +562,100 @@ reinforceWithSnippet 메서드 오버로딩 및 기능 강화
 reinforceWithSnippet의 기존 버전과 신규 오버로드 메서드 모두 개선된 computeBoltzmannEnergy 로직을 호출하도록 통일하여, 어떤 경로로 데이터가 들어오든 일관된 기준으로 평가받도록 수정했습니다.
 
 개선 효과: 코드의 가독성과 유지보수성이 향상되었으며, 기능 변경 시 수정 범위를 최소화할 수 있습니다.
+AbandonWareAI: System Analysis & Improvement Strategy
+1. Project Overview
+본 프로젝트는 자가 학습 및 강화가 가능한 고도의 하이브리드 RAG(Retrieval-Augmented Generation) 시스템입니다. 단순한 챗봇을 넘어, 스스로 질문을 분해하고(Self-Ask), 사실을 검증하며(Fact-Check), 대화 경험을 통해 성능을 개선하는(Reinforcement) 동적인 아키텍처를 목표로 합니다.
 
+2. Architectural Strengths
+체계적인 파이프라인 아키텍처: 사용자 질의는 교정 → 의도 분석/재작성 → 전략 선택 → 하이브리드 검색 → 결과 융합 → 사실 검증 → 답변 생성 → 피드백 강화의 명확한 파이프라인을 따릅니다. 각 단계는 단일 책임을 갖는 서비스로 분리되어 유지보수와 확장에 용이합니다.
+
+관련 컴포넌트:
+
+QueryCorrectionService: /src/main/java/com/example/lms/service/QueryCorrectionService.java
+
+HybridRetriever: /src/main/java/com/example/lms/retriever/HybridRetriever.java
+
+FactVerifierService: /src/main/java/com/example/lms/service/FactVerifierService.java
+
+고급 RAG 기술의 집약체: 단순 벡터 검색을 넘어, 실시간 웹 검색, 키워드 분석 검색, 복잡한 질문 분해를 결합한 하이브리드 검색을 구현했습니다.
+
+관련 컴포넌트:
+
+NaverSearchService: /src/main/java/com/example/lms/service/NaverSearchService.java
+
+AnalyzeWebSearchRetriever: /src/main/java/com/example/lms/retriever/AnalyzeWebSearchRetriever.java
+
+SelfAskWebSearchRetriever: /src/main/java/com/example/lms/retriever/SelfAskWebSearchRetriever.java
+
+메타-학습 및 강화 루프: 시스템이 사용한 검색 전략의 성과를 기록하고, 다음 질문에 더 나은 전략을 스스로 선택하는 매우 진보된 기능을 갖추고 있습니다.
+
+관련 컴포넌트:
+
+StrategyPerformance: /src/main/java/com/example/lms/domain/StrategyPerformance.java
+
+StrategySelectorService: /src/main/java/com/example/lms/service/StrategySelectorService.java
+
+견고한 운영 기능: SSE 스트리밍, 세션 격리, 캐싱, 동적 파라미터 관리 등 실제 서비스를 위한 기능들이 꼼꼼하게 구현되어 있습니다.
+
+관련 컴포넌트:
+
+HyperparameterService: /src/main/java/com/example/lms/service/HyperparameterService.java
+
+3. Neutral Observations
+의사결정의 다층 구조: 최종 답변 생성 전, 여러 LLM 호출을 통해 중간 판단을 내리는 구조는 컨텍스트의 질을 높이지만, 각 단계의 작은 실수가 연쇄적으로 전파될 위험(Cascading Failure)을 내포합니다.
+
+관련 컴포넌트:
+
+QueryDisambiguationService: /src/main/java/com/example/lms/service/QueryDisambiguationService.java
+
+QueryTransformer: /src/main/java/com/example/lms/service/QueryTransformer.java
+
+휴리스틱과 AI의 공존: 정규식 기반 필터와 특정 키워드 감지 같은 규칙 기반 로직과 LLM의 유연한 판단이 혼재되어 있어, 성능과 안정성 간의 균형을 맞추고 있습니다.
+
+관련 컴포넌트:
+
+QueryHygieneFilter: /src/main/java/com/example/lms/service/filter/QueryHygieneFilter.java
+
+FallbackHeuristics: /src/main/java/com/example/lms/service/heuristics/FallbackHeuristics.java
+
+4. Case Study: '푸리나' 검색 실패 분석
+'푸리나' 관련 질문에 대한 실패는 검색(Retrieval) 자체의 문제가 아닌, 검색 파이프라인 가장 앞단의 '질의 이해(Query Understanding)' 단계에서 발생한 치명적인 오판 때문입니다.
+
+문제의 핵심, QueryDisambiguationService: 이 서비스는 사용자의 모호한 질문을 명확하게 만드는 역할을 합니다. 하지만 "게임에 존재하지 않는 요소를 지어내지 말라"는 LLM 프롬프트 지침을 과하게 해석하여, "원신에 푸리나랑 잘 어울리는 캐릭터가 뭐야"라는 명확한 질문에 "(존재하지 않는 요소 가능성)" 이라는 불필요한 꼬리표를 붙여 쿼리를 오염시켰습니다.
+
+지식의 사일로(Knowledge Silo) 현상:
+
+DefaultDomainTermDictionary는 '푸리나'가 '원신' 도메인의 유효한 고유명사임을 알고 있습니다.
+
+LLMQueryCorrectionService는 이 사전을 참조하여 오타를 교정합니다.
+
+하지만 정작 문제를 일으킨 QueryDisambiguationService는 이 사전을 참조하지 않고, LLM의 일반 지식에만 의존하여 "이런 캐릭터가 없을 수도 있다"는 보수적이고 잘못된 판단을 내렸습니다. 시스템의 한쪽에서는 아는 정보를 다른 쪽에서 활용하지 못한 것입니다.
+
+5. Improvement Strategy
+[!NOTE]
+아래 전략은 코드 수정을 최소화하고, GPT-4에 대한 지시(프롬프트 엔지니어링 및 로직 플로우 변경)를 통해 문제를 해결하는 방향을 제시합니다.
+
+'선(先) 사전 조회, 후(後) LLM 호출' 원칙 확립 (가장 확실한 해결책)
+
+지시 사항: QueryDisambiguationService의 로직을 수정하여, LLM을 호출하기 전 사용자 질문의 키워드가 DomainTermDictionary에 등록된 보호 용어인지 먼저 확인하도록 지시합니다.
+
+기대 효과: '푸리나'처럼 사전에 등록된 용어가 포함된 질문은 모호하지 않다고 간주하고, 불필요한 LLM 중의성 해소 과정을 건너뛰어 쿼리 오염을 원천 차단하고 API 비용을 절감합니다.
+
+LLM 프롬프트에 '보호어' 명시적 주입
+
+지시 사항: 위의 '사전 조회' 로직 구현이 여의치 않을 경우, QueryDisambiguationService가 LLM을 호출할 때 프롬프트에 동적으로 보호어 목록을 주입하도록 지시합니다.
+
+예시 프롬프트: "다음 질문을 명확하게 재작성해줘. 단, ['푸리나', '원신'] 이라는 단어는 절대로 변경하거나 의심하지 말고 그대로 유지해야 해."
+
+기대 효과: LLM에게 명시적인 제약 조건을 제공하여 잘못된 판단을 내릴 확률을 크게 줄입니다.
+
+답변 검증 단계(FactVerifierService)의 유연성 강화
+
+지시 사항: 현재 정규식 기반으로 답변의 핵심 개체(Entity)를 추출하는 로직을 LLM을 사용하도록 변경을 지시합니다.
+
+예시 프롬프트: "다음 문장에서 모든 고유명사(인물, 아이템, 지역 등)를 쉼표로 구분하여 추출해줘."
+
+기대 효과: 신규 캐릭터나 용어가 추가될 때마다 코드를 수정할 필요 없이, 동적으로 핵심 정보를 추출하고 교차 검증하여 시스템의 확장성과 견고함을 높입니다.
 마이그레이션 노트(Breaking Changes)
 FactVerifierService의 2-인자 생성자 제거: 구성 코드나 수동 new 사용처가 있다면 3-인자( OpenAiService, FactStatusClassifier, SourceAnalyzerService)로 교체하거나, 스프링 빈 자동주입을 사용하세요.
 
