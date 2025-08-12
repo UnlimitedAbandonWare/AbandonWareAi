@@ -509,7 +509,44 @@ reinforceWithSnippet 메서드 오버로딩 및 기능 강화
 볼츠만 에너지(Boltzmann Energy) 계산 로직 고도화
 
 어떻게 개선했는가: computeBoltzmannEnergy 메서드를 static에서 인스턴스 메서드로 전환했습니다. 이를 통해 HyperparameterService 같은 외부 설정 값을 주입받아 동적으로 계산할 수 있도록 구조를 변경했습니다.
+feat: RAG 파이프라인 개선 및 고유명사 검색 정확도 향상
 
+'푸리나'와 같은 알려진 고유명사 검색 시, 시스템이 이를 '존재하지 않는 요소'로 오판하여 검색에 실패하는 문제를 해결하고 전반적인 RAG 파이프라인의 안정성을 강화했습니다.
+
+### 1. 문제 원인 (The Problem)
+
+- **과잉 교정 및 쿼리 오염**: `QueryDisambiguationService`가 환각을 방지하려는 LLM 프롬프트 규칙을 과하게 해석하여, `DomainTermDictionary`에 이미 등록된 '푸리나' 같은 명확한 고유명사조차 의심하고 쿼리를 `(존재하지 않는 요소 가능성)`과 같이 오염시키는 문제가 발생했습니다.
+- **지식 단절 (Knowledge Silo)**: 오타 교정(`LLMQueryCorrectionService`) 단계에서는 `DomainTermDictionary`를 참조했지만, 정작 중요한 의도 분석(`QueryDisambiguationService`) 단계에서는 이를 활용하지 않아 시스템 내에서 정보가 단절되었습니다.
+- **경직된 사실 검증**: `FactVerifierService`가 하드코딩된 정규식(Regex)에 의존하여 개체(Entity)를 추출했기 때문에, '푸리나'와 같은 새로운 고유명사에 대한 유연한 대처가 어려웠습니다.
+- **단순한 검색 결과 정렬**: `WebSearchRetriever`가 검색 결과의 출처 신뢰도를 고려하지 않고 단순 정렬하여, 컨텍스트의 질이 저하될 가능성이 있었습니다.
+
+### 2. 개선 내용 (Improvements)
+
+#### 가. `QueryDisambiguationService` 가드레일 강화
+- **'선(先) 사전 조회, 후(後) LLM 호출'** 원칙을 적용했습니다.
+- LLM 호출 전 `DomainTermDictionary`를 먼저 조회하여, 사용자 질문에 '푸리나'와 같이 사전에 등록된 보호 용어가 포함된 경우 LLM을 통한 중의성 해소 과정을 건너뛰도록 로직을 수정했습니다.
+- 이를 통해 불필요한 API 호출을 줄이고, 알려진 고유명사가 포함된 쿼리가 오염되는 것을 원천 차단했습니다.
+
+#### 나. `FactVerifierService`의 유연성 확보 (LLM 기반 개체 추출 도입)
+- 텍스트에서 동적으로 개체명을 추출하는 `NamedEntityExtractor` 인터페이스와 그 구현체인 `LLMNamedEntityExtractor`를 **새로 생성**했습니다.
+- `FactVerifierService`가 이 새로운 NER 컴포넌트를 사용하도록 수정하여, 정규식에 의존하지 않고도 최신 게임 캐릭터나 도메인 고유명사를 유연하게 식별하고 검증할 수 있도록 개선했습니다. (컴포넌트 미주입 시 기존 정규식으로 폴백)
+
+#### 다. `WebSearchRetriever`의 정렬 로직 고도화
+- 신규 컴포넌트인 `AuthorityScorer`를 `WebSearchRetriever`에 통합했습니다.
+- 이제 검색 결과는 단순 선호도뿐만 아니라, `application.properties`에 정의된 출처별 신뢰도 점수(`weight`)에 따라 가중 정렬됩니다.
+- 이를 통해 `namu.wiki`와 같은 특정 도메인에서 신뢰도가 높은 정보 소스가 우선적으로 컨텍스트에 포함될 확률을 높였습니다.
+
+#### 라. `AuthorityScorer` 휴리스틱 미세 조정
+- 게임 및 서브컬처 도메인에서 중요한 정보 소스인 `namu.wiki` 등의 기본 신뢰도 점수를 상향 조정하여, 관련 질문에 대한 답변 품질을 높였습니다.
+
+### 3. 수정된 파일 목록
+
+- **Modified**: `src/main/java/com/example/lms/service/disambiguation/QueryDisambiguationService.java`
+- **Modified**: `src/main/java/com/example/lms/service/FactVerifierService.java`
+- **Modified**: `src/main/java/com/example/lms/service/rag/WebSearchRetriever.java`
+- **Modified**: `src/main/java/com/example/lms/service/rag/auth/AuthorityScorer.java`
+- **Added**: `src/main/java/com/example/lms/service/ner/NamedEntityExtractor.java`
+- **Added**: `src/main/java/com/example/lms/service/ner/LLMNamedEntityExtractor.java`
 개선 효과:
 
 정교한 스코어링: 기존의 성공률, 탐험항 외에 **신뢰도(Confidence Score)**와 **최신성(Recency)**을 에너지 계산의 새로운 변수로 추가했습니다.
