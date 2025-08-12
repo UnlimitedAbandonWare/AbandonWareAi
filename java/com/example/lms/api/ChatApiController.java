@@ -25,12 +25,14 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
-
+import lombok.extern.slf4j.Slf4j;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Consumer;
-
-@Slf4j
+import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+@Slf4j // ◀◀◀ 2. 어노테이션 추가 (이제 'log' 변수 사용 가능)
 @RestController
 @RequestMapping("/api/chat")
 @RequiredArgsConstructor

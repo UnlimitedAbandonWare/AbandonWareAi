@@ -155,8 +155,9 @@ public class HybridRetriever implements ContentRetriever {
     /**
      * Progressive retrieval:
      * 1) Local RAG 우선 → 품질 충분 시 조기 종료
-     * 2) 미흡 시 Self‑Ask(1~2개)로 정제된 웹 검색만 수행
+     * 2) 미흡 시 Self-Ask(1~2개)로 정제된 웹 검색만 수행
      */
+    @Deprecated // ← 폭포수 검색 비활성화 경로(남겨두되 호출은 남김)
     public List<Content> retrieveProgressive(String question, String sessionKey, int limit) {
         if (question == null || question.isBlank()) {
             return List.of(Content.from("[빈 질의]"));

@@ -26,7 +26,7 @@ import java.lang.reflect.Method;                 // NEW
 import java.nio.charset.StandardCharsets;       // NEW
 import java.security.MessageDigest;             // NEW
 import java.util.List;
-
+import org.springframework.dao.DataIntegrityViolationException; // ⬅️ 누락 import 추가
 @Slf4j
 @Service
 @Transactional

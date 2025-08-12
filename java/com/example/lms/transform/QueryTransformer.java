@@ -33,7 +33,7 @@ public class QueryTransformer {
 
     /** LLM 제안·힌트 개수 상한 */
     private static final int MAX_VARIANTS = 3;   // generateVariantsWithLLM() 한도
-    private static final int MAX_HINTS    = 5;   // transformEnhanced() 힌트 한도
+    private static final int MAX_HINTS    = 2;   // ⬅️ LLM 힌트 축소(폭주 방지)
 
     /* ────────────────────────────────────────
      * 0.  “원소 감지”  ― 쿼리 Intent Enum

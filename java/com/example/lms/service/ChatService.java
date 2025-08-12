@@ -77,6 +77,7 @@ import java.util.regex.Pattern;
 // import 블록 맨 아래쯤
 import dev.langchain4j.memory.ChatMemory;        // ✔ 실제 버전에 맞게 교정
 import com.example.lms.transform.QueryTransformer;            // ⬅️ 추가
+import com.example.lms.search.SmartQueryPlanner;              // ⬅️ NEW: 지능형 쿼리 플래너
 //  hybrid retrieval content classes
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
@@ -84,6 +85,7 @@ import com.example.lms.service.rag.ContextOrchestrator;
 // 🔹 NEW: ML correction util
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.correction.QueryCorrectionService;   // ★ 추가
+import org.springframework.beans.factory.annotation.Qualifier; // Qualifier import 추가
 
 /**
  * 중앙 허브 – OpenAI-Java · LangChain4j · RAG 통합. (v7.2, RAG 우선 패치 적용)
@@ -107,6 +109,7 @@ import com.example.lms.service.correction.QueryCorrectionService;   // ★ 추�
 @Service
 @RequiredArgsConstructor
 public class ChatService {
+    private final @Qualifier("queryTransformer") QueryTransformer queryTransformer;
 
     /* ───────────────────────────── DTO ───────────────────────────── */
 
@@ -151,13 +154,15 @@ public class ChatService {
     // 이미 있는 DI 필드 아래쪽에 추가
     private final NaverSearchService searchService;
     private final ChatMemoryProvider chatMemoryProvider; // 세션 메모리 Bean
-    private final QueryTransformer queryTransformer;
     private final HybridRetriever hybridRetriever; // ★ 하이브리드 리트리버
+
     // ▼▼ 신규 DI
     private final com.example.lms.strategy.StrategySelectorService strategySelector;
     private final com.example.lms.strategy.StrategyDecisionTracker strategyTracker;
     private final com.example.lms.scoring.ContextualScorer contextualScorer;
     private final QueryAugmentationService augmentationSvc; // ★ 질의 향상 서비스
+
+    private final SmartQueryPlanner smartQueryPlanner;      // ⬅️ NEW DI
     private final QueryCorrectionService correctionSvc;             // ★ 추가
     // 🔹 NEW: 다차원 누적·보강·합성기
     // 🔹 단일 패스 오케스트레이션을 위해 체인 캐시는 제거
@@ -403,47 +408,12 @@ public class ChatService {
             ragCtx = null;
         }
 
-        // ❶ 메타‑전략 선택
-        var chosen = strategySelector.selectForQuestion(finalQuery, req);
-        strategyTracker.associate(sessionKey, chosen); // 피드백 집계용
+        // ❶ "지능형 다중 쿼리" 계획: transformEnhanced → 위생 → 상한(≤2)
+        List<String> smartQueries = smartQueryPlanner.plan(finalQuery, /*assistantDraft*/ null, 2);
+        if (smartQueries.isEmpty()) smartQueries = List.of(finalQuery);
 
-        // ❷ 전략별 수집 경로
-        List<Content> fused;
-        switch (chosen) {
-            case WEB_FIRST -> {
-                // 웹 우선 → 스니펫을 Content로 래핑, 부족하면 벡터 보강
-                List<String> sn = searchService.searchSnippets(finalQuery, hybridTopK);
-                List<Content> webOnly = sn.stream().map(Content::from).toList();
-                if (webOnly.size() < Math.max(3, hybridTopK / 2)) {
-                    var pine = ragSvc.asContentRetriever(pineconeIndexName);
-                    var vec = pine.retrieve(Query.from(finalQuery));
-                    fused = new java.util.ArrayList<>(webOnly);
-                    fused.addAll(vec);
-                } else fused = webOnly;
-            }
-            case VECTOR_FIRST -> {
-                var pine = ragSvc.asContentRetriever(pineconeIndexName);
-                fused = pine.retrieve(Query.from(finalQuery));
-                if (fused.size() < Math.max(3, hybridTopK / 2)) {
-                    List<String> sn = searchService.searchSnippets(finalQuery, hybridTopK / 2);
-                    fused = new java.util.ArrayList<>(fused);
-                    fused.addAll(sn.stream().map(Content::from).toList());
-                }
-            }
-            case DEEP_DIVE_SELF_ASK -> {
-                fused = hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
-            }
-            case WEB_VECTOR_FUSION -> {
-                List<String> augmented = augmentationSvc.augment(finalQuery);
-                List<String> queries = QueryHygieneFilter.sanitize(augmented, 4, 0.80);
-                fused = (queries != null && queries.size() > 1)
-                        ? hybridRetriever.retrieveAll(queries, hybridTopK)
-                        : hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
-            }
-            default -> {
-                fused = hybridRetriever.retrieveProgressive(finalQuery, sessionKey, hybridTopK);
-            }
-        }
+        // ❷ 병렬 검색  RRF 융합(하이브리드 리트리버 단일 경로)
+        List<Content> fused = hybridRetriever.retrieveAll(smartQueries, hybridTopK);
 
 
         // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
@@ -486,7 +456,8 @@ public class ChatService {
         var scoreReport = contextualScorer.score(correctedMsg, unifiedCtx, out);
 
 
-        reinforceAssistantAnswer(sessionKey, correctedMsg, out, scoreReport.overall(), chosen);
+        // 간단 오버로드로 기록(전략 없음)
+        reinforceAssistantAnswer(sessionKey, correctedMsg, out);
         return ChatResult.of(out, "lc:" + cleanModel, true);
     }   // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 // ------------------------------------------------------------------------
