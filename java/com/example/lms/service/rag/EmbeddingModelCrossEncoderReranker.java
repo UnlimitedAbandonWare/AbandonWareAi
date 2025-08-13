@@ -29,11 +29,15 @@ import java.util.stream.Collectors;
 public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker {
 
     private final EmbeddingModel embeddingModel;
-    private final com.example.lms.service.rag.filter.GenericDocClassifier genericClassifier; //  inject
-    private final com.example.lms.genshin.GenshinElementLexicon lexicon;                    //  NEW
-    private final com.example.lms.service.rag.rerank.ElementConstraintScorer elemScorer;    //  NEW
+    private final com.example.lms.genshin.GenshinElementLexicon lexicon;                 // NEW
+
+    private final com.example.lms.service.rag.rerank.ElementConstraintScorer elemScorer; // keep
+    private final com.example.lms.service.knowledge.KnowledgeBaseService knowledgeBase;  //  NEW
+    private final com.example.lms.service.rag.detector.GameDomainDetector domainDetector;//  NEW
+    private final com.example.lms.service.scoring.AdaptiveScoringService adaptiveScorer; //  NEW
+    // ⚠ GenericDocClassifier가 @Component가 아니라면, 유틸처럼 1회 생성하여 사용
     private final com.example.lms.service.rag.filter.GenericDocClassifier genericClassifier =
-            new com.example.lms.service.rag.filter.GenericDocClassifier(); // 가벼운 유틸
+            new com.example.lms.service.rag.filter.GenericDocClassifier();
 
     /**
      * 후보 목록(candidates)을 쿼리(query)와의 관련도에 따라 재정렬하고 상위 N개를 반환합니다.
@@ -51,7 +55,7 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
 
         try {
             // 쿼리 벡터는 한 번만 계산하여 효율성 확보
-            final float[] queryVector = embeddingModel.embed(query).content().vector();
+            final float[] queryVector = embeddingModel.embed(TextSegment.from(query)).content().vector();
             final int n = candidates.size();
             final int k = Math.max(1, Math.min(topN, n));
 
@@ -75,31 +79,36 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
             }
 
             // 정책(원소 허용/비선호) 계산
-            var policy = lexicon.policyForQuery(query);  //  NEW
+            var policy = lexicon.policyForQuery(query);  // fallback (KB 정책은 전처리에서 동일 주입)
+            String domain = domainDetector.detect(query);
+            String subject = com.example.lms.service.subject.SubjectResolver.guessSubjectFromQueryStatic(
+                    knowledgeBase, domain, query); //  partner 추출에 사용
 
             record ScoredContent(Content content, double score) {}
             final List<ScoredContent> scored = new ArrayList<>(n);
-            String subjectGuess = guessSubjectFromQuery(query);
+
             for (int i = 0; i < n; i++) {
-                Content c = snapshot.get(i);
                 Content c = snapshot.get(i);
                 String text = String.valueOf(c);
                 double score = cosineSimilarity(queryVector, docEmbeddings.get(i).vector());
 // 주어/범용 휴리스틱
+                // 주어/범용 휴리스틱
                 String subjectGuess = guessSubjectFromQuery(query);
                 boolean hasSubject = !subjectGuess.isBlank()
                         && text.toLowerCase().contains(subjectGuess.toLowerCase());
                 boolean isGeneric = genericClassifier.isGenericText(text);
-//  원소 정책 가중
+                // 원소 정책 가중
                 double deltaElem = elemScorer.deltaForText(text, policy.allowed(), policy.discouraged());
-                double adj = score + (hasSubject ? 0.15 : -0.20) + (isGeneric ? -0.25 : 0.0) + deltaElem;
+                // 파트너(문서 내 등장 개체 중 subject 제외 1개) 추출 후 적응형 보너스
+                String partner = knowledgeBase.findFirstMentionedEntityExcluding(domain, text, subject).orElse("");
+                double synergyBonus = adaptiveScorer.getSynergyScore(domain, subject, partner); // [-0.05, 0.10] 범위
+                double adj = score
+                        + (hasSubject ? 0.15 : -0.20)
+                        +  (isGeneric ? -0.25 : 0.0)
+                        +  deltaElem
+                        +   synergyBonus;
                 scored.add(new ScoredContent(c, adj));
-                boolean hasSubject = !subjectGuess.isBlank()
-                        && text.toLowerCase().contains(subjectGuess.toLowerCase());
-                boolean isGeneric  = genericClassifier.isGenericText(text);
-                // 주어 가산(+), 범용 감점(−)
-                double adj = score +  (hasSubject ? 0.15 : -0.20)+ (isGeneric ? -0.25 : 0.0);
-                scored.add(new ScoredContent(c, adj));
+
             }
 
 

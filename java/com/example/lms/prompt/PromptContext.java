@@ -7,6 +7,7 @@ import java.util.Set;
 /** LLM 프롬프트에 주입될 구조화 컨텍스트 */
 @Builder
 public record PromptContext(
+
         List<Content> web,      // LIVE WEB RESULTS
         List<Content> rag,      // VECTOR RAG
         String memory,          // LONG-TERM MEMORY

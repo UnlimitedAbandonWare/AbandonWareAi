@@ -2,7 +2,7 @@ package com.example.lms.prompt;
 
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-import java.util.List;               // 🔹 ← 누락
+import java.util.List;
 import java.util.stream.Collectors;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
@@ -66,20 +66,21 @@ public class PromptBuilder {
                 sys.append("- Discouraged elements: ").append(String.join(",", ctx.discouragedElements())).append("\n");
             }
             // RECOMMENDATION/PAIRING 공통 보수적 가드
-            if ("RECOMMENDATION".equalsIgnoreCase(ctx.intent()) || "PAIRING".equalsIgnoreCase(ctx.intent())) {
-                if (StringUtils.hasText(ctx.subjectName())) {
-                    sys.append("- Recommend partners ONLY for subject: ").append(ctx.subjectName()).append("\n");
-                }
-                if (!CollectionUtils.isEmpty(ctx.trustedHosts())) {
-                    sys.append("- Prefer trusted domains: ").append(String.join(",", ctx.trustedHosts())).append("\n");
-                }
+
                 sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
             }
-        }
+
         return sys.toString();
     }
 
     private static String join(List<Content> list) {
-        return list.stream().map(Object::toString).collect(Collectors.joining("\n"));
+        return list.stream()
+                .map(c -> {
+                    var seg = c.textSegment(); // 1.x API
+                    return (seg != null && seg.text() != null && !seg.text().isBlank())
+                            ? seg.text()
+                            : c.toString();
+                })
+                .collect(Collectors.joining("\n"));
     }
 }

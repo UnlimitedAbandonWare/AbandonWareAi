@@ -40,8 +40,10 @@ public interface QueryContextPreprocessor {
     default String inferIntent(String q) {
         if (q == null) return "GENERAL";
         String s = q.toLowerCase(Locale.ROOT);
-        // "추천", "조합", "파티", "시너지" 등과 같은 키워드가 포함되면 '추천' 의도로 파악
-        if (s.matches(".*(추천|추천해|추천좀|조합|파티|상성|시너지|픽|티어|메타|어울리(?:는|다)?|궁합).*"))
+        // '궁합/시너지/어울림/조합/파티'는 PAIRING으로 엄밀 분류
+        if (s.matches(".*(잘\\s*어울리|어울리(?:는|다)?|궁합|상성|시너지|조합|파티).*"))
+            return "PAIRING";
+        if (s.matches(".*(추천|추천해|추천좀|픽|티어|메타).*"))
             return "RECOMMENDATION";
         return "GENERAL";
     }

@@ -24,18 +24,21 @@ public class FactVerifierService {
     private final SourceAnalyzerService sourceAnalyzer;   // ★ 신규 의존성
     private final OpenAiService openAi;
     private final FactStatusClassifier classifier;
+    private final com.example.lms.service.verification.ClaimVerifierService claimVerifier; // + NEW
     // 개체 추출기(선택 주입). 없으면 기존 정규식 폴백.
     @Autowired(required = false)
     private com.example.lms.service.ner.NamedEntityExtractor entityExtractor;
 
     public FactVerifierService(OpenAiService openAi,
                                FactStatusClassifier classifier,
-                               SourceAnalyzerService sourceAnalyzer) {
+                               SourceAnalyzerService sourceAnalyzer,
+                               com.example.lms.service.verification.ClaimVerifierService claimVerifier) {
+        // <<<<<<<<<<<< 여기에 코드를 삽입
         this.openAi = Objects.requireNonNull(openAi, "openAi");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
         this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
+        this.claimVerifier = Objects.requireNonNull(claimVerifier, "claimVerifier");
     }
-
 
 
     private static final int MIN_CONTEXT_CHARS = 80;
@@ -90,6 +93,7 @@ public class FactVerifierService {
                          String model) {
         if (!StringUtils.hasText(draft)) return "";
         if (!StringUtils.hasText(context) || context.length() < MIN_CONTEXT_CHARS) return draft;
+
         if (context.contains("[검색 결과 없음]")) return draft;
         // ── 0) META‑CHECK: 컨텍스트가 아예 다른 대상을 가리키는지(또는 부족한지) 1차 판별 ──
 
@@ -157,10 +161,9 @@ public class FactVerifierService {
                     String raw = openAi.createChatCompletion(req)
                             .getChoices().get(0).getMessage().getContent();
                     int split = raw.indexOf("CONTENT:");
-                    if (split > -1) {
-                        return raw.substring(split + 8).trim();
-                    }
-                    return raw.trim();
+                    String corrected = (split > -1 ? raw.substring(split + 8).trim() : raw.trim());
+                    var res = claimVerifier.verifyClaims(context, corrected, model);
+                    return res.verifiedAnswer();
                 } catch (Exception e) {
                     log.error("Correction generation failed – fallback to '정보 없음'", e);
                     return "정보 없음";

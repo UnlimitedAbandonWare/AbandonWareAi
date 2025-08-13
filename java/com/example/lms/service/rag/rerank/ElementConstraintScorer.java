@@ -89,7 +89,7 @@ public class ElementConstraintScorer {
      * @param discouraged  비선호 원소 Set
      * @return 계산된 점수(delta)
      */
-    private double deltaForText(String text, Set<String> allowed, Set<String> discouraged) {
+    public double deltaForText(String text, Set<String> allowed, Set<String> discouraged) {
         if (text == null || (allowed.isEmpty() && discouraged.isEmpty())) {
             return 0.0;
         }

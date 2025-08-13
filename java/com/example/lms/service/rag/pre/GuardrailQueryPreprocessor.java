@@ -1,7 +1,8 @@
 package com.example.lms.service.rag.pre;
 
 import com.example.lms.service.rag.detector.GameDomainDetector;
-import com.example.lms.genshin.GenshinElementLexicon;   // + NEW
+import com.example.lms.service.knowledge.KnowledgeBaseService; //  NEW
+import com.example.lms.service.subject.SubjectResolver;        //  NEW
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -25,11 +26,15 @@ import java.util.regex.Pattern;
 public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
 
     private final GameDomainDetector domainDetector;
-    private final GenshinElementLexicon lexicon;        // + NEW
+    private final KnowledgeBaseService knowledgeBase;   //  NEW
+    private final SubjectResolver subjectResolver;      //  NEW
     public GuardrailQueryPreprocessor(GameDomainDetector detector,
-                                      GenshinElementLexicon lexicon) { //  NEW
+                                      KnowledgeBaseService knowledgeBase,
+                                      SubjectResolver subjectResolver) { //  NEW
         this.domainDetector = detector;
-        this.lexicon = lexicon;
+        this.knowledgeBase = knowledgeBase;
+        this.subjectResolver = subjectResolver;
+
     }
     // ── 간단 오타 사전(필요 시 Settings로 이관)
     private static final Map<String, String> TYPO = Map.of(
@@ -127,14 +132,18 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
     // ── 허용 원소(원신) – 에스코피에 맥락 보수 정책
     @Override
     public Set<String> allowedElements(String q) {
-        if (!"GENSHIN".equalsIgnoreCase(detectDomain(q))) return Set.of();
-        return lexicon.policyForQuery(q).allowed();      //  Lexicon 기반
+        String domain = detectDomain(q);
+        if (!"GENSHIN".equalsIgnoreCase(domain)) return Set.of();
+        String subject = subjectResolver.resolve(q, domain).orElse("");
+        return knowledgeBase.getPairingPolicy(domain, subject).allowed();
     }
 
     // ── 비선호 원소(원신) – Pyro/Dendro 보수 감점
     @Override
     public Set<String> discouragedElements(String q) {
-        if (!"GENSHIN".equalsIgnoreCase(detectDomain(q))) return Set.of();
-        return lexicon.policyForQuery(q).discouraged();  //  Lexicon 기반
+        String domain = detectDomain(q);
+        if (!"GENSHIN".equalsIgnoreCase(domain)) return Set.of();
+        String subject = subjectResolver.resolve(q, domain).orElse("");
+        return knowledgeBase.getPairingPolicy(domain, subject).discouraged();
     }
 }
