@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 // imports
 import com.example.lms.service.rag.rerank.LightWeightRanker;
+import com.example.lms.service.rag.rerank.ElementConstraintScorer;  //  신규 재랭커
 
 import java.lang.reflect.Method;
 import java.util.*;
@@ -53,6 +54,7 @@ public class HybridRetriever implements ContentRetriever {
     private final SelfAskPlanner selfAskPlanner;
     private final RelevanceScoringService relevanceScoringService;
     private final HyperparameterService hp; // ★ NEW: 동적 가중치 로더
+    private final ElementConstraintScorer elementConstraintScorer; // ★ NEW: 원소 제약 재랭커
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
     private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
@@ -409,6 +411,16 @@ public class HybridRetriever implements ContentRetriever {
                 Math.max(topK * 2, 20)
         )
                 : candidates;
+
+        //  원소 제약 기반 보정(추천 의도·제약은 전처리기에서 유도)
+        if (elementConstraintScorer != null) {
+            try {
+                firstPass = elementConstraintScorer.rescore(
+                        Optional.ofNullable(queryText).orElse(""),
+                        firstPass
+                );
+            } catch (Exception ignore) { /* 안전 무시 */ }
+        }
 
         // 2‑B) 🔴 (옵션) 교차엔코더 재정렬: 질문과의 의미 유사도 정밀 재계산
         if (crossEncoderReranker != null && !candidates.isEmpty()) {

@@ -29,4 +29,17 @@ public class DynamicChatModelFactory {
         }
         return builder.build();
     }
+
+    /**  추천(Recommender) 작업용 보수적 세팅(temperature ≤ 0.2, topP=1.0) */
+    public ChatModel lcWithPolicy(String intent,
+                                  String modelId,
+                                  double temperature,
+                                  double topP,
+                                  Integer maxTokens) {
+        if ("RECOMMENDATION".equalsIgnoreCase(intent)) {
+            temperature = Math.min(temperature, 0.2);
+            topP = 1.0;
+        }
+        return lc(modelId, temperature, topP, maxTokens);
+    }
 }

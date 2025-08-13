@@ -154,9 +154,10 @@ public class LangChainConfig {
             ChatModel chatModel,
             EmbeddingModel embeddingModel,
             EmbeddingStore<TextSegment> store,
-            MemoryReinforcementService memorySvc
+            MemoryReinforcementService memorySvc,
+            QueryContextPreprocessor preprocessor
     ) {
-        return new LangChainRAGService(chatModel, embeddingModel, store, memorySvc);
+        return new LangChainRAGService(chatModel, embeddingModel, store, memorySvc, preprocessor);
     }
 
     // NOTE:

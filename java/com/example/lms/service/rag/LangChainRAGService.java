@@ -16,6 +16,9 @@ import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
+import com.example.lms.service.rag.pre.QueryContextPreprocessor;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -68,6 +71,7 @@ public class LangChainRAGService {
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final MemoryReinforcementService  memorySvc;
+    private final QueryContextPreprocessor    preprocessor;   //  의도/도메인/원소 제약 주입원
 
     /**
      * 대화 기록을 제한된 크기로 유지하기 위해 Caffeine LRU 캐시를 사용한다.
@@ -177,14 +181,32 @@ public class LangChainRAGService {
 
         ChatModel use = (override != null ? override : this.chatModel);   // ★ 핵심
 
+        //  의도·제약 계산 (없으면 빈 셋/GENERAL)
+        final String intent = (preprocessor != null) ? preprocessor.inferIntent(query) : "";
+        final Set<String> allow = (preprocessor != null) ? preprocessor.allowedElements(query) : java.util.Set.of();
+        final Set<String> block = (preprocessor != null) ? preprocessor.discouragedElements(query) : java.util.Set.of();
+
+        //  INSTRUCTIONS 구성 (추천 의도 시 보수적 제약 삽입)
+        StringBuilder inst = new StringBuilder();
+        inst.append("### INSTRUCTIONS:\n");
+        inst.append("- Earlier sections have higher authority: VECTOR RAG > HISTORY > WEB SEARCH.\n");
+        inst.append("- Ground every claim in the provided sections; if evidence is insufficient, reply \"정보 없음\".\n");
+        inst.append("- Cite specific snippets or sources inline when possible.\n");
+        if ("RECOMMENDATION".equalsIgnoreCase(intent)) {
+            if (!allow.isEmpty()) {
+                inst.append("- 추천은 allowedElements(")
+                        .append(String.join("/", allow)).append(") 범위 내에서만 제시.\n");
+            }
+            if (!block.isEmpty()) {
+                inst.append("- discouragedElements(")
+                        .append(String.join("/", block)).append(")는 원칙적으로 제외. 예외 제시 시 성능 저하 근거를 함께 설명.\n");
+            }
+            inst.append("- 근거가 부족하거나 상충하면 '정보 없음'으로 답변. 정확성 우선, 창의성 억제.\n");
+        }
+
         // LangChain4j 1.0.1: chat(List<ChatMessage>) → AiMessage.text()
         String answer = use.chat(java.util.List.of(
-                SystemMessage.from("""
-            ### INSTRUCTIONS:
-            - Earlier sections have higher authority: VECTOR RAG > HISTORY > WEB SEARCH.
-            - Ground every claim in the provided sections; if evidence is insufficient, reply "정보 없음".
-            - Cite specific snippets or sources inline when possible.
-            """),
+                SystemMessage.from(inst.toString()),
                 UserMessage.from(prompt)
         )).aiMessage().text();
 

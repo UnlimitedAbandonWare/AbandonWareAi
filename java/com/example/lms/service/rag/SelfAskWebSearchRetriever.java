@@ -19,7 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
-
+import com.example.lms.service.rag.detector.GameDomainDetector;       // + 도메인 감지
 import org.springframework.util.StringUtils;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -34,6 +34,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     private final ChatModel chatModel;
     @Qualifier("guardrailQueryPreprocessor")
     private final QueryContextPreprocessor preprocessor;
+    private final GameDomainDetector domainDetector; // + GENSHIN 감지용
 
     /* 선택적 Tavily 폴백(존재 시에만 사용) */
     @Autowired(required = false)
@@ -358,15 +359,14 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             return Collections.emptyList();
         }
     }
-    /** LLM 호출 없이 간단 확장(최대 followupsPerLevel개) */
+    /** LLM 호출 없이 간단 확장(최대 followupsPerLevel개) — 도메인 민감 */
     private List<String> heuristicFollowups(String parent) {
         if (!StringUtils.hasText(parent)) return List.of();
-        List<String> cands = List.of(
-                parent + " 정의",
-                parent + " 공식",
-                parent + " 예시",
-                parent + " 요약"
-        );
+        boolean isGenshin = (domainDetector != null)
+                && "GENSHIN".equalsIgnoreCase(domainDetector.detect(parent));
+        List<String> cands = isGenshin
+                ? List.of(parent + " 파티 조합", parent + " 시너지", parent + " 상성", parent + " 추천 파티")
+                : List.of(parent + " 개요", parent + " 핵심 포인트");
         return cands.stream()
                 .limit(Math.max(1, followupsPerLevel))
                 .toList();
