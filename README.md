@@ -389,7 +389,95 @@ Introduced a robust, policy-driven guardrail system to prevent model hallucinati
 * **Centralized Prompt & Model Management:**
     * `PromptBuilder`: Now centrally constructs all system prompts, injecting `PAIRING`-specific instructions (e.g., "Recommend partners ONLY for subject: X," "If evidence is insufficient, answer '정보 없음'") from the `PromptContext`.
     * `ModelRouter`: New component to dynamically route `PAIRING` or high-stakes queries to a superior, low-temperature model (e.g., `gpt-4o`), while using a more efficient model for general queries.
+Of course, (AbandonWare). Here is the directive for Gemini, translated into English based on your request. It is focused on providing strategic direction without writing the source code itself.
 
+Pull Request Analysis and Implementation Guidelines
+Overview
+This pull request has two primary objectives. First, it addresses a build-breaking issue in MemoryReinforcementService.java with a hotfix. Second, it refactors the existing static RAG pipeline into a dynamic, self-learning system that improves over time through user feedback and a database-driven knowledge base. This marks a significant architectural shift from simple information retrieval to a system that continuously enhances its performance based on user interaction.
+
+Part 1: Hotfix Instructions for Build Failure
+Open File: Open the file src/main/java/com/example/lms/service/MemoryReinforcementService.java.
+
+Apply Fixes:
+
+Locate and remove the misplaced } bracket inside the reinforceWithSnippet(TranslationMemory t) method.
+
+Add minContentLength and maxContentLength as class fields. Use the @Value annotation to inject the values from memory.snippet.min-length and memory.snippet.max-length in application.yml.
+
+Implement the tryGetString helper method to safely use reflection. This method should accept multiple getter method names and return the value from the first one that succeeds.
+
+Part 2: Architectural Directives for Self-Learning RAG Pipeline
+Task 2.1: Centralize the Knowledge Base
+Create JPA Entities:
+
+DomainKnowledge: Create an entity that includes fields for domain, entityType, and entityName.
+
+EntityAttribute: Create an entity linked to DomainKnowledge via a OneToMany relationship to store attributeKey and attributeValue pairs.
+
+Create Repository:
+
+DomainKnowledgeRepository: Create a repository interface that extends JpaRepository to manage the DomainKnowledge entity.
+
+Create Service:
+
+Create a KnowledgeBaseService interface and its implementation, DefaultKnowledgeBaseService.
+
+Implement key methods such as getAttribute(domain, entityName, key) and getPairingPolicy(domain, entityName) to fetch attributes and policies from the database.
+
+Update Dependencies:
+
+Modify SubjectResolver and GuardrailQueryPreprocessor to use the new KnowledgeBaseService instead of the hardcoded GenshinElementLexicon.
+
+Task 2.2: Implement Adaptive Scoring
+Create JPA Entity:
+
+SynergyStat: Create an entity to record positive and negative user feedback scores. It must include fields for domain, subject, partner, positive, and negative.
+
+Create Repository:
+
+SynergyStatRepository: Create a JpaRepository to manage the SynergyStat entity.
+
+Create Service:
+
+AdaptiveScoringService: Create this service to calculate a synergyBonus score based on the data in SynergyStat. The logic should grant a bonus for positive feedback and a penalty for negative feedback.
+
+Modify Existing Logic:
+
+Inject the AdaptiveScoringService into EmbeddingModelCrossEncoderReranker.
+
+Add the synergyBonus to the final score calculation to ensure user feedback dynamically influences the reranking results.
+
+Task 2.3: Enhance Hallucination Suppression
+Create Service:
+
+ClaimVerifierService: Create this service. Its role is to extract key claims from the AI's draft answer and verify each claim against the provided context (search results) using an LLM call.
+
+Modify Existing Logic:
+
+Integrate the ClaimVerifierService into the final stage of FactVerifierService.
+
+Add a final "sanitization" step where ClaimVerifierService removes unsubstantiated claims or replaces the answer with "정보 없음" (Information not available) just before the response is returned to the user.
+
+Implementation Verification and Test Plan
+Follow the checklist below to confirm that the changes have been implemented correctly.
+
+[Database]
+
+[ ] Verify that the new tables (domain_knowledge, entity_attribute, synergy_stat) are correctly created in the database schema.
+
+[Dependency Injection]
+
+[ ] Check the Spring Boot application startup logs to confirm that new services like DefaultKnowledgeBaseService and AdaptiveScoringService are properly initialized as Spring Beans.
+
+[Functionality Test]
+
+[ ] Write a unit test that calls GuardrailQueryPreprocessor to verify that it now fetches policies from the database-backed KnowledgeBaseService instead of the old hardcoded GenshinElementLexicon.
+
+[End-to-End Test]
+
+[ ] Perform a manual chat test via the ChatApiController.
+
+[ ] Inspect the application logs to confirm that the synergyBonus from AdaptiveScoringService is being correctly calculated and applied in the final score computation within EmbeddingModelCrossEncoderReranker.
 * **Evidence & Answer Sanitization:**
     * `EvidenceGate`: New final guard that blocks the LLM call entirely if the retrieved context lacks sufficient evidence (e.g., minimum number of subject mentions), returning "정보 없음" to prevent confident hallucinations from sparse data.
     * `GenshinRecommendationSanitizer`: A new `AnswerSanitizer` implementation that performs a final check on the generated answer, filtering out recommendations that violate the initial `discouragedElements` policy.
