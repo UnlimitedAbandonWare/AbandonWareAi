@@ -1,5 +1,6 @@
 package com.example.lms.prompt;
-
+import java.util.Map;
+import java.util.Set;
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
 import java.util.List;
@@ -59,16 +60,20 @@ public class PromptBuilder {
             if (StringUtils.hasText(ctx.domain())) {
                 sys.append("- Domain: ").append(ctx.domain()).append("\n");
             }
-            if (!CollectionUtils.isEmpty(ctx.allowedElements())) {
-                sys.append("- Allowed elements: ").append(String.join(",", ctx.allowedElements())).append("\n");
-            }
-            if (!CollectionUtils.isEmpty(ctx.discouragedElements())) {
-                sys.append("- Discouraged elements: ").append(String.join(",", ctx.discouragedElements())).append("\n");
+            if (ctx.interactionRules() != null && !ctx.interactionRules().isEmpty()) {
+                sys.append("### DYNAMIC RELATIONSHIP RULES\n");
+                ctx.interactionRules().forEach((k, v) -> {
+                    if (v != null && !v.isEmpty()) {
+                        sys.append("- ").append(k).append(": ")
+                                .append(String.join(",", v))
+                                .append('\n');
+                    }
+                });
             }
             // RECOMMENDATION/PAIRING 공통 보수적 가드
 
-                sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
-            }
+            sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
+        }
 
         return sys.toString();
     }

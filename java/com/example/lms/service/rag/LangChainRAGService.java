@@ -202,22 +202,20 @@ public class LangChainRAGService {
                 .map(dev.langchain4j.rag.content.Content::from).toList()
                 : java.util.List.<dev.langchain4j.rag.content.Content>of();
 
-        //  의도·제약 계산 (없으면 빈 셋/GENERAL)  ← 기존 중복 선언 삭제
+        // 교체
         final String domain = (preprocessor != null) ? preprocessor.detectDomain(query) : "";
-        final java.util.Set<String> allow = (preprocessor != null) ? preprocessor.allowedElements(query) : java.util.Set.of();
-        final java.util.Set<String> block = (preprocessor != null) ? preprocessor.discouragedElements(query) : java.util.Set.of();
+        final java.util.Map<String, java.util.Set<String>> rules =
+                (preprocessor != null) ? preprocessor.getInteractionRules(query) : java.util.Map.of();
 
         PromptContext ctx = PromptContext.builder()
                 .web(webContent)
                 .rag(ragContent)
-                .memory("")           // 필요 시 장기 메모리 주입
+                .memory("")
                 .history(history)
                 .domain(domain)
                 .intent(intent)
-                .allowedElements(allow)
-                .discouragedElements(block)
+                .interactionRules(rules)
                 .build();
-
         String instructions = promptBuilder.buildInstructions(ctx);
         String body = promptBuilder.build(ctx)+ "\n### QUESTION\n" + query;
 

@@ -23,6 +23,7 @@ import static com.example.lms.service.rag.LangChainRAGService.META_SID;
 import com.example.lms.service.rag.QueryComplexityGate;
 import jakarta.annotation.PostConstruct;
 import com.example.lms.service.rag.HybridRetriever;
+import com.example.lms.service.rag.pre.QueryContextPreprocessor;
 /* ---------- OpenAI-Java ---------- */
 import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.PromptService;
@@ -161,6 +162,7 @@ public class ChatService {
     private final NaverSearchService searchService;
     private final ChatMemoryProvider chatMemoryProvider; // 세션 메모리 Bean
     private final HybridRetriever hybridRetriever; // ★ 하이브리드 리트리버
+    private final QueryContextPreprocessor qcPreprocessor; // ★ 동적 규칙 전처리기
 
     // ▼▼ 신규 DI
     private final com.example.lms.strategy.StrategySelectorService strategySelector;
@@ -307,25 +309,26 @@ public class ChatService {
     /**
      * 의도 분석을 통해 최종 검색 쿼리를 결정한다.
      */
+    /**
+     * 사용자의 원본 쿼리와 LLM이 재작성한 쿼리 중 최종적으로 사용할 쿼리를 결정합니다.
+     * 재작성된 쿼리가 유효하고, 모델이 그 결과에 자신감을 보일 때만 재작성된 쿼리를 사용합니다.
+     *
+     * @param originalQuery 사용자의 원본 입력 쿼리
+     * @param r             QueryRewriteResult, 재작성된 쿼리와 신뢰도 점수를 포함
+     * @return 최종적으로 RAG 검색에 사용될 쿼리 문자열
+     */
+
     private String decideFinalQuery(String originalQuery, Long sessionId) {
         if (originalQuery == null || originalQuery.isBlank()) return originalQuery;
         List<String> history = (sessionId != null)
                 ? chatHistoryService.getFormattedRecentHistory(sessionId, 5)
-                : Collections.emptyList();
-        if (log.isDebugEnabled()) {
-            log.debug("[decideFinalQuery] sid={}, histSize={}, q='{}'",
-                    sessionId, (history != null ? history.size() : 0), originalQuery);
-        }
+                : java.util.Collections.emptyList();
 
         DisambiguationResult r = disambiguationService.clarify(originalQuery, history);
-        if (r != null && r.isConfident()
-                && r.getRewrittenQuery() != null
-                && !r.getRewrittenQuery().isBlank()) {
-            log.debug("[decideFinalQuery] rewritten='{}' (confident)", r.getRewrittenQuery());
+        if (r != null && r.isConfident() && r.getRewrittenQuery() != null && !r.getRewrittenQuery().isBlank()) {
             return r.getRewrittenQuery();
         }
-        log.debug("[decideFinalQuery] use-original");
-        return originalQuery;
+        return originalQuery; // ← 이 줄이 반드시 있어야 함
     }
 
     // ------------------------------------------------------------------------
@@ -428,8 +431,9 @@ public class ChatService {
         List<Content> fused = hybridRetriever.retrieveAll(smartQueries, hybridTopK);
 
 
-        // 🔸 3) 교차‑인코더 리랭킹(임베딩 기반 대체 구현) → 상위 N 문서
-        List<Content> topDocs = reranker.rerank(finalQuery, fused, rerankTopN);
+        // 🔸 3) 동적 관계 규칙 산출 → 리랭킹에 반영
+        java.util.Map<String, java.util.Set<String>> rules = qcPreprocessor.getInteractionRules(finalQuery);
+        List<Content> topDocs = reranker.rerank(finalQuery, fused, rerankTopN, rules);
         if (log.isDebugEnabled())
             log.debug("[Hybrid] fused={}, topN={} (sid={})", (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
         /* 🔴 컨텍스트 부족 가드레일(하이브리드 이후로 이동)
@@ -441,9 +445,11 @@ public class ChatService {
         }
 
         // 🔸 4) 최종 컨텍스트 생성(룰 기반) — 오케스트레이터로 이관
-        String unifiedCtx = contextOrchestrator.orchestrate(finalQuery,
-                ragSvc.asContentRetriever(pineconeIndexName).retrieve(Query.from(finalQuery)), // vector
-                topDocs);
+        String unifiedCtx = contextOrchestrator.orchestrate(
+                finalQuery,
+                ragSvc.asContentRetriever(pineconeIndexName).retrieve(Query.from(finalQuery)),
+                topDocs,
+                rules);
 
         // 🔸 5) 단일 LLM 호출로 답변 생성
         // 🔸 5) 모델/온도 준비 → 위험 질의면 온도 하향

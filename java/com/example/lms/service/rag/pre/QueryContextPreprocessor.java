@@ -3,7 +3,7 @@ package com.example.lms.service.rag.pre;
 
 import java.util.Locale;
 import java.util.Set;
-
+import java.util.Map;
 /**
  * 검색 전 쿼리를 고유명사 추출 및 지역/도메인 맥락 주입을 통해 강화(enrich)하는 전처리기.
  * - enrich(String): 필수 계약
@@ -40,9 +40,8 @@ public interface QueryContextPreprocessor {
     default String inferIntent(String q) {
         if (q == null) return "GENERAL";
         String s = q.toLowerCase(Locale.ROOT);
-        // '궁합/시너지/어울림/조합/파티'는 PAIRING으로 엄밀 분류
-        if (s.matches(".*(잘\\s*어울리|어울리(?:는|다)?|궁합|상성|시너지|조합|파티).*"))
-            return "PAIRING";
+        // '궁합/시너지/어울림/조합/파티'는 PAIRING으로 분류
+
         // 현재 적용된 로직 (PAIRING 우선 분리)
         if (s.matches(".*(잘\\s*어울리|어울리(?:는|다)?|궁합|상성|시너지|조합|파티).*"))
             return "PAIRING";
@@ -51,23 +50,7 @@ public interface QueryContextPreprocessor {
         return "GENERAL";
     }
 
-    /**
-     * 특정 도메인이나 의도에 따라 검색 결과에 포함되어야 할 허용 요소를 반환합니다.
-     *
-     * @param q 원본 쿼리
-     * @return 허용 요소 집합 (기본값: 비어 있음)
-     */
-    default Set<String> allowedElements(String q) {
-        return Set.of();
-    }
-
-    /**
-     * 특정 도메인이나 의도에 따라 검색 결과에서 가급적 제외해야 할 비선호 요소를 반환합니다.
-     *
-     * @param q 원본 쿼리
-     * @return 비선호 요소 집합 (기본값: 비어 있음)
-     */
-    default Set<String> discouragedElements(String q) {
-        return Set.of();
-    }
+    /** 쿼리 기반 **동적 관계 규칙**을 반환합니다.
+     * 예) RELATIONSHIP_CONTAINS → {"공기","하늘"}, RELATIONSHIP_IS_PART_OF → {"자연"} */
+    default Map<String, Set<String>> getInteractionRules(String q) { return Map.of(); }
 }

@@ -76,4 +76,24 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
         }
         return out;
     }
+
+    @Override
+    public Map<String, Set<String>> getAllRelationships(String domain, String entityName) {
+        return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
+                .map(dk -> {
+                    Map<String, Set<String>> map = new LinkedHashMap<>();
+                    dk.getAttributes().stream()
+                            .filter(a -> a.getAttributeKey() != null
+                                    && a.getAttributeKey().toUpperCase(Locale.ROOT).startsWith("RELATIONSHIP_"))
+                            .forEach(a -> {
+                                String key = a.getAttributeKey().toUpperCase(Locale.ROOT);
+                                Set<String> vals = csvSet(a.getAttributeValue());
+                                if (!vals.isEmpty()) map.put(key, vals);
+                            });
+                    return map.isEmpty()
+                            ? Collections.<String, Set<String>>emptyMap()
+                            : Collections.unmodifiableMap(map);
+                })
+                .orElseGet(Collections::emptyMap);
+    }
 }

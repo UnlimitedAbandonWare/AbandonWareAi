@@ -39,8 +39,8 @@ public class ElementConstraintScorer {
         }
 
         // 1. 쿼리로부터 허용/비선호 원소 정책 가져오기
-        Set<String> allowed = preprocessor.allowedElements(queryText);
-        Set<String> discouraged = preprocessor.discouragedElements(queryText);
+        Set<String> allowed = java.util.Set.of();
+        Set<String> discouraged = java.util.Set.of();
 
         boolean hasPolicy = (allowed != null && !allowed.isEmpty()) || (discouraged != null && !discouraged.isEmpty());
         if (!hasPolicy) {

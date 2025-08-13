@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  * - 공손어/불필요 꼬리표 제거
  * - 여분 공백/기호 정리 및 길이 제한
  * - 도메인/의도 감지
- * - (원신 질의 시) 원소 허용/비선호 정책 주입
+ + * - (관계 규칙) DB의 RELATIONSHIP_* 속성을 읽어 **동적 상호작용 규칙** 주입
  */
 @Component("guardrailQueryPreprocessor")
 @Primary // 다중 구현 시 기본값으로 사용
@@ -129,21 +129,13 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
         return "GENERAL";
     }
 
-    // ── 허용 원소(원신) – 에스코피에 맥락 보수 정책
     @Override
-    public Set<String> allowedElements(String q) {
+    public Map<String, Set<String>> getInteractionRules(String q) {
         String domain = detectDomain(q);
-        if (!"GENSHIN".equalsIgnoreCase(domain)) return Set.of();
-        String subject = subjectResolver.resolve(q, domain).orElse("");
-        return knowledgeBase.getPairingPolicy(domain, subject).allowed();
-    }
-
-    // ── 비선호 원소(원신) – Pyro/Dendro 보수 감점
-    @Override
-    public Set<String> discouragedElements(String q) {
-        String domain = detectDomain(q);
-        if (!"GENSHIN".equalsIgnoreCase(domain)) return Set.of();
-        String subject = subjectResolver.resolve(q, domain).orElse("");
-        return knowledgeBase.getPairingPolicy(domain, subject).discouraged();
+        if (!org.springframework.util.StringUtils.hasText(domain)) return Map.of();
+        String subject = subjectResolver.resolve(q, domain).orElse(null);
+        if (!org.springframework.util.StringUtils.hasText(subject)) return Map.of();
+        // DB의 RELATIONSHIP_* 키를 전부 모아 반환
+        return knowledgeBase.getAllRelationships(domain, subject);
     }
 }
