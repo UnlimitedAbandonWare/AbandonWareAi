@@ -1,3 +1,81 @@
+Generalizing the AbandonWare RAG Chatbot into a Domain‑Agnostic Knowledge‑Driven Agent
+Background
+Retrieval‑augmented generation (RAG) is an architectural pattern that supplements a language model with external knowledge. Instead of relying solely on the model’s internal training, RAG fetches relevant documents from a knowledge base and uses them to ground responses. This method helps reduce hallucinations by providing the model with accurate context; as one tutorial notes, the technique allows you to “add your own data to the prompt and ensure more accurate generative AI output”
+medium.com
+. RAG implementations often use a vector store for efficient retrieval, and a hybrid retrieval strategy can combine vector similarity with real‑time web search and rule‑based filters to build a rich context.
+
+The AbandonWare Hybrid RAG Chatbot originally targeted questions about the game Genshin Impact and its characters. Written in Java 17 with Spring Boot and LangChain4j 1.0.1, the system already included advanced capabilities such as query correction, hybrid retrieval (web search and vector database), reciprocal rank fusion, cross‑encoder re‑ranking, two‑pass fact verification and reinforcement learning from user feedback. However, the early design hard‑coded domain‑specific policies (e.g. allowed or discouraged elements) and entity lists (e.g. GenshinElementLexicon), making it difficult to support new domains. A critical bug in MemoryReinforcementService also prevented the project from building successfully.
+
+Objectives of the Refactor
+Two major goals drove the recent set of pull requests:
+
+Fix the build failure—Remove a misplaced brace in MemoryReinforcementService.reinforceWithSnippet(...), introduce minContentLength and maxContentLength as configurable fields, and implement a reflection‑based helper method to safely access translation‑memory fields.
+
+Generalize the system into a domain‑agnostic agent—Replace hard‑coded lexicons and static policies with a database‑driven knowledge base. The revised architecture allows new entities, attributes and relationship rules to be added via data, not code. Dynamic reranking and hallucination‑suppression services adapt based on user feedback and claim verification, creating a self‑learning pipeline suitable for any knowledge domain.
+
+Architectural Changes
+Centralized Knowledge Base
+The refactor introduces two JPA entities, DomainKnowledge and EntityAttribute, stored in relational tables. Each record in DomainKnowledge represents an entity (such as a character, person or product) within a domain (e.g. games, people, products). The EntityAttribute table holds key–value pairs describing attributes of those entities (for example, element, type or role). A new service, DefaultKnowledgeBaseService, abstracts database queries and provides methods like getAttribute(domain, entityName, key) and getInteractionRules(domain, entityName). The SubjectResolver now derives the subject of a query by consulting this knowledge base rather than matching against a list of hard‑coded names.
+
+By replacing the static GenshinElementLexicon, the system can answer questions about any entity loaded in the knowledge base. For instance, a user could ask, “Which character pairs well with Hu Tao?” or “Which team complements Diluc?” without the code explicitly knowing those names. Adding other games or product domains simply requires populating the tables with appropriate entities and relationships.
+
+Dynamic Relationship Rules
+In the previous implementation, the query preprocessor enforced fixed policies about allowed and discouraged elements (e.g. hydro vs. pyro) and the ElementConstraintScorer applied those rules during reranking. The refactor replaces these with a generic relationship‑rule scorer. The QueryContextPreprocessor now calls getInteractionRules() on the knowledge base to obtain all relevant relationship rules for a given subject. These relationship rules can include CONTAINS, IS_PART_OF, PREFERRED_PARTNER, etc. During retrieval and reranking:
+
+GuardrailQueryPreprocessor injects the rules into the PromptContext so that the model is explicitly told which pairings are allowed or discouraged.
+
+RelationshipRuleScorer applies these rules when ranking documents retrieved from the web or vector store.
+
+Thus, if a new character or even a different domain (e.g. musical instruments, recipes or product recommendations) is introduced, the same mechanism enforces domain‑specific pairing constraints without altering the codebase.
+
+Adaptive Reranking Based on User Feedback
+The system’s original reinforcement learning used a MemoryReinforcementService to update translation‑memory entries with hit counts, Q‑values and recency. The upgrade adds a SynergyStat entity and an AdaptiveScoringService. SynergyStat records positive and negative feedback about combinations or pairings (e.g. how well two characters work together). When a user reacts with 👍 or 👎 to a recommendation, the service updates the synergy scores.
+
+During reranking, the EmbeddingModelCrossEncoderReranker incorporates a synergyBonus computed by AdaptiveScoringService. Candidate answers that align with historical user preferences receive a higher score, while those consistently judged unhelpful are penalized. Over time, this feedback loop personalizes the recommendations.
+
+Enhanced Hallucination Suppression
+Retrieval alone cannot guarantee factual accuracy. Even with context, language models sometimes generate confident but incorrect statements. A tutorial on KNIME’s RAG framework notes that hallucinations occur when the model invents nonexistent items and presents them convincingly
+medium.com
+. To mitigate this, the new architecture adds multiple guardrails:
+
+ClaimVerifierService – After the model generates a draft answer, this service extracts factual claims and verifies each against the retrieved context via an LLM call. Unsupported claims are removed before the answer is returned. If verification fails, the system responds with “정보 없음” (information unavailable).
+
+EvidenceGate – Before prompting the LLM, this gate ensures that the retrieved context contains sufficient evidence (e.g. enough mentions of the subject). If not, the LLM call is aborted and a fallback response is returned to prevent baseless answers.
+
+AnswerSanitizers – Final sanitizers (such as GenshinRecommendationSanitizer) enforce domain policies on the generated answer, filtering out recommendations that violate discouraged rules.
+
+Authority‑weighted Retrieval – The web search retriever now integrates the AuthorityScorer, prioritizing trustworthy sources. When the system constructs the context, it prefers official or authoritative domains (e.g. vendor sites, reputable encyclopedias) and demotes low‑credibility sources.
+
+Collectively, these measures reduce hallucinations and ensure that the final answer is grounded in evidence. As the KNIME tutorial explains, adding domain‑specific data and careful prompt engineering helps produce fact‑based responses
+medium.com
+.
+
+Modular Prompt Builder & Model Router
+The PromptBuilder has been centralized to construct system prompts consistently. For special intents such as pairing or recommendation, it injects domain‑specific instructions: for example, “Recommend partners ONLY for subject X; if evidence is insufficient, answer ‘정보 없음.’” A new ModelRouter selects an appropriate LLM model and temperature based on query intent and domain importance. High‑stakes or pairing queries might be routed to a higher‑quality model (e.g. GPT‑4o), while general queries use a faster model. This modular design simplifies future changes to prompt policies or model selection.
+
+Meta‑Learning and Hyperparameter Tuning
+The original system already employed a meta‑learning loop: StrategySelectorService tracked the performance of different retrieval strategies (web‑first, vector‑first, self‑ask, hybrid fusion) and used a softmax policy to choose strategies based on historical success. The refactor keeps this loop but makes it domain‑agnostic. DynamicHyperparameterTuner periodically adjusts exploration–exploitation trade‑offs (e.g. temperature for Boltzmann selection) and reward weights based on aggregated performance. ContextualScorer evaluates answers on factuality, quality and novelty and provides reward scores for reinforcement learning.
+
+Session Isolation and Streaming
+Each chat session is still isolated by a metadata key (META_SID). Session‑specific caches are maintained to avoid context leakage between users. The streaming API uses Server‑Sent Events (SSE) to provide incremental updates—search status, context building, draft answer and verification results. This transparency helps users understand the reasoning process and fosters trust.
+
+Implications and Usage
+The result of these changes is a knowledge‑driven agent that can answer questions across diverse domains. Instead of being limited to characters from Genshin Impact, the agent can handle queries about any subject recorded in its knowledge base. By combining external retrieval with dynamic relationship rules and feedback‑driven reranking, the system provides more accurate, context‑rich responses. Hallucinations are mitigated through multiple layers of verification and evidence gating. Users are encouraged to provide feedback (👍/👎 or corrections), which is fed into the adaptive scoring system to continuously refine future answers.
+
+To deploy the updated agent:
+
+Populate the knowledge base – Insert entities, attributes and relationship rules into the DomainKnowledge and EntityAttribute tables.
+
+Configure environment variables – Provide API keys for OpenAI, vector databases (e.g. Pinecone) and web search services (e.g. Naver).
+
+Run the application – Build the project (ensuring Java 17+), adjust application.yml for retrieval mode, caches and hyperparameters, and start the server via ./gradlew bootRun or your IDE.
+
+Iterate and Improve – Use the synergy statistics and claim verification logs to adjust domain weights, update relationship rules and refine the KnowledgeBase. Encourage users to rate answers to fuel the adaptive scoring mechanism.
+
+Conclusion
+The AbandonWare RAG Chatbot has evolved from a Genshin‑specific helper into a general‑purpose, knowledge‑driven agent. By centralizing domain knowledge, replacing static rules with dynamic relationships, incorporating user feedback into reranking and adding robust hallucination suppression, the system offers grounded and extensible responses. This aligns with the guiding principle of retrieval‑augmented generation: supplement the language model with relevant context to improve accuracy and reduce hallucinations
+medium.com
+. Future development can further expand the knowledge base, refine scoring heuristics and integrate additional domains, ensuring that the agent remains both adaptable and trustworthy.
 AbandonWare Hybrid RAG AI Chatbot Service
 About the Project
 This repository contains a highly advanced retrieval‑augmented generation (RAG) AI chatbot service, developed as part of the AbandonWare project. The system is built on Java 17, Spring Boot, and LangChain4j 1.0.1 (fixed at BOM/core/starter/OpenAI), delivering far more than a simple LLM call: it combines real‑time web search, vector‑database retrieval, dynamic re‑ranking, two‑pass fact verification, and reinforcement learning from user feedback to provide accurate, up‑to‑date, and contextually rich answers. Each chat session is isolated; caching, SSE streaming, and dynamic configuration are supported to meet production requirements.
