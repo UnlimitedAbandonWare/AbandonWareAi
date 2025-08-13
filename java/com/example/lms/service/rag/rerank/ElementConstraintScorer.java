@@ -1,5 +1,5 @@
-// src/main/java/com/example/lms/service/rag/rerank/ElementConstraintScorer.java
-package com.example.lms.service.rag.rerank;
+
+        package com.example.lms.service.rag.rerank;
 
 import com.example.lms.genshin.GenshinElementLexicon;
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;
@@ -21,7 +21,7 @@ public class ElementConstraintScorer {
     private final QueryContextPreprocessor preprocessor;
     private final GenshinElementLexicon lexicon;
 
-    // 두 클래스의 의존성을 모두 주입받도록 수정
+    // 두 클래스의 의존성을 모두 주입받도록 생성자 통합
     public ElementConstraintScorer(QueryContextPreprocessor preprocessor, GenshinElementLexicon lexicon) {
         this.preprocessor = preprocessor;
         this.lexicon = lexicon;

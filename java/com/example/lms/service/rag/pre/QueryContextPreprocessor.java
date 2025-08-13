@@ -43,6 +43,9 @@ public interface QueryContextPreprocessor {
         // '궁합/시너지/어울림/조합/파티'는 PAIRING으로 엄밀 분류
         if (s.matches(".*(잘\\s*어울리|어울리(?:는|다)?|궁합|상성|시너지|조합|파티).*"))
             return "PAIRING";
+        // 현재 적용된 로직 (PAIRING 우선 분리)
+        if (s.matches(".*(잘\\s*어울리|어울리(?:는|다)?|궁합|상성|시너지|조합|파티).*"))
+            return "PAIRING";
         if (s.matches(".*(추천|추천해|추천좀|픽|티어|메타).*"))
             return "RECOMMENDATION";
         return "GENERAL";

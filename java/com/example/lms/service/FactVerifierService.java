@@ -64,6 +64,10 @@ public class FactVerifierService {
             2. Compare the Draft with the Context (Context has higher authority).
             3. A fact is verified only if **at least two independent Context lines** state the same information.
             4. Remove or explicitly mark any named entities (characters/items/regions) that **do not appear in Context**.
+                        4-1. For any **pairing/synergy** claims (e.g., "A works well with B"):
+                            - Treat as VERIFIED only if Context contains an explicit synergy cue
+                              (e.g., "잘 어울린다", "시너지", "조합", "함께 쓰면 좋다") relating A↔B.
+                            - Mere **stat comparisons**, **co-mentions**, or **example lists** are NOT sufficient.
             5. If the Draft is fully consistent, reply exactly:
                STATUS: PASS
                CONTENT:
@@ -143,7 +147,9 @@ public class FactVerifierService {
                     log.debug("[Verify] grounding 실패 → 정보 없음");
                     return "정보 없음";
                 }
-                return draft;
+                // PASS여도 조합/시너지 등 unsupported claim 제거
+                var res = claimVerifier.verifyClaims(context, draft, model);
+                return res.verifiedAnswer();
             }
             case CORRECTED -> {
                 if (!grounded) {

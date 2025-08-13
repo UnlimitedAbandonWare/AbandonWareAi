@@ -1,11 +1,9 @@
-// src/main/java/com/example/lms/service/verification/ClaimVerifierService.java
 package com.example.lms.service.verification;
 
 import com.theokanning.openai.completion.chat.*;
 import com.theokanning.openai.service.OpenAiService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-
 import java.util.*;
 
 @Service
@@ -14,32 +12,33 @@ public class ClaimVerifierService {
 
     private final OpenAiService openAi;
 
-    public record Result(String verifiedAnswer, List<String> unsupportedClaims) {}
+    public record VerificationResult(String verifiedAnswer, List<String> unsupportedClaims) {}
 
-    public Result verifyClaims(String context, String draft, String model) {
+    public VerificationResult verifyClaims(String context, String draftAnswer, String model) {
         try {
-            List<String> claims = extractClaims(draft, model);
-            if (claims.isEmpty()) return new Result(draft, List.of());
+            List<String> claims = extractClaims(draftAnswer, model);
+            if (claims.isEmpty()) return new VerificationResult(draftAnswer, List.of());
+
+            // 두 버전 중 더 강화된 프롬프트를 사용하는 judgeClaims 호출
             List<Boolean> verdicts = judgeClaims(context, claims, model);
 
-            // unsupported 제거 후 답변 재구성(단순 문장 필터)
             List<String> unsupported = new ArrayList<>();
-            String filtered = rebuild(draft, claims, verdicts, unsupported);
-            return new Result(filtered.isBlank() ? "정보 없음" : filtered, unsupported);
+            String filtered = rebuild(draftAnswer, claims, verdicts, unsupported);
+            return new VerificationResult(filtered.isBlank() ? "정보 없음" : filtered, unsupported);
         } catch (Exception e) {
-            // 실패 시 원문 유지
-            return new Result(draft, List.of());
+            // 예외 발생 시 안전하게 원본 답변 반환
+            return new VerificationResult(draftAnswer, List.of());
         }
     }
 
     private List<String> extractClaims(String draft, String model) {
         String prompt = """
-      Extract the core factual claims from the ANSWER as a JSON array of strings (max 8).
-      Keep each claim concise and self-contained. Output JSON only.
+          Extract the core factual claims from the ANSWER as a JSON array of strings (max 8).
+          Keep each claim concise and self-contained. Output JSON only.
 
-      ANSWER:
-      %s
-      """.formatted(draft);
+          ANSWER:
+          %s
+          """.formatted(draft);
         ChatCompletionRequest req = ChatCompletionRequest.builder()
                 .model(model).temperature(0d).topP(0.05d)
                 .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
@@ -49,16 +48,20 @@ public class ClaimVerifierService {
     }
 
     private List<Boolean> judgeClaims(String context, List<String> claims, String model) {
+        // - (제거) 단순 true/false 질문
+        // + (개선) "조합/시너지"와 "단순 스탯 비교/동시 언급"을 구분하도록 명시적으로 지시
         String prompt = """
-      For each CLAIM[i], answer STRICTLY "true" or "false" if it is directly supported by CONTEXT.
-      Return a JSON array of booleans with the same order and length as CLAIMS.
+          For each CLAIM[i], answer STRICTLY "true" or "false" if it is directly supported by CONTEXT.
+          Treat **pairing/synergy** as true only with explicit synergy cues (e.g., "잘 어울린다", "시너지", "조합", "함께 쓰면 좋다").
+          Mere stat comparisons / co-mentions are false.
+          Return a JSON array of booleans with the same order and length as CLAIMS.
 
-      CONTEXT:
-      %s
+          CONTEXT:
+          %s
 
-      CLAIMS:
-      %s
-      """.formatted(context, claims.toString());
+          CLAIMS:
+          %s
+          """.formatted(context, claims.toString());
         ChatCompletionRequest req = ChatCompletionRequest.builder()
                 .model(model).temperature(0d).topP(0.05d)
                 .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
@@ -67,10 +70,9 @@ public class ClaimVerifierService {
         return parseJsonBooleans(json, claims.size());
     }
 
-    // --- helpers ---
+    // --- Helper Methods (두 버전에서 동일) ---
     private static List<String> parseJsonArray(String raw) {
         try {
-            // 매우 경량 파서(환경에 따라 Jackson 사용 권장)
             String s = raw.trim();
             if (!s.startsWith("[")) return List.of();
             s = s.substring(1, s.lastIndexOf(']'));
@@ -99,15 +101,17 @@ public class ClaimVerifierService {
         return out;
     }
 
-    private static String rebuild(String draft, List<String> claims, List<Boolean> ok, List<String> unsupported) {
-        if (claims.isEmpty() || ok.isEmpty()) return draft;
-        for (int i=0;i<claims.size();i++) {
-            if (!ok.get(i)) unsupported.add(claims.get(i));
+    private static String rebuild(String draft, List<String> claims, List<Boolean> verdicts, List<String> unsupported) {
+        if (claims.isEmpty() || verdicts.isEmpty()) return draft;
+        for (int i = 0; i < claims.size(); i++) {
+            if (i < verdicts.size() && !verdicts.get(i)) {
+                unsupported.add(claims.get(i));
+            }
         }
-        // 간단: unsupported claim 문장 제거
         String filtered = draft;
-        for (String bad : unsupported) {
-            filtered = filtered.replace(bad, "");
+        for (String badClaim : unsupported) {
+            // 문장 단위로 제거하기 위해 정규식 사용 고려 가능
+            filtered = filtered.replace(badClaim, "");
         }
         return filtered.replaceAll("\\s{2,}", " ").trim();
     }

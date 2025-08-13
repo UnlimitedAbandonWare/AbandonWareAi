@@ -247,8 +247,12 @@ public class ChatService {
                   - When sources conflict, give higher weight to **official domains** (e.g., *.hoyoverse.com, hoyolab.com)
                     and be cautious with **community/fan sites** (e.g., fandom.com, personal blogs).
                   - Cite the source titles when you answer.
-                  - Do NOT guess or invent facts. If the Context does not explicitly mention a named entity
-                    (character/item/region), do NOT include it in the answer.
+                            - Do NOT guess or invent facts. If the Context does not explicitly mention a named entity
+                                                                                           (character/item/region), do NOT include it in the answer.
+                                                                                         - For **pairing/synergy** questions:
+                                                                                             * Recommend character pairs **only if** the Context explicitly states that they work well together
+                                                                                               (e.g., "잘 어울린다", "시너지", "조합", "함께 쓰면 좋다").
+                                                                                             * **Do NOT** recommend pairs based solely on stat comparisons, example lists, or mere co-mentions.
                   - If the information is insufficient or conflicting from low‑authority sources only, reply "정보 없음".
                   """;
     private static final String MEM_PREFIX = """
