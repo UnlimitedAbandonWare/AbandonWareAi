@@ -160,9 +160,7 @@ public class ChatApiController {
                 // 7) 세션 저장 + 모델/트레이스 메타
                 historyService.appendMessage(session.getId(), "assistant", finalText);
 
-                String modelUsedFinal = (result.modelUsed() != null && !result.modelUsed().isBlank())
-                        ? result.modelUsed()
-                        : (dto.getModel() != null && !dto.getModel().isBlank() ? dto.getModel() : FALLBACK_MODEL);
+                String modelUsedFinal = resolveModelUsed(result.modelUsed(), dto.getModel());
 
                 historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
 
@@ -241,24 +239,27 @@ public class ChatApiController {
         // 5) 저장
         historyService.appendMessage(session.getId(), "assistant", result.content());
 
-        String modelUsedFinal = (result.modelUsed() != null && !result.modelUsed().isBlank())
-                ? result.modelUsed()
-                : (dto.getModel() != null && !dto.getModel().isBlank() ? dto.getModel() : FALLBACK_MODEL);
+        String modelUsedFinal = resolveModelUsed(result.modelUsed(), dto.getModel());
 
         historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
 
         if (dto.isUseWebSearch() && sr.trace() != null) {
             String traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
             historyService.appendMessage(session.getId(), "system", TRACE_META_PREFIX + traceHtml);
-            return new ChatResponseDto(
-                    result.content() + "\n\n" + traceHtml,
-                    session.getId(),
-                    modelUsedFinal,
-                    result.ragUsed()
-            );
         }
-
         return new ChatResponseDto(result.content(), session.getId(), modelUsedFinal, result.ragUsed());
+    }
+    /** prefer real model id over LangChain wrapper labels */
+    private static String resolveModelUsed(String fromLlm, String requested) {
+        String cand = safeTrim(fromLlm);
+        if (cand != null && !isWrapperLabel(cand)) return cand;
+        String req = safeTrim(requested);
+        return (req != null && !req.isBlank()) ? req : FALLBACK_MODEL;
+    }
+    private static String safeTrim(String s) { return (s == null) ? null : s.trim(); }
+    private static boolean isWrapperLabel(String s) {
+        String v = s.toLowerCase(Locale.ROOT);
+        return v.startsWith("lc:") || v.endsWith("chatmodel") || v.equals("openaichatmodel");
     }
 
     // ===== settings merge =====
@@ -289,7 +290,7 @@ public class ChatApiController {
                 .frequencyPenalty(frequencyPenalty)
                 .presencePenalty(presencePenalty)
                 .useRag(ui.isUseRag())
-                .useWebSearch(ui.isUseRag() || ui.isUseWebSearch())
+                .useWebSearch(ui.isUseWebSearch())
                 .build();
     }
 
@@ -376,7 +377,13 @@ public class ChatApiController {
                 .filter(Objects::nonNull)
                 .reduce((p, c) -> c)
                 .orElse(null);
-        String effectiveModel = (modelUsed == null || modelUsed.isBlank()) ? FALLBACK_MODEL : modelUsed;
+        String effectiveModel;
+        if (modelUsed == null || modelUsed.isBlank() || isWrapperLabel(modelUsed)) {
+            String cfgModel = settingsService.getAllSettings().get(KEY_DEFAULT_MODEL);
+            effectiveModel = (cfgModel != null && !cfgModel.isBlank()) ? cfgModel : FALLBACK_MODEL;
+        } else {
+            effectiveModel = modelUsed;
+        }
 
         if (!messages.isEmpty()) {
             for (int i = messages.size() - 1; i >= 0; i--) {
