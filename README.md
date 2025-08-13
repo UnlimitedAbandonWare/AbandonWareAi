@@ -497,7 +497,29 @@ Follow the checklist below to confirm that the changes have been implemented cor
 [End-to-End Test]
 
 [ ] Perform a manual chat test via the ChatApiController.
+Shift from 'Static Elements' to 'Dynamic Relationships' (Core Architectural Change)
 
+The QueryContextPreprocessor interface contract has been changed, replacing fixed policies like allowedElements/discouragedElements with getInteractionRules(). This allows for the dynamic processing of all relationship rules in the RELATIONSHIP_* format.
+
+GuardrailQueryPreprocessor now dynamically queries all relationships (e.g., "CONTAINS", "IS_PART_OF") from the KnowledgeBaseService and injects them into the PromptContext.
+
+Instead of a static ElementConstraintScorer, the EmbeddingModelCrossEncoderReranker now uses a RelationshipRuleScorer to rerank documents based on dynamically injected relationship rules (interactionRules), generating more accurate context.
+
+Adaptive Reranking Based on Feedback (Adaptive Scoring)
+
+Introduced the SynergyStat entity and AdaptiveScoringService to record user feedback (positive/negative).
+
+The EmbeddingModelCrossEncoderReranker now incorporates a synergyBonus calculated by this service into its final ranking score, allowing the system to self-improve its recommendation quality based on real user interactions.
+
+Enhanced Hallucination Suppression
+
+Added a ClaimVerifierService to the final stage of the FactVerifierService. This service extracts key claims from the AI's draft response and uses an LLM to verify each claim against the retrieved context.
+
+Unsupported claims are removed from the final answer, significantly improving the reliability of the response.
+
+Centralized Knowledge Base
+
+The hardcoded GenshinElementLexicon has been completely replaced with a KnowledgeBaseService based on DomainKnowledge and EntityAttribute JPA entities. This ensures scalability, allowing new domains, entities, and relationship rules to be added dynamically without code changes.
 [ ] Inspect the application logs to confirm that the synergyBonus from AdaptiveScoringService is being correctly calculated and applied in the final score computation within EmbeddingModelCrossEncoderReranker.
 * **Evidence & Answer Sanitization:**
     * `EvidenceGate`: New final guard that blocks the LLM call entirely if the retrieved context lacks sufficient evidence (e.g., minimum number of subject mentions), returning "정보 없음" to prevent confident hallucinations from sparse data.
