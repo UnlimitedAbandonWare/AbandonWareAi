@@ -66,7 +66,7 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
             if (resp == null) return List.of();
 
             List<Content> out = new ArrayList<>();
-            Object results = resp.get("results"); // {title,url,content/snippet,...}
+            Object results = resp.get("results"); // each: {title,url,content/snippet,...}
             if (results instanceof List<?> list) {
                 for (Object o : list) {
                     if (o instanceof Map<?, ?> m) {

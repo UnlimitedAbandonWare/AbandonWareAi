@@ -1,6 +1,6 @@
 // src/main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java
 package com.example.lms.service.rag;
-import org.springframework.beans.factory.annotation.Value;
+
 import com.example.lms.service.NaverSearchService;
 
 import dev.langchain4j.data.message.SystemMessage;
@@ -13,7 +13,9 @@ import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
@@ -33,7 +35,10 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     @Qualifier("guardrailQueryPreprocessor")
     private final QueryContextPreprocessor preprocessor;
 
-
+    /* 선택적 Tavily 폴백(존재 시에만 사용) */
+    @Autowired(required = false)
+    @Qualifier("tavilyWebSearchRetriever")
+    private ContentRetriever tavily;
     /* ---------- 튜닝 가능한 기본값(프로퍼티 주입) ---------- */
     @Value("${selfask.max-depth:2}")                private int maxDepth;                 // Self-Ask 재귀 깊이
     @Value("${selfask.web-top-k:5}")                private int webTopK;                  // 키워드당 검색 스니펫 수
@@ -42,8 +47,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     @Value("${selfask.followups-per-level:2}")      private int followupsPerLevel;        // 레벨별 추가 키워드
     @Value("${selfask.first-hit-stop-threshold:3}") private int firstHitStopThreshold;    // 1차 검색이 n개 이상이면 종료
     @Value("${selfask.timeout-seconds:12}")         private int selfAskTimeoutSec;        // 레벨 타임박스(초)
-    @Value("${selfask.per-request-timeout-ms:5000}")private int perRequestTimeoutMs;      // 개별 검색 타임아웃(ms)
-
+    @Value("${selfask.per-request-timeout-ms:5000}") private int perRequestTimeoutMs; // 개별 검색 타임아웃(ms)
+    @Value("${selfask.use-llm-followups:false}")     private boolean useLlmFollowups;  // 하위 키워드 LLM 사용 여부
     /**
      * Executor for parallel Naver searches
      */
@@ -207,7 +212,11 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
                 if (depth + 1 <= maxDepth && snippets.size() < overallTopK) {
                     int used = 0;
-                    for (String child : followUpKeywords(kw)) {
+                    // LLM 호출 최소화: 기본은 휴리스틱, 필요 시에만 LLM
+                    List<String> children = useLlmFollowups
+                            ? followUpKeywords(kw)
+                            : heuristicFollowups(kw);
+                    for (String child : children) {
                         if (used >= followupsPerLevel) break;  // per-level 제한
                         String norm = normalize(child);
                         String canon = canonicalKeyword(norm);
@@ -221,7 +230,20 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             depth++;
         }
 
-        // 4) Content 변환(비어있을 경우 안전 폴백)
+        // 3-B) 결과 부족 시 Tavily로 보강
+        if (snippets.size() < overallTopK && tavily != null) {
+            try {
+                int need = Math.max(0, overallTopK - snippets.size());
+                tavily.retrieve(Query.from(qText)).stream()
+                        .map(Content::toString)
+                        .filter(StringUtils::hasText)
+                        .limit(need)
+                        .forEach(snippets::add);
+            } catch (Exception e) {
+                log.debug("[SelfAsk] Tavily fallback skipped: {}", e.toString());
+            }
+        }
+// 4) Content 변환(비어있을 경우 안전 폴백)
         if (snippets.isEmpty()) {
             if (!firstSnippets.isEmpty()) {
                 return firstSnippets.stream()
@@ -335,6 +357,19 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             log.warn("초기 검색 실패: {}", q, e);
             return Collections.emptyList();
         }
+    }
+    /** LLM 호출 없이 간단 확장(최대 followupsPerLevel개) */
+    private List<String> heuristicFollowups(String parent) {
+        if (!StringUtils.hasText(parent)) return List.of();
+        List<String> cands = List.of(
+                parent + " 정의",
+                parent + " 공식",
+                parent + " 예시",
+                parent + " 요약"
+        );
+        return cands.stream()
+                .limit(Math.max(1, followupsPerLevel))
+                .toList();
     }
 
     /**

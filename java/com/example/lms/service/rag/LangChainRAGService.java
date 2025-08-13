@@ -30,8 +30,8 @@ import java.time.Duration;
 
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
 import java.util.concurrent.atomic.AtomicInteger;
-import lombok.extern.slf4j.Slf4j;
 //검색
 @Slf4j
 @Service
@@ -159,23 +159,19 @@ public class LangChainRAGService {
 
         List<String> ragSnippets = retrieveRagContext(query, sessionId);
         String history = conversationMemory.asMap().getOrDefault(sessionId, "No history yet.");
-
         String prompt = """
-            ### WEB SEARCH
-            %s
-
-            ### VECTOR RAG
-            %s
-
-            ### HISTORY
-            %s
-
-            ### QUESTION
-            %s
-            """.formatted(
-                org.springframework.util.StringUtils.hasText(externalContext) ? externalContext : "N/A",
+        ### VECTOR RAG
+        %s
+        ### HISTORY
+        %s
+        ### WEB SEARCH
+        %s
+        ### QUESTION
+        %s
+        """.formatted(
                 String.join("\n\n---\n\n", ragSnippets),
                 history,
+                org.springframework.util.StringUtils.hasText(externalContext) ? externalContext : "N/A",
                 query
         );
 
@@ -183,7 +179,12 @@ public class LangChainRAGService {
 
         // LangChain4j 1.0.1: chat(List<ChatMessage>) → AiMessage.text()
         String answer = use.chat(java.util.List.of(
-                SystemMessage.from("Use the following sections to answer the question."),
+                SystemMessage.from("""
+            ### INSTRUCTIONS:
+            - Earlier sections have higher authority: VECTOR RAG > HISTORY > WEB SEARCH.
+            - Ground every claim in the provided sections; if evidence is insufficient, reply "정보 없음".
+            - Cite specific snippets or sources inline when possible.
+            """),
                 UserMessage.from(prompt)
         )).aiMessage().text();
 

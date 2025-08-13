@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.regex.Pattern;             /* 🔴 NEW */
+import java.util.regex.Pattern;
 @Slf4j
 @RequiredArgsConstructor
 @org.springframework.stereotype.Component
@@ -25,8 +26,9 @@ public class WebSearchRetriever implements ContentRetriever {
     private static final Pattern META_TAG = Pattern.compile("\\[[^\\]]+\\]");
     private static final Pattern TIME_TAG = Pattern.compile("\\b\\d{1,2}:\\d{2}\\b");
     /* 🔵 봇/캡차 페이지 힌트 */
+    /* DuckDuckGo 등에서 반환되는 캡차/봇 차단 힌트 제거용 */
     private static final Pattern CAPTCHA_HINT = Pattern.compile(
-            "(?i)(captcha|봇을|로봇|are you (a )?robot|unusual\\straffic|verify you are human|duckduckgo\\.com/captcha)");
+            "(?i)(captcha|are you (a )?robot|unusual\\s*traffic|verify you are human|duckduckgo\\.com/captcha|bots\\s*use\\s*duckduckgo)");
     private static String normalize(String raw) {        /* 🔴 NEW */
         if (raw == null) return "";
 
@@ -49,7 +51,7 @@ public class WebSearchRetriever implements ContentRetriever {
 
     @Override
     public List<Content> retrieve(Query query) {
-        String normalized = normalize(query.text());
+        String normalized = normalize(query != null ? query.text() : "");
         // 1) 1차 수집: topK*2 → 중복/정렬 후 topK
         List<String> first = searchSvc.searchSnippets(normalized, Math.max(topK, 1) * 2)
                 .stream()

@@ -285,6 +285,10 @@ public class NaverSearchService {
     private static final Pattern ACADEMIC_PATTERN = Pattern.compile(
             "(?i)(논문|학술|저널|학회|conference|publication|research)");
 
+    /* 봇/캡차 페이지 감지 패턴 */
+    private static final Pattern CAPTCHA_HINT = Pattern.compile(
+            "(?i)(captcha|are you (a )?robot|unusual\\s*traffic|verify you are human|duckduckgo\\.com/captcha|bots\\s*use\\s*duckduckgo)");
+
     /** Source tag for assistant-generated responses stored into memory. */
     private static final String ASSISTANT_SOURCE = "ASSISTANT";
     private static final Pattern VERSION_PATTERN = Pattern.compile("(\\d+\\.\\d+)");
@@ -1057,6 +1061,11 @@ public class NaverSearchService {
     //
     private List<String> parseDuckDuckGoHtml(String originalQuery, String html) {
         if (isBlank(html)) return Collections.emptyList();
+        /* CAPTCHA/Anti-bot 페이지 즉시 폐기 */
+        if (CAPTCHA_HINT.matcher(html).find()) {
+            log.warn("DuckDuckGo returned CAPTCHA/anti-bot page; dropping.");
+            return Collections.emptyList();
+        }
         try {
             // 빠른 차단: CAPTCHA/봇 페이지라면 즉시 빈 결과
             if (isCaptchaHtml(html)) return Collections.emptyList();
@@ -1534,7 +1543,6 @@ public class NaverSearchService {
                 .replace("<", "&lt;")
                 .replace(">", "&gt;");
     }
-
     /* === DTOs for JSON parsing === */
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record NaverResponse(List<NaverItem> items) { }
