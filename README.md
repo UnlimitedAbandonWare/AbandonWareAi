@@ -368,4 +368,33 @@ Case Study – '푸리나' Search Failure – The failure to retrieve informatio
 Improvement Strategy – The key fixes are (a) consult DomainTermDictionary before calling LLMs in disambiguation; (b) dynamically inject protected terms into LLM prompts; (c) adopt an LLM-based named entity extractor; (d) integrate domain authority weighting into web search sorting; (e) fine-tune heuristics for domain weighting.
 
 Conclusion
-The AbandonWare Hybrid RAG AI Chatbot Service presents a sophisticated fusion of retrieval techniques, dynamic strategy learning, and reinforcement. It is designed for robustness, adaptability, and ease of extension. This document aims to provide a comprehensive reference for collaborators and maintainers to understand the architecture, key components, improvement history, and recommended operating principles. All details have been preserved and organized to assist both human readers and AI tools (e.g., Jammini) in understanding the system’s function and evolution.
+The AbandonWare Hybrid RAG AI Chatbot Service presents a sophisticated fusion of retrieval techniques, dynamic strategy learning, and reinforcement. It is designed for robustness, 
+adaptability, and ease of extension. This document aims to provide a comprehensive reference for collaborators and maintainers to understand the architecture, key components, improvement history, and recommended operating principles. All details have been preserved and organized to assist both human readers and AI tools (e.g., Jammini) in understanding the system’s function and evolution.
+feat: Enhance RAG pipeline with policy-driven guards and dynamic routing
+
+Introduced a robust, policy-driven guardrail system to prevent model hallucinations and improve response accuracy, specifically for domain-sensitive queries like Genshin Impact character pairings. This commit addresses the root cause of incorrect recommendations (e.g., "Diluc" for a Cryo character "Escoffier") by enforcing constraints throughout the entire RAG pipeline.
+
+**Key Enhancements:**
+
+* **Intent & Domain Detection:**
+    * `GuardrailQueryPreprocessor`: Enhanced to detect `PAIRING` intent (e.g., "synergy," "compatible with") and `GENSHIN` domain. It injects domain-specific policies (`allowedElements`, `discouragedElements`) into the `PromptContext`.
+    * `SubjectResolver`: New component to reliably extract the query's subject (e.g., "Escoffier") using dictionary-based lookups and heuristics, ensuring all downstream operations are anchored to the correct entity.
+
+* **Policy-Driven Retrieval & Ranking:**
+    * `PairingGuardHandler`: New retrieval handler that intercepts `PAIRING` intents to enforce subject anchoring in all generated search queries via `SmartQueryPlanner`.
+    * `GenericDocClassifier`: New component to identify and penalize low-quality, generic documents (e.g., "tier lists," "all characters") during search and reranking phases.
+    * `AuthorityScorer`: Updated to prioritize trusted domains (`namu.wiki`, `hoyolab.com`) and demote less reliable ones (blogs, general forums), improving context quality.
+    * `EmbeddingModelCrossEncoderReranker`: Reranking logic now adds a score bonus for documents containing the subject anchor and penalizes generic content.
+
+* **Centralized Prompt & Model Management:**
+    * `PromptBuilder`: Now centrally constructs all system prompts, injecting `PAIRING`-specific instructions (e.g., "Recommend partners ONLY for subject: X," "If evidence is insufficient, answer '정보 없음'") from the `PromptContext`.
+    * `ModelRouter`: New component to dynamically route `PAIRING` or high-stakes queries to a superior, low-temperature model (e.g., `gpt-4o`), while using a more efficient model for general queries.
+
+* **Evidence & Answer Sanitization:**
+    * `EvidenceGate`: New final guard that blocks the LLM call entirely if the retrieved context lacks sufficient evidence (e.g., minimum number of subject mentions), returning "정보 없음" to prevent confident hallucinations from sparse data.
+    * `GenshinRecommendationSanitizer`: A new `AnswerSanitizer` implementation that performs a final check on the generated answer, filtering out recommendations that violate the initial `discouragedElements` policy.
+
+* **System Stability & Health:**
+    * `StartupVersionPurityCheck`: New component that runs on boot to verify `LangChain4j` dependencies are all locked to version `1.0.1`, preventing runtime errors from mixed versions. A corresponding `VersionPurityHealthIndicator` exposes this status via `/actuator/health`.
+
+This multi-layered approach ensures that domain constraints are respected at every stage—from query planning to final response generation—making the system more reliable, predictable, and resistant to "튀는" (out-of-context) answers.
