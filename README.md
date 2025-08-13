@@ -932,3 +932,131 @@ LLM (Large Language Model): A neural network trained on large corpora of text ca
 Authority Scoring: A heuristic that assigns higher weight to information from trusted sources, improving answer reliability.
 
 Fact Verification: The process of checking statements against retrieved context to ensure accuracy. Implemented in FactVerifierService and ClaimVerifierService.
+
+Here are partial, git-style patch hunks you can apply to README.md to incorporate the verbosity pipeline, routing policy, handler order, config keys, and version-purity guard. They only add content; nothing is removed.
+
+--- a/README.md
++++ b/README.md
+@@
+ Table of Contents
+ Introduction and Background – Overview of retrieval-augmented generation, the evolution from a Genshin-specific chatbot to a domain-agnostic knowledge agent, and the objectives behind the refactor.
+@@
+ Modular Prompt Builder and Model Router – Centralization of prompt construction and the dynamic routing of queries to appropriate LLM models.
++Verbosity-Driven Output Policy (brief|standard|deep|ultra) – End-to-end signal that controls routing, context caps, prompt sections, and post-expansion.
++Classpath Version Purity Guard (LangChain4j 1.0.1) – Startup check that aborts on mixed 0.2.x/1.0.x artifacts.
+ Configuration and Environment Setup – Instructions on cloning the repository, configuring environment variables, building the project, and understanding important configuration keys.
+
+--- a/README.md
++++ b/README.md
+@@ 3. Architectural Overview @@
+ The AbandonWare RAG AI Chatbot Service follows a search-generate-verify-reinforce loop. Each stage of this pipeline is implemented as a distinct component, promoting separation of concerns and facilitating maintenance. In this section we describe each stage in detail, explaining how data flows and how different components interact to produce a final answer.
+ 
++#### Chain of Responsibility (HybridRetriever entry)
++The request pipeline is a chain of handlers in this strict order:
++`SelfAskHandler → AnalyzeHandler (Query Hygiene) → WebHandler → VectorDbHandler`.
++Each handler may fully handle or pass down; **failures must not crash the chain**—they return partial results downstream. New strategies are introduced by inserting a new handler link.
+
+--- a/README.md
++++ b/README.md
+@@ 8. Modular Prompt Builder and Model Router @@
+ Centralizing prompt construction and dynamic model selection are key to consistent and efficient performance:
+ 
++##### Verbosity-Driven Output Policy (brief|standard|deep|ultra)
++The system propagates a `Verbosity` hint end-to-end—**model routing → context caps → prompt sections → post-expansion**:
++* **Hints**: `brief | standard | deep | ultra`.
++* **Routing**: `deep|ultra` force a **higher-tier MoE model** (e.g., `gpt-4o`) for high-stakes intents (PAIRING/EXPLANATION/TUTORIAL/ANALYSIS) with **low temperature (≤0.3)**.
++* **Context caps** (RAG/web): caps increase at `deep|ultra` to admit more evidence (see config keys below).
++* **Prompt sections**: `PromptBuilder` injects **required section headers** and a **minimum length** rule when `deep|ultra`.
++* **Post-expansion (1 pass max)**: if the generated answer is under the minimum-words threshold, an **expander** performs a single, fact-preserving enlargement.
++This policy is implemented via `PromptContext` fields (`verbosityHint`, `minWordCount`, `targetTokenBudgetOut`, `sectionSpec`, `audience`, `citationStyle`) and consumed by `ModelRouter`, `ContextOrchestrator`, and the output policy block in `PromptBuilder`.
+
+--- a/README.md
++++ b/README.md
+@@ 17.3 Editing application.yml @@
+ Important sections include:
+ 
+@@
+ openai:
+   api:
+     key: "${OPENAI_API_KEY}"
+     model: "gpt-4o"
+   temperature:
+     default: 0.7
+   top-p:
+     default: 1.0
+@@
+ memory:
+   snippet:
+     min-length: 40
+     max-length: 4000
+ 
+ # Additional hyperparameter keys for energy calculation, recency decay, authority weighting, etc.
++
++###### Configuration Keys (Verbosity & Routing)
++```yaml
++abandonware:
++  answer:
++    detail:
++      min-words:
++        brief: 120
++        standard: 250
++        deep: 600
++        ultra: 1000
++    token-out:
++      brief: 512
++      standard: 1024
++      deep: 2048
++      ultra: 3072
++
++orchestrator:
++  max-docs: 10
++  max-docs:
++    deep: 14
++    ultra: 18
++
++reranker:
++  keep-top-n:
++    brief: 5
++    standard: 8
++    deep: 12
++    ultra: 16
++
++openai:
++  model:
++    moe: gpt-4o   # High-tier MoE used when intent+verbosity require it
++```
++These keys enable the verbosity signal to shape **model choice**, **context size**, **prompt sections**, and **post-expansion** consistently across the pipeline.
+
+--- a/README.md
++++ b/README.md
+@@ 18. Operating Principles and Recommended Practices @@
+ Version Lock: The project uses LangChain4j version 1.0.1. Avoid upgrading dependencies without thorough testing, as API changes may break the pipeline.
+ 
++Classpath Version Purity Guard (LangChain4j 1.0.1):
++At startup, a guard scans `META-INF/MANIFEST.MF` across the classpath for `dev.langchain4j*` modules and **aborts** if any artifact is not `1.0.1` (e.g., accidental `0.2.x`). It also logs a module version dump to aid root-cause analysis. This prevents subtle ABI/API mismatches that can manifest as routing, prompt, or RAG failures even when builds succeed.
++Sample log line on success:
++```
++LangChain4j purity OK: [langchain4j-core:1.0.1, langchain4j-bom:1.0.1, ...]
++LangChain4j module dump → [dev.langchain4j:langchain4j-openai:1.0.1, ...]
++```
++On mismatch, the application fails fast with a clear message (e.g., `Mixed LangChain4j detected: langchain4j-core:0.2.9 (expected 1.0.1) – purge old artifacts.`).
+
+--- a/README.md
++++ b/README.md
+@@ 21. Implementation Verification and Test Plan @@
+ End-to-End Chat Test: Start the server and use an API client to send a query. Simulate a session by setting a META_SID. Observe the SSE stream and confirm that search progress, context construction, draft answers, verification steps, and final answers are streamed correctly. Provide feedback and verify that synergy bonuses change reranking in subsequent queries.
+ 
++Verbosity Policy Tests:
++* Issue queries containing “상세히/깊게/ultra” signals and confirm: (a) `ModelRouter` selects the MoE model, (b) `ContextOrchestrator` raises document caps (14/18), and (c) answers meet minimum word counts or trigger a single expansion pass.
++* For `brief`, verify that smaller caps/outputs are enforced and no post-expansion occurs.
+
+
+These hunks only add the necessary README content to document:
+
+the handler order and non-crashing chain behavior,
+
+the verbosity-driven routing/sections/length policy,
+
+the config keys to control it, and
+
+the LangChain4j 1.0.1 purity guard.
