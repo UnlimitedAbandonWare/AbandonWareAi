@@ -409,7 +409,29 @@ Implement the tryGetString helper method to safely use reflection. This method s
 Part 2: Architectural Directives for Self-Learning RAG Pipeline
 Task 2.1: Centralize the Knowledge Base
 Create JPA Entities:
+Shift from 'Static Elements' to 'Dynamic Relationships' (Core Architectural Change)
 
+The QueryContextPreprocessor interface contract has been changed, replacing fixed policies like allowedElements/discouragedElements with getInteractionRules(). This allows for the dynamic processing of all relationship rules in the RELATIONSHIP_* format.
+
+GuardrailQueryPreprocessor now dynamically queries all relationships (e.g., "CONTAINS", "IS_PART_OF") from the KnowledgeBaseService and injects them into the PromptContext.
+
+Instead of a static ElementConstraintScorer, the EmbeddingModelCrossEncoderReranker now uses a RelationshipRuleScorer to rerank documents based on dynamically injected relationship rules (interactionRules), generating more accurate context.
+
+Adaptive Reranking Based on Feedback (Adaptive Scoring)
+
+Introduced the SynergyStat entity and AdaptiveScoringService to record user feedback (positive/negative).
+
+The EmbeddingModelCrossEncoderReranker now incorporates a synergyBonus calculated by this service into its final ranking score, allowing the system to self-improve its recommendation quality based on real user interactions.
+
+Enhanced Hallucination Suppression
+
+Added a ClaimVerifierService to the final stage of the FactVerifierService. This service extracts key claims from the AI's draft response and uses an LLM to verify each claim against the retrieved context.
+
+Unsupported claims are removed from the final answer, significantly improving the reliability of the response.
+
+Centralized Knowledge Base
+
+The hardcoded GenshinElementLexicon has been completely replaced with a KnowledgeBaseService based on DomainKnowledge and EntityAttribute JPA entities. This ensures scalability, allowing new domains, entities, and relationship rules to be added dynamically without code changes.
 DomainKnowledge: Create an entity that includes fields for domain, entityType, and entityName.
 
 EntityAttribute: Create an entity linked to DomainKnowledge via a OneToMany relationship to store attributeKey and attributeValue pairs.
