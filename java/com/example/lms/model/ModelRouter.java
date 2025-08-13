@@ -16,8 +16,10 @@ import java.util.concurrent.atomic.AtomicReference;
 @Component
 public class ModelRouter {
 
-    /** 상위 모델로 라우팅할 의도 집합 */
-    private static final Set<String> HIGH_TIER_INTENTS = Set.of("PAIRING", "RECOMMENDATION");
+    /** 상위 모델로 라우팅할 의도 집합(확장) */
+    private static final Set<String> HIGH_TIER_INTENTS = Set.of(
+            "PAIRING", "RECOMMENDATION", "EXPLANATION", "TUTORIAL", "ANALYSIS"
+    );
 
     /** 선택적으로 주입될 수 있는 동적 팩토리 */
     @Nullable private final DynamicChatModelFactory factory;
@@ -48,10 +50,38 @@ public class ModelRouter {
         this.baseModelName = baseModelName;
     }
 
-    /** 의도 기반 모델 라우팅 */
+    /** 의도 기반 모델 라우팅(기존 호환) */
     public ChatModel route(@Nullable String intent) {
         boolean highTier = intent != null && HIGH_TIER_INTENTS.contains(intent.toUpperCase());
         return highTier ? resolveMoe() : resolveBase();
+    }
+
+    /**
+     * 의도 + 리스크 + 상세도 기반 라우팅
+     * - high intent(위 집합) OR risk=HIGH OR verbosity in {deep, ultra} → 상위(MOE)
+     * - 토큰 예산 힌트가 큰 경우(예: 1536+ )도 상위로 승격
+     */
+    public ChatModel route(@Nullable String intent,
+                           @Nullable String riskLevel,
+                           @Nullable String verbosityHint,
+                           @Nullable Integer targetMaxTokens) {
+
+        boolean highTierIntent = intent != null && HIGH_TIER_INTENTS.contains(intent.toUpperCase());
+        boolean highRisk       = "HIGH".equalsIgnoreCase(riskLevel);
+        boolean highVerbosity  = verbosityHint != null
+                && ("deep".equalsIgnoreCase(verbosityHint) || "ultra".equalsIgnoreCase(verbosityHint));
+
+        // 토큰 예산이 큰 경우 상위 모델 선호 (휴리스틱)
+        boolean bigBudget = targetMaxTokens != null && targetMaxTokens >= 1536;
+
+        boolean useMoe = highTierIntent || highRisk || highVerbosity || bigBudget;
+
+        if (log.isDebugEnabled()) {
+            log.debug("ModelRouter decision intent={}, risk={}, verbosity={}, maxTokens={}, useMoe={}",
+                    intent, riskLevel, verbosityHint, targetMaxTokens, useMoe);
+        }
+
+        return useMoe ? resolveMoe() : resolveBase();
     }
 
     /** 상위(MOE) 모델 해석 */
@@ -62,7 +92,8 @@ public class ModelRouter {
         ensureFactory();                                   // 없으면 동적 생성
         return cachedMoe.updateAndGet(existing ->
                 existing != null ? existing
-                        : factory.lcWithPolicy("PAIRING", moeModelName, 0.2, 1.0, null)
+                        // moe: 낮은 temperature로 일관성/사실성 강화
+                        : factory.lc(moeModelName, 0.3, 1.0, null)
         );
     }
 

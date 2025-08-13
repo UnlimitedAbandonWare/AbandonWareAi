@@ -1,14 +1,16 @@
+// src/main/java/com/example/lms/service/rag/pre/GuardrailQueryPreprocessor.java
 package com.example.lms.service.rag.pre;
 
 import com.example.lms.service.rag.detector.GameDomainDetector;
-import com.example.lms.service.knowledge.KnowledgeBaseService; //  NEW
-import com.example.lms.service.subject.SubjectResolver;        //  NEW
+import com.example.lms.service.knowledge.KnowledgeBaseService;
+import com.example.lms.service.subject.SubjectResolver;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -19,23 +21,24 @@ import java.util.regex.Pattern;
  * - 공손어/불필요 꼬리표 제거
  * - 여분 공백/기호 정리 및 길이 제한
  * - 도메인/의도 감지
- + * - (관계 규칙) DB의 RELATIONSHIP_* 속성을 읽어 **동적 상호작용 규칙** 주입
+ * - (관계 규칙) DB의 RELATIONSHIP_* 속성을 읽어 동적 상호작용 규칙 주입
  */
 @Component("guardrailQueryPreprocessor")
 @Primary // 다중 구현 시 기본값으로 사용
 public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
 
     private final GameDomainDetector domainDetector;
-    private final KnowledgeBaseService knowledgeBase;   //  NEW
-    private final SubjectResolver subjectResolver;      //  NEW
+    private final KnowledgeBaseService knowledgeBase;
+    private final SubjectResolver subjectResolver;
+
     public GuardrailQueryPreprocessor(GameDomainDetector detector,
                                       KnowledgeBaseService knowledgeBase,
-                                      SubjectResolver subjectResolver) { //  NEW
+                                      SubjectResolver subjectResolver) {
         this.domainDetector = detector;
         this.knowledgeBase = knowledgeBase;
         this.subjectResolver = subjectResolver;
-
     }
+
     // ── 간단 오타 사전(필요 시 Settings로 이관)
     private static final Map<String, String> TYPO = Map.of(
             "후리나", "푸리나",
@@ -129,12 +132,23 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
         return "GENERAL";
     }
 
+    /** 간단 상세도(Verbosity) 힌트 추정 — 없으면 null */
+    public String inferVerbosityHint(String q) {
+        if (!StringUtils.hasText(q)) return null;
+        String s = q.toLowerCase(Locale.ROOT);
+        if (s.matches(".*(아주\\s*자세|논문급|ultra).*")) return "ultra";
+        if (s.matches(".*(상세히|자세히|깊게|deep|원리부터).*")) return "deep";
+        return null;
+    }
+
     @Override
     public Map<String, Set<String>> getInteractionRules(String q) {
         String domain = detectDomain(q);
-        if (!org.springframework.util.StringUtils.hasText(domain)) return Map.of();
+        if (!StringUtils.hasText(domain)) return Map.of();
+
         String subject = subjectResolver.resolve(q, domain).orElse(null);
-        if (!org.springframework.util.StringUtils.hasText(subject)) return Map.of();
+        if (!StringUtils.hasText(subject)) return Map.of();
+
         // DB의 RELATIONSHIP_* 키를 전부 모아 반환
         return knowledgeBase.getAllRelationships(domain, subject);
     }

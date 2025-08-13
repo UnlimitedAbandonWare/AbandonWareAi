@@ -1,7 +1,9 @@
-  package com.example.lms.service.rag;
+// src/main/java/com/example/lms/service/rag/ContextOrchestrator.java
+package com.example.lms.service.rag;
 
 import com.example.lms.prompt.PromptContext;
 import com.example.lms.prompt.PromptEngine;
+import com.example.lms.service.verbosity.VerbosityProfile;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,14 @@ public class ContextOrchestrator {
 
     @Value("${orchestrator.max-docs:10}")
     private int maxDocs;
+
+    // Verbosity에 따른 상한 확장
+    @Value("${orchestrator.max-docs.deep:14}")
+    private int maxDocsDeep;
+
+    @Value("${orchestrator.max-docs.ultra:18}")
+    private int maxDocsUltra;
+
     @Value("${orchestrator.min-top-score:0.60}")
     private double minTopScore;
 
@@ -30,16 +40,26 @@ public class ContextOrchestrator {
 
     /**
      * 여러 정보 소스를 바탕으로 최종 컨텍스트를 조율하고, 동적 규칙을 포함하여 프롬프트를 생성합니다.
-     * @param query 사용자 원본 쿼리
-     * @param vectorResults Vector DB 검색 결과
-     * @param webResults 웹 검색 결과
-     * @param interactionRules 동적 상호작용 규칙
-     * @return LLM에 전달될 최종 프롬프트 문자열 또는 "정보 없음"
+     * (기존 호환 버전: Verbosity 미사용)
      */
     public String orchestrate(String query,
                               List<Content> vectorResults,
                               List<Content> webResults,
                               Map<String, Set<String>> interactionRules) {
+        return orchestrate(query, vectorResults, webResults, interactionRules, null);
+    }
+
+    /**
+     * Verbosity-aware 오케스트레이션
+     * - Verbosity(deep/ultra)에 따라 상위 문서 캡 확장
+     * - Verbosity 신호를 PromptContext에 전파(섹션/최소길이/토큰 버짓/대상/인용스타일)
+     */
+    public String orchestrate(String query,
+                              List<Content> vectorResults,
+                              List<Content> webResults,
+                              Map<String, Set<String>> interactionRules,
+                              VerbosityProfile profile) {
+
         List<Scored> pool = new ArrayList<>();
         boolean wantsFresh = query != null && TIMELY.matcher(query).find();
 
@@ -57,34 +77,48 @@ public class ContextOrchestrator {
             uniq.putIfAbsent(hashOf(s.text()), s);
         }
 
-        // 3. 점수 내림차순으로 상위 N개 문서 선택
+        // 3. 점수 내림차순으로 상위 N개 문서 선택 (Verbosity에 따라 캡 상향)
+        int cap = this.maxDocs;
+        String hint = profile != null ? profile.hint() : null;
+        if ("deep".equalsIgnoreCase(hint)) {
+            cap = Math.max(cap, maxDocsDeep);
+        } else if ("ultra".equalsIgnoreCase(hint)) {
+            cap = Math.max(cap, maxDocsUltra);
+        }
+
         List<Content> finalDocs = uniq.values().stream()
                 .sorted(Comparator.comparingDouble(s -> -s.score)) // 점수 내림차순 정렬
-                .limit(Math.max(1, maxDocs))
+                .limit(Math.max(1, cap))
                 .map(s -> s.content)
                 .collect(Collectors.toList());
 
         // 4. 안전장치: 가장 높은 점수가 기준 미달이면 신뢰할 수 없는 정보로 판단하고 차단
         double topScore = uniq.values().stream().mapToDouble(Scored::score).max().orElse(0.0);
         if (topScore < minTopScore) {
-            log.warn("[Orchestrator] Top score ({}) is below the minimum threshold ({}). Returning '정보 없음'.", String.format("%.2f", topScore), minTopScore);
+            log.warn("[Orchestrator] Top score ({}) is below the minimum threshold ({}). Returning '정보 없음'.",
+                    String.format("%.2f", topScore), minTopScore);
             return "정보 없음";
         }
 
-        // 5. 최종 프롬프트 생성을 위한 PromptContext 구성 및 호출
+        // 5. 최종 프롬프트 생성을 위한 PromptContext 구성 (Verbosity 신호 전파)
         PromptContext ctx = PromptContext.builder()
                 .rag(finalDocs)
-                .web(List.of()) // 웹 결과는 이미 finalDocs에 통합되었으므로 별도 전달 필요 없음
+                .web(List.of()) // 웹 결과는 통합되었으므로 비워 전달(기존 빌더 계약 유지)
                 .domain("GENERAL")
                 .intent("GENERAL")
                 .interactionRules(interactionRules == null ? Map.of() : interactionRules)
+                // ▼ Verbosity 파라미터 전파(옵션)
+                .verbosityHint(profile == null ? null : profile.hint())
+                .minWordCount(profile == null ? null : profile.minWordCount())
+                .targetTokenBudgetOut(profile == null ? null : profile.targetTokenBudgetOut())
+                .sectionSpec(profile == null ? null : profile.sections())
+                .audience(profile == null ? null : profile.audience())
+                .citationStyle(profile == null ? null : profile.citationStyle())
                 .build();
+
+        // (실제 프롬프트 생성/합성은 PromptEngine이 담당)
         return promptEngine.createPrompt(ctx);
     }
-
-
-
-    // NOTE: 중복 오버로드 정리 — 4인자(규칙 포함) 메서드만 유지합니다.
 
     /**
      * 점수화된 컨텐츠 목록을 누적기에 추가합니다.

@@ -1,16 +1,19 @@
+// src/main/java/com/example/lms/prompt/PromptBuilder.java
 package com.example.lms.prompt;
-import java.util.Map;
-import java.util.Set;
+
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-import java.util.List;
-import java.util.stream.Collectors;
-import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class PromptBuilder {
+
     private static final String WEB_PREFIX = """
             ### LIVE WEB RESULTS
             %s
@@ -60,9 +63,10 @@ public class PromptBuilder {
             if (StringUtils.hasText(ctx.domain())) {
                 sys.append("- Domain: ").append(ctx.domain()).append("\n");
             }
-            if (ctx.interactionRules() != null && !ctx.interactionRules().isEmpty()) {
+            Map<String, Set<String>> rules = ctx.interactionRules();
+            if (rules != null && !rules.isEmpty()) {
                 sys.append("### DYNAMIC RELATIONSHIP RULES\n");
-                ctx.interactionRules().forEach((k, v) -> {
+                rules.forEach((k, v) -> {
                     if (v != null && !v.isEmpty()) {
                         sys.append("- ").append(k).append(": ")
                                 .append(String.join(",", v))
@@ -70,18 +74,45 @@ public class PromptBuilder {
                     }
                 });
             }
-            // RECOMMENDATION/PAIRING 공통 보수적 가드
 
+            // RECOMMENDATION/PAIRING 공통 보수적 가드
+            sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
+
+            // ▼ Verbosity/Output policy (섹션/최소길이/상세도 강제)
+            String vh = Objects.toString(ctx.verbosityHint(), "standard");
+            Integer minWords = ctx.minWordCount();
+            List<String> sections = ctx.sectionSpec();
+
+            if ("deep".equalsIgnoreCase(vh) || "ultra".equalsIgnoreCase(vh)) {
+                sys.append("- Write in a detailed, structured style (not brief).\n");
+                if (sections != null && !sections.isEmpty()) {
+                    sys.append("- Organize the answer with the following section headers (use Korean): ")
+                            .append(String.join(", ", sections)).append('\n');
+                }
+                if (minWords != null && minWords > 0) {
+                    sys.append("- The final answer MUST be at least ")
+                            .append(minWords).append(" Korean words.\n");
+                }
+            }
+
+            String audience = Objects.toString(ctx.audience(), "");
+            if (!audience.isBlank()) {
+                sys.append("- Target audience: ").append(audience).append('\n');
+            }
+
+            String cite = Objects.toString(ctx.citationStyle(), "inline");
+            sys.append("- Citation style: ").append(cite).append('\n');
+
+            // 보수적 가드 재확인
             sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
         }
-
         return sys.toString();
     }
 
     private static String join(List<Content> list) {
         return list.stream()
                 .map(c -> {
-                    var seg = c.textSegment(); // 1.x API
+                    var seg = c.textSegment(); // LangChain4j 1.x API
                     return (seg != null && seg.text() != null && !seg.text().isBlank())
                             ? seg.text()
                             : c.toString();

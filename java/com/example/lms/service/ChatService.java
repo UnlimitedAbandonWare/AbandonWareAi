@@ -1,4 +1,23 @@
 package com.example.lms.service;
+import com.example.lms.prompt.PromptContext;
+import com.example.lms.prompt.PromptBuilder;
+import com.example.lms.model.ModelRouter;
+import com.example.lms.service.rag.ContextOrchestrator;
+import com.example.lms.service.rag.HybridRetriever;
+import com.example.lms.service.verbosity.VerbosityDetector;
+import com.example.lms.service.verbosity.VerbosityProfile;
+import com.example.lms.service.verbosity.SectionSpecGenerator;
+import com.example.lms.service.answer.LengthVerifierService;
+import com.example.lms.service.answer.AnswerExpanderService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import java.util.*;
+import com.example.lms.service.rag.ContextOrchestrator;
+
 import com.example.lms.search.QueryHygieneFilter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import com.example.lms.domain.enums.RulePhase;
@@ -161,7 +180,7 @@ public class ChatService {
     // 이미 있는 DI 필드 아래쪽에 추가
     private final NaverSearchService searchService;
     private final ChatMemoryProvider chatMemoryProvider; // 세션 메모리 Bean
-    private final HybridRetriever hybridRetriever; // ★ 하이브리드 리트리버
+
     private final QueryContextPreprocessor qcPreprocessor; // ★ 동적 규칙 전처리기
 
     // ▼▼ 신규 DI
@@ -181,12 +200,26 @@ public class ChatService {
 
     private final SmartFallbackService fallbackSvc;
     // 🔧 신규 오케스트레이터 주입 (RequiredArgsConstructor로 자동 주입)
+// 🔧 오케스트레이터 주입
     private final ContextOrchestrator contextOrchestrator;
+    private final HybridRetriever hybridRetriever;
+    private final PromptBuilder promptBuilder;
+    private final ModelRouter modelRouter;
+    // ▼ Verbosity & Expansion
+    private final VerbosityDetector verbosityDetector;
+    private final SectionSpecGenerator sectionSpecGenerator;
+    private final LengthVerifierService lengthVerifier;
+    private final AnswerExpanderService answerExpander;
 
-    @Value("${rag.hybrid.top-k:50}")
-    private int hybridTopK;
-    @Value("${rag.rerank.top-n:10}")
-    private int rerankTopN;
+
+
+    @Value("${rag.hybrid.top-k:50}") private int hybridTopK;
+    @Value("${rag.rerank.top-n:10}") private int rerankTopN;
+    // ▼ reranker keep-top-n by verbosity
+    @Value("${reranker.keep-top-n.brief:5}")     private int keepNBrief;
+    @Value("${reranker.keep-top-n.standard:8}")  private int keepNStd;
+    @Value("${reranker.keep-top-n.deep:12}")     private int keepNDeep;
+    @Value("${reranker.keep-top-n.ultra:16}")    private int keepNUltra;
     /**
      * 하이브리드 우회(진단용): true면 HybridRetriever를 건너뛰고 단일패스로 처리
      */
@@ -210,10 +243,8 @@ public class ChatService {
     private String defaultModel;
     @Value("${openai.fine-tuning.custom-model-id:}")
     private String tunedModelId;
-    @Value("${openai.api.temperature.default:0.7}")
-    private double defaultTemp;
-    @Value("${openai.api.top-p.default:1.0}")
-    private double defaultTopP;
+    @Value("${openai.api.temperature.default:0.7}") private double defaultTemp;
+    @Value("${openai.api.top-p.default:1.0}")       private double defaultTopP;
     @Value("${openai.api.history.max-messages:6}")
     private int maxHistory;
     // ChatService 클래스 필드 섹션에
@@ -306,6 +337,25 @@ public class ChatService {
         return continueChat(req, defaultProvider);        // ↓ ②로 위임
     }
 
+    // ── intent/risk/로깅 유틸 ─────────────────────────────────────
+    private String inferIntent(String q) {
+        try { return qcPreprocessor.inferIntent(q); } catch (Exception e) { return "GENERAL"; }
+    }
+
+    private String detectRisk(String q) {
+        if (q == null) return null;
+        String s = q.toLowerCase(java.util.Locale.ROOT);
+        return s.matches(".*(진단|처방|증상|법률|소송|형량|투자|수익률|보험금).*") ? "HIGH" : null;
+    }
+
+    private static String getModelName(dev.langchain4j.model.chat.ChatModel m) {
+        return (m == null) ? "unknown" : m.getClass().getSimpleName();
+    }
+
+    private void reinforce(String sessionKey, String query, String answer) {
+        try { reinforceAssistantAnswer(sessionKey, query, answer); } catch (Throwable ignore) {}
+    }
+
     /**
      * 의도 분석을 통해 최종 검색 쿼리를 결정한다.
      */
@@ -331,155 +381,100 @@ public class ChatService {
         return originalQuery; // ← 이 줄이 반드시 있어야 함
     }
 
-    // ------------------------------------------------------------------------
-// ② 2-인자 실제 구현 (헤더·중괄호 반드시 포함!)
+    // ② 2-인자 실제 구현 (헤더·중괄호 반드시 포함!)
     public ChatResult continueChat(ChatRequestDto req,
                                    Function<String, List<String>> externalCtxProvider) {
 
-        /* 0) 플래그 */
-        boolean useRetrieval = req.isUseWebSearch() || req.isUseRag();
-        boolean ragStandalone = req.isUseRag() && Boolean.TRUE.equals(req.getRagStandalone());
-
-        /* 0-1) 사용자 입력 교정 (한 번만) */
-        final String originalMsg = Optional.ofNullable(req.getMessage()).orElse("");
-        final String correctedMsg = correctionSvc.correct(originalMsg);
-        if (!originalMsg.equals(correctedMsg)) {
-            log.debug("[QC] corrected '{}' -> '{}'", originalMsg, correctedMsg);
-        }
-        /* 0-2) 의미 확정(Ser8 ↔ S8 등) 적용 */
-        Long sidNum = Optional.ofNullable(req.getSessionId())
-                .map(Object::toString)
-                .filter(s -> s.matches("\\d+"))    // ✔ 다자리 숫자 허용
-                .map(Long::valueOf)
-                .orElse(null);
-        final String finalQuery = decideFinalQuery(correctedMsg, sidNum);
-        /* A. RAG Stand-Alone */
-// A. RAG Stand-Alone
-        if (ragStandalone) {
-            String sid = Optional.ofNullable(req.getSessionId())
-                    .map(String::valueOf)
-                    .map(s -> s.startsWith("chat-") ? s        // 이미 정규화
-                            : (s.matches("\\d+") ? "chat-" + s    // 205 → chat-205
-                            : s))                                 // UUID 등
-                    .orElse(UUID.randomUUID().toString());
-
-            // ✅ RAG Stand-alone에도 교정된 쿼리 사용
-            String answer = ragSvc.getAnswer(correctedMsg, sid);
-
-            // ▲ ASSISTANT 답변 저장 금지(정책)
-            return ChatResult.of(
-                    answer, "rag:" + chatModel.getClass().getSimpleName(), true);
-        }
-
-        /* B. Retrieval OFF */
-        if (!useRetrieval) {
-            String sessionId = Optional.ofNullable(req.getSessionId())
-                    .map(String::valueOf)
-                    .map(s -> s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-" + s : s))
-                    .orElse(UUID.randomUUID().toString());
-
-            String memCtx = memorySvc.loadContext(sessionId);
-
-            boolean useLc = Optional.ofNullable(req.getModel())
-                    .map(m -> m.startsWith("lc:"))
-                    .orElse(false);
-
-            /* unifiedCtx = memCtx 만 전달 (OFF 경로는 각 메서드 내부에서 교정 재적용) */
-            return useLc
-                    ? invokeLangChain(req, memCtx)
-                    : invokeOpenAiJava(req, memCtx);
-        }
-
-        /* C. Retrieval ON (Hybrid + Meta‑Strategy)
-         * ▶▶ 하나의 세션키(sessionKey)만 생성·전파 ◀◀
-         */
+        // ── 세션키 정규화(단일 키 전파) ───────────────────────────────
         String sessionKey = Optional.ofNullable(req.getSessionId())
                 .map(String::valueOf)
                 .map(s -> s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-" + s : s))
                 .orElse(UUID.randomUUID().toString());
 
-        /* ── 세션별 메모리 / RAG 컨텍스트 로드 ───────────────── */
-        String memCtx = memorySvc.loadContext(sessionKey);    // ✅ 세션‑스코프
-        String ragCtx = req.isUseRag()
-                ? ragSvc.getAnswer(finalQuery, sessionKey)
-                : null;
-
-        /* ▶ 진단용 우회: HybridRetriever 비활성화 */
-        if (bypassHybrid) {
-            log.warn("[Bypass] debug.hybrid.bypass=true → HybridRetriever 미사용 (sid={})", sessionKey);
-            boolean useLc = Optional.ofNullable(req.getModel())
-                    .map(m -> m.startsWith("lc:"))
-                    .orElse(false);
-            return useLc
-                    ? invokeLangChain(req, buildUnifiedContext(null, ragCtx, memCtx))
-                    : invokeOpenAiJava(req, buildUnifiedContext(null, ragCtx, memCtx));
+        // ── 0) 사용자 입력 확보 ─────────────────────────────────────
+        final String userQuery = Optional.ofNullable(req.getMessage()).orElse("");
+        if (userQuery.isBlank()) {
+            return ChatResult.of("정보 없음", "lc:" + chatModel.getClass().getSimpleName(), true);
         }
 
+        // ── 0-1) Verbosity 감지 & 섹션 스펙 ─────────────────────────
+        VerbosityProfile vp = verbosityDetector.detect(userQuery);
+        String intent = inferIntent(userQuery);
+        List<String> sections = sectionSpecGenerator.generate(intent, /*domain*/"", vp.hint());
 
-        /* ❶ "정보 없음" 은 의미 없는 컨텍스트 → null 로 치환 */
-        if ("정보 없음".equals((ragCtx != null ? ragCtx.trim() : ""))) {
-            ragCtx = null;
-        }
+        // ── 1) 검색/융합: Self-Ask → HybridRetriever → Cross-Encoder Rerank ─
+        List<String> planned = smartQueryPlanner.plan(userQuery, /*assistantDraft*/ null, /*maxBranches*/ 2);
+        if (planned.isEmpty()) planned = List.of(userQuery);
 
+        List<dev.langchain4j.rag.content.Content> fused = hybridRetriever.retrieveAll(planned, hybridTopK);
+        Map<String, Set<String>> rules = qcPreprocessor.getInteractionRules(userQuery);
 
-        // ❶ "지능형 다중 쿼리" 계획: 단일 책임 원칙에 따라 쿼리 생성을 SmartQueryPlanner에 위임.
-        List<String> smartQueries = smartQueryPlanner.plan(finalQuery, /*assistantDraft*/ null, 2);
-        if (smartQueries.isEmpty()) smartQueries = List.of(finalQuery);
+        int keepN = switch (Objects.toString(vp.hint(), "standard").toLowerCase(Locale.ROOT)) {
+            case "brief" -> keepNBrief;
+            case "deep"  -> Math.max(rerankTopN, keepNDeep);
+            case "ultra" -> Math.max(rerankTopN, keepNUltra);
+            default      -> keepNStd;
+        };
 
-        // ❷ 병렬 검색 + RRF 융합: HybridRetriever가 모든 소스(Web, Vector, Memory 등)를 단일 End-point로 처리.
-        //    - 복잡한 switch 분기를 제거하여 코드가 간결해지고 응집도가 높아짐.
-        List<Content> fused = hybridRetriever.retrieveAll(smartQueries, hybridTopK);
+        List<dev.langchain4j.rag.content.Content> topDocs =
+                reranker.rerank(userQuery, fused, keepN, rules);
 
-
-        // 🔸 3) 동적 관계 규칙 산출 → 리랭킹에 반영
-        java.util.Map<String, java.util.Set<String>> rules = qcPreprocessor.getInteractionRules(finalQuery);
-        List<Content> topDocs = reranker.rerank(finalQuery, fused, rerankTopN, rules);
-        if (log.isDebugEnabled())
-            log.debug("[Hybrid] fused={}, topN={} (sid={})", (fused != null ? fused.size() : 0), (topDocs != null ? topDocs.size() : 0), sessionKey);
-        /* 🔴 컨텍스트 부족 가드레일(하이브리드 이후로 이동)
-         * 웹/벡터 문서(topDocs)와 RAG가 모두 비면 즉시 종료 */
-        if ((topDocs == null || topDocs.isEmpty()) && !org.springframework.util.StringUtils.hasText(ragCtx)) {
-            log.warn("[Guard] no web/vector docs & no ragCtx → stop LLM (sid={}, q='{}')", sessionKey, finalQuery);
-            return ChatResult.of("정보 없음",
-                    "lc:" + chatModel.getClass().getSimpleName(), true);
-        }
-
-        // 🔸 4) 최종 컨텍스트 생성(룰 기반) — 오케스트레이터로 이관
+        // ── 2) 컨텍스트 생성(Verbosity-aware) ────────────────────────
         String unifiedCtx = contextOrchestrator.orchestrate(
-                finalQuery,
-                ragSvc.asContentRetriever(pineconeIndexName).retrieve(Query.from(finalQuery)),
+                userQuery,
+                ragSvc.asContentRetriever(pineconeIndexName)
+                        .retrieve(dev.langchain4j.rag.query.Query.from(userQuery)),
                 topDocs,
-                rules);
-
-        // 🔸 5) 단일 LLM 호출로 답변 생성
-        // 🔸 5) 모델/온도 준비 → 위험 질의면 온도 하향
-        String cleanModel = chooseModel(req.getModel(), true);
-        double llmTemp = Optional.ofNullable(req.getTemperature()).orElse(defaultTemp);
-        if (FallbackHeuristics.detect(finalQuery) != null) {
-            llmTemp = Math.min(llmTemp, 0.05); // 탐색 억제
-        }
-        // 준비 끝난 후 팩토리 호출
-        ChatModel dynamic = chatModelFactory.lc(
-                cleanModel,
-                llmTemp,
-                Optional.ofNullable(req.getTopP()).orElse(defaultTopP),
-                req.getMaxTokens()
+                rules,
+                vp
         );
 
-        List<ChatMessage> msgs = buildLcMessages(req, unifiedCtx);
-        String answer = dynamic.chat(msgs).aiMessage().text();
-        String out = ruleEngine.apply(answer, "ko", RulePhase.POST);
+        // ── 3) 모델 라우팅(상세도/리스크/의도) ───────────────────────
+        ChatModel model = modelRouter.route(
+                intent,
+                detectRisk(userQuery),           // "HIGH"|"LOW"|etc. (기존 헬퍼)
+                vp.hint(),                       // brief|standard|deep|ultra
+                vp.targetTokenBudgetOut()        // 출력 토큰 예산 힌트
+        );
 
-        // 컨텍스트 스코어(사실성/품질/신규성) 산출 → 강화 점수 보정
-        var scoreReport = contextualScorer.score(correctedMsg, unifiedCtx, out);
+        // ── 4) 메시지 구성(출력정책 포함) ────────────────────────────
+        String outputPolicy = buildOutputPolicy(vp, sections);   // 기존 헬퍼: 섹션/최소길이/인용스타일 등
+        var msgs = new ArrayList<dev.langchain4j.data.message.ChatMessage>();
+        msgs.add(dev.langchain4j.data.message.SystemMessage.from(unifiedCtx));
+        if (org.springframework.util.StringUtils.hasText(outputPolicy)) {
+            msgs.add(dev.langchain4j.data.message.SystemMessage.from(outputPolicy));
+        }
+        msgs.add(dev.langchain4j.data.message.UserMessage.from(userQuery));
 
-        // [+] 전략 태깅 없이 간단한 오버로드 메서드를 호출하여 메모리 강화 로직을 단순화.
-        //     - 복잡한 파라미터 전달을 피하고, reinforceAssistantAnswer 내부에서 점수 계산을 캡슐화.
-        reinforceAssistantAnswer(sessionKey, correctedMsg, out);
-        return ChatResult.of(out, "lc:" + cleanModel, true);
-    }   // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
+        // ── 5) 단일 호출 → 초안 ─────────────────────────────────────
+        String draft = model.chat(msgs).aiMessage().text();
+
+        // ── 6) 길이 검증 → 조건부 1회 확장 ───────────────────────────
+        String out = draft;
+        if (lengthVerifier.isShort(out, vp.minWordCount())) {
+            out = Optional.ofNullable(answerExpander.expandWithLc(out, vp, model)).orElse(out);
+        }
+
+        // ── 7) 후처리/강화/리턴 ──────────────────────────────────────
+        reinforce(sessionKey, userQuery, out);  // 기존 강화 로직 사용
+        return ChatResult.of(out, "lc:" + getModelName(model), true);
+    } // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 // ------------------------------------------------------------------------
 
+    private static String buildOutputPolicy(VerbosityProfile vp, List<String> sections) {
+        String vh = Objects.toString(vp.hint(), "standard");
+        if (!("deep".equalsIgnoreCase(vh) || "ultra".equalsIgnoreCase(vh))) return "";
+        StringBuilder sb = new StringBuilder("### OUTPUT POLICY\n");
+        sb.append("- Do not be brief; respond with rich details.\n");
+        if (vp.minWordCount() > 0) {
+            sb.append("- Minimum length: ").append(vp.minWordCount()).append(" Korean words.\n");
+        }
+        if (sections != null && !sections.isEmpty()) {
+            sb.append("- Required sections (use these headers in Korean): ")
+                    .append(String.join(", ", sections)).append('\n');
+        }
+        return sb.toString();
+    }
 
 
 
