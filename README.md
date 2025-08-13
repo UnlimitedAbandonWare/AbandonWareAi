@@ -440,7 +440,28 @@ SynergyStatRepository: Create a JpaRepository to manage the SynergyStat entity.
 Create Service:
 
 AdaptiveScoringService: Create this service to calculate a synergyBonus score based on the data in SynergyStat. The logic should grant a bonus for positive feedback and a penalty for negative feedback.
+feat: Evolve RAG pipeline to be dynamic, adaptive, and knowledge-driven
 
+This major feature refactors the RAG pipeline from a static, policy-based system to a dynamic, self-learning architecture. The key objective is to improve response accuracy, reduce hallucinations, and make the system extensible to new domains beyond Genshin Impact.
+
+Key Enhancements:
+
+1.  **Centralized and Extensible Knowledge Base:**
+    * Replaced the hardcoded `GenshinElementLexicon` with a database-driven `KnowledgeBaseService`, backed by `DomainKnowledge` and `EntityAttribute` JPA entities.
+    * This allows dynamic addition of new domains, characters, items, and policies without code changes, making the system scalable.
+    * Introduced a `SubjectResolver` to reliably extract the query's main subject using the Knowledge Base, ensuring all downstream operations are correctly anchored.
+
+2.  **Adaptive, Feedback-Driven Reranking:**
+    * Introduced `AdaptiveScoringService` and a `SynergyStat` entity to track user feedback (👍/👎) on entity pairings (e.g., character teams).
+    * `EmbeddingModelCrossEncoderReranker` now incorporates a `synergyBonus` from this service into its scoring logic. The system now learns which combinations are effective based on real user interactions, dynamically improving its recommendation quality.
+
+3.  **Enhanced Hallucination Suppression:**
+    * Added a new `ClaimVerifierService` that performs a final "sanitization" step. It extracts factual claims from the AI's draft answer and verifies each against the retrieved context using an LLM call.
+    * Unsupported claims are removed before sending the final response, significantly reducing the risk of factual inaccuracies and hallucinations.
+    * `FactVerifierService` is updated to incorporate this claim-evidence mapping as a final, robust check.
+
+4.  **Granular Intent Detection:**
+    * Refined `QueryContextPreprocessor` to differentiate more accurately between a general `RECOMMENDATION` and a specific `PAIRING` intent, allowing for more tailored pipeline strategies.
 Modify Existing Logic:
 
 Inject the AdaptiveScoringService into EmbeddingModelCrossEncoderReranker.
