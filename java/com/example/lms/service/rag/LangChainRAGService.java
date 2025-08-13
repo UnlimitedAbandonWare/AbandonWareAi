@@ -14,12 +14,16 @@ import dev.langchain4j.rag.query.Query;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import lombok.RequiredArgsConstructor;
+
 import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;
+import com.example.lms.prompt.PromptBuilder;
+import com.example.lms.prompt.PromptContext;
+import com.example.lms.guard.AnswerSanitizer;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -67,11 +71,18 @@ public class LangChainRAGService {
         }
     }
 
-    private final ChatModel                   chatModel;
+    @Qualifier("utilityChatModel")
+    private final ChatModel                   chatModel; // 기본
+    private final com.example.lms.model.ModelRouter modelRouter; // ★ NEW
+
+    @Qualifier("moeChatModel")
+    private final ChatModel                   moeChatModel;
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final MemoryReinforcementService  memorySvc;
     private final QueryContextPreprocessor    preprocessor;   //  의도/도메인/원소 제약 주입원
+    private final PromptBuilder               promptBuilder;
+    private final AnswerSanitizer             answerSanitizer;
 
     /**
      * 대화 기록을 제한된 크기로 유지하기 위해 Caffeine LRU 캐시를 사용한다.
@@ -159,56 +170,68 @@ public class LangChainRAGService {
     // + 공통 내부 구현: override가 있으면 그 모델 사용
     private String getAnswerInternal(String query, String sessionId, String externalContext,
                                      ChatModel override) {
+        // ── 의도 추정
+        //  의도·제약 계산 (없으면 빈 셋/GENERAL)
+        // ── 모델 라우팅(override 우선)
+
+
+        // ── 의도 추정 (한 번만 선언)
+        final String intent = (preprocessor != null) ? preprocessor.inferIntent(query) : "GENERAL";
+        // ── 모델 라우팅(override 우선)
+        ChatModel use = (override != null) ? override : modelRouter.route(intent);
         log.debug("▶ RAG 시작 session={}, query={}", sessionId, query);
 
+        // 1) 자료 수집
         List<String> ragSnippets = retrieveRagContext(query, sessionId);
         String history = conversationMemory.asMap().getOrDefault(sessionId, "No history yet.");
-        String prompt = """
-        ### VECTOR RAG
-        %s
-        ### HISTORY
-        %s
-        ### WEB SEARCH
-        %s
-        ### QUESTION
-        %s
-        """.formatted(
-                String.join("\n\n---\n\n", ragSnippets),
-                history,
-                org.springframework.util.StringUtils.hasText(externalContext) ? externalContext : "N/A",
-                query
-        );
 
-        ChatModel use = (override != null ? override : this.chatModel);   // ★ 핵심
-
-        //  의도·제약 계산 (없으면 빈 셋/GENERAL)
-        final String intent = (preprocessor != null) ? preprocessor.inferIntent(query) : "";
-        final Set<String> allow = (preprocessor != null) ? preprocessor.allowedElements(query) : java.util.Set.of();
-        final Set<String> block = (preprocessor != null) ? preprocessor.discouragedElements(query) : java.util.Set.of();
-
-        //  INSTRUCTIONS 구성 (추천 의도 시 보수적 제약 삽입)
-        StringBuilder inst = new StringBuilder();
-        inst.append("### INSTRUCTIONS:\n");
-        inst.append("- Earlier sections have higher authority: VECTOR RAG > HISTORY > WEB SEARCH.\n");
-        inst.append("- Ground every claim in the provided sections; if evidence is insufficient, reply \"정보 없음\".\n");
-        inst.append("- Cite specific snippets or sources inline when possible.\n");
-        if ("RECOMMENDATION".equalsIgnoreCase(intent)) {
-            if (!allow.isEmpty()) {
-                inst.append("- 추천은 allowedElements(")
-                        .append(String.join("/", allow)).append(") 범위 내에서만 제시.\n");
-            }
-            if (!block.isEmpty()) {
-                inst.append("- discouragedElements(")
-                        .append(String.join("/", block)).append(")는 원칙적으로 제외. 예외 제시 시 성능 저하 근거를 함께 설명.\n");
-            }
-            inst.append("- 근거가 부족하거나 상충하면 '정보 없음'으로 답변. 정확성 우선, 창의성 억제.\n");
+        // ── Evidence Gate: PAIRING/RECOMMENDATION에서 증거 부족 시 LLM 호출 차단
+        com.example.lms.service.rag.guard.EvidenceGate gate =
+                new com.example.lms.service.rag.guard.EvidenceGate();
+        int minEv =  (externalContext != null && org.springframework.util.StringUtils.hasText(externalContext)) ? 2 : 1;
+        boolean ok = gate.hasSufficientCoverage(query, ragSnippets, externalContext, minEv);
+        if (("PAIRING".equalsIgnoreCase(intent) || "RECOMMENDATION".equalsIgnoreCase(intent)) && !ok) {
+            return "정보 없음";
         }
 
-        // LangChain4j 1.0.1: chat(List<ChatMessage>) → AiMessage.text()
+        // 2) 컨텍스트 조립
+        var ragContent = ragSnippets.stream().map(dev.langchain4j.rag.content.Content::from).toList();
+        var webContent = org.springframework.util.StringUtils.hasText(externalContext)
+                ? java.util.Arrays.stream(externalContext.split("\\r?\\n"))
+                .map(String::trim).filter(s -> !s.isEmpty())
+                .map(dev.langchain4j.rag.content.Content::from).toList()
+                : java.util.List.<dev.langchain4j.rag.content.Content>of();
+
+        //  의도·제약 계산 (없으면 빈 셋/GENERAL)  ← 기존 중복 선언 삭제
+        final String domain = (preprocessor != null) ? preprocessor.detectDomain(query) : "";
+        final java.util.Set<String> allow = (preprocessor != null) ? preprocessor.allowedElements(query) : java.util.Set.of();
+        final java.util.Set<String> block = (preprocessor != null) ? preprocessor.discouragedElements(query) : java.util.Set.of();
+
+        PromptContext ctx = PromptContext.builder()
+                .web(webContent)
+                .rag(ragContent)
+                .memory("")           // 필요 시 장기 메모리 주입
+                .history(history)
+                .domain(domain)
+                .intent(intent)
+                .allowedElements(allow)
+                .discouragedElements(block)
+                .build();
+
+        String instructions = promptBuilder.buildInstructions(ctx);
+        String body = promptBuilder.build(ctx)+ "\n### QUESTION\n" + query;
+
+        // 3) 모델 라우팅(override > 의도별 선택)
         String answer = use.chat(java.util.List.of(
-                SystemMessage.from(inst.toString()),
-                UserMessage.from(prompt)
+                SystemMessage.from(instructions),
+                UserMessage.from(body)
         )).aiMessage().text();
+
+
+        // LangChain4j 1.0.1: chat(List<ChatMessage>) → AiMessage.text()
+
+        // 4) 산출물 가드(금지 요소 컷/정정)
+        answer = answerSanitizer.sanitize(answer, ctx);
 
         java.util.concurrent.atomic.AtomicInteger rank = new java.util.concurrent.atomic.AtomicInteger(1);
         for (String snippet : ragSnippets) {

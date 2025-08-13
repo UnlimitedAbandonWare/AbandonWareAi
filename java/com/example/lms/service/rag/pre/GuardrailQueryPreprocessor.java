@@ -1,6 +1,7 @@
 package com.example.lms.service.rag.pre;
 
 import com.example.lms.service.rag.detector.GameDomainDetector;
+import com.example.lms.genshin.GenshinElementLexicon;   // + NEW
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -24,11 +25,12 @@ import java.util.regex.Pattern;
 public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
 
     private final GameDomainDetector domainDetector;
-
-    public GuardrailQueryPreprocessor(GameDomainDetector detector) {
+    private final GenshinElementLexicon lexicon;        // + NEW
+    public GuardrailQueryPreprocessor(GameDomainDetector detector,
+                                      GenshinElementLexicon lexicon) { //  NEW
         this.domainDetector = detector;
+        this.lexicon = lexicon;
     }
-
     // ── 간단 오타 사전(필요 시 Settings로 이관)
     private static final Map<String, String> TYPO = Map.of(
             "후리나", "푸리나",
@@ -112,7 +114,13 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
     public String inferIntent(String q) {
         if (!StringUtils.hasText(q)) return "GENERAL";
         String s = q.toLowerCase(Locale.ROOT);
-        if (s.matches(".*(추천|조합|파티|상성|시너지|픽|티어|메타).*")) return "RECOMMENDATION";
+        // PAIRING(궁합/어울림/상성/조합/파티/시너지) 우선 분류
+        if (s.matches(".*(잘\\s*어울리|어울리(?:는|다)?|궁합|상성|시너지|조합|파티).*")) {
+            return "PAIRING";
+        }
+        if (s.matches(".*(추천|픽|티어|메타).*")) {
+            return "RECOMMENDATION";
+        }
         return "GENERAL";
     }
 
@@ -120,21 +128,13 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
     @Override
     public Set<String> allowedElements(String q) {
         if (!"GENSHIN".equalsIgnoreCase(detectDomain(q))) return Set.of();
-        String s = q == null ? "" : q.toLowerCase(Locale.ROOT);
-        if (s.contains("에스코피에") || s.contains("escoffier")) {
-            return Set.of("CRYO", "HYDRO");
-        }
-        return Set.of();
+        return lexicon.policyForQuery(q).allowed();      //  Lexicon 기반
     }
 
     // ── 비선호 원소(원신) – Pyro/Dendro 보수 감점
     @Override
     public Set<String> discouragedElements(String q) {
         if (!"GENSHIN".equalsIgnoreCase(detectDomain(q))) return Set.of();
-        String s = q == null ? "" : q.toLowerCase(Locale.ROOT);
-        if (s.contains("에스코피에") || s.contains("escoffier")) {
-            return Set.of("PYRO", "DENDRO");
-        }
-        return Set.of();
+        return lexicon.policyForQuery(q).discouraged();  //  Lexicon 기반
     }
 }

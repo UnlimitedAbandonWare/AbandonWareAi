@@ -1,6 +1,7 @@
 package com.example.lms.transform;
-
 import java.util.*;
+import java.util.Objects;
+
 import java.util.regex.Pattern;
 
 import dev.langchain4j.model.chat.ChatModel;
@@ -19,7 +20,8 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.Arrays;
 import com.example.lms.search.SmartQueryPlanner;
-
+import com.example.lms.search.QueryHygieneFilter;
+import static com.example.lms.search.QueryHygieneFilter.sanitize;
 
 /**
  * 쿼리 오타를 교정해 주는 Transformer
@@ -406,6 +408,28 @@ public class QueryTransformer {
         }
         return kept;
     }
+
+    /** ko/en 주어 미포함 쿼리에 앵커 보정 삽입 */
+    public static List<String> sanitizeAnchored(
+            List<String> input, int max, double jaccardThreshold,
+            String subjectKo, String subjectEn) {
+
+        List<String> base = sanitize(input, max, jaccardThreshold);
+        if (base.isEmpty()) return base;
+
+        String ko = Objects.toString(subjectKo, "").trim();
+        String en = Objects.toString(subjectEn, "").trim();
+
+        return base.stream().map(q -> {
+            String l = q.toLowerCase();
+            boolean hasKo = !ko.isBlank() && l.contains(ko.toLowerCase());
+            boolean hasEn = !en.isBlank() && l.contains(en.toLowerCase());
+            if (hasKo || hasEn) return q;
+            String add = (ko.isBlank() ? "" : ko + " ") + (en.isBlank() ? "" : "\"" + en + "\" ");
+            return (add + q).trim();
+        }).distinct().toList();
+    }
+
     public record ParsedQuery(String subject,
                               String intent,
                               List<String> constraints) {}

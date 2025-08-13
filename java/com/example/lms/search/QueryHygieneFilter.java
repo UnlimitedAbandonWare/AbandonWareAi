@@ -57,6 +57,34 @@ public final class QueryHygieneFilter {
                 .filter(w -> !w.isBlank())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
+    /** 주제(ko/en)가 쿼리에 없으면 앵커를 삽입한 뒤 위생 정제 */
+    public static List<String> sanitizeAnchored(
+            List<String> input, int max, double jaccardThreshold,
+            String subjectPrimary, String subjectAlias) {
+
+        // 1차 위생 정제
+        List<String> base = sanitize(input, max, jaccardThreshold);
+        if (base.isEmpty()) return base;
+
+        String ko = Objects.toString(subjectPrimary, "").trim();
+        String en = Objects.toString(subjectAlias, "").trim();
+
+        // ko/en 어느 하나도 포함되지 않은 쿼리에 앵커를 앞에 붙인다.
+        List<String> anchored = base.stream().map(q -> {
+            String l = q.toLowerCase();
+            boolean hasKo = !ko.isBlank() && l.contains(ko.toLowerCase());
+            boolean hasEn = !en.isBlank() && l.contains(en.toLowerCase());
+            if (hasKo || hasEn) return q;
+
+            String prefix = "";
+            if (!ko.isBlank()) prefix += ko + " ";
+            if (!en.isBlank()) prefix += "\"" + en + "\" ";
+            return (prefix + q).trim();
+        }).distinct().collect(Collectors.toList());
+
+        // 앵커 삽입 후 다시 위생 정제(중복/상한 적용)
+        return sanitize(anchored, max, jaccardThreshold);
+    }
 
     private static double jaccard(Set<String> a, Set<String> b) {
         if (a.isEmpty() && b.isEmpty()) return 1.0;

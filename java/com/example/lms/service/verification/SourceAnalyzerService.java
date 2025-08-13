@@ -14,16 +14,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 출처 신뢰도 메타 점검 서비스 (통합판)
+ * 출처 신뢰도를 종합적으로 분석하는 서비스.
  *
- * 판정 흐름(우선순위):
- *  1) 텍스트 충돌 단서 → CONFLICTING
- *  2) AuthorityScorer 가중치 분포(있으면) → OFFICIAL/RELIABLE_WIKI/FAN_MADE_SPECULATION/CONFLICTING/UNKNOWN
- *  3) 휴리스틱 폴백:
- *     - 공식 도메인 포함 → OFFICIAL
- *     - 루머/팬메이드 강한 단서 or 커뮤니티·블로그 비율 과다(공식 0) → FAN_MADE_SPECULATION
- *     - 공식 & 커뮤니티 혼재 + 충돌 단서 → CONFLICTING
- *     - 그 외 → safeOk()  (enum 차이를 고려해 OK 또는 TRUSTED 또는 UNKNOWN)
+ * <p>분석 우선순위:
+ * <ol>
+ * <li><b>텍스트 단서:</b> 내용에 명백한 '충돌', '모순' 키워드가 있으면 즉시 CONFLICTING 판정.</li>
+ * <li><b>AuthorityScorer 정밀 분석:</b> 출처 URL을 기반으로 가중치를 평가하여 OFFICIAL, RELIABLE_WIKI 등으로 정밀 판정.</li>
+ * <li><b>휴리스틱 폴백:</b> 위 방법이 불가능할 경우, 도메인 종류(공식, 위키, 커뮤니티) 비율과 루머 키워드 등을 종합해 추정.</li>
+ * </ol>
+ * </p>
  */
 @Slf4j
 @Service
@@ -32,208 +31,161 @@ public class SourceAnalyzerService {
 
     private final ObjectProvider<AuthorityScorer> authorityScorerProvider;
 
-    // --- 텍스트 단서 패턴 ---
-    private static final Pattern CONFLICT_TXT =
-            Pattern.compile("(?i)(상반|엇갈|모순|상충|논란|서로\\s*다르|conflict)");
-    private static final Pattern FAN_CUE =
-            Pattern.compile("(?i)(fan[- ]?made|추측|루머|유출|소문|rumor|leak|unconfirmed|speculation)");
-    private static final Pattern OFFICIAL_DOMAIN_TXT =
-            Pattern.compile("(?i)(hoyoverse\\.com|hoyolab\\.com|genshin\\.hoyoverse\\.com|\\.go\\.kr|\\.ac\\.kr|\\.gov|\\.edu)");
+    // --- 텍스트 단서 패턴 (두 버전의 키워드 통합) ---
+    private static final Pattern CONFLICT_TXT = Pattern.compile(
+            "(?i)(상반|엇갈|모순|상충|논란|서로\\s*다르|반박|conflict|contradict)");
+    private static final Pattern FAN_CUE = Pattern.compile(
+            "(?i)(fan[- ]?made|추측|루머|유출|소문|datamine|datamining|rumor|leak|unconfirmed|speculation)");
+    private static final Pattern OFFICIAL_DOMAIN_TXT = Pattern.compile(
+            "(?i)(hoyoverse\\.com|hoyolab\\.com|genshin\\.hoyoverse\\.com|\\.go\\.kr|\\.ac\\.kr|\\.gov|\\.edu)");
 
-    // --- 가중치 임계값 (AuthorityScorer) ---
-    private static final double HIGH_T = 0.90;  // 고신뢰 컷
-    private static final double WIKI_T = 0.70;  // 위키 컷
-    private static final double LOW_T  = 0.40;  // 저신뢰 컷
+    // --- AuthorityScorer 가중치 임계값 ---
+    private static final double HIGH_T = 0.90;  // 공식
+    private static final double WIKI_T = 0.70;  // 신뢰도 높은 위키
+    private static final double LOW_T  = 0.40;  // 팬 커뮤니티/블로그
+    private static final double OFFICIAL_RATIO = 0.50;
+    private static final double WIKI_RATIO     = 0.50;
+    private static final double WIKI_HIGH_MIN  = 0.10;
+    private static final double FAN_LOW_RATIO  = 0.50;
+    private static final double FAN_HIGH_MAX   = 0.10;
+    private static final double CONFLICT_MIN   = 0.25;
 
-    private static final double OFFICIAL_RATIO = 0.50; // high 비율 ≥ 50%
-    private static final double WIKI_RATIO     = 0.50; // wiki 비율 ≥ 50%
-    private static final double WIKI_HIGH_MIN  = 0.10; // wiki 판정 시 high 최소 비율
-    private static final double FAN_LOW_RATIO  = 0.50; // low 비율 ≥ 50%
-    private static final double FAN_HIGH_MAX   = 0.10; // fan 판정 시 high 최대 비율
-    private static final double CONFLICT_MIN   = 0.25; // high/low 동시 존재 비율
-
+    /**
+     * 질문과 컨텍스트를 기반으로 출처의 신뢰도를 분석합니다.
+     */
     public SourceCredibility analyze(String question, String context) {
         if (context == null || context.isBlank()) {
-            return safeOk(); // 빈 컨텍스트는 보수적으로 OK/TRUSTED/UNKNOWN 중 enum 호환
+            return SourceCredibility.UNKNOWN;
         }
 
-        // 1) 텍스트 충돌 단서 즉시 판정
+        // 1. 텍스트에서 명백한 충돌 단서 확인
         if (CONFLICT_TXT.matcher(context).find()) {
-            return enumOrFallback(SourceCredibility.CONFLICTING);
+            return SourceCredibility.CONFLICTING;
         }
 
-        // 2) URL 기반 정밀 판정 (가능 시 우선)
-        List<String> urls = extractUrls(context);
+        // 2. AuthorityScorer를 이용한 URL 기반 정밀 분석
         AuthorityScorer scorer = authorityScorerProvider.getIfAvailable();
+        List<String> urls = extractUrls(context);
         if (scorer != null && !urls.isEmpty()) {
             try {
                 SourceCredibility judged = judgeByWeightDistribution(scorer, urls);
-                if (judged != null && judged != SourceCredibility.UNKNOWN) {
+                if (judged != SourceCredibility.UNKNOWN) {
                     return judged;
                 }
             } catch (Exception e) {
-                log.debug("AuthorityScorer 평가 실패(폴백 사용): {}", e.toString());
+                log.debug("AuthorityScorer 평가 실패 (휴리스틱으로 폴백): {}", e.toString());
             }
         }
 
-        // 3) 휴리스틱 폴백(도메인/루머/비율)
+        // 3. 휴리스틱 폴백 분석
         if (OFFICIAL_DOMAIN_TXT.matcher(context).find()) {
-            return enumOrFallback(SourceCredibility.OFFICIAL);
+            return SourceCredibility.OFFICIAL;
         }
 
         HeuristicTally tally = tallyByHosts(context);
-        double commRatio = tally.total == 0 ? 0.0 : (tally.community + tally.blog) / (double) tally.total;
-
-        if (tally.rumorCue >= 2 || (commRatio >= 0.75 && tally.official == 0)) {
-            return enumOrFallback(SourceCredibility.FAN_MADE_SPECULATION);
-        }
-        if (tally.official > 0 && tally.community > 0 && hasConflictCue(context)) {
-            return enumOrFallback(SourceCredibility.CONFLICTING);
+        if (tally.total == 0) { // URL 정보가 전혀 없으면 추측성 키워드로만 판단
+            return FAN_CUE.matcher(context).find() ? SourceCredibility.FAN_MADE_SPECULATION : SourceCredibility.UNKNOWN;
         }
 
-        return safeOk();
+        double fanRatio = (double) (tally.community + tally.blog) / tally.total;
+
+        if (FAN_CUE.matcher(context).find() || (fanRatio >= 0.75 && tally.official == 0)) {
+            return SourceCredibility.FAN_MADE_SPECULATION;
+        }
+        if (tally.wiki > 0 && tally.official == 0 && fanRatio < 0.3) {
+            return SourceCredibility.RELIABLE_WIKI;
+        }
+        if (tally.official > 0 && (tally.community > 0 || tally.blog > 0)) {
+            return SourceCredibility.CONFLICTING; // 공식과 비공식이 혼재하면 충돌 가능성
+        }
+
+        return SourceCredibility.UNKNOWN;
     }
 
-    // --- AuthorityScorer 분포 판정 ---
+    // --- AuthorityScorer 분포 판정 로직 ---
     private SourceCredibility judgeByWeightDistribution(AuthorityScorer scorer, List<String> urls) {
         int total = 0, high = 0, wiki = 0, low = 0;
 
         for (String u : urls) {
-            double w;
-            try {
-                w = scorer.weightFor(u);
-            } catch (Exception e) {
-                w = 0.5; // 평가 실패 시 중립
-            }
+            double w = scorer.weightFor(u);
             total++;
-            if (w >= HIGH_T)       high++;
-            else if (w >= WIKI_T)  wiki++;
-            else if (w <= LOW_T)   low++;
+            if (w >= HIGH_T) high++;
+            else if (w >= WIKI_T) wiki++;
+            else if (w <= LOW_T) low++;
         }
         if (total == 0) return SourceCredibility.UNKNOWN;
 
         double highR = (double) high / total;
         double wikiR = (double) wiki / total;
-        double lowR  = (double) low  / total;
+        double lowR = (double) low / total;
 
         boolean conflicting = (highR >= CONFLICT_MIN) && (lowR >= CONFLICT_MIN);
 
-        if (highR >= OFFICIAL_RATIO)                        return enumOrFallback(SourceCredibility.OFFICIAL);
-        if (wikiR  >= WIKI_RATIO && highR >= WIKI_HIGH_MIN) return enumOrFallback(SourceCredibility.RELIABLE_WIKI);
-        if (lowR   >= FAN_LOW_RATIO && highR < FAN_HIGH_MAX) return enumOrFallback(SourceCredibility.FAN_MADE_SPECULATION);
-        if (conflicting)                                     return enumOrFallback(SourceCredibility.CONFLICTING);
+        if (highR >= OFFICIAL_RATIO) return SourceCredibility.OFFICIAL;
+        if (wikiR >= WIKI_RATIO && highR >= WIKI_HIGH_MIN) return SourceCredibility.RELIABLE_WIKI;
+        if (lowR >= FAN_LOW_RATIO && highR < FAN_HIGH_MAX) return SourceCredibility.FAN_MADE_SPECULATION;
+        if (conflicting) return SourceCredibility.CONFLICTING;
 
         return SourceCredibility.UNKNOWN;
     }
 
-    // --- 휴리스틱: URL/호스트 집계 ---
+    // --- 휴리스틱 집계 로직 ---
     private HeuristicTally tallyByHosts(String context) {
         HeuristicTally t = new HeuristicTally();
-        for (String line : context.split("\\R+")) {
-            if (line.isBlank()) continue;
-            String url = extractUrlLoose(line);
+        List<String> urls = extractUrls(context);
+        t.total = urls.size();
+        for (String url : urls) {
             String host = host(url);
             if (host != null) {
                 String h = host.toLowerCase(Locale.ROOT);
                 if (isOfficial(h)) t.official++;
+                else if (isWiki(h)) t.wiki++;
                 else if (isCommunity(h)) t.community++;
                 else if (isBlog(h)) t.blog++;
-                t.total++;
             }
-            if (containsRumorCue(line)) t.rumorCue++;
         }
         return t;
     }
 
-    // --- URL 추출 (여러 줄 텍스트에서) ---
+    // --- Helper 메서드 ---
     public static List<String> extractUrls(String text) {
         if (text == null || text.isBlank()) return List.of();
         LinkedHashSet<String> out = new LinkedHashSet<>();
-        Matcher a = Pattern.compile("href\\s*=\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(text);
-        while (a.find()) out.add(a.group(1));
-        Matcher b = Pattern.compile("(https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)", Pattern.CASE_INSENSITIVE).matcher(text);
-        while (b.find()) out.add(b.group(1));
+        Matcher m = Pattern.compile("(https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)").matcher(text);
+        while (m.find()) {
+            out.add(m.group(1));
+        }
         return new ArrayList<>(out);
-    }
-
-    // 한 줄에서 URL 1개 느슨 추출 (휴리스틱 집계용)
-    private static String extractUrlLoose(String text) {
-        if (text == null) return null;
-        int a = text.indexOf("href=\"");
-        if (a >= 0) {
-            int s = a + 6, e = text.indexOf('"', s);
-            if (e > s) return text.substring(s, e);
-        }
-        int http = text.indexOf("http");
-        if (http >= 0) {
-            int sp = text.indexOf(' ', http);
-            return sp > http ? text.substring(http, sp) : text.substring(http);
-        }
-        return null;
     }
 
     private static String host(String url) {
         if (url == null) return null;
-        try { return URI.create(url).getHost(); }
-        catch (Exception ignore) { return null; }
+        try {
+            return URI.create(url).getHost();
+        } catch (Exception ignore) {
+            return null;
+        }
     }
 
-    // --- 도메인 분류 규칙 ---
     private static boolean isOfficial(String h) {
         return h.endsWith(".go.kr") || h.endsWith(".ac.kr") || h.contains(".gov") || h.contains(".edu")
                 || h.contains("hoyoverse.com") || h.contains("hoyolab.com");
     }
+
+    private static boolean isWiki(String h) {
+        return h.contains("wikipedia.org") || h.contains("namu.wiki");
+    }
+
     private static boolean isCommunity(String h) {
         return h.contains("fandom.com") || h.contains("dcinside.com") || h.contains("arca.live") || h.contains("reddit.com");
     }
+
     private static boolean isBlog(String h) {
         return h.contains("blog.naver.com") || h.contains("tistory.com") || h.contains("medium.com");
     }
 
-    private static boolean containsRumorCue(String s) {
-        if (s == null) return false;
-        String t = s.toLowerCase(Locale.ROOT);
-        return t.contains("루머") || t.contains("유출") || t.contains("추정") || t.contains("소문")
-                || t.contains("rumor") || t.contains("leak") || t.contains("unconfirmed") || t.contains("fan made") || t.contains("추측");
-    }
-    private static boolean hasConflictCue(String ctx) {
-        if (ctx == null) return false;
-        String t = ctx.toLowerCase(Locale.ROOT);
-        return t.contains("상반") || t.contains("엇갈") || t.contains("모순") || t.contains("다르다") || t.contains("논란") || t.contains("상충") || t.contains("conflict");
-    }
-
-    // --- enum 호환 안전 반환 ---
-    private static SourceCredibility safeOk() {
-        // 우선 OK → 실패 시 TRUSTED → 그래도 없으면 UNKNOWN
-        try { return SourceCredibility.valueOf("OK"); }
-        catch (Exception ignored1) {
-            try { return SourceCredibility.valueOf("TRUSTED"); }
-            catch (Exception ignored2) { return SourceCredibility.UNKNOWN; }
-        }
-    }
-    private static SourceCredibility enumOrFallback(SourceCredibility v) {
-        try {
-            // enum 상수 존재 시 그대로 사용
-            SourceCredibility.valueOf(v.name());
-            return v;
-        } catch (Exception e) {
-            // 존재하지 않는 상수면 최대한 의미가 가까운 쪽으로 폴백
-            switch (v.name()) {
-                case "OFFICIAL":                return safeOk();
-                case "RELIABLE_WIKI":           return safeOk();
-                case "FAN_MADE_SPECULATION":    return SourceCredibility.UNKNOWN;
-                case "CONFLICTING":             return SourceCredibility.UNKNOWN;
-                default:                        return SourceCredibility.UNKNOWN;
-            }
-        }
-    }
-
-    // 집계 구조체
+    // 집계용 내부 클래스
     private static class HeuristicTally {
-        int total = 0;
-        int official = 0;
-        int community = 0;
-        int blog = 0;
-        int rumorCue = 0;
+        int total = 0, official = 0, wiki = 0, community = 0, blog = 0;
     }
 }

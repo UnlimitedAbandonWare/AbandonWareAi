@@ -24,11 +24,16 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Component
-@Primary // 여러 Reranker 구현체 중 이 클래스를 기본으로 사용하도록 지정
+@Primary
 @RequiredArgsConstructor
 public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker {
 
     private final EmbeddingModel embeddingModel;
+    private final com.example.lms.service.rag.filter.GenericDocClassifier genericClassifier; //  inject
+    private final com.example.lms.genshin.GenshinElementLexicon lexicon;                    //  NEW
+    private final com.example.lms.service.rag.rerank.ElementConstraintScorer elemScorer;    //  NEW
+    private final com.example.lms.service.rag.filter.GenericDocClassifier genericClassifier =
+            new com.example.lms.service.rag.filter.GenericDocClassifier(); // 가벼운 유틸
 
     /**
      * 후보 목록(candidates)을 쿼리(query)와의 관련도에 따라 재정렬하고 상위 N개를 반환합니다.
@@ -69,13 +74,35 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
                 return new ArrayList<>(snapshot.subList(0, k));
             }
 
-            // 점수 계산 및 정렬
+            // 정책(원소 허용/비선호) 계산
+            var policy = lexicon.policyForQuery(query);  //  NEW
+
             record ScoredContent(Content content, double score) {}
             final List<ScoredContent> scored = new ArrayList<>(n);
+            String subjectGuess = guessSubjectFromQuery(query);
             for (int i = 0; i < n; i++) {
+                Content c = snapshot.get(i);
+                Content c = snapshot.get(i);
+                String text = String.valueOf(c);
                 double score = cosineSimilarity(queryVector, docEmbeddings.get(i).vector());
-                scored.add(new ScoredContent(snapshot.get(i), score));
+// 주어/범용 휴리스틱
+                String subjectGuess = guessSubjectFromQuery(query);
+                boolean hasSubject = !subjectGuess.isBlank()
+                        && text.toLowerCase().contains(subjectGuess.toLowerCase());
+                boolean isGeneric = genericClassifier.isGenericText(text);
+//  원소 정책 가중
+                double deltaElem = elemScorer.deltaForText(text, policy.allowed(), policy.discouraged());
+                double adj = score + (hasSubject ? 0.15 : -0.20) + (isGeneric ? -0.25 : 0.0) + deltaElem;
+                scored.add(new ScoredContent(c, adj));
+                boolean hasSubject = !subjectGuess.isBlank()
+                        && text.toLowerCase().contains(subjectGuess.toLowerCase());
+                boolean isGeneric  = genericClassifier.isGenericText(text);
+                // 주어 가산(+), 범용 감점(−)
+                double adj = score +  (hasSubject ? 0.15 : -0.20)+ (isGeneric ? -0.25 : 0.0);
+                scored.add(new ScoredContent(c, adj));
             }
+
+
 
             long tSort0 = System.nanoTime();
             scored.sort(Comparator.comparingDouble(ScoredContent::score).reversed());
@@ -99,7 +126,17 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
             return new ArrayList<>(candidates.subList(0, k));
         }
     }
-
+    // 매우 단순한 주어 추정(따옴표/한글 고유명-like 토큰 우선)
+    private static String guessSubjectFromQuery(String q) {
+        if (q == null) return "";
+        var m = java.util.regex.Pattern.compile("\"([^\"]{2,})\"").matcher(q);
+        if (m.find()) return m.group(1);
+        String[] toks = q.split("\\s+");
+        for (String t : toks) {
+            if (t.length() >= 2) return t;
+        }
+        return "";
+    }
     private double cosineSimilarity(float[] v1, float[] v2) {
         if (v1 == null || v2 == null || v1.length != v2.length || v1.length == 0) {
             return 0.0;

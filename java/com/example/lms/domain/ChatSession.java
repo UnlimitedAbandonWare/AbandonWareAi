@@ -58,6 +58,7 @@ public class ChatSession {
 
     @OneToMany(mappedBy = "session", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
     @OrderBy("createdAt ASC, id ASC")
+    @lombok.Builder.Default
     private List<ChatMessage> messages = new ArrayList<>();
 
 

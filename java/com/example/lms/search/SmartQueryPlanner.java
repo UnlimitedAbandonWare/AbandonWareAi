@@ -2,7 +2,6 @@
 package com.example.lms.search;
 
 import com.example.lms.transform.QueryTransformer;
-import com.example.lms.search.QueryHygieneFilter; // ⬅️ [수정] 누락된 import 추가
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
@@ -24,7 +23,6 @@ public class SmartQueryPlanner {
      * 여러 QueryTransformer 빈 중 'queryTransformer'를 명시적으로 주입받습니다.
      * @param transformer 쿼리 변환을 수행할 트랜스포머
      */
-    // ⬅️ [수정] 실제 빈 이름인 'queryTransformer'로 변경
     public SmartQueryPlanner(@Qualifier("queryTransformer") QueryTransformer transformer) {
         this.transformer = transformer;
     }
@@ -62,4 +60,31 @@ public class SmartQueryPlanner {
     public List<String> plan(String userPrompt) {
         return plan(userPrompt, null, 2);
     }
+
+    /**
+     * PAIRING 등에서 주어를 강제 포함시키는 쿼리 플래너.
+     * 앵커 삽입 및 정제는 QueryHygieneFilter에 위임합니다.
+     */
+    public List<String> planAnchored(
+            String userPrompt,
+            String subjectPrimary,
+            @Nullable String subjectAlias,
+            @Nullable String assistantDraft,
+            int maxQueries
+    ) {
+        int cap = Math.max(1, Math.min(4, maxQueries));
+
+        // 1. QueryTransformer를 통해 원시 쿼리 목록을 생성합니다.
+        List<String> raw = transformer.transformEnhanced(
+                Objects.toString(userPrompt, ""),
+                assistantDraft
+        );
+
+        // 2. [수정] 앵커링 및 정제 작업을 QueryHygieneFilter.sanitizeAnchored 메서드에 모두 위임합니다.
+        //    - 이 클래스 내에서 앵커를 미리 추가하는 중복 로직을 제거했습니다.
+        return QueryHygieneFilter.sanitizeAnchored(raw, cap, 0.80, subjectPrimary, subjectAlias);
+    }
+
+    // ⬅️ [제거] 이 메서드는 QueryHygieneFilter.sanitizeAnchored 내부 로직과 중복되므로 제거합니다.
+    // private static String ensureSubjectAnchor(String q, String primary, String alias) { ... }
 }

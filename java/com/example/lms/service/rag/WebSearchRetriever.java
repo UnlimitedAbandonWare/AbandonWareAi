@@ -9,7 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.regex.Pattern;             /* 🔴 NEW */
-import java.util.regex.Pattern;
+import com.example.lms.service.rag.filter.GenericDocClassifier;
 @Slf4j
 @RequiredArgsConstructor
 @org.springframework.stereotype.Component
@@ -22,7 +22,7 @@ public class WebSearchRetriever implements ContentRetriever {
     private static final int MIN_SNIPPETS = 2;
     //  도메인 신뢰도 점수로 정렬 가중
     private final com.example.lms.service.rag.auth.AuthorityScorer authorityScorer;
-    /* 🔴 노이즈 제거 패턴 */
+    private final GenericDocClassifier genericClassifier = new GenericDocClassifier();
     private static final Pattern META_TAG = Pattern.compile("\\[[^\\]]+\\]");
     private static final Pattern TIME_TAG = Pattern.compile("\\b\\d{1,2}:\\d{2}\\b");
     /* 🔵 봇/캡차 페이지 힌트 */
@@ -64,13 +64,18 @@ public class WebSearchRetriever implements ContentRetriever {
         List<String> ranked = first.stream()
                 .distinct()
                 .sorted((a, b) -> {
-                    double aw = authorityScorer.weightFor(extractUrl(a));
-                    double bw = authorityScorer.weightFor(extractUrl(b));
-                    int cmp = Double.compare(bw, aw); // high first
+                    double aw = authorityScorer.weightFor(extractUrl(a)) - genericClassifier.penalty(a);
+                    double bw = authorityScorer.weightFor(extractUrl(b)) - genericClassifier.penalty(b);
+                    int cmp = Double.compare(bw, aw); // high first (penalty 반영)
                     if (cmp != 0) return cmp;
                     // 동률이면 선호 도메인 우선
                     return Boolean.compare(containsPreferred(b), containsPreferred(a));
                 })
+                .limit(topK)
+                .toList();
+        // 과도하게 범용인 결과는 컷
+        ranked = ranked.stream()
+                .filter(s -> !genericClassifier.isGenericSnippet(s))
                 .limit(topK)
                 .toList();
 

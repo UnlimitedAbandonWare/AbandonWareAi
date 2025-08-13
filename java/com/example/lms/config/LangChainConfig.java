@@ -75,6 +75,19 @@ public class LangChainConfig {
                 .timeout(Duration.ofSeconds(openAiTimeoutSec))
                 .build();
     }
+    /** 추천/조합(RECOMMENDATION) 전용 상위 모델(저온) */
+    @Bean("moeChatModel")
+    public ChatModel moeChatModel(
+            @Value("${openai.chat.model.moe:gpt-4o}") String moeModel,
+            @Value("${openai.chat.temperature.recommender:0.2}") double recTemp
+    ) {
+        return OpenAiChatModel.builder()
+                .apiKey(openAiKey)
+                .modelName(moeModel)
+                .temperature(recTemp)
+                .timeout(Duration.ofSeconds(openAiTimeoutSec))
+                .build();
+    }
 
     @Bean
     public EmbeddingModel embeddingModel() {
@@ -148,17 +161,8 @@ public class LangChainConfig {
         return new AnalyzeWebSearchRetriever(koreanAnalyzer, svc, maxTokens, preprocessor);
     }
 
-    /* ═════════ 4. 벡터-RAG 서비스 ═════════ */
-    @Bean
-    public LangChainRAGService langChainRAGService(
-            ChatModel chatModel,
-            EmbeddingModel embeddingModel,
-            EmbeddingStore<TextSegment> store,
-            MemoryReinforcementService memorySvc,
-            QueryContextPreprocessor preprocessor
-    ) {
-        return new LangChainRAGService(chatModel, embeddingModel, store, memorySvc, preprocessor);
-    }
+    // ⚠️ LangChainRAGService 는 @Service 로 등록됩니다.
+    //    중복 빈 생성을 피하기 위해 수동 @Bean 정의를 제거합니다.
 
     // NOTE:
     // - HybridRetriever 는 @Component 로 등록됩니다. (여기서 @Bean 만들지 마세요)
