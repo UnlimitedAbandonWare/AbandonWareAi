@@ -1203,7 +1203,132 @@ Keep/extend: GenshinRecommendationSanitizer (rename to a generic policy chain if
 Phase 7 — Controller/Service glue & compile breakages
 
 7.1 Unreachable statement @ ChatService:462
+Modify
 
+src/main/java/.../boot/StartupVersionPurityCheck.java
+
+Scan classpath for dev.langchain4j* artifacts; abort startup if any ≠ 1.0.1.
+
+Log a compact dump of the exact offending coordinates to make the fix mechanical.
+
+Add
+
+A short dependency audit step in build (Gradle/Maven) that fails fast when any transitive pulls 0.2.x. (Keep it build-time; runtime guard remains authoritative.)
+
+Touch nothing else until this is green.
+
+Slice 2/4 — Truthful model routing + header integrity (MoE on high-stakes)
+
+Why: “Why is it always Diluc?” was largely wrong model & weak routing. We force MoE for high-stakes intents and fix headers to reflect the real provider model id.
+
+Modify
+
+src/main/java/.../model/ModelRouter.java
+
+Route PAIRING/RECOMMENDATION and verbosity ∈ {deep, ultra} to the MoE/high-tier model (your openai.model.moe).
+
+Expose resolveModelName(...) that returns the provider’s actual id (not lc:OpenAiChatModel nor an alias).
+
+src/main/java/.../service/ChatService.java
+
+Single return path: compute (answer, modelUsed, ragUsed) once; no early returns (fixes your “unreachable statement” hotspot).
+
+Never build prompts inline; every call flows through PromptBuilder.build(PromptContext).
+
+src/main/java/.../api/ChatApiController.java
+
+Set X-Model-Used from ModelRouter.resolveModelName(...) only.
+
+Ensure SSE final event always carries {modelUsed, ragUsed} from the same source of truth.
+
+Add
+
+None (reuse DynamicChatModelFactory).
+
+Acceptance checks: PAIRING + deep|ultra → MoE; X-Model-Used shows provider id; no lc:* in headers.
+
+Slice 3/4 — Memory always-on (read & write), even when RAG/Web = OFF
+
+Why: Your target is “RAG/Web off → memory still saves, loads, and informs answers.”
+
+Add
+
+service/rag/handler/MemoryHandler
+
+Plugs before retrieval; injects recent session turns into the working context (non-throwing, silent on failure).
+
+service/rag/handler/MemoryWriteInterceptor
+
+Plugs after generation; always persists the final answer ( OFF/ON modes alike ), routing through your existing MemoryReinforcementService.
+
+Modify
+
+service/rag/HybridRetriever.java
+
+Call MemoryHandler to preload memory into the candidate pool unconditionally (errors swallowed).
+
+service/ChatService.java
+
+Replace any direct memory writes with the MemoryWriteInterceptor.
+
+Compute ragUsed = (req.useWeb && webDocs>0) || (req.useRag && vectorDocs>0); flags alone must not set it true.
+
+prompt/PromptBuilder.java
+
+Standardize a visible “CONVERSATION MEMORY” section when memory exists (no behavior change; just consistent sectioning).
+
+Type contract cleanup
+
+Pick one: PromptContext.memory as String or List<String>.
+
+Align FactVerifierService and any call sites to that single type to remove the “String cannot be converted to List<String>” error surface.
+
+Acceptance checks:
+Turn-2 uses Turn-1 info with useRag=false,useWeb=false; X-RAG-Used=false; memory still influences the answer.
+
+Slice 4/4 — Chain order + subject anchoring + low-risk verification
+
+Why: Drift happens when the subject isn’t locked and weak evidence flows into generation.
+
+Modify (wiring)
+
+Ensure handler order (Chain of Responsibility):
+MemoryHandler → SelfAskHandler → AnalyzeHandler(Query Hygiene) → WebHandler → VectorDbHandler → MemoryWriteInterceptor
+
+No handler throws through the chain; on failure, return partials and pass down.
+
+Add
+
+service/rag/guard/EvidenceGate
+
+Minimal, configurable evidence thresholds; lenient on follow-ups; can short-circuit generation to a conservative reply.
+
+service/rag/rank/RelationshipRuleScorer
+
+Replace any element hard-codes with KB-driven rules (preferred/discouraged pairs, contains/part-of).
+
+(If not present) service/rag/subject/SubjectResolver
+
+Resolve subject via KB entity list (longest match + domain hints). Feed the anchor to PromptContext and preferred-site filters.
+
+Modify (reuse)
+
+Keep AuthorityScorer, RRF/Borda fusion, and integrate AdaptiveScoringService (SynergyStat) inside your cross-encoder reranker.
+
+GuardrailQueryPreprocessor (or QueryContextPreprocessor) injects protected terms (subject + dictionary hits) so LLM can’t “correct” valid names.
+
+Acceptance checks:
+Subject remains stable across follow-ups; low-authority pages don’t dominate; weak evidence yields safe, short answers instead of hallucinations.
+
+Small gotchas to tame along the way (no code, just targets)
+
+Duplicate stereotypes & missing loggers: ensure each reranker/handler has one Spring stereotype and a logger (fixes “Component is not a repeatable annotation type” + log not found).
+
+SSE variable scope: in ChatApiController, consolidate any local sink usage and ensure it’s defined where emitted (fixes your “cannot find symbol sink”).
+
+Unreachable statement: already addressed by the single-return refactor in ChatService.
+
+If you want the next partial slices, I’ll cover: (a) KB service interfaces to de-hardcode policies, (b) claim verification ordering inside FactVerifierService, and (c) minimal config keys to activate verbosity-driven routing without touching other modules.
 Refactor that method to a single exit (collect modelUsed, ragUsed, result) then return/emit once.
 Also ensure contextOrchestrator is injected (you previously missed the field).
 Add (new):
