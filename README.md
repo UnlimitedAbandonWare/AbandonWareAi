@@ -1583,7 +1583,163 @@ These hunks only add the necessary README content to document:
 
 the handler order and non-crashing chain behavior,
 
-the verbosity-driven routing/sections/length policy,
+the verbosity-driven routing/sections/length policy,Slice 1 — Classpath Purity & Boot Hygiene (must pass before anything else)
+
+Goal: Abort fast on mixed LangChain4j (0.2.x vs 1.0.1) and remove noisy local boot blockers.
+
+Modify
+
+src/main/java/com/example/lms/boot/StartupVersionPurityCheck.java
+Action: scan classpath for dev.langchain4j* artifacts, fail hard unless all are 1.0.1. Log a compact module dump naming any offenders.
+
+Build script (Gradle): add a lightweight dependency audit (e.g., a task that runs dependencies/dependencyInsight for dev.langchain4j) and fails CI on non-1.0.1.
+
+Local profile config: disable Spring Cloud Config for local (spring.cloud.config.enabled=false) to stop http://localhost:8888/application/default bootRun noise.
+
+Stop Rule: If purity fails, do nothing else—report the conflicting artifacts and exit.
+
+Reuse
+
+Your existing StartupVersionPurityCheck skeleton and logging.
+
+Acceptance checks
+
+Startup log prints a single “LangChain4j purity OK: …1.0.1” line.
+
+Any 0.2.x instantly aborts with a human-readable list of coordinates.
+
+Slice 2 — Truthful Model Headers & High-Tier Routing (fixes “always Diluc”, wrong header)
+
+Goal: Route high-stakes to MoE/top model and ensure X-Model-Used reflects the provider model id, not lc:*.
+
+Modify
+
+src/main/java/com/example/lms/model/ModelRouter.java
+Action:
+
+Implement resolveModelName(ChatModel) that returns the actual provider model id.
+
+Route intents PAIRING/RECOMMENDATION with verbosity ∈ {deep, ultra} to openai.model.moe with low temperature.
+
+src/main/java/com/example/lms/service/ChatService.java
+Action:
+
+Refactor to single return path (collect answer, modelUsed, ragUsed once). This removes the “unreachable statement” hotspot reported earlier.
+
+Never build prompts inline here; delegate to PromptBuilder.build(PromptContext).
+
+src/main/java/com/example/lms/api/ChatApiController.java
+Action: set X-Model-Used exclusively from ModelRouter.resolveModelName(...).
+
+Also fix SSE scope: ensure the sink/emitter variable is defined in the scope where it’s used (earlier “cannot find symbol sink”).
+
+Reuse
+
+DynamicChatModelFactory (temps/top-p/max tokens), existing SSE streaming.
+
+Acceptance checks
+
+Deep/ultra pairing queries → MoE route; X-Model-Used shows e.g., gpt-4o, never lc:OpenAiChatModel.
+
+No more “unreachable statement” in ChatService.
+
+Slice 3 — Prompt/Context Discipline & Verifier Contract (kills String↔List mismatch)
+
+Goal: One context contract; all prompts flow through builder; fix the FactVerifierService memory type mismatch.
+
+Modify
+
+src/main/java/com/example/lms/prompt/PromptContext.java
+Action: finalize fields used by the chain (no code here):
+
+userQuery, lastAssistantAnswer, web, rag, memory, history, intent, verbosityHint, minWordCount, sectionSpec, audience, citationStyle, interactionRules.
+
+Decision: standardize memory’s type.
+
+If today it’s String in some places and List<String> in others (your error shows exactly this): pick one. Easiest path: keep String in PromptContext, and in verifiers adapt with List.of(memory) when needed.
+
+src/main/java/com/example/lms/prompt/PromptBuilder.java
+Action: centralize:
+
+Inject PREVIOUS_ANSWER section when follow-up is detected.
+
+Enforce verbosity policy (min words, optional single post-expansion trigger).
+
+Render CONVERSATION MEMORY consistently when present.
+
+src/main/java/com/example/lms/service/FactVerifierService.java
+Action: align method signature/usage so the memory argument matches the chosen type from PromptContext (wrap to List<String> internally if the context keeps it as String). This removes: “String cannot be converted to List<String>”.
+
+src/main/java/com/example/lms/service/ChatService.java
+Action: Remove any string concatenation for prompts; build both context and instruction via PromptBuilder. Ensure contextOrchestrator is actually injected (you previously missed the field—earlier error).
+
+Reuse
+
+Your VerbosityDetector, AnswerExpanderService, length verifier.
+
+Acceptance checks
+
+No compile error at FactVerifierService.java:169/170.
+
+All ChatService → PromptBuilder only; no inline prompt glue.
+
+Slice 4 — Chain Wiring + Memory Always-On (RAG/Web OFF still reads/writes memory)
+
+Goal: Make the handler order explicit, add memory hooks, and keep the chain fault-tolerant.
+
+Modify
+
+Chain assembly (your configuration that builds HybridRetriever chain):
+Order must be:
+MemoryHandler → SelfAskHandler → AnalyzeHandler (Query Hygiene) → WebHandler → VectorDbHandler → MemoryWriteInterceptor
+
+All handlers must not throw; on failure they return partials and pass down.
+
+src/main/java/com/example/lms/service/ChatService.java
+Action: compute ragUsed from evidence presence (WEB/RAG) only; flags alone mustn’t set it true.
+
+Add (new)
+
+src/main/java/com/example/lms/service/rag/handler/MemoryHandler.java
+Purpose: inject recent verified session snippets into context before retrieval (anchor the subject; mark evidence MEMORY).
+
+src/main/java/com/example/lms/service/rag/handler/MemoryWriteInterceptor.java
+Purpose: persist every final answer (and optional verified snippets) regardless of useRag/useWeb—this fixes “RAG/Web off ⇒ memory not saved”.
+
+src/main/java/com/example/lms/service/rag/guard/EvidenceGate.java (optional in this slice)
+Purpose: short-circuit to conservative output when evidence is thin; more lenient on follow-ups.
+
+Tighten history API (if not merged yet)
+
+src/main/java/com/example/lms/service/ChatHistoryService.java → ensure getLastAssistantMessage(sessionId) exists.
+
+src/main/java/com/example/lms/service/ChatHistoryServiceImpl.java → role whitelist + recent assistant query.
+
+src/main/java/com/example/lms/repository/ChatMessageRepository.java → two “top by role” finders (by createdAt desc, id desc).
+
+Reuse
+
+Existing MemoryReinforcementService (energy/annealing), caches, SSE.
+
+Acceptance checks
+
+With useRag=false, useWeb=false, turn-2 still leverages turn-1 memory; response evidence shows MEMORY.
+
+Chain doesn’t crash when a handler fails; downstream still returns a conservative answer.
+
+Quick hotspot cleanups you can fold into the slices
+
+Annotations/loggers: ensure each component has one stereotype only; add @Slf4j (or a logger) to classes where you logged (fixes “Component is not a repeatable annotation type” and missing log).
+
+ChatService as class: if you converted it to a record, revert to a normal @Service class; those “field declaration must be static” compiler errors happen when adding non-record fields to a record.
+
+If you want the next partial slice, I’ll cover:
+
+KB-driven rules (KnowledgeBaseService, RelationshipRuleScorer) to replace hard-coded element logic,
+
+Adaptive reranking integration (SynergyStat/AdaptiveScoringService inside the cross-encoder),
+
+Claim/Evidence ordering inside FactVerifierService (EvidenceGate → ClaimVerifier → Sanitizers).
 
 the config keys to control it, and
 
