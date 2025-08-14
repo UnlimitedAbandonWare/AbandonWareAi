@@ -1603,7 +1603,207 @@ Reuse
 Your existing StartupVersionPurityCheck skeleton and logging.
 
 Acceptance checks
+(AbandonWare), here’s a surgical, code-free plan you can apply as small PR slices. It tells you exactly where to edit and what to add, reusing what you already have. Short, partial, and in order of highest leverage.
 
+Slice 0 — Fail-Fast Purity Guard (must pass first)
+
+Goal: Stop mixed LangChain4j (0.2.x vs 1.0.1) before anything else.
+
+Modify: src/main/java/com/example/lms/boot/StartupVersionPurityCheck.java
+
+Scan classpath for dev.langchain4j* and abort unless all are 1.0.1.
+
+Log a compact module/version dump naming any offenders.
+
+(Optional CI) Add a Gradle dependency-insight step that fails on any dev.langchain4j ≠ 1.0.1.
+
+Stop rule: If this fails, report conflicting artifacts and do nothing else.
+
+Slice 1 — Truthful Model Routing & Headers (fixes “always Diluc”, wrong header)
+
+Goal: Route high-stakes to MoE and make headers tell the truth.
+
+Modify: src/main/java/com/example/lms/model/ModelRouter.java
+
+Route intents PAIRING/RECOMMENDATION with verbosity ∈ {deep, ultra} to the MoE/high-tier model (from config).
+
+Expose resolveModelName(...) that returns the provider’s real model id (not lc:OpenAiChatModel).
+
+Modify: src/main/java/com/example/lms/service/ChatService.java
+
+Refactor to one return path: compute (answer, modelUsed, ragUsed) once; no early returns (fixes “unreachable statement”).
+
+Never build prompts here; always call PromptBuilder.build(PromptContext).
+
+Modify: src/main/java/com/example/lms/api/ChatApiController.java
+
+Set X-Model-Used only from ModelRouter.resolveModelName(...).
+
+Fix SSE scope so final “done” event always carries {modelUsed, ragUsed}.
+
+Sanity: If ChatService accidentally became a record, revert to a normal @Service class (fixes “field must be static” errors when adding fields).
+
+Outcome checks: High-stakes → MoE; header shows e.g., gpt-4o (never lc:*).
+
+Slice 2 — Prompt/Context Discipline & Memory Type Unification
+
+Goal: One contract; no string concat in ChatService; kill the String ↔ List<String> mismatch.
+
+Modify: src/main/java/com/example/lms/prompt/PromptContext.java
+
+Fields to be authoritative: userQuery, lastAssistantAnswer, web, rag, memory, history, domain, subject, protectedTerms, interactionRules, verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience, citationStyle.
+
+Choose one type for memory (recommend String) and stick to it across the pipeline.
+
+Modify: src/main/java/com/example/lms/prompt/PromptBuilder.java
+
+Render CONVERSATION MEMORY and PREVIOUS ANSWER sections consistently.
+
+Enforce verbosity policy (min words; one optional post-expansion for deep|ultra).
+
+Modify: src/main/java/com/example/lms/service/FactVerifierService.java
+
+Align to the chosen memory type; if verifiers want lists, wrap internally (List.of(memory)).
+
+Outcome checks: No String cannot be converted to List<String>; all prompts flow through PromptBuilder.
+
+Slice 3 — Chain Wiring + Memory Always-On
+
+Goal: Explicit handler order; fault-tolerant; memory read/write even when RAG/Web are OFF.
+
+Verify order (Chain of Responsibility) in the config that assembles handlers:
+MemoryHandler → SelfAskHandler → AnalyzeHandler (Query Hygiene) → WebHandler → VectorDbHandler → MemoryWriteInterceptor
+Each handler returns partials; no throws through the chain.
+
+Add: src/main/java/com/example/lms/service/rag/handler/MemoryHandler.java
+
+Preload recent verified session snippets into working context; tag evidence as MEMORY.
+
+Add: src/main/java/com/example/lms/service/rag/handler/MemoryWriteInterceptor.java
+
+Always persist the final turn (and verified snippets) regardless of useRag/useWeb.
+
+Modify: src/main/java/com/example/lms/service/ChatService.java
+
+Compute ragUsed from evidence presence (WEB/RAG docs found), not flags alone.
+
+Tighten history API (if missing):
+
+ChatHistoryService#getLastAssistantMessage(sessionId) and repo finder for latest assistant message.
+
+Outcome checks: With useRag=false,useWeb=false, turn-2 still leverages turn-1; evidence shows MEMORY.
+
+Slice 4 — KB-First Subject Anchoring (stop topic drift)
+
+Goal: De-hardcode rules; resolve subject from data; anchor queries.
+
+Add (if not merged):
+
+Entities/Repos: domain/DomainKnowledge, domain/EntityAttribute, repository/*.
+
+Service: service/knowledge/KnowledgeBaseService (+ default impl).
+
+Add/Modify: src/main/java/com/example/lms/service/subject/SubjectResolver.java
+
+Use KB entity lists (longest match + domain hints); return canonical subject.
+
+Modify: src/main/java/com/example/lms/search/SmartQueryPlanner.java
+
+Inject SubjectResolver + KnowledgeBaseService.
+
+Use anchored planning (plan(..., subject) overload), defaulting to resolver when subject is not provided.
+
+Modify: src/main/java/com/example/lms/transform/QueryTransformer.java
+
+Overload to accept subject; filter/boost variants to contain subject tokens; block unsafe acronym expansion.
+
+Outcome checks: Follow-ups stick to the same subject; no DW→Deutsche Welle-type drift.
+
+Slice 5 — Reranking that Learns
+
+Goal: Replace element hard-codes; integrate synergy; fix stereotypes/logging.
+
+Add: src/main/java/com/example/lms/service/rag/rank/RelationshipRuleScorer.java
+
+Use KB interaction rules (preferred/ discouraged/contains/part-of) to boost/penalize candidates.
+
+Modify: src/main/java/com/example/lms/service/rag/EmbeddingModelCrossEncoderReranker.java
+
+Inject AdaptiveScoringService (SynergyStat) and RelationshipRuleScorer; combine with cross-encoder score.
+
+Ensure exactly one Spring stereotype and a logger (@Slf4j or Logger) to fix compile errors.
+
+Reuse: your AuthorityScorer, RRF/Borda fusion.
+
+Outcome checks: Preferred pairings rise; discouraged drop; compile warnings gone.
+
+Slice 6 — Hallucination Suppression (soft-fail)
+
+Goal: Multi-layer guard; conservative when weak evidence.
+
+Add: src/main/java/com/example/lms/service/rag/guard/EvidenceGate.java
+
+Configurable min evidence; lenient for follow-ups; can short-circuit to conservative output.
+
+Add: src/main/java/com/example/lms/service/verification/ClaimVerifierService.java
+
+Extract claims from the draft; drop unsupported ones against retrieved context.
+
+Modify: src/main/java/com/example/lms/service/FactVerifierService.java
+
+Order: EvidenceGate → Fact checks → ClaimVerifier → AnswerSanitizers.
+
+Only return “정보 없음” if claims/context end up empty.
+
+Keep/extend: sanitizer chain (e.g., recommendation policy).
+
+Outcome checks: Weak context → safe, short answer; no bold hallucinations.
+
+Slice 7 — Config & Keys (minimal, partial)
+
+Goal: Wire MoE & verbosity without a big config diff.
+
+application.yml (partial additions only):
+
+openai.model.moe: <your high-tier model id>
+
+abandonware.answer.detail.min-words.{brief,standard,deep,ultra}
+
+abandonware.answer.token-out.{brief,standard,deep,ultra}
+
+orchestrator.max-docs (+ higher caps for deep|ultra)
+
+reranker.keep-top-n.{brief,standard,deep,ultra}
+
+memory.read.enabled=true, memory.write.enabled=true
+
+(Optional) verifier.evidence.min-count.memory=1, verifier.followup.leniency=true
+
+Outcome checks: Verbosity changes routing, context caps, min length, and one-hop expansion.
+
+Slice 8 — Hotspot Cleanups & Tests
+
+Quick fixes you can fold into the PRs
+
+Remove duplicate @Component annotations; add @Slf4j where log.* is used.
+
+Ensure contextOrchestrator is injected in ChatService.
+
+Fix SSE sink scope in ChatApiController.
+
+Acceptance tests (minimal):
+
+Pairing + deep|ultra → MoE; X-Model-Used shows provider id.
+
+RAG/Web = OFF still reads/writes memory and influences next turn.
+
+Subject stays anchored across follow-ups.
+
+Weak evidence → conservative output, not hallucination.
+
+Chain never crashes; partials flow.
+
+If you want, I can turn any slice above into a tiny PR checklist (titles + file paths + test points) so you can land them one by one without touching unrelated modules.
 Startup log prints a single “LangChain4j purity OK: …1.0.1” line.
 
 Any 0.2.x instantly aborts with a human-readable list of coordinates.
@@ -1683,7 +1883,183 @@ Build hygiene (optional)
 Gradle: add a dependency-insight check in CI that fails on any dev.langchain4j ≠ 1.0.1.
 
 Acceptance check
+Slice 1 — Truthful Model Routing & Headers (fix “always Diluc” / wrong header)
 
+Route high-stakes to the MoE model and make headers reflect the provider model id.
+
++ Edit: src/main/java/.../model/ModelRouter.java
+
+Add resolveModelName(ChatModel) → return real provider id (never lc:OpenAiChatModel).
+
+Route intents PAIRING/RECOMMENDATION with Verbosity ∈ {deep, ultra} to openai.model.moe (low temp).
+
++ Edit: src/main/java/.../service/ChatService.java
+
+Single exit: compute (answer, modelUsed, ragUsed) once; remove early returns (fixes unreachable statement @462).
+
+No string concatenation for prompts; all go through PromptBuilder.build(PromptContext).
+
++ Edit: src/main/java/.../api/ChatApiController.java
+
+Set X-Model-Used only from ModelRouter.resolveModelName(...).
+
+Ensure SSE final event includes {modelUsed, ragUsed} from same source of truth.
+
+Slice 2 — Prompt/Context Contract & Memory Type Unification
+
+Kill String ↔ List<String> mismatches and centralize policy.
+
++ Edit: src/main/java/.../prompt/PromptContext.java
+Keep a single authoritative set: userQuery, lastAssistantAnswer, web, rag, memory, history, domain, subject, protectedTerms, interactionRules, verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience, citationStyle.
+Choose one memory type (String recommended) and stick to it across pipeline.
+
++ Edit: src/main/java/.../prompt/PromptBuilder.java
+Add standardized sections (CONVERSATION MEMORY, PREVIOUS ANSWER).
+Enforce minimum words for deep|ultra; allow one optional post-expansion hop.
+
++ Edit: src/main/java/.../service/FactVerifierService.java
+Align to chosen memory type; if a list is needed internally, wrap via List.of(memory).
+
+Slice 3 — Chain Wiring & Memory Always-On (RAG/Web OFF still reads/writes memory)
+
+Chain must never crash; return partials.
+
++ Order (verify in your chain @Configuration):
+MemoryHandler → SelfAskHandler → AnalyzeHandler (Query Hygiene) → WebHandler → VectorDbHandler → MemoryWriteInterceptor
+
++ New class: service/rag/handler/MemoryHandler
+Preload recent verified session snippets into working context; tag evidence MEMORY; non-throwing.
+
++ New class: service/rag/handler/MemoryWriteInterceptor
+Persist final turn (and verified snippets) always, regardless of useRag/useWeb.
+
++ Edit: service/rag/HybridRetriever.java
+Call MemoryHandler unconditionally; failures fall through as partials.
+
++ Edit: service/ChatService.java
+Compute ragUsed from evidence presence (WEB/RAG docs found), not flags alone.
+
+Slice 4 — KB-First Subject Anchoring (stop topic drift)
+
+De-hardcode rules; resolve subject from data; anchor queries.
+
++ New JPA: domain/DomainKnowledge, domain/EntityAttribute
+
++ New repos: repository/DomainKnowledgeRepository, repository/EntityAttributeRepository
+
++ New service: service/knowledge/KnowledgeBaseService (+ default impl)
+Methods: getAttribute(...), getInteractionRules(...), getAllEntityNames(...).
+
++ Edit/New: service/subject/SubjectResolver
+Longest-match over KB entity names (+ domain hints); return canonical subject and protected terms.
+
++ Edit: search/SmartQueryPlanner.java & transform/QueryTransformer.java
+Overloads that accept subject; ensure generated variants preserve anchor tokens.
+
+Slice 5 — Reranking That Learns
+
+Replace element hard-codes; incorporate user feedback; keep authority weights.
+
++ New class: service/rag/rank/RelationshipRuleScorer
+Use KB interactionRules to boost/penalize candidates (preferred/ discouraged/ contains/ part-of).
+
++ Edit: service/rag/EmbeddingModelCrossEncoderReranker.java
+Inject AdaptiveScoringService (SynergyStat) and RelationshipRuleScorer; combine with cross-encoder score.
+Ensure exactly one stereotype (e.g., @Component) and a logger (@Slf4j).
+
++ Reuse: AuthorityScorer, RRF/Borda fusion; pass hostnames from WebHandler.
+
+Slice 6 — Hallucination Suppression (soft-fail)
+
+Prefer conservative output over wrong output.
+
++ New class: service/rag/guard/EvidenceGate
+Configurable min evidence; lenient for follow-ups; can short-circuit to conservative reply.
+
++ New class: service/verification/ClaimVerifierService
+Extract simple claims from draft; drop unsupported against retrieved context.
+
++ Edit: service/FactVerifierService.java
+Order: EvidenceGate → Fact checks → ClaimVerifier → AnswerSanitizers.
+Return “정보 없음” only if claims/context end up empty.
+
++ Reuse: existing sanitizer chain; rename game-specific sanitizer to generic policy if needed.
+
+Slice 7 — Config Keys (partial, minimal)
+
+Only add what the new logic needs; keep the rest untouched.
+
++ application.yml (partial additions):
+
+openai:
+  model:
+    moe: gpt-4o   # or your chosen high-tier
+abandonware:
+  answer:
+    detail.min-words: { brief: 120, standard: 250, deep: 600, ultra: 1000 }
+    token-out:        { brief: 512, standard: 1024, deep: 2048, ultra: 3072 }
+orchestrator:
+  max-docs: 10
+  max-docs.deep: 14
+  max-docs.ultra: 18
+reranker:
+  keep-top-n: { brief: 5, standard: 8, deep: 12, ultra: 16 }
+memory:
+  read.enabled: true
+  write.enabled: true
+verifier:
+  evidence:
+    min-count.memory: 1
+    followup.leniency: true
+
+
+(Keep keys partial; don’t replace your whole file.)
+
+Slice 8 — Build & Controller Hotspots (tight repairs only)
+
+Address recent compiler errors without large edits.
+
++ ChatService: add missing field injection for ContextOrchestrator; ensure it’s a normal @Service (not a record), fixing “field must be static”.
+
++ ChatApiController: define and use a consistent sink/emitter in SSE scope (fix cannot find symbol sink).
+
++ FactVerifierService: resolve String cannot be converted to List<String> per Slice 2 unification.
+
++ HyperparameterService: keep your adjust(...) clamping utility; no math surprises (you already fixed cur + delta typo).
+
+Slice 9 — Acceptance Checks (quick, automatable)
+
+Purity: startup logs “LangChain4j purity OK: …1.0.1”; any 0.2.x → fails fast with coordinates.
+
+MoE routing: PAIRING + deep|ultra → MoE; X-Model-Used shows provider id (never lc:*).
+
+Memory always-on: with useRag=false,useWeb=false, Turn-2 leverages Turn-1; evidence includes MEMORY.
+
+Subject anchoring: follow-ups keep the same subject; no off-topic drift.
+
+Reranking learns: positive feedback raises synergy pairings; discouraged rules demote.
+
+Soft-fail: weak evidence yields short, cautious output (not bold hallucinations).
+
+Chain resilience: handler failures do not crash; partials flow downstream.
+
+Notes on PR sizing (to keep reviews painless)
+
+PR-1: Slice 0 (purity guard)
+
+PR-2: Slice 1 (routing + truthful headers)
+
+PR-3: Slice 2 (PromptContext/PromptBuilder + memory type)
+
+PR-4: Slice 3 (chain wiring + two memory handlers)
+
+PR-5: Slice 4 (KB + subject resolver)
+
+PR-6: Slice 5 (reranking integration)
+
+PR-7: Slice 6 (verification stack)
+
+PR-8: Slice 7 (config keys) + Slice 8 (hotspot fixes)
 Startup logs: one “LangChain4j purity OK: …1.0.1” line; any 0.2.x aborts with a clear list.
 
 Slice 1 — Truthful Model Routing & Headers (fix “always Diluc”, wrong header)
@@ -1797,7 +2173,147 @@ With useRag=false, useWeb=false, turn-2 still leverages turn-1 memory; evidence 
 Chain never crashes; partials flow to downstream handlers.
 
 Quick Hotspot Cleanups (fold into the slices above)
+Got it, (AbandonWare). Here’s a partial, surgical strategy plan (Slice 1)—only where to change/add things, no code. It focuses on (a) version purity, (b) truthful MoE routing & headers (so it doesn’t “always be Diluc”), and (c) minimal prompt/context contract fixes that unblock compile errors you hit. If you want the next slice (chain wiring, KB-rules reranking, evidence gate), say “Next slice”.
 
+Slice 1 — Stop-rule + MoE routing + header integrity (no code)
+A) Root-cause recap (why things broke / “always Diluc”)
+
+Mixed LangChain4j (0.2.x vs 1.0.1) causes wrapper names like lc:OpenAiChatModel to leak into headers and subtle API/ABI mismatches. If purity isn’t enforced, downstream fixes are unreliable.
+
+Header shows wrapper, not the real model → you can’t confirm if the upper-tier MoE was actually routed.
+
+Early returns in ChatService ⇒ unreachable statement and inconsistent modelUsed/ragUsed.
+
+Type drift in memory (String vs List<String>) causes String cannot be converted to List<String> at verifiers.
+
+SSE scope leaks (sink not in scope) and missing DI fields (e.g., contextOrchestrator) trigger build fails.
+
+B) Exact edits (paths) — modify vs add (no code)
+0) Fail-fast classpath purity (must pass before anything else)
+
+Modify: src/main/java/com/example/lms/boot/StartupVersionPurityCheck.java
+
+- Log-only scanning.
+
++ Abort startup when any dev.langchain4j* artifact ≠ 1.0.1; dump offending coordinates.
+
+(Optional CI) Add a Gradle/Maven dependency-insight check that fails when any dev.langchain4j ≠ 1.0.1.
+
+Acceptance checks
+
+Startup logs one green line: “LangChain4j purity OK …1.0.1”.
+
+On mismatch, app exits with a human-readable list (no app boot).
+
+1) Truthful model routing (MoE on high-stakes) & headers
+
+Modify: src/main/java/com/example/lms/model/ModelRouter.java
+
++ Route PAIRING/RECOMMENDATION with verbosity ∈ {deep, ultra} to MoE (openai.model.moe) with low temperature.
+
++ resolveModelName(...) that returns the provider’s real model id (never lc:*).
+
+Modify: src/main/java/com/example/lms/service/ChatService.java
+
+- Multiple early return/emit paths.
+
++ Single exit: compute (answer, modelUsed, ragUsed) once; emit once (fixes unreachable statement).
+
+- Any prompt string concatenation.
+
++ All prompts must go through PromptBuilder.build(PromptContext).
+
++ Ensure contextOrchestrator is declared, injected, and method signatures actually exist (the source of your earlier “cannot find symbol” on builder methods).
+
++ Compute ragUsed from evidence presence (docs found), not from flags alone.
+
+Modify: src/main/java/com/example/lms/api/ChatApiController.java
+
+- Pulling X-Model-Used from wrappers.
+
++ Set X-Model-Used via ModelRouter.resolveModelName(...).
+
++ Fix SSE sink scope: define where it’s used; always send a final done event with {modelUsed, ragUsed}.
+
+(Sanity) If ChatService was accidentally converted to a record, revert to a normal @Service so non-static fields compile.
+
+Acceptance checks
+
+High-stakes (PAIRING + deep/ultra) → MoE model.
+
+Response header always shows real provider id (e.g., gpt-4o), never lc:OpenAiChatModel.
+
+No “unreachable statement” at ChatService.
+
+2) Prompt/context contract & memory type unification
+
+Modify: src/main/java/com/example/lms/prompt/PromptContext.java
+
++ Keep canonical fields used by router/builders: userQuery, lastAssistantAnswer, web, rag, memory, history, domain, subject, protectedTerms, interactionRules, verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience, citationStyle.
+
+± Pick one type for memory (recommend String) and stick to it repo-wide.
+
+Modify: src/main/java/com/example/lms/prompt/PromptBuilder.java
+
++ Render CONVERSATION MEMORY section when present (no string concat in ChatService).
+
++ Enforce verbosity policy (min-words for deep/ultra; at most one post-expansion hop).
+
+Modify: src/main/java/com/example/lms/service/FactVerifierService.java
+
+± Align to the chosen memory type; if a list is needed internally, wrap with List.of(memory).
+
+Modify: src/main/java/com/example/lms/service/DefaultChatHistoryService.java
+
++ Implement getLastAssistantMessage(...) to satisfy ChatHistoryService (fixes your earlier abstract-method compile error).
+
+Acceptance checks
+
+No String cannot be converted to List<String> errors.
+
+All prompts built via PromptBuilder; memory appears as a consistent section.
+
+3) Controller/service glue hot-spots (quick repairs only)
+
+Modify: src/main/java/com/example/lms/service/ChatService.java
+
++ Ensure DI for any new collaborators (ModelRouter, PromptBuilder, ContextOrchestrator, history/memory services).
+
+Modify: Any class with logging but no logger
+
++ Add a logger (e.g., @Slf4j) and ensure single Spring stereotype per class (fixes duplicate @Component warnings).
+
+Acceptance checks
+
+Build is green without Lombok/stereotype noise.
+
+SSE streaming compiles and the final event carries accurate {modelUsed, ragUsed}.
+
+C) Minimal config (names only; wire later)
+
+openai.model.moe – upper-tier model id for MoE routing.
+
+abandonware.answer.detail.min-words.{brief,standard,deep,ultra} – min lengths.
+
+abandonware.answer.token-out.{brief,standard,deep,ultra} – output token budgets.
+
+D) What this slice deliberately does not include (next slice)
+
+Chain wiring & Memory-always-on handlers (read/write even when RAG/Web OFF).
+
+KB-driven RelationshipRuleScorer and AdaptiveScoringService fusion to kill subject drift.
+
+EvidenceGate + ClaimVerifierService ordering.
+
+E) Quick smoke tests (manual)
+
+Purity guard: start app with a forced langchain4j-core:0.2.x on the classpath → startup aborts listing offenders.
+
+MoE routing: ask a PAIRING question with “deep” → header shows MoE id; temperature low; no lc:*.
+
+Memory type: run verification path → no String↔List<String> errors; memory shows as a dedicated section in the built prompt.
+
+SSE: stream endpoint finishes with {modelUsed, ragUsed} populated.
 Remove duplicate stereotypes causing Component is not a repeatable annotation type; keep one Spring stereotype per class.
 
 Add logging (@Slf4j or a Logger) to classes where you log (fixes “log not found”).
