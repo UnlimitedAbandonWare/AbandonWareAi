@@ -1206,7 +1206,144 @@ Phase 7 — Controller/Service glue & compile breakages
 
 Refactor that method to a single exit (collect modelUsed, ragUsed, result) then return/emit once.
 Also ensure contextOrchestrator is injected (you previously missed the field).
+Add (new):
 
+service/rag/handler/MemoryHandler — first in chain; loads recent verified session snippets into PromptContext.memory; marks evidence MEMORY.
+
+service/rag/handler/MemoryWriteInterceptor — last in chain; always persists the final turn & verified snippets (even when RAG/Web OFF).
+
+service/rag/guard/EvidenceGate — counts evidence classes (WEB/RAG/MEMORY) and enforces minimal thresholds (lenient for follow-ups).
+
+Re-use: existing MemoryReinforcementService (energy/annealing), caches, SSE.
+
+Phase 2 — Chain of Responsibility wiring (order & fault-tolerance)
+
+Modify (existing or your chain @Configuration):
+
+Ensure exact order:
+MemoryHandler → SelfAskHandler → AnalyzeHandler (Query Hygiene) → WebHandler → VectorDbHandler → MemoryWriteInterceptor
+
+Make all handlers non-throwing; on failure, return partials and pass down.
+
+Phase 3 — Prompt & context discipline
+
+Modify (existing):
+
+prompt/PromptContext.java
+
+Confirm fields for: memory, web, rag, history, intent, verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, evidenceClassesPresent.
+
+prompt/PromptBuilder.java
+
+Inject a dedicated “Conversation Memory” section when present.
+
+Enforce verbosity policy (min words & single post-expansion for deep|ultra).
+
+Include protected terms (subject + dictionary hits) to prevent LLM “correction” of proper nouns.
+
+Phase 4 — Model routing & truth-in-headers
+
+Modify (existing):
+
+model/ModelRouter.java
+
+Route PAIRING/RECOMMENDATION + verbosity ∈ {deep, ultra} to the MoE/high-tier model (low temperature).
+
+Expose resolveModelName(ChatModel) returning the provider’s real model id.
+
+api/ChatApiController.java
+
+Set X-Model-Used from ModelRouter.resolveModelName(...) not an alias/wrapper name.
+
+service/ChatService.java
+
+Compute ragUsed only if evidence includes WEB or RAG; never infer from flags.
+
+Re-use: DynamicChatModelFactory knobs (temperature/top-p/tokens).
+
+Phase 5 — KB-driven rules & adaptive reranking (kill the “always Diluc” bias)
+
+Add (new):
+
+service/rag/rank/RelationshipRuleScorer — replace any element-hardcode with KB interaction rules (boost preferred, penalize discouraged).
+
+Modify (existing):
+
+service/rag/EmbeddingModelCrossEncoderReranker.java
+
+Integrate synergy bonus (from AdaptiveScoringService) and rule score from RelationshipRuleScorer.
+
+Fix stereotypes/logging issues (single @Component; add logger if missing).
+
+Re-use: AuthorityScorer, RRF/Borda fusion, AdaptiveScoringService + SynergyStat.
+
+Phase 6 — Query hygiene & subject locking (anchor the topic)
+
+Modify (existing):
+
+service/rag/pre/GuardrailQueryPreprocessor (and/or QueryContextPreprocessor)
+
+Detect PAIRING intent beyond simple keywords; mark follow-ups (anaphora).
+
+Inject protected terms and subject anchor into PromptContext.
+
+service/rag/subject/SubjectResolver
+
+Prefer KB entity names (longest match, domain hint) over LLM guesses.
+
+service/rag/WebHandler
+
+Apply authority-weighted site preferences and pass hostnames to the rankers.
+
+Phase 7 — Config (partial keys only; keep minimal)
+
+Add/tune (application.yml):
+
+openai.model.moe: gpt-4o (or your chosen high-tier)
+
+abandonware.answer.detail.min-words.{brief,standard,deep,ultra}
+
+abandonware.answer.token-out.{brief,standard,deep,ultra}
+
+orchestrator.max-docs with higher caps for deep|ultra
+
+reranker.keep-top-n.{brief,standard,deep,ultra}
+
+retrieval.mode: {RETRIEVAL_ON|RAG_ONLY|RETRIEVAL_OFF}
+
+memory.read.enabled: true, memory.write.enabled: true
+
+verifier.evidence.min-count.memory: 1, verifier.evidence.followup.leniency: true
+
+Phase 8 — Small PR slicing (reviewable, incremental)
+
+Purity guard only (Phase 0).
+
+Header truth & single exit (ChatService + Controller + ModelRouter).
+
+PromptContext/PromptBuilder (verbosity + memory section).
+
+Chain wiring + MemoryHandler & MemoryWriteInterceptor.
+
+KB rules + RelationshipRuleScorer + reranker integration.
+
+EvidenceGate + verifier ordering.
+
+Config keys + brief README patch.
+
+Acceptance checks (quick)
+
+Model truth: X-Model-Used shows the provider id (never lc:OpenAiChatModel, never an alias).
+
+RAG OFF still remembers: turn-2 answers leverage turn-1 memory, evidence lists include MEMORY.
+
+MoE routing: PAIRING + deep|ultra → high-tier model with low temperature.
+
+No chain crashes: partials flow; Memory-only paths produce safe answers instead of “정보 없음.”
+
+No “Diluc drift”: subject anchored; rules + authority weighting steer retrieval.
+
+If you want, I can turn this into a short PR checklist or add tiny README patch hunks documenting handler order, verbosity policy, and the purity guard—still partial, not a full doc.
 7.2 Logging & annotations
 
 Fix: classes complaining about log missing => add @Slf4j or a private static final Logger.
