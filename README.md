@@ -434,36 +434,35 @@ Editing application.yml – copy application.yml.example to application.yml and 
 Configuration Keys for Verbosity & Routing – the following keys control the verbosity policy and routing:
 
 abandonware:
-  answer:
-    detail:
-      min-words:
-        brief: 120
-        standard: 250
-        deep: 600
-        ultra: 1000
-    token-out:
-      brief: 512
-      standard: 1024
-      deep: 2048
-      ultra: 3072
+answer:
+detail:
+min-words:
+brief: 120
+standard: 250
+deep: 600
+ultra: 1000
+token-out:
+brief: 512
+standard: 1024
+deep: 2048
+ultra: 3072
 
 orchestrator:
-  max-docs: 10
-  max-docs:
-    deep: 14
-    ultra: 18
+max-docs: 10
+max-docs:
+deep: 14
+ultra: 18
 
 reranker:
-  keep-top-n:
-    brief: 5
-    standard: 8
-    deep: 12
-    ultra: 16
+keep-top-n:
+brief: 5
+standard: 8
+deep: 12
+ultra: 16
 
 openai:
-  model:
-    moe: gpt-4o   # High-tier MoE used when intent+verbosity require it
-
+model:
+moe: gpt-4o # High-tier MoE used when intent+verbosity require it
 
 These keys adjust the minimum word count, output token limits, document caps, reranking pool sizes and high‑tier model selection based on verbosity; developers should tune them according to resource availability and desired response lengths.
 
@@ -484,7 +483,6 @@ On success, the guard logs a line such as:
 
 LangChain4j purity OK: [langchain4j-core:1.0.1, langchain4j-bom:1.0.1, ...]
 LangChain4j module dump → [dev.langchain4j:langchain4j-openai:1.0.1, ...]
-
 
 On mismatch, the application fails fast with an error message identifying the offending modules and recommending purging old artifacts.
 This guard helps avoid runtime failures that can be difficult to diagnose and ensures predictable behaviour across environments.
@@ -674,36 +672,35 @@ Configuration Keys (Verbosity & Routing)
 The following configuration keys in application.yml govern verbosity and routing, enabling developers to tune response length, context size, model selection and reranking behaviour:
 
 abandonware:
-  answer:
-    detail:
-      min-words:
-        brief: 120
-        standard: 250
-        deep: 600
-        ultra: 1000
-    token-out:
-      brief: 512
-      standard: 1024
-      deep: 2048
-      ultra: 3072
+answer:
+detail:
+min-words:
+brief: 120
+standard: 250
+deep: 600
+ultra: 1000
+token-out:
+brief: 512
+standard: 1024
+deep: 2048
+ultra: 3072
 
 orchestrator:
-  max-docs: 10
-  max-docs:
-    deep: 14
-    ultra: 18
+max-docs: 10
+max-docs:
+deep: 14
+ultra: 18
 
 reranker:
-  keep-top-n:
-    brief: 5
-    standard: 8
-    deep: 12
-    ultra: 16
+keep-top-n:
+brief: 5
+standard: 8
+deep: 12
+ultra: 16
 
 openai:
-  model:
-    moe: gpt-4o   # High-tier MoE used when intent+verbosity require it
-
+model:
+moe: gpt-4o # High-tier MoE used when intent+verbosity require it
 
 These keys define minimum word counts, token budgets, maximum documents and top‑N reranking counts per verbosity level; developers should adjust them to balance response quality and performance; the moe model (mixture of experts) is used for high‑stakes queries and deep or ultra verbosity.
 
@@ -915,7 +912,7 @@ The MemoryReinforcementService uses a Boltzmann energy calculation to determine 
 
 Energy is computed as a weighted sum of similarity, Q‑value, success ratio, confidence and recency; similarity measures how closely the stored snippet matches the current query; Q‑value represents the learned reward; success ratio is the number of successful uses divided by total uses; confidence measures how reliable the snippet is; recency decays over time.
 
-The formula can be written as Energy = wSim*similarity + wQ*Qvalue + wSucc*successRatio + wConf*confidence + wRec*recency, where each w is a configurable weight.
+The formula can be written as Energy = wSimsimilarity + wQQvalue + wSuccsuccessRatio + wConfconfidence + wRec*recency, where each w is a configurable weight.
 
 The recency term often uses exponential decay: recency = exp(-t / tauHours), where t is the time since the snippet was last reinforced and tauHours is a decay constant; lower tauHours results in faster decay.
 
