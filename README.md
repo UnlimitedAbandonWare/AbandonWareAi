@@ -1451,7 +1451,14 @@ Each reference is listed on its own line to contribute to the line count and to 
 
 “GitHub Flow” – describes a simple branching model for collaborative development.
 
-“Conventional Commits Specification” – explains the commit message prefixes used in this project.
+“Conventional Commits Specificatifeat: Add framework for Autonomous Knowledge Curation Agent
+
+Introduces the core components for a self-learning agent designed to enrich the knowledge base automatically.
+
+- Adds scheduler, curiosity, and synthesis services for the agent's main loop.
+- Implements a `ChatModel` abstraction for LLM interactions.
+- Extends `KnowledgeBaseService` with a write API (`integrateVerifiedKnowledge`) for the agent to commit new information.
+- The feature is disabled by default and can be enabled via configuration property `agent.knowledge-curation.enabled`.on” – explains the commit message prefixes used in this project.
 
 “Mermaid Documentation” – useful for creating diagrams to document system flows.
 
