@@ -1,3 +1,4 @@
+// src/main/java/com/example/lms/service/ChatHistoryServiceImpl.java
 package com.example.lms.service;
 
 import com.example.lms.domain.Administrator;
@@ -14,8 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -55,6 +58,9 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 || c.contains("<li") || c.contains("<p>")
                 || c.contains("</");
     }
+
+    // [NEW] 허용 역할 화이트리스트
+    private static final Set<String> ALLOWED_ROLES = Set.of("user", "assistant", "system");
 
     private void save(ChatMessage msg) {
         messageRepository.save(msg);
@@ -101,10 +107,16 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     @Override
     @Transactional
     public void appendMessage(Long sessionId, String role, String content) {
-        String r = Objects.toString(role, "");
+        String r = Objects.toString(role, "").toLowerCase(Locale.ROOT).trim();
         String c = Objects.toString(content, "");
 
-        // 1) TRACE 메타(system)면 예외적으로 무조건 저장
+        // [CHANGED] 역할 정규화 & 검증
+        if (!ALLOWED_ROLES.contains(r)) {
+            log.debug("Unsupported role '{}' → skip persist (session {})", role, sessionId);
+            return;
+        }
+
+        // 1) TRACE 메타(system)면 무조건 저장
         if ("system".equals(r) && isTraceMeta(c)) {
             save(sessionId, r, c);
             log.debug("세션 {}: system TRACE 메타 저장 ({} bytes)", sessionId, c.length());
@@ -163,10 +175,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     @Override
     @Transactional(readOnly = true)
     public List<String> getFormattedRecentHistory(Long sessionId, int limit) {
-
         if (sessionId == null) return List.of();
-        List<ChatMessage> all =
-                messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<ChatMessage> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
         int from = Math.max(0, all.size() - Math.max(1, limit));
         return all.subList(from, all.size()).stream()
                 .map(m -> {
@@ -175,5 +185,18 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                     return role + ": " + content;
                 })
                 .collect(Collectors.toList());
+    }
+
+    /* -------------------- Quick access -------------------- */
+
+    // [NEW] 최근 assistant 1건 바로 조회 (createdAt 우선, id DESC 폴백)
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> getLastAssistantMessage(Long sessionId) {
+        if (sessionId == null) return Optional.empty();
+        return messageRepository
+                .findTopBySessionIdAndRoleOrderByCreatedAtDesc(sessionId, "assistant")
+                .or(() -> messageRepository.findTopBySessionIdAndRoleOrderByIdDesc(sessionId, "assistant"))
+                .map(ChatMessage::getContent);
     }
 }

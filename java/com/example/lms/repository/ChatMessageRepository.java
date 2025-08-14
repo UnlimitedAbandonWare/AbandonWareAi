@@ -1,6 +1,11 @@
 package com.example.lms.repository;
 import java.util.List;
 
+import com.example.lms.domain.ChatMessage;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
 import org.springframework.data.jpa.repository.JpaRepository;
 import com.example.lms.domain.ChatMessage;
 
@@ -15,4 +20,7 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
 
     void deleteAllBySession_Id(Long sessionId);
 
+    Optional<ChatMessage> findTopBySessionIdAndRoleOrderByCreatedAtDesc(Long sessionId, String role);
+
+    Optional<ChatMessage> findTopBySessionIdAndRoleOrderByIdDesc(Long sessionId, String role);
 }

@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -30,18 +31,27 @@ public class PromptBuilder {
             ### HISTORY
             %s
             """;
+    // [NEW] 직전 답변 명시 섹션
+    private static final String PREV_PREFIX = """
+            ### PREVIOUS_ANSWER
+            %s
+            """;
 
     /** 컨텍스트 본문(자료 영역) */
     public String build(PromptContext ctx) {
         StringBuilder sb = new StringBuilder();
         if (ctx != null) {
+            // [NEW] 후속 질문이면 직전 답변을 먼저 명확히 제공
+            if (isFollowUp(ctx.userQuery()) && StringUtils.hasText(ctx.lastAssistantAnswer())) {
+                sb.append(PREV_PREFIX.formatted(ctx.lastAssistantAnswer()));
+            }
             if (ctx.web() != null && !ctx.web().isEmpty()) {
                 sb.append(WEB_PREFIX.formatted(join(ctx.web())));
             }
             if (ctx.rag() != null && !ctx.rag().isEmpty()) {
                 sb.append(RAG_PREFIX.formatted(join(ctx.rag())));
             }
-            if (ctx.memory() != null && !ctx.memory().isBlank()) {
+            if (StringUtils.hasText(ctx.memory())) {
                 sb.append(MEM_PREFIX.formatted(ctx.memory()));
             }
             if (StringUtils.hasText(ctx.history())) {
@@ -60,6 +70,13 @@ public class PromptBuilder {
         sys.append("- Cite specific snippets or sources inline when possible.\n");
 
         if (ctx != null) {
+            // [NEW] 후속 질문이면 '이전 답변'을 주제로 확장하라고 강제
+            if (isFollowUp(ctx.userQuery()) && StringUtils.hasText(ctx.lastAssistantAnswer())) {
+                sys.append("- Treat the section 'PREVIOUS_ANSWER' as the primary subject of the user's new query.\n");
+                sys.append("- Expand, elaborate, or give concrete examples based on 'PREVIOUS_ANSWER'.\n");
+                sys.append("- If the follow-up is underspecified, infer the omitted object from 'PREVIOUS_ANSWER'.\n");
+            }
+
             if (StringUtils.hasText(ctx.domain())) {
                 sys.append("- Domain: ").append(ctx.domain()).append("\n");
             }
@@ -82,7 +99,7 @@ public class PromptBuilder {
                 });
             }
 
-            // RECOMMENDATION/PAIRING 공통 보수적 가드 + 근거부족 분기
+            // 공통 보수적 가드
             sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
             sys.append("- If evidence is weak but related to the same subject, provide a conservative summary and add a short 'clarify' question instead of refusing outright.\n");
 
@@ -120,11 +137,23 @@ public class PromptBuilder {
     private static String join(List<Content> list) {
         return list.stream()
                 .map(c -> {
-                    var seg = c.textSegment(); // LangChain4j 1.x API
+                    var seg = c.textSegment();
                     return (seg != null && seg.text() != null && !seg.text().isBlank())
                             ? seg.text()
                             : c.toString();
                 })
                 .collect(Collectors.joining("\n"));
+    }
+
+    // [NEW] 후속질문 간단 감지: 한국어/영어 패턴
+    private static boolean isFollowUp(String q) {
+        if (!StringUtils.hasText(q)) return false;
+        String s = q.toLowerCase(Locale.ROOT).trim();
+        return s.matches("^(더|조금|좀)\\s*자세히.*")
+                || s.matches(".*자세히\\s*말해줘.*")
+                || s.matches(".*예시(도|를)\\s*들(어|어서)?\\s*줘.*")
+                || s.matches("^왜\\s+그렇(게|지).*")
+                || s.matches(".*근거(는|가)\\s*뭐(야|지).*")
+                || s.matches("^(tell me more|more details|give me examples|why is that).*");
     }
 }
