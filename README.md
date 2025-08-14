@@ -1,786 +1,5 @@
 AbandonWare Hybrid RAG AI Chatbot Service: A Domain‑Agnostic Knowledge‑Driven Agentsrc/main/java/com/example/lms/app/LmsApplication.java
-src/main/java/com/example/lms/app/StartupVersionPurityCheck.java
-src/main/java/com/example/lms/app/VersionPurityHealthIndicator.java
-src/main/java/com/example/lms/app/init/AdminInitializer.java
 
-src/main/java/com/example/lms/config/AppSecurityConfig.java
-src/main/java/com/example/lms/config/CacheConfig.java
-src/main/java/com/example/lms/config/GoogleTranslateProperties.java
-src/main/java/com/example/lms/config/LangChainConfig.java
-src/main/java/com/example/lms/config/MatrixConfig.java
-src/main/java/com/example/lms/config/MemoryConfig.java
-src/main/java/com/example/lms/config/OpenAiConfig.java
-src/main/java/com/example/lms/config/OpenAiProperties.java
-src/main/java/com/example/lms/config/QueryTransformerConfig.java
-src/main/java/com/example/lms/config/RestTemplateConfig.java
-src/main/java/com/example/lms/config/RetrieverChainConfig.java
-src/main/java/com/example/lms/config/SchedulingConfig.java
-src/main/java/com/example/lms/config/SessionConfig.java
-src/main/java/com/example/lms/config/WebClientConfig.java
-src/main/java/com/example/lms/config/WebConfig.java
-src/main/java/com/example/lms/config/WebMvcConfig.java
-
-src/main/java/com/example/lms/api/rest/AdminController.java
-src/main/java/com/example/lms/api/rest/ChatApiController.java
-src/main/java/com/example/lms/api/rest/FeedbackController.java
-src/main/java/com/example/lms/api/rest/FileUploadController.java
-src/main/java/com/example/lms/api/rest/KakaoAdminController.java
-src/main/java/com/example/lms/api/rest/KakaoOAuthController.java
-src/main/java/com/example/lms/api/rest/KakaoTriggerController.java
-src/main/java/com/example/lms/api/rest/KakaoUuidController.java
-src/main/java/com/example/lms/api/rest/KakaoWebhookController.java
-src/main/java/com/example/lms/api/rest/ModelSettingsController.java
-src/main/java/com/example/lms/api/rest/PkiUploadPageController.java
-src/main/java/com/example/lms/api/rest/PkiValidationController.java
-src/main/java/com/example/lms/api/rest/SettingsController.java
-src/main/java/com/example/lms/api/rest/TranslateController.java
-src/main/java/com/example/lms/api/rest/AdaptiveTranslateController.java
-src/main/java/com/example/lms/api/rest/RentalController.java
-src/main/java/com/example/lms/api/rest/TrainingController.java
-src/main/java/com/example/lms/api/rest/TranslationController.java
-
-src/main/java/com/example/lms/api/mvc/AssignmentController.java
-src/main/java/com/example/lms/api/mvc/AttendanceController.java
-src/main/java/com/example/lms/api/mvc/AuthController.java
-src/main/java/com/example/lms/api/mvc/CourseController.java
-src/main/java/com/example/lms/api/mvc/EnrollmentController.java
-src/main/java/com/example/lms/api/mvc/ExamController.java
-src/main/java/com/example/lms/api/mvc/NoticeController.java
-src/main/java/com/example/lms/api/mvc/PageController.java
-src/main/java/com/example/lms/api/mvc/ProfessorController.java
-src/main/java/com/example/lms/api/mvc/QuestionController.java
-src/main/java/com/example/lms/api/mvc/RegistrationController.java
-src/main/java/com/example/lms/api/mvc/StudentController.java
-src/main/java/com/example/lms/api/mvc/UploadController.java
-
-src/main/java/com/example/lms/api/ws/ChatChannelInitializer.java
-src/main/java/com/example/lms/api/ws/ChatWebSocketHandler.java
-
-src/main/java/com/example/lms/api/dto/AssignmentDTO.java
-src/main/java/com/example/lms/api/dto/ChatMessageDto.java
-src/main/java/com/example/lms/api/dto/ChatRequestDto.java
-src/main/java/com/example/lms/api/dto/ChatResponse.java
-src/main/java/com/example/lms/api/dto/ChatResponseDto.java
-src/main/java/com/example/lms/api/dto/ChatStreamEvent.java
-src/main/java/com/example/lms/api/dto/FeedbackDto.java
-src/main/java/com/example/lms/api/dto/FineTuningOptionsDto.java
-src/main/java/com/example/lms/api/dto/KakaoFormDto.java
-src/main/java/com/example/lms/api/dto/KakaoFriends.java
-src/main/java/com/example/lms/api/dto/MessageDto.java
-src/main/java/com/example/lms/api/dto/ModelInfoDto.java
-src/main/java/com/example/lms/api/dto/payload/KakaoWebhookPayload.java
-
-src/main/java/com/example/lms/domain/model/Administrator.java
-src/main/java/com/example/lms/domain/model/Assignment.java
-src/main/java/com/example/lms/domain/model/Attendance.java
-src/main/java/com/example/lms/domain/model/Category.java
-src/main/java/com/example/lms/domain/model/ChatMessage.java
-src/main/java/com/example/lms/domain/model/ChatSession.java
-src/main/java/com/example/lms/domain/model/Choice.java
-src/main/java/com/example/lms/domain/model/Comment.java
-src/main/java/com/example/lms/domain/model/ConfigurationSetting.java
-src/main/java/com/example/lms/domain/model/Course.java
-src/main/java/com/example/lms/domain/model/Enrollment.java
-src/main/java/com/example/lms/domain/model/Exam.java
-src/main/java/com/example/lms/domain/model/Grade.java
-src/main/java/com/example/lms/domain/model/Hyperparameter.java
-src/main/java/com/example/lms/domain/model/Notice.java
-src/main/java/com/example/lms/domain/model/NoticeType.java
-src/main/java/com/example/lms/domain/model/Professor.java
-src/main/java/com/example/lms/domain/model/Question.java
-src/main/java/com/example/lms/domain/model/QuestionType.java
-src/main/java/com/example/lms/domain/model/Rental.java
-src/main/java/com/example/lms/domain/model/Rule.java
-src/main/java/com/example/lms/domain/model/Setting.java
-src/main/java/com/example/lms/domain/model/Status.java
-src/main/java/com/example/lms/domain/model/Student.java
-src/main/java/com/example/lms/domain/model/Submission.java
-src/main/java/com/example/lms/domain/model/SubmissionStatus.java
-src/main/java/com/example/lms/domain/model/TrainingJob.java
-src/main/java/com/example/lms/domain/model/TranslationRule.java
-src/main/java/com/example/lms/domain/model/TranslationSample.java
-src/main/java/com/example/lms/domain/model/UploadToken.java
-src/main/java/com/example/lms/domain/model/User.java
-src/main/java/com/example/lms/domain/model/ApiKey.java
-src/main/java/com/example/lms/domain/model/ApiKeyUsage.java
-src/main/java/com/example/lms/domain/model/AppConfig.java
-src/main/java/com/example/lms/domain/model/CorrectedSample.java
-src/main/java/com/example/lms/domain/model/CurrentModel.java
-src/main/java/com/example/lms/domain/model/ModelEntity.java
-src/main/java/com/example/lms/domain/model/TranslationMemory.java
-src/main/java/com/example/lms/domain/model/converter/MemoryStatusConverter.java
-
-src/main/java/com/example/lms/domain/model/enums/RulePhase.java
-src/main/java/com/example/lms/domain/model/enums/SourceCredibility.java
-src/main/java/com/example/lms/domain/model/enums/TranslationRoute.java
-
-src/main/java/com/example/lms/domain/knowledge/DomainKnowledge.java
-src/main/java/com/example/lms/domain/knowledge/EntityAttribute.java
-src/main/java/com/example/lms/domain/knowledge/genshin/ElementLexicon.java
-src/main/java/com/example/lms/domain/knowledge/genshin/GenshinElement.java
-src/main/java/com/example/lms/domain/knowledge/genshin/GenshinElementLexicon.java
-
-src/main/java/com/example/lms/domain/rule/PairingPolicy.java
-
-src/main/java/com/example/lms/application/service/AdminService.java
-src/main/java/com/example/lms/application/service/AdminSessionService.java
-src/main/java/com/example/lms/application/service/AdvancedTranslationService.java
-src/main/java/com/example/lms/application/service/AssignmentQueryService.java
-src/main/java/com/example/lms/application/service/AssignmentService.java
-src/main/java/com/example/lms/application/service/AttendanceService.java
-src/main/java/com/example/lms/application/service/CommentService.java
-src/main/java/com/example/lms/application/service/CourseService.java
-src/main/java/com/example/lms/application/service/EnrollmentService.java
-src/main/java/com/example/lms/application/service/ExamService.java
-src/main/java/com/example/lms/application/service/ModelSettingsService.java
-src/main/java/com/example/lms/application/service/NoticeService.java
-src/main/java/com/example/lms/application/service/NoticeServiceImpl.java
-src/main/java/com/example/lms/application/service/NotificationService.java
-src/main/java/com/example/lms/application/service/ProfessorService.java
-src/main/java/com/example/lms/application/service/QuestionService.java
-src/main/java/com/example/lms/application/service/SettingsService.java
-src/main/java/com/example/lms/application/service/StudentService.java
-src/main/java/com/example/lms/application/service/SubmissionQueryService.java
-src/main/java/com/example/lms/application/service/SubmissionQueryServiceImpl.java
-src/main/java/com/example/lms/application/service/SubmissionService.java
-src/main/java/com/example/lms/application/service/SubmissionServiceImpl.java
-src/main/java/com/example/lms/application/service/TrainingService.java
-src/main/java/com/example/lms/application/service/TranslationService.java
-src/main/java/com/example/lms/application/service/UploadTokenService.java
-src/main/java/com/example/lms/application/service/UserService.java
-
-src/main/java/com/example/lms/application/chat/ChatService.java
-src/main/java/com/example/lms/application/chat/ChatHistoryService.java
-src/main/java/com/example/lms/application/chat/ChatHistoryServiceImpl.java
-src/main/java/com/example/lms/application/chat/DefaultChatHistoryService.java
-src/main/java/com/example/lms/application/chat/PromptService.java
-src/main/java/com/example/lms/application/chat/DefaultQueryTransformer.java
-src/main/java/com/example/lms/application/chat/transform/MatrixTransformer.java
-src/main/java/com/example/lms/application/chat/transform/ParsedQuery.java
-src/main/java/com/example/lms/application/chat/transform/QueryTransformer.java
-src/main/java/com/example/lms/application/chat/answer/AnswerExpanderService.java
-src/main/java/com/example/lms/application/chat/answer/LengthVerifierService.java
-src/main/java/com/example/lms/application/chat/disambiguation/DisambiguationResult.java
-src/main/java/com/example/lms/application/chat/disambiguation/NonGameEntityHeuristics.java
-src/main/java/com/example/lms/application/chat/disambiguation/QueryDisambiguationService.java
-src/main/java/com/example/lms/application/chat/fallback/FallbackHeuristics.java
-src/main/java/com/example/lms/application/chat/fallback/FallbackResult.java
-src/main/java/com/example/lms/application/chat/fallback/SmartFallbackService.java
-src/main/java/com/example/lms/application/chat/verbosity/SectionSpecGenerator.java
-src/main/java/com/example/lms/application/chat/verbosity/VerbosityDetector.java
-src/main/java/com/example/lms/application/chat/verbosity/VerbosityProfile.java
-
-src/main/java/com/example/lms/application/translation/AdaptiveTranslationService.java
-src/main/java/com/example/lms/application/translation/TranslationTrainingService.java
-src/main/java/com/example/lms/application/translation/impl/TranslationTrainingServiceImpl.java
-src/main/java/com/example/lms/application/translation/ner/LLMNamedEntityExtractor.java
-src/main/java/com/example/lms/application/translation/ner/NamedEntityExtractor.java
-src/main/java/com/example/lms/application/translation/correction/DefaultDomainTermDictionary.java
-src/main/java/com/example/lms/application/translation/correction/DefaultQueryCorrectionService.java
-src/main/java/com/example/lms/application/translation/correction/DomainTermDictionary.java
-src/main/java/com/example/lms/application/translation/correction/InMemoryDomainTermDictionary.java
-src/main/java/com/example/lms/application/translation/correction/LLMQueryCorrectionService.java
-src/main/java/com/example/lms/application/translation/correction/QueryCorrectionService.java
-
-src/main/java/com/example/lms/application/verification/ClaimVerifierService.java
-src/main/java/com/example/lms/application/verification/FactStatusClassifier.java
-src/main/java/com/example/lms/application/verification/FactVerificationStatus.java
-src/main/java/com/example/lms/application/verification/FactVerifierService.java
-src/main/java/com/example/lms/application/verification/SourceAnalyzerService.java
-
-src/main/java/com/example/lms/application/rag/LangChainRAGService.java
-src/main/java/com/example/lms/application/rag/HybridRetriever.java
-src/main/java/com/example/lms/application/rag/SearchContext.java
-src/main/java/com/example/lms/application/rag/ScoredContent.java
-src/main/java/com/example/lms/application/rag/policy/AuthorityScorer.java
-src/main/java/com/example/lms/application/rag/policy/SourceEntropyPolicy.java
-src/main/java/com/example/lms/application/rag/policy/RuleEngine.java
-src/main/java/com/example/lms/application/rag/handler/AbstractRetrievalHandler.java
-src/main/java/com/example/lms/application/rag/handler/AnalyzeHandler.java
-src/main/java/com/example/lms/application/rag/handler/DefaultRetrievalHandlerChain.java
-src/main/java/com/example/lms/application/rag/handler/EvidenceRepairHandler.java
-src/main/java/com/example/lms/application/rag/handler/MemoryHandler.java
-src/main/java/com/example/lms/application/rag/handler/MemoryWriteInterceptor.java
-src/main/java/com/example/lms/application/rag/handler/PairingGuardHandler.java
-src/main/java/com/example/lms/application/rag/handler/RetrievalHandler.java
-src/main/java/com/example/lms/application/rag/handler/SelfAskHandler.java
-src/main/java/com/example/lms/application/rag/handler/VectorDbHandler.java
-src/main/java/com/example/lms/application/rag/handler/WebSearchHandler.java
-src/main/java/com/example/lms/application/rag/search/AnalyzeWebSearchRetriever.java
-src/main/java/com/example/lms/application/rag/search/EnhancedSearchService.java
-src/main/java/com/example/lms/application/rag/search/SelfAskWebSearchRetriever.java
-src/main/java/com/example/lms/application/rag/search/TavilyWebSearchRetriever.java
-src/main/java/com/example/lms/application/rag/search/WebSearchRetriever.java
-src/main/java/com/example/lms/application/rag/rerank/CrossEncoderReranker.java
-src/main/java/com/example/lms/application/rag/rerank/DefaultLightWeightRanker.java
-src/main/java/com/example/lms/application/rag/rerank/ElementConstraintScorer.java
-src/main/java/com/example/lms/application/rag/rerank/EmbeddingCrossEncoderReranker.java
-src/main/java/com/example/lms/application/rag/rerank/EmbeddingModelCrossEncoderReranker.java
-src/main/java/com/example/lms/application/rag/rerank/LightWeightRanker.java
-src/main/java/com/example/lms/application/rag/rerank/NoopCrossEncoderReranker.java
-src/main/java/com/example/lms/application/rag/rerank/SimpleReranker.java
-src/main/java/com/example/lms/application/rag/orchestrator/ContextOrchestrator.java
-src/main/java/com/example/lms/application/rag/orchestrator/ModelBasedQueryComplexityClassifier.java
-src/main/java/com/example/lms/application/rag/orchestrator/QueryComplexityClassifier.java
-src/main/java/com/example/lms/application/rag/orchestrator/QueryComplexityGate.java
-src/main/java/com/example/lms/application/rag/preprocess/CognitiveState.java
-src/main/java/com/example/lms/application/rag/preprocess/CognitiveStateExtractor.java
-src/main/java/com/example/lms/application/rag/preprocess/CompositeQueryContextPreprocessor.java
-src/main/java/com/example/lms/application/rag/preprocess/DefaultGuardrailQueryPreprocessor.java
-src/main/java/com/example/lms/application/rag/preprocess/DefaultQueryContextPreprocessor.java
-src/main/java/com/example/lms/application/rag/preprocess/GuardrailQueryPreprocessor.java
-src/main/java/com/example/lms/application/rag/preprocess/QueryContextPreprocessor.java
-src/main/java/com/example/lms/application/rag/guard/EvidenceGate.java
-src/main/java/com/example/lms/application/rag/guard/MemoryAsEvidenceAdapter.java
-src/main/java/com/example/lms/application/rag/energy/ContextEnergyModel.java
-src/main/java/com/example/lms/application/rag/energy/ContradictionScorer.java
-src/main/java/com/example/lms/application/rag/filter/GenericDocClassifier.java
-src/main/java/com/example/lms/application/rag/fusion/ReciprocalRankFuser.java
-src/main/java/com/example/lms/application/rag/subject/SubjectResolver.java
-src/main/java/com/example/lms/application/rag/quality/AnswerQualityEvaluator.java
-
-src/main/java/com/example/lms/application/strategy/StrategyDecisionTracker.java
-src/main/java/com/example/lms/application/strategy/StrategyHyperparams.java
-src/main/java/com/example/lms/application/strategy/StrategySelectorService.java
-src/main/java/com/example/lms/application/strategy/tuning/DynamicHyperparameterTuner.java
-src/main/java/com/example/lms/application/strategy/tuning/StrategyWeightTuner.java
-src/main/java/com/example/lms/application/strategy/ml/BanditSelector.java
-src/main/java/com/example/lms/application/strategy/ml/PerformanceMetricService.java
-src/main/java/com/example/lms/application/strategy/reinforcement/ReinforcementQueue.java
-src/main/java/com/example/lms/application/strategy/reinforcement/ReinforcementTask.java
-src/main/java/com/example/lms/application/strategy/reinforcement/RewardHyperparameterTuner.java
-src/main/java/com/example/lms/application/strategy/reinforcement/RewardScoringEngine.java
-src/main/java/com/example/lms/application/strategy/scoring/AdaptiveScoringService.java
-src/main/java/com/example/lms/application/strategy/scoring/RelevanceScoringService.java
-
-src/main/java/com/example/lms/application/query/QueryAugmentationService.java
-src/main/java/com/example/lms/application/query/EmbeddingStoreManager.java
-
-src/main/java/com/example/lms/infrastructure/persistence/repository/AdminRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/AdministratorRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ApiKeyRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ApiKeyUsageRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/AppConfigRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/AssignmentRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/AttendanceRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ChatMessageRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ChatSessionRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ChoiceRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/CommentRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ConfigRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ConfigurationSettingRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/CorrectedSampleRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/CourseRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/CurrentModelRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/DomainKnowledgeRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/EnrollmentRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ExamRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/GradeRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/HyperparameterRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/MemoryRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ModelEntityRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ModelInfoRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ModelRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/NoticeRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/ProfessorRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/QuestionRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/RentalRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/RuleRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/SampleRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/SettingRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/StudentRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/SubmissionRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/SynergyStatRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/TrainingJobRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/TrainingSampleRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/TranslationMemoryRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/repository/UploadTokenRepository.java
-src/main/java/com/example/lms/infrastructure/persistence/memory/PersistentChatMemory.java
-src/main/java/com/example/lms/infrastructure/persistence/projection/UuidsProjection.java
-
-src/main/java/com/example/lms/infrastructure/llm/LlmClient.java
-src/main/java/com/example/lms/infrastructure/llm/LangChain4jLlmClient.java
-src/main/java/com/example/lms/infrastructure/llm/DynamicChatModelFactory.java
-src/main/java/com/example/lms/infrastructure/llm/GPTService.java
-src/main/java/com/example/lms/infrastructure/llm/LangChainChatService.java
-src/main/java/com/example/lms/infrastructure/llm/client/EmbeddingClient.java
-src/main/java/com/example/lms/infrastructure/llm/client/GTranslateClient.java
-src/main/java/com/example/lms/infrastructure/llm/client/GeminiClient.java
-src/main/java/com/example/lms/infrastructure/llm/client/OpenAiClient.java
-src/main/java/com/example/lms/infrastructure/llm/model/ModelInfo.java
-src/main/java/com/example/lms/infrastructure/llm/model/OpenAiModelDto.java
-src/main/java/com/example/lms/infrastructure/llm/model/routing/ModelRouter.java
-
-src/main/java/com/example/lms/infrastructure/search/NaverSearchService.java
-src/main/java/com/example/lms/infrastructure/search/extract/PageContentScraper.java
-
-src/main/java/com/example/lms/infrastructure/messaging/NettyServerConfig.java
-
-src/main/java/com/example/lms/infrastructure/storage/FileStorageService.java
-src/main/java/com/example/lms/infrastructure/storage/LocalFileStorageService.java
-
-src/main/java/com/example/lms/infrastructure/security/CustomUserDetailsService.java
-src/main/java/com/example/lms/infrastructure/security/ApiKeyManager.java
-src/main/java/com/example/lms/infrastructure/security/AdminAuthInterceptor.java
-
-src/main/java/com/example/lms/infrastructure/external/kakao/KakaoMessageService.java
-src/main/java/com/example/lms/infrastructure/external/kakao/KakaoOAuthServiceImpl.java
-
-src/main/java/com/example/lms/prompt/DefaultPromptEngine.java
-src/main/java/com/example/lms/prompt/PromptBuilder.java
-src/main/java/com/example/lms/prompt/PromptContext.java
-src/main/java/com/example/lms/prompt/PromptEngine.java
-src/main/java/com/example/lms/prompt/SystemPrompt.java
-
-src/main/java/com/example/lms/support/scope/ChatSessionScope.java
-src/main/java/com/example/lms/support/web/ReqLogInterceptor.java
-
-src/main/java/com/example/lms/util/FileStorage.java
-src/main/java/com/example/lms/util/HashUtil.java
-src/main/java/com/example/lms/util/MLCalibrationUtil.java
-src/main/java/com/example/lms/util/MetadataUtils.java
-src/main/java/com/example/lms/util/ProductAliasNormalizer.java
-src/main/java/com/example/lms/util/RelevanceConfidenceEvaluator.java
-src/main/java/com/example/lms/util/RelevanceScorer.java
-src/main/java/com/example/lms/util/SoftmaxUtil.java
-src/main/java/com/example/lms/util/StreamTokenUtil.java
-src/main/java/com/example/lms/util/StreamUtils.java
-src/main/java/com/example/lms/util/TextSimilarityUtil.java
-src/main/java/com/example/lms/util/TokenCounter.java
-src/main/java/com/example/lms/util/TraceMetaUtil.java
-
-src/main/java/com/example/lms
-├─ app/
-│  ├─ LmsApplication.java
-│  ├─ StartupVersionPurityCheck.java
-│  ├─ VersionPurityHealthIndicator.java
-│  └─ init/
-│     └─ AdminInitializer.java
-│
-├─ config/
-│  ├─ AppSecurityConfig.java
-│  ├─ CacheConfig.java
-│  ├─ GoogleTranslateProperties.java
-│  ├─ LangChainConfig.java
-│  ├─ MatrixConfig.java
-│  ├─ MemoryConfig.java
-│  ├─ OpenAiConfig.java
-│  ├─ OpenAiProperties.java
-│  ├─ QueryTransformerConfig.java
-│  ├─ RestTemplateConfig.java
-│  ├─ RetrieverChainConfig.java
-│  ├─ SchedulingConfig.java
-│  ├─ SessionConfig.java
-│  ├─ WebClientConfig.java
-│  ├─ WebConfig.java
-│  └─ WebMvcConfig.java
-│
-├─ api/
-│  ├─ rest/
-│  │  ├─ AdminController.java
-│  │  ├─ ChatApiController.java
-│  │  ├─ FeedbackController.java
-│  │  ├─ FileUploadController.java
-│  │  ├─ KakaoAdminController.java
-│  │  ├─ KakaoOAuthController.java
-│  │  ├─ KakaoTriggerController.java
-│  │  ├─ KakaoUuidController.java
-│  │  ├─ KakaoWebhookController.java
-│  │  ├─ ModelSettingsController.java
-│  │  ├─ PkiUploadPageController.java
-│  │  ├─ PkiValidationController.java
-│  │  ├─ SettingsController.java
-│  │  ├─ TranslateController.java
-│  │  ├─ AdaptiveTranslateController.java
-│  │  ├─ RentalController.java
-│  │  ├─ TrainingController.java
-│  │  └─ TranslationController.java
-│  ├─ mvc/
-│  │  ├─ AssignmentController.java
-│  │  ├─ AttendanceController.java
-│  │  ├─ AuthController.java
-│  │  ├─ CourseController.java
-│  │  ├─ EnrollmentController.java
-│  │  ├─ ExamController.java
-│  │  ├─ NoticeController.java
-│  │  ├─ PageController.java
-│  │  ├─ ProfessorController.java
-│  │  ├─ QuestionController.java
-│  │  ├─ RegistrationController.java
-│  │  ├─ StudentController.java
-│  │  └─ UploadController.java
-│  ├─ ws/
-│  │  ├─ ChatChannelInitializer.java
-│  │  └─ ChatWebSocketHandler.java
-│  └─ dto/
-│     ├─ AssignmentDTO.java
-│     ├─ ChatMessageDto.java
-│     ├─ ChatRequestDto.java
-│     ├─ ChatResponse.java
-│     ├─ ChatResponseDto.java
-│     ├─ ChatStreamEvent.java
-│     ├─ FeedbackDto.java
-│     ├─ FineTuningOptionsDto.java
-│     ├─ KakaoFormDto.java
-│     ├─ KakaoFriends.java
-│     ├─ MessageDto.java
-│     ├─ ModelInfoDto.java
-│     └─ payload/
-│        └─ KakaoWebhookPayload.java
-│
-├─ domain/
-│  ├─ model/
-│  │  ├─ Administrator.java
-│  │  ├─ Assignment.java
-│  │  ├─ Attendance.java
-│  │  ├─ Category.java
-│  │  ├─ ChatMessage.java
-│  │  ├─ ChatSession.java
-│  │  ├─ Choice.java
-│  │  ├─ Comment.java
-│  │  ├─ ConfigurationSetting.java
-│  │  ├─ Course.java
-│  │  ├─ Enrollment.java
-│  │  ├─ Exam.java
-│  │  ├─ Grade.java
-│  │  ├─ Hyperparameter.java
-│  │  ├─ Notice.java
-│  │  ├─ NoticeType.java
-│  │  ├─ Professor.java
-│  │  ├─ Question.java
-│  │  ├─ QuestionType.java
-│  │  ├─ Rental.java
-│  │  ├─ Rule.java
-│  │  ├─ Setting.java
-│  │  ├─ Status.java
-│  │  ├─ Student.java
-│  │  ├─ Submission.java
-│  │  ├─ SubmissionStatus.java
-│  │  ├─ TrainingJob.java
-│  │  ├─ TranslationRule.java
-│  │  ├─ TranslationSample.java
-│  │  ├─ UploadToken.java
-│  │  ├─ User.java
-│  │  ├─ ApiKey.java
-│  │  ├─ ApiKeyUsage.java
-│  │  ├─ AppConfig.java
-│  │  ├─ CorrectedSample.java
-│  │  ├─ CurrentModel.java
-│  │  ├─ ModelEntity.java
-│  │  ├─ TranslationMemory.java
-│  │  └─ converter/
-│  │     └─ MemoryStatusConverter.java
-│  ├─ model/enums/
-│  │  ├─ RulePhase.java
-│  │  ├─ SourceCredibility.java
-│  │  └─ TranslationRoute.java
-│  ├─ knowledge/
-│  │  ├─ DomainKnowledge.java
-│  │  ├─ EntityAttribute.java
-│  │  └─ genshin/
-│  │     ├─ ElementLexicon.java
-│  │     ├─ GenshinElement.java
-│  │     └─ GenshinElementLexicon.java
-│  └─ rule/
-│     └─ PairingPolicy.java
-│
-├─ application/
-│  ├─ service/
-│  │  ├─ AdminService.java
-│  │  ├─ AdminSessionService.java
-│  │  ├─ AdvancedTranslationService.java
-│  │  ├─ AssignmentQueryService.java
-│  │  ├─ AssignmentService.java
-│  │  ├─ AttendanceService.java
-│  │  ├─ CommentService.java
-│  │  ├─ CourseService.java
-│  │  ├─ EnrollmentService.java
-│  │  ├─ ExamService.java
-│  │  ├─ ModelSettingsService.java
-│  │  ├─ NoticeService.java
-│  │  ├─ NoticeServiceImpl.java
-│  │  ├─ NotificationService.java
-│  │  ├─ ProfessorService.java
-│  │  ├─ QuestionService.java
-│  │  ├─ SettingsService.java
-│  │  ├─ StudentService.java
-│  │  ├─ SubmissionQueryService.java
-│  │  ├─ SubmissionQueryServiceImpl.java
-│  │  ├─ SubmissionService.java
-│  │  ├─ SubmissionServiceImpl.java
-│  │  ├─ TrainingService.java
-│  │  ├─ TranslationService.java
-│  │  ├─ UploadTokenService.java
-│  │  └─ UserService.java
-│  ├─ chat/
-│  │  ├─ ChatService.java
-│  │  ├─ ChatHistoryService.java
-│  │  ├─ ChatHistoryServiceImpl.java
-│  │  ├─ DefaultChatHistoryService.java
-│  │  ├─ PromptService.java
-│  │  ├─ DefaultQueryTransformer.java
-│  │  ├─ transform/
-│  │  │  ├─ MatrixTransformer.java
-│  │  │  ├─ ParsedQuery.java
-│  │  │  └─ QueryTransformer.java
-│  │  ├─ answer/
-│  │  │  ├─ AnswerExpanderService.java
-│  │  │  └─ LengthVerifierService.java
-│  │  ├─ disambiguation/
-│  │  │  ├─ DisambiguationResult.java
-│  │  │  ├─ NonGameEntityHeuristics.java
-│  │  │  └─ QueryDisambiguationService.java
-│  │  ├─ fallback/
-│  │  │  ├─ FallbackHeuristics.java
-│  │  │  ├─ FallbackResult.java
-│  │  │  └─ SmartFallbackService.java
-│  │  └─ verbosity/
-│  │     ├─ SectionSpecGenerator.java
-│  │     ├─ VerbosityDetector.java
-│  │     └─ VerbosityProfile.java
-│  ├─ translation/
-│  │  ├─ AdaptiveTranslationService.java
-│  │  ├─ TranslationTrainingService.java
-│  │  ├─ impl/
-│  │  │  └─ TranslationTrainingServiceImpl.java
-│  │  ├─ ner/
-│  │  │  ├─ LLMNamedEntityExtractor.java
-│  │  │  └─ NamedEntityExtractor.java
-│  │  └─ correction/
-│  │     ├─ DefaultDomainTermDictionary.java
-│  │     ├─ DefaultQueryCorrectionService.java
-│  │     ├─ DomainTermDictionary.java
-│  │     ├─ InMemoryDomainTermDictionary.java
-│  │     ├─ LLMQueryCorrectionService.java
-│  │     └─ QueryCorrectionService.java
-│  ├─ verification/
-│  │  ├─ ClaimVerifierService.java
-│  │  ├─ FactStatusClassifier.java
-│  │  ├─ FactVerificationStatus.java
-│  │  ├─ FactVerifierService.java
-│  │  └─ SourceAnalyzerService.java
-│  ├─ rag/
-│  │  ├─ LangChainRAGService.java
-│  │  ├─ HybridRetriever.java
-│  │  ├─ SearchContext.java
-│  │  ├─ ScoredContent.java
-│  │  ├─ policy/
-│  │  │  ├─ AuthorityScorer.java
-│  │  │  ├─ SourceEntropyPolicy.java
-│  │  │  └─ RuleEngine.java
-│  │  ├─ handler/
-│  │  │  ├─ AbstractRetrievalHandler.java
-│  │  │  ├─ AnalyzeHandler.java
-│  │  │  ├─ DefaultRetrievalHandlerChain.java
-│  │  │  ├─ EvidenceRepairHandler.java
-│  │  │  ├─ MemoryHandler.java
-│  │  │  ├─ MemoryWriteInterceptor.java
-│  │  │  ├─ PairingGuardHandler.java
-│  │  │  ├─ RetrievalHandler.java
-│  │  │  ├─ SelfAskHandler.java
-│  │  │  ├─ VectorDbHandler.java
-│  │  │  └─ WebSearchHandler.java
-│  │  ├─ search/
-│  │  │  ├─ AnalyzeWebSearchRetriever.java
-│  │  │  ├─ EnhancedSearchService.java
-│  │  │  ├─ SelfAskWebSearchRetriever.java
-│  │  │  ├─ TavilyWebSearchRetriever.java
-│  │  │  └─ WebSearchRetriever.java
-│  │  ├─ rerank/
-│  │  │  ├─ CrossEncoderReranker.java
-│  │  │  ├─ DefaultLightWeightRanker.java
-│  │  │  ├─ ElementConstraintScorer.java
-│  │  │  ├─ EmbeddingCrossEncoderReranker.java
-│  │  │  ├─ EmbeddingModelCrossEncoderReranker.java
-│  │  │  ├─ LightWeightRanker.java
-│  │  │  ├─ NoopCrossEncoderReranker.java
-│  │  │  └─ SimpleReranker.java
-│  │  ├─ orchestrator/
-│  │  │  ├─ ContextOrchestrator.java
-│  │  │  ├─ ModelBasedQueryComplexityClassifier.java
-│  │  │  ├─ QueryComplexityClassifier.java
-│  │  │  └─ QueryComplexityGate.java
-│  │  ├─ preprocess/
-│  │  │  ├─ CognitiveState.java
-│  │  │  ├─ CognitiveStateExtractor.java
-│  │  │  ├─ CompositeQueryContextPreprocessor.java
-│  │  │  ├─ DefaultGuardrailQueryPreprocessor.java
-│  │  │  ├─ DefaultQueryContextPreprocessor.java
-│  │  │  ├─ GuardrailQueryPreprocessor.java
-│  │  │  └─ QueryContextPreprocessor.java
-│  │  ├─ guard/
-│  │  │  ├─ EvidenceGate.java
-│  │  │  └─ MemoryAsEvidenceAdapter.java
-│  │  ├─ energy/
-│  │  │  ├─ ContextEnergyModel.java
-│  │  │  └─ ContradictionScorer.java
-│  │  ├─ filter/
-│  │  │  └─ GenericDocClassifier.java
-│  │  ├─ fusion/
-│  │  │  └─ ReciprocalRankFuser.java
-│  │  ├─ subject/
-│  │  │  └─ SubjectResolver.java
-│  │  └─ quality/
-│  │     └─ AnswerQualityEvaluator.java
-│  ├─ strategy/
-│  │  ├─ StrategyDecisionTracker.java
-│  │  ├─ StrategyHyperparams.java
-│  │  ├─ StrategySelectorService.java
-│  │  ├─ tuning/
-│  │  │  ├─ DynamicHyperparameterTuner.java
-│  │  │  └─ StrategyWeightTuner.java
-│  │  ├─ ml/
-│  │  │  ├─ BanditSelector.java
-│  │  │  └─ PerformanceMetricService.java
-│  │  ├─ reinforcement/
-│  │  │  ├─ ReinforcementQueue.java
-│  │  │  ├─ ReinforcementTask.java
-│  │  │  ├─ RewardHyperparameterTuner.java
-│  │  │  └─ RewardScoringEngine.java
-│  │  └─ scoring/
-│  │     ├─ AdaptiveScoringService.java
-│  │     └─ RelevanceScoringService.java
-│  └─ query/
-│     ├─ QueryAugmentationService.java
-│     └─ EmbeddingStoreManager.java
-│
-├─ infrastructure/
-│  ├─ persistence/
-│  │  ├─ repository/
-│  │  │  ├─ AdminRepository.java
-│  │  │  ├─ AdministratorRepository.java
-│  │  │  ├─ ApiKeyRepository.java
-│  │  │  ├─ ApiKeyUsageRepository.java
-│  │  │  ├─ AppConfigRepository.java
-│  │  │  ├─ AssignmentRepository.java
-│  │  │  ├─ AttendanceRepository.java
-│  │  │  ├─ ChatMessageRepository.java
-│  │  │  ├─ ChatSessionRepository.java
-│  │  │  ├─ ChoiceRepository.java
-│  │  │  ├─ CommentRepository.java
-│  │  │  ├─ ConfigRepository.java
-│  │  │  ├─ ConfigurationSettingRepository.java
-│  │  │  ├─ CorrectedSampleRepository.java
-│  │  │  ├─ CourseRepository.java
-│  │  │  ├─ CurrentModelRepository.java
-│  │  │  ├─ DomainKnowledgeRepository.java
-│  │  │  ├─ EnrollmentRepository.java
-│  │  │  ├─ ExamRepository.java
-│  │  │  ├─ GradeRepository.java
-│  │  │  ├─ HyperparameterRepository.java
-│  │  │  ├─ MemoryRepository.java
-│  │  │  ├─ ModelEntityRepository.java
-│  │  │  ├─ ModelInfoRepository.java
-│  │  │  ├─ ModelRepository.java
-│  │  │  ├─ NoticeRepository.java
-│  │  │  ├─ ProfessorRepository.java
-│  │  │  ├─ QuestionRepository.java
-│  │  │  ├─ RentalRepository.java
-│  │  │  ├─ RuleRepository.java
-│  │  │  ├─ SampleRepository.java
-│  │  │  ├─ SettingRepository.java
-│  │  │  ├─ StudentRepository.java
-│  │  │  ├─ SubmissionRepository.java
-│  │  │  ├─ SynergyStatRepository.java
-│  │  │  ├─ TrainingJobRepository.java
-│  │  │  ├─ TrainingSampleRepository.java
-│  │  │  ├─ TranslationMemoryRepository.java
-│  │  │  └─ UploadTokenRepository.java
-│  │  ├─ memory/
-│  │  │  └─ PersistentChatMemory.java
-│  │  └─ projection/
-│  │     └─ UuidsProjection.java
-│  ├─ llm/
-│  │  ├─ LlmClient.java
-│  │  ├─ LangChain4jLlmClient.java
-│  │  ├─ DynamicChatModelFactory.java
-│  │  ├─ GPTService.java
-│  │  ├─ LangChainChatService.java
-│  │  ├─ client/
-│  │  │  ├─ EmbeddingClient.java
-│  │  │  ├─ GTranslateClient.java
-│  │  │  ├─ GeminiClient.java
-│  │  │  └─ OpenAiClient.java
-│  │  └─ model/
-│  │     ├─ ModelInfo.java
-│  │     ├─ OpenAiModelDto.java
-│  │     └─ routing/
-│  │        └─ ModelRouter.java
-│  ├─ search/
-│  │  ├─ NaverSearchService.java
-│  │  └─ extract/
-│  │     └─ PageContentScraper.java
-│  ├─ messaging/
-│  │  └─ NettyServerConfig.java
-│  ├─ storage/
-│  │  ├─ FileStorageService.java
-│  │  └─ LocalFileStorageService.java
-│  ├─ security/
-│  │  ├─ CustomUserDetailsService.java
-│  │  ├─ ApiKeyManager.java
-│  │  └─ AdminAuthInterceptor.java
-│  └─ external/
-│     └─ kakao/
-│        ├─ KakaoMessageService.java
-│        └─ KakaoOAuthServiceImpl.java
-│
-├─ prompt/
-│  ├─ DefaultPromptEngine.java
-│  ├─ PromptBuilder.java
-│  ├─ PromptContext.java
-│  ├─ PromptEngine.java
-│  └─ SystemPrompt.java
-│
-├─ support/
-│  ├─ scope/
-│  │  └─ ChatSessionScope.java
-│  └─ web/
-│     └─ ReqLogInterceptor.java
-│
-└─ util/
-   ├─ FileStorage.java
-   ├─ HashUtil.java
-   ├─ MLCalibrationUtil.java
-   ├─ MetadataUtils.java
-   ├─ ProductAliasNormalizer.java
-   ├─ RelevanceConfidenceEvaluator.java
-   ├─ RelevanceScorer.java
-   ├─ SoftmaxUtil.java
-   ├─ StreamTokenUtil.java
-   ├─ StreamUtils.java
-   ├─ TextSimilarityUtil.java
-   ├─ TokenCounter.java
-   └─ TraceMetaUtil.java
-
-
-I. resources (정적/템플릿/설정)
-src/main/resources
-├─ static/
-│  ├─ js/
-│  │  ├─ chat.js
-│  │  └─ fetch-wrapper.js
-│  └─ .well-known/pki-validation/E7A9589C....txt
-├─ templates/
-│  ├─ admin/notices/{list,detail,form}.html
-│  ├─ chat-ui.html
-│  ├─ dashboard.html
-│  ├─ model-settings.html
-│  ├─ notice-list.html
-│  ├─ assignment/ ...
-│  ├─ attendance/ ...
-│  ├─ auth/{login.html,register.html}
-│  ├─ courses/ ...
-│  ├─ enrollments/ ...
-│  ├─ exam/ ...
-│  ├─ fragments/ ...
-│  ├─ kakao/ ...
-│  ├─ professors/ ...
-│  ├─ rentals/ ...
-│  ├─ students/ ...
-│  ├─ upload/pki-upload.html
-│  ├─ error.html
-│  └─ index.html
-└─ application.yml (또는 profiles)
 This repository documents the AbandonWare Hybrid RAG AI Chatbot Service, which began as a specialized Genshin Impact assistant and has been refactored into a general‑purpose retrieval‑augmented generation (RAG) agent.
 The refactor converts the project from a domain‑specific helper into a knowledge‑driven agent capable of answering questions across domains using a unified architecture.
 Retrieval‑augmented generation combines neural language models with external knowledge sources, retrieving relevant information and grounding the model’s output in real documents rather than relying solely on learned parameters.
@@ -2235,6 +1454,439 @@ Each reference is listed on its own line to contribute to the line count and to 
 
 Introduces the core components for a self-learning agent designed to enrich the knowledge base automatically.
 
+
+src/main/java/com/example/lms
+├─ app/
+│  ├─ LmsApplication.java
+│  ├─ StartupVersionPurityCheck.java
+│  ├─ VersionPurityHealthIndicator.java
+│  └─ init/
+│     └─ AdminInitializer.java
+│
+├─ config/
+│  ├─ AppSecurityConfig.java
+│  ├─ CacheConfig.java
+│  ├─ GoogleTranslateProperties.java
+│  ├─ LangChainConfig.java
+│  ├─ MatrixConfig.java
+│  ├─ MemoryConfig.java
+│  ├─ OpenAiConfig.java
+│  ├─ OpenAiProperties.java
+│  ├─ QueryTransformerConfig.java
+│  ├─ RestTemplateConfig.java
+│  ├─ RetrieverChainConfig.java
+│  ├─ SchedulingConfig.java
+│  ├─ SessionConfig.java
+│  ├─ WebClientConfig.java
+│  ├─ WebConfig.java
+│  └─ WebMvcConfig.java
+│
+├─ api/
+│  ├─ rest/
+│  │  ├─ AdminController.java
+│  │  ├─ ChatApiController.java
+│  │  ├─ FeedbackController.java
+│  │  ├─ FileUploadController.java
+│  │  ├─ KakaoAdminController.java
+│  │  ├─ KakaoOAuthController.java
+│  │  ├─ KakaoTriggerController.java
+│  │  ├─ KakaoUuidController.java
+│  │  ├─ KakaoWebhookController.java
+│  │  ├─ ModelSettingsController.java
+│  │  ├─ PkiUploadPageController.java
+│  │  ├─ PkiValidationController.java
+│  │  ├─ SettingsController.java
+│  │  ├─ TranslateController.java
+│  │  ├─ AdaptiveTranslateController.java
+│  │  ├─ RentalController.java
+│  │  ├─ TrainingController.java
+│  │  └─ TranslationController.java
+│  ├─ mvc/
+│  │  ├─ AssignmentController.java
+│  │  ├─ AttendanceController.java
+│  │  ├─ AuthController.java
+│  │  ├─ CourseController.java
+│  │  ├─ EnrollmentController.java
+│  │  ├─ ExamController.java
+│  │  ├─ NoticeController.java
+│  │  ├─ PageController.java
+│  │  ├─ ProfessorController.java
+│  │  ├─ QuestionController.java
+│  │  ├─ RegistrationController.java
+│  │  ├─ StudentController.java
+│  │  └─ UploadController.java
+│  ├─ ws/
+│  │  ├─ ChatChannelInitializer.java
+│  │  └─ ChatWebSocketHandler.java
+│  └─ dto/
+│     ├─ AssignmentDTO.java
+│     ├─ ChatMessageDto.java
+│     ├─ ChatRequestDto.java
+│     ├─ ChatResponse.java
+│     ├─ ChatResponseDto.java
+│     ├─ ChatStreamEvent.java
+│     ├─ FeedbackDto.java
+│     ├─ FineTuningOptionsDto.java
+│     ├─ KakaoFormDto.java
+│     ├─ KakaoFriends.java
+│     ├─ MessageDto.java
+│     ├─ ModelInfoDto.java
+│     └─ payload/
+│        └─ KakaoWebhookPayload.java
+│
+├─ domain/
+│  ├─ model/
+│  │  ├─ Administrator.java
+│  │  ├─ Assignment.java
+│  │  ├─ Attendance.java
+│  │  ├─ Category.java
+│  │  ├─ ChatMessage.java
+│  │  ├─ ChatSession.java
+│  │  ├─ Choice.java
+│  │  ├─ Comment.java
+│  │  ├─ ConfigurationSetting.java
+│  │  ├─ Course.java
+│  │  ├─ Enrollment.java
+│  │  ├─ Exam.java
+│  │  ├─ Grade.java
+│  │  ├─ Hyperparameter.java
+│  │  ├─ Notice.java
+│  │  ├─ NoticeType.java
+│  │  ├─ Professor.java
+│  │  ├─ Question.java
+│  │  ├─ QuestionType.java
+│  │  ├─ Rental.java
+│  │  ├─ Rule.java
+│  │  ├─ Setting.java
+│  │  ├─ Status.java
+│  │  ├─ Student.java
+│  │  ├─ Submission.java
+│  │  ├─ SubmissionStatus.java
+│  │  ├─ TrainingJob.java
+│  │  ├─ TranslationRule.java
+│  │  ├─ TranslationSample.java
+│  │  ├─ UploadToken.java
+│  │  ├─ User.java
+│  │  ├─ ApiKey.java
+│  │  ├─ ApiKeyUsage.java
+│  │  ├─ AppConfig.java
+│  │  ├─ CorrectedSample.java
+│  │  ├─ CurrentModel.java
+│  │  ├─ ModelEntity.java
+│  │  ├─ TranslationMemory.java
+│  │  └─ converter/
+│  │     └─ MemoryStatusConverter.java
+│  ├─ model/enums/
+│  │  ├─ RulePhase.java
+│  │  ├─ SourceCredibility.java
+│  │  └─ TranslationRoute.java
+│  ├─ knowledge/
+│  │  ├─ DomainKnowledge.java
+│  │  ├─ EntityAttribute.java
+│  │  └─ genshin/
+│  │     ├─ ElementLexicon.java
+│  │     ├─ GenshinElement.java
+│  │     └─ GenshinElementLexicon.java
+│  └─ rule/
+│     └─ PairingPolicy.java
+│
+├─ application/
+│  ├─ service/
+│  │  ├─ AdminService.java
+│  │  ├─ AdminSessionService.java
+│  │  ├─ AdvancedTranslationService.java
+│  │  ├─ AssignmentQueryService.java
+│  │  ├─ AssignmentService.java
+│  │  ├─ AttendanceService.java
+│  │  ├─ CommentService.java
+│  │  ├─ CourseService.java
+│  │  ├─ EnrollmentService.java
+│  │  ├─ ExamService.java
+│  │  ├─ ModelSettingsService.java
+│  │  ├─ NoticeService.java
+│  │  ├─ NoticeServiceImpl.java
+│  │  ├─ NotificationService.java
+│  │  ├─ ProfessorService.java
+│  │  ├─ QuestionService.java
+│  │  ├─ SettingsService.java
+│  │  ├─ StudentService.java
+│  │  ├─ SubmissionQueryService.java
+│  │  ├─ SubmissionQueryServiceImpl.java
+│  │  ├─ SubmissionService.java
+│  │  ├─ SubmissionServiceImpl.java
+│  │  ├─ TrainingService.java
+│  │  ├─ TranslationService.java
+│  │  ├─ UploadTokenService.java
+│  │  └─ UserService.java
+│  ├─ chat/
+│  │  ├─ ChatService.java
+│  │  ├─ ChatHistoryService.java
+│  │  ├─ ChatHistoryServiceImpl.java
+│  │  ├─ DefaultChatHistoryService.java
+│  │  ├─ PromptService.java
+│  │  ├─ DefaultQueryTransformer.java
+│  │  ├─ transform/
+│  │  │  ├─ MatrixTransformer.java
+│  │  │  ├─ ParsedQuery.java
+│  │  │  └─ QueryTransformer.java
+│  │  ├─ answer/
+│  │  │  ├─ AnswerExpanderService.java
+│  │  │  └─ LengthVerifierService.java
+│  │  ├─ disambiguation/
+│  │  │  ├─ DisambiguationResult.java
+│  │  │  ├─ NonGameEntityHeuristics.java
+│  │  │  └─ QueryDisambiguationService.java
+│  │  ├─ fallback/
+│  │  │  ├─ FallbackHeuristics.java
+│  │  │  ├─ FallbackResult.java
+│  │  │  └─ SmartFallbackService.java
+│  │  └─ verbosity/
+│  │     ├─ SectionSpecGenerator.java
+│  │     ├─ VerbosityDetector.java
+│  │     └─ VerbosityProfile.java
+│  ├─ translation/
+│  │  ├─ AdaptiveTranslationService.java
+│  │  ├─ TranslationTrainingService.java
+│  │  ├─ impl/
+│  │  │  └─ TranslationTrainingServiceImpl.java
+│  │  ├─ ner/
+│  │  │  ├─ LLMNamedEntityExtractor.java
+│  │  │  └─ NamedEntityExtractor.java
+│  │  └─ correction/
+│  │     ├─ DefaultDomainTermDictionary.java
+│  │     ├─ DefaultQueryCorrectionService.java
+│  │     ├─ DomainTermDictionary.java
+│  │     ├─ InMemoryDomainTermDictionary.java
+│  │     ├─ LLMQueryCorrectionService.java
+│  │     └─ QueryCorrectionService.java
+│  ├─ verification/
+│  │  ├─ ClaimVerifierService.java
+│  │  ├─ FactStatusClassifier.java
+│  │  ├─ FactVerificationStatus.java
+│  │  ├─ FactVerifierService.java
+│  │  └─ SourceAnalyzerService.java
+│  ├─ rag/
+│  │  ├─ LangChainRAGService.java
+│  │  ├─ HybridRetriever.java
+│  │  ├─ SearchContext.java
+│  │  ├─ ScoredContent.java
+│  │  ├─ policy/
+│  │  │  ├─ AuthorityScorer.java
+│  │  │  ├─ SourceEntropyPolicy.java
+│  │  │  └─ RuleEngine.java
+│  │  ├─ handler/
+│  │  │  ├─ AbstractRetrievalHandler.java
+│  │  │  ├─ AnalyzeHandler.java
+│  │  │  ├─ DefaultRetrievalHandlerChain.java
+│  │  │  ├─ EvidenceRepairHandler.java
+│  │  │  ├─ MemoryHandler.java
+│  │  │  ├─ MemoryWriteInterceptor.java
+│  │  │  ├─ PairingGuardHandler.java
+│  │  │  ├─ RetrievalHandler.java
+│  │  │  ├─ SelfAskHandler.java
+│  │  │  ├─ VectorDbHandler.java
+│  │  │  └─ WebSearchHandler.java
+│  │  ├─ search/
+│  │  │  ├─ AnalyzeWebSearchRetriever.java
+│  │  │  ├─ EnhancedSearchService.java
+│  │  │  ├─ SelfAskWebSearchRetriever.java
+│  │  │  ├─ TavilyWebSearchRetriever.java
+│  │  │  └─ WebSearchRetriever.java
+│  │  ├─ rerank/
+│  │  │  ├─ CrossEncoderReranker.java
+│  │  │  ├─ DefaultLightWeightRanker.java
+│  │  │  ├─ ElementConstraintScorer.java
+│  │  │  ├─ EmbeddingCrossEncoderReranker.java
+│  │  │  ├─ EmbeddingModelCrossEncoderReranker.java
+│  │  │  ├─ LightWeightRanker.java
+│  │  │  ├─ NoopCrossEncoderReranker.java
+│  │  │  └─ SimpleReranker.java
+│  │  ├─ orchestrator/
+│  │  │  ├─ ContextOrchestrator.java
+│  │  │  ├─ ModelBasedQueryComplexityClassifier.java
+│  │  │  ├─ QueryComplexityClassifier.java
+│  │  │  └─ QueryComplexityGate.java
+│  │  ├─ preprocess/
+│  │  │  ├─ CognitiveState.java
+│  │  │  ├─ CognitiveStateExtractor.java
+│  │  │  ├─ CompositeQueryContextPreprocessor.java
+│  │  │  ├─ DefaultGuardrailQueryPreprocessor.java
+│  │  │  ├─ DefaultQueryContextPreprocessor.java
+│  │  │  ├─ GuardrailQueryPreprocessor.java
+│  │  │  └─ QueryContextPreprocessor.java
+│  │  ├─ guard/
+│  │  │  ├─ EvidenceGate.java
+│  │  │  └─ MemoryAsEvidenceAdapter.java
+│  │  ├─ energy/
+│  │  │  ├─ ContextEnergyModel.java
+│  │  │  └─ ContradictionScorer.java
+│  │  ├─ filter/
+│  │  │  └─ GenericDocClassifier.java
+│  │  ├─ fusion/
+│  │  │  └─ ReciprocalRankFuser.java
+│  │  ├─ subject/
+│  │  │  └─ SubjectResolver.java
+│  │  └─ quality/
+│  │     └─ AnswerQualityEvaluator.java
+│  ├─ strategy/
+│  │  ├─ StrategyDecisionTracker.java
+│  │  ├─ StrategyHyperparams.java
+│  │  ├─ StrategySelectorService.java
+│  │  ├─ tuning/
+│  │  │  ├─ DynamicHyperparameterTuner.java
+│  │  │  └─ StrategyWeightTuner.java
+│  │  ├─ ml/
+│  │  │  ├─ BanditSelector.java
+│  │  │  └─ PerformanceMetricService.java
+│  │  ├─ reinforcement/
+│  │  │  ├─ ReinforcementQueue.java
+│  │  │  ├─ ReinforcementTask.java
+│  │  │  ├─ RewardHyperparameterTuner.java
+│  │  │  └─ RewardScoringEngine.java
+│  │  └─ scoring/
+│  │     ├─ AdaptiveScoringService.java
+│  │     └─ RelevanceScoringService.java
+│  └─ query/
+│     ├─ QueryAugmentationService.java
+│     └─ EmbeddingStoreManager.java
+│
+├─ infrastructure/
+│  ├─ persistence/
+│  │  ├─ repository/
+│  │  │  ├─ AdminRepository.java
+│  │  │  ├─ AdministratorRepository.java
+│  │  │  ├─ ApiKeyRepository.java
+│  │  │  ├─ ApiKeyUsageRepository.java
+│  │  │  ├─ AppConfigRepository.java
+│  │  │  ├─ AssignmentRepository.java
+│  │  │  ├─ AttendanceRepository.java
+│  │  │  ├─ ChatMessageRepository.java
+│  │  │  ├─ ChatSessionRepository.java
+│  │  │  ├─ ChoiceRepository.java
+│  │  │  ├─ CommentRepository.java
+│  │  │  ├─ ConfigRepository.java
+│  │  │  ├─ ConfigurationSettingRepository.java
+│  │  │  ├─ CorrectedSampleRepository.java
+│  │  │  ├─ CourseRepository.java
+│  │  │  ├─ CurrentModelRepository.java
+│  │  │  ├─ DomainKnowledgeRepository.java
+│  │  │  ├─ EnrollmentRepository.java
+│  │  │  ├─ ExamRepository.java
+│  │  │  ├─ GradeRepository.java
+│  │  │  ├─ HyperparameterRepository.java
+│  │  │  ├─ MemoryRepository.java
+│  │  │  ├─ ModelEntityRepository.java
+│  │  │  ├─ ModelInfoRepository.java
+│  │  │  ├─ ModelRepository.java
+│  │  │  ├─ NoticeRepository.java
+│  │  │  ├─ ProfessorRepository.java
+│  │  │  ├─ QuestionRepository.java
+│  │  │  ├─ RentalRepository.java
+│  │  │  ├─ RuleRepository.java
+│  │  │  ├─ SampleRepository.java
+│  │  │  ├─ SettingRepository.java
+│  │  │  ├─ StudentRepository.java
+│  │  │  ├─ SubmissionRepository.java
+│  │  │  ├─ SynergyStatRepository.java
+│  │  │  ├─ TrainingJobRepository.java
+│  │  │  ├─ TrainingSampleRepository.java
+│  │  │  ├─ TranslationMemoryRepository.java
+│  │  │  └─ UploadTokenRepository.java
+│  │  ├─ memory/
+│  │  │  └─ PersistentChatMemory.java
+│  │  └─ projection/
+│  │     └─ UuidsProjection.java
+│  ├─ llm/
+│  │  ├─ LlmClient.java
+│  │  ├─ LangChain4jLlmClient.java
+│  │  ├─ DynamicChatModelFactory.java
+│  │  ├─ GPTService.java
+│  │  ├─ LangChainChatService.java
+│  │  ├─ client/
+│  │  │  ├─ EmbeddingClient.java
+│  │  │  ├─ GTranslateClient.java
+│  │  │  ├─ GeminiClient.java
+│  │  │  └─ OpenAiClient.java
+│  │  └─ model/
+│  │     ├─ ModelInfo.java
+│  │     ├─ OpenAiModelDto.java
+│  │     └─ routing/
+│  │        └─ ModelRouter.java
+│  ├─ search/
+│  │  ├─ NaverSearchService.java
+│  │  └─ extract/
+│  │     └─ PageContentScraper.java
+│  ├─ messaging/
+│  │  └─ NettyServerConfig.java
+│  ├─ storage/
+│  │  ├─ FileStorageService.java
+│  │  └─ LocalFileStorageService.java
+│  ├─ security/
+│  │  ├─ CustomUserDetailsService.java
+│  │  ├─ ApiKeyManager.java
+│  │  └─ AdminAuthInterceptor.java
+│  └─ external/
+│     └─ kakao/
+│        ├─ KakaoMessageService.java
+│        └─ KakaoOAuthServiceImpl.java
+│
+├─ prompt/
+│  ├─ DefaultPromptEngine.java
+│  ├─ PromptBuilder.java
+│  ├─ PromptContext.java
+│  ├─ PromptEngine.java
+│  └─ SystemPrompt.java
+│
+├─ support/
+│  ├─ scope/
+│  │  └─ ChatSessionScope.java
+│  └─ web/
+│     └─ ReqLogInterceptor.java
+│
+└─ util/
+   ├─ FileStorage.java
+   ├─ HashUtil.java
+   ├─ MLCalibrationUtil.java
+   ├─ MetadataUtils.java
+   ├─ ProductAliasNormalizer.java
+   ├─ RelevanceConfidenceEvaluator.java
+   ├─ RelevanceScorer.java
+   ├─ SoftmaxUtil.java
+   ├─ StreamTokenUtil.java
+   ├─ StreamUtils.java
+   ├─ TextSimilarityUtil.java
+   ├─ TokenCounter.java
+   └─ TraceMetaUtil.java
+
+
+I. resources (정적/템플릿/설정)
+src/main/resources
+├─ static/
+│  ├─ js/
+│  │  ├─ chat.js
+│  │  └─ fetch-wrapper.js
+│  └─ .well-known/pki-validation/E7A9589C....txt
+├─ templates/
+│  ├─ admin/notices/{list,detail,form}.html
+│  ├─ chat-ui.html
+│  ├─ dashboard.html
+│  ├─ model-settings.html
+│  ├─ notice-list.html
+│  ├─ assignment/ ...
+│  ├─ attendance/ ...
+│  ├─ auth/{login.html,register.html}
+│  ├─ courses/ ...
+│  ├─ enrollments/ ...
+│  ├─ exam/ ...
+│  ├─ fragments/ ...
+│  ├─ kakao/ ...
+│  ├─ professors/ ...
+│  ├─ rentals/ ...
+│  ├─ students/ ...
+│  ├─ upload/pki-upload.html
+│  ├─ error.html
+│  └─ index.html
+└─ application.yml (또는 profiles)
 - Adds scheduler, curiosity, and synthesis services for the agent's main loop.
 - Implements a `ChatModel` abstraction for LLM interactions.
 - Extends `KnowledgeBaseService` with a write API (`integrateVerifiedKnowledge`) for the agent to commit new information.
