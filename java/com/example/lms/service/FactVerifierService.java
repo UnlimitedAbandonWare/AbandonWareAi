@@ -20,6 +20,7 @@ import com.example.lms.service.verification.FactStatusClassifier;
 import com.example.lms.service.rag.guard.EvidenceGate;
 import com.example.lms.service.rag.guard.MemoryAsEvidenceAdapter;
 import org.springframework.beans.factory.annotation.Autowired;
+import java.util.Arrays;
 @Slf4j
 @Service
 public class FactVerifierService {
@@ -99,18 +100,27 @@ public class FactVerifierService {
             %s
             """;
 
+    /** 하위호환: 기존 시그니처는 memory=null로 위임 */
+    public String verify(String question, String context, String draft, String model) {
+        return verify(question, context, /*memory*/ null, draft, model);
+    }
+
+    /** 메모리 증거를 별도 인자로 받아 EvidenceGate에 반영 */
     public String verify(String question,
                          String context,
+                         String memory,
                          String draft,
                          String model) {
         if (!StringUtils.hasText(draft)) return "";
         // ✅ 컨텍스트가 빈약해도 즉시 "정보 없음"으로 보내지 않고 SOFT-FAIL 경로 유지
-        if (!StringUtils.hasText(context) || context.length() < MIN_CONTEXT_CHARS) {
+        boolean hasCtx = StringUtils.hasText(context) && context.length() >= MIN_CONTEXT_CHARS;
+        boolean hasMem = StringUtils.hasText(memory) && memory.length() >= 40; // 간이 컷
+        if (!hasCtx && !hasMem) {
             var res = claimVerifier.verifyClaims("", draft, model);
             return res.verifiedAnswer();
         }
 
-        if (context.contains("[검색 결과 없음]")) return draft;
+        if (StringUtils.hasText(context) && context.contains("[검색 결과 없음]")) return draft;
         // ── 0) META‑CHECK: 컨텍스트가 아예 다른 대상을 가리키는지(또는 부족한지) 1차 판별 ──
 
         // ★ 0) 소스 신뢰도 메타 점검: 팬 추측/상충이면 즉시 차단
@@ -155,10 +165,10 @@ public class FactVerifierService {
         // ✅ 증거 게이트: 메모리/KB 포함(후속질의 완화는 상위에서 isFollowUp 전달 시 확장)
         boolean enoughEvidence = evidenceGate.hasSufficientCoverage(
                 question,
-                List.of(context), // ragSnippets 대용(이미 통합 컨텍스트)
-                context,
-                /*memory*/ null,
-                /*kb*/ null,
+                toLines(context),   // RAG snippets (List<String>)
+                context,            // RAG unified context (String)
+                toLines(memory),    // Memory snippets (List<String>)
+                List.of(),          // KB snippets (없으면 빈 리스트)
                 /*followUp*/ false
         );
 
@@ -167,17 +177,17 @@ public class FactVerifierService {
                 // ✅ 엄격 차단 대신: 근거 부족이면 SOFT‑FAIL 필터링 후 출력
                 if (!grounded || !enoughEvidence) {
                     log.debug("[Verify] grounding/evidence 부족 → SOFT-FAIL 필터만 적용");
-                    var res = claimVerifier.verifyClaims(context, draft, model);
+                    var res = claimVerifier.verifyClaims(mergeCtx(context, memory), draft, model);
                     return res.verifiedAnswer().isBlank() ? "정보 없음" : res.verifiedAnswer();
                 }
                 // PASS여도 조합/시너지 등 unsupported claim 제거
-                var res = claimVerifier.verifyClaims(context, draft, model);
+                var res = claimVerifier.verifyClaims(mergeCtx(context, memory), draft, model);
                 return res.verifiedAnswer();
             }
             case CORRECTED -> {
                 if (!grounded || !enoughEvidence) {
                     log.debug("[Verify] CORRECTED도 grounding/evidence 부족 → SOFT-FAIL 필터 후 출력");
-                    var res = claimVerifier.verifyClaims(context, draft, model);
+                    var res = claimVerifier.verifyClaims(mergeCtx(context, memory), draft, model);
                     return res.verifiedAnswer().isBlank() ? "정보 없음" : res.verifiedAnswer();
                 }
                 String gPrompt = String.format(TEMPLATE, question, context, draft);
@@ -192,7 +202,7 @@ public class FactVerifierService {
                             .getChoices().get(0).getMessage().getContent();
                     int split = raw.indexOf("CONTENT:");
                     String corrected = (split > -1 ? raw.substring(split + 8).trim() : raw.trim());
-                    var res = claimVerifier.verifyClaims(context, corrected, model);
+                    var res = claimVerifier.verifyClaims(mergeCtx(context, memory), corrected, model);
                     return res.verifiedAnswer();
                 } catch (Exception e) {
                     log.error("Correction generation failed – fallback to '정보 없음'", e);
@@ -203,6 +213,12 @@ public class FactVerifierService {
                 return draft;
             }
         }
+    }
+
+    private static String mergeCtx(String ctx, String mem) {
+        String c = (ctx == null ? "" : ctx);
+        String m = (mem == null || mem.isBlank()) ? "" : ("\n\n### LONG-TERM MEMORY\n" + mem);
+        return c + m;
     }
 
     /** 간단 개체 추출(LLM 추출기 없을 시 폴백용) */
@@ -227,6 +243,15 @@ public class FactVerifierService {
             }
         }
         return out;
+    }
+
+    /** util: split into non-empty lines */
+    private static List<String> toLines(String s) {
+        if (s == null || s.isBlank()) return List.of();
+        return Arrays.stream(s.split("\\R+"))
+                .map(String::trim)
+                .filter(t -> !t.isEmpty())
+                .toList();
     }
 
     /** 개체가 서로 다른 컨텍스트 라인에 최소 minLines 등장하는지 */

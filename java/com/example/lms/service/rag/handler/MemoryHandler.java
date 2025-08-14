@@ -1,35 +1,36 @@
-// src/main/java/com/example/lms/service/rag/handler/MemoryHandler.java
 package com.example.lms.service.rag.handler;
 
-import com.example.lms.service.rag.guard.MemoryAsEvidenceAdapter;
-import dev.langchain4j.rag.content.Content;
-import dev.langchain4j.rag.query.Query;
+import com.example.lms.service.ChatHistoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 import java.util.List;
-
 /**
- * 세션의 "검증된" 메모리 스니펫을 retrieval 파이프 전단에 주입.
+ * MemoryHandler — 읽기 전담(minimal):
+ *  - loadForSession(sessionId): 최근 N턴을 bullet text로 묶어 프롬프트 주입용 문자열 반환(없으면 null)
+ *  - 파일 분리 유지, 다른 체인 단계와의 결합 제거(evidence 주입/핸들러 링크 제거)
  */
 @Slf4j
+@Component
 @RequiredArgsConstructor
-public class MemoryHandler extends AbstractRetrievalHandler {
+public class MemoryHandler {
 
-    private final MemoryAsEvidenceAdapter memoryAdapter;
-    private final Long sessionId;
-    private final int lastN;
+    private final ChatHistoryService historyService;
 
-    @Override
-    protected boolean doHandle(Query q, List<Content> acc) {
+    @Value("${memory.read.max-turns:8}")
+    private int maxTurns;
+    /** 프롬프트 주입용: 세션의 최근 N턴을 bullet text로 묶어 반환(없으면 null) */
+    public String loadForSession(Long sessionId) {
         try {
-            var mem = memoryAdapter.fromSession(sessionId, lastN);
-            for (String s : mem) {
-                if (s != null && !s.isBlank()) acc.add(Content.from("[MEM] " + s));
-            }
+            if (sessionId == null) return null;
+            List<String> hist = historyService.getFormattedRecentHistory(sessionId, Math.max(1, maxTurns));
+            if (hist == null || hist.isEmpty()) return null;
+            return String.join("\n", hist);
         } catch (Exception e) {
-            log.debug("[MemoryHandler] skip: {}", e.toString());
+            log.debug("[MemoryHandler] loadForSession 실패: {}", e.toString());
+            return null;
         }
-        return true; // 다음 핸들러 계속
     }
+
 }

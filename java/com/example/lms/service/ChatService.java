@@ -16,7 +16,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import java.util.*;
-import com.example.lms.service.rag.ContextOrchestrator;
+
 
 import com.example.lms.search.QueryHygieneFilter;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -68,7 +68,7 @@ import java.util.stream.Collectors;
 // (정리) 미사용 OpenAiChatModel import 제거
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatModel;
+
 
 
 /* ---------- RAG ---------- */
@@ -108,7 +108,7 @@ import com.example.lms.service.correction.QueryCorrectionService;   // ★ 추�
 import org.springframework.beans.factory.annotation.Qualifier; // Qualifier import 추가
 import com.example.lms.search.SmartQueryPlanner;
 import org.springframework.beans.factory.annotation.Autowired;   // ← 추가
-import org.springframework.beans.factory.annotation.Qualifier;
+
 import com.example.lms.service.rag.rerank.CrossEncoderReranker;
 /**
  * 중앙 허브 – OpenAI-Java · LangChain4j · RAG 통합. (v7.2, RAG 우선 패치 적용)
@@ -142,7 +142,7 @@ public class ChatService {
     /**
      * 컨트롤러 ↔ 서비스 간 정형 응답 객체.
      */
-    public static record ChatResult(String content, String modelUsed, boolean ragUsed) {
+    public static record ChatResult(String content, String modelUsed, boolean ragUsed, java.util.Set<String> evidence) {
         /**
          * @deprecated: modelUsed() 로 대체
          */
@@ -152,9 +152,12 @@ public class ChatService {
         }
 
         public static ChatResult of(String c, String m, boolean r) {
-            return new ChatResult(c, m, r);
+            return new ChatResult(c, m, r, java.util.Set.of());
         }
-    }
+        public static ChatResult of(String c, String m, boolean r, java.util.Set<String> e) {
+            return new ChatResult(c, m, r, e == null ? java.util.Set.of() : e);
+        }
+    } // ← record ChatResult 스코프 닫기 (필수)
 
 
     /* ───────────────────────────── DI ────────────────────────────── */
@@ -210,7 +213,9 @@ public class ChatService {
     private final SectionSpecGenerator sectionSpecGenerator;
     private final LengthVerifierService lengthVerifier;
     private final AnswerExpanderService answerExpander;
-
+    // ▼ Memory evidence I/O
+    private final com.example.lms.service.rag.handler.MemoryHandler memoryHandler;
+    private final com.example.lms.service.rag.handler.MemoryWriteInterceptor memoryWriteInterceptor;
 
 
     @Value("${rag.hybrid.top-k:50}") private int hybridTopK;
@@ -403,10 +408,18 @@ public class ChatService {
         List<String> sections = sectionSpecGenerator.generate(intent, /*domain*/"", vp.hint());
 
         // ── 1) 검색/융합: Self-Ask → HybridRetriever → Cross-Encoder Rerank ─
-        List<String> planned = smartQueryPlanner.plan(userQuery, /*assistantDraft*/ null, /*maxBranches*/ 2);
-        if (planned.isEmpty()) planned = List.of(userQuery);
+        // 0‑2) Retrieval 플래그
+        boolean useWeb = req.isUseWebSearch();
+        boolean useRag = req.isUseRag();
 
-        List<dev.langchain4j.rag.content.Content> fused = hybridRetriever.retrieveAll(planned, hybridTopK);
+        // 1) (옵션) 웹 검색 계획 및 실행
+        List<String> planned = List.of();
+        List<dev.langchain4j.rag.content.Content> fused = List.of();
+        if (useWeb) {
+            planned = smartQueryPlanner.plan(userQuery, /*assistantDraft*/ null, /*maxBranches*/ 2);
+            if (planned.isEmpty()) planned = List.of(userQuery);
+            fused = hybridRetriever.retrieveAll(planned, hybridTopK);
+        }
         Map<String, Set<String>> rules = qcPreprocessor.getInteractionRules(userQuery);
 
         int keepN = switch (Objects.toString(vp.hint(), "standard").toLowerCase(Locale.ROOT)) {
@@ -417,16 +430,28 @@ public class ChatService {
         };
 
         List<dev.langchain4j.rag.content.Content> topDocs =
-                reranker.rerank(userQuery, fused, keepN, rules);
+                (useWeb && !fused.isEmpty())
+                        ? reranker.rerank(userQuery, fused, keepN, rules)
+                        : List.of();
+
+        // 1‑b) (옵션) RAG(Vector) 조회
+        List<dev.langchain4j.rag.content.Content> vectorDocs =
+                useRag
+                        ? ragSvc.asContentRetriever(pineconeIndexName)
+                        .retrieve(dev.langchain4j.rag.query.Query.from(userQuery))
+                        : List.of();
+
+        // 1-c) 메모리 컨텍스트(항상 시도) — 전담 핸들러 사용
+        String memoryCtx = memoryHandler.loadForSession(req.getSessionId());
 
         // ── 2) 컨텍스트 생성(Verbosity-aware) ────────────────────────
         String unifiedCtx = contextOrchestrator.orchestrate(
                 userQuery,
-                ragSvc.asContentRetriever(pineconeIndexName)
-                        .retrieve(dev.langchain4j.rag.query.Query.from(userQuery)),
+                vectorDocs,
                 topDocs,
                 rules,
-                vp
+                vp,
+                memoryCtx
         );
 
         // ── 3) 모델 라우팅(상세도/리스크/의도) ───────────────────────
@@ -449,14 +474,21 @@ public class ChatService {
         // ── 5) 단일 호출 → 초안 ─────────────────────────────────────
         String draft = model.chat(msgs).aiMessage().text();
 
+        // 5‑b) (옵션) 컨텍스트+메모리 기반 검증
+        String verified = shouldVerify(unifiedCtx, req)
+                ? verifier.verify(userQuery, /*context*/ unifiedCtx, /*memory*/ memoryCtx, draft, "gpt-4o")
+                : draft;
+
         // ── 6) 길이 검증 → 조건부 1회 확장 ───────────────────────────
-        String out = draft;
+        String out = verified;
         if (lengthVerifier.isShort(out, vp.minWordCount())) {
             out = Optional.ofNullable(answerExpander.expandWithLc(out, vp, model)).orElse(out);
         }
 
         // ── 7) 후처리/강화/리턴 ──────────────────────────────────────
-        reinforce(sessionKey, userQuery, out);  // 기존 강화 로직 사용
+        // (항상 저장) – 인터셉터  +기존 강화 로직 병행 허용
+        try { memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5); } catch (Throwable ignore) {}
+        reinforce(sessionKey, userQuery, out);
         // ✅ 실제 모델명으로 보고 (실패 시 안전 폴백)
         String modelUsed;
         try {
@@ -464,7 +496,13 @@ public class ChatService {
         } catch (Exception e) {
             modelUsed = "lc:" + getModelName(model);
         }
-        return ChatResult.of(out, modelUsed, true);
+        // 증거 집합 정리
+        java.util.LinkedHashSet<String> evidence = new java.util.LinkedHashSet<>();
+        if (useWeb && !topDocs.isEmpty()) evidence.add("WEB");
+        if (useRag && !vectorDocs.isEmpty()) evidence.add("RAG");
+        if (memoryCtx != null && !memoryCtx.isBlank()) evidence.add("MEMORY");
+        boolean ragUsed = evidence.contains("WEB") || evidence.contains("RAG");
+        return ChatResult.of(out, modelUsed, ragUsed, java.util.Collections.unmodifiableSet(evidence));
     } // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 // ------------------------------------------------------------------------
 
@@ -482,6 +520,8 @@ public class ChatService {
         }
         return sb.toString();
     }
+
+    // (삭제) loadMemoryContext(...) — MemoryHandler로 일원화
 
 
 

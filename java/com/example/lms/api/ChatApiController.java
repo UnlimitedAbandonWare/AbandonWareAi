@@ -249,6 +249,9 @@ public class ChatApiController {
             String traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
             historyService.appendMessage(session.getId(), "system", TRACE_META_PREFIX + traceHtml);
         }
+        // (sync path) 증거셋 알림은 SSE 전용(sink)이라 여기서는 생략.
+        // 필요 시 ChatResponseDto에 evidence 필드를 추가해 응답 바디로 전달하세요.
+
         return new ChatResponseDto(result.content(), session.getId(), modelUsedFinal, result.ragUsed());
     }
     /** prefer real model id over LangChain wrapper labels */

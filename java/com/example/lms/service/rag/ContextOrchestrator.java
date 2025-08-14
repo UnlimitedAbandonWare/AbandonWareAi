@@ -42,13 +42,13 @@ public class ContextOrchestrator {
      * 여러 정보 소스를 바탕으로 최종 컨텍스트를 조율하고, 동적 규칙을 포함하여 프롬프트를 생성합니다.
      * (기존 호환 버전: Verbosity 미사용)
      */
+    /** Verbosity-aware + Memory-aware (메모리 단독도 허용) */
     public String orchestrate(String query,
                               List<Content> vectorResults,
                               List<Content> webResults,
                               Map<String, Set<String>> interactionRules) {
-        return orchestrate(query, vectorResults, webResults, interactionRules, null);
+        return orchestrate(query, vectorResults, webResults, interactionRules, null, null);
     }
-
     /**
      * Verbosity-aware 오케스트레이션
      * - Verbosity(deep/ultra)에 따라 상위 문서 캡 확장
@@ -59,6 +59,18 @@ public class ContextOrchestrator {
                               List<Content> webResults,
                               Map<String, Set<String>> interactionRules,
                               VerbosityProfile profile) {
+        return orchestrate(query, vectorResults, webResults, interactionRules, profile, null);
+    }
+
+    /**
+     * Verbosity-aware + Memory-aware 오케스트레이션 (메모리 단독도 허용)
+     */
+    public String orchestrate(String query,
+                              List<Content> vectorResults,
+                              List<Content> webResults,
+                              Map<String, Set<String>> interactionRules,
+                              VerbosityProfile profile,
+                              String memoryCtx) {
 
         List<Scored> pool = new ArrayList<>();
         boolean wantsFresh = query != null && TIMELY.matcher(query).find();
@@ -67,9 +79,26 @@ public class ContextOrchestrator {
         addAll(pool, vectorResults, wantsFresh, Source.VECTOR);
         addAll(pool, webResults, wantsFresh, Source.WEB);
 
-        if (pool.isEmpty()) {
-            return "정보 없음";
+        boolean hasMemory = memoryCtx != null && !memoryCtx.isBlank();
+        if (pool.isEmpty() && hasMemory) {
+            // ⚠️ 검색 결과가 전혀 없어도 메모리만으로 프롬프트를 생성한다.
+            PromptContext ctx = PromptContext.builder()
+                    .rag(List.of())
+                    .web(List.of())
+                    .memory(memoryCtx)
+                    .domain("GENERAL")
+                    .intent("GENERAL")
+                    .interactionRules(interactionRules == null ? Map.of() : interactionRules)
+                    .verbosityHint(profile == null ? null : profile.hint())
+                    .minWordCount(profile == null ? null : profile.minWordCount())
+                    .targetTokenBudgetOut(profile == null ? null : profile.targetTokenBudgetOut())
+                    .sectionSpec(profile == null ? null : profile.sections())
+                    .audience(profile == null ? null : profile.audience())
+                    .citationStyle(profile == null ? null : profile.citationStyle())
+                    .build();
+            return promptEngine.createPrompt(ctx);
         }
+        if (pool.isEmpty()) return "정보 없음";
 
         // 2. 텍스트 내용 기반으로 중복 제거
         LinkedHashMap<String, Scored> uniq = new LinkedHashMap<>();
@@ -94,7 +123,7 @@ public class ContextOrchestrator {
 
         // 4. 안전장치: 가장 높은 점수가 기준 미달이면 신뢰할 수 없는 정보로 판단하고 차단
         double topScore = uniq.values().stream().mapToDouble(Scored::score).max().orElse(0.0);
-        if (topScore < minTopScore) {
+        if (!hasMemory && topScore < minTopScore) {
             log.warn("[Orchestrator] Top score ({}) is below the minimum threshold ({}). Returning '정보 없음'.",
                     String.format("%.2f", topScore), minTopScore);
             return "정보 없음";
@@ -104,6 +133,7 @@ public class ContextOrchestrator {
         PromptContext ctx = PromptContext.builder()
                 .rag(finalDocs)
                 .web(List.of()) // 웹 결과는 통합되었으므로 비워 전달(기존 빌더 계약 유지)
+                .memory(memoryCtx) // ★ 메모리 증거 주입(있으면)
                 .domain("GENERAL")
                 .intent("GENERAL")
                 .interactionRules(interactionRules == null ? Map.of() : interactionRules)
