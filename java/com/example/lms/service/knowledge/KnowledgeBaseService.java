@@ -1,5 +1,6 @@
-package com.example.lms.service.knowledge;
+ package com.example.lms.service.knowledge;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -9,6 +10,15 @@ import java.util.Set;
  * 이 서비스는 RAG 파이프라인의 여러 단계에서 '진실의 원천(Source of Truth)' 역할을 수행합니다.
  */
 public interface KnowledgeBaseService {
+
+    /**
+     * 지식 통합 결과의 상태를 나타내는 열거형입니다.
+     * CREATED: 새 지식이 생성됨
+     * UPDATED: 기존 지식이 갱신됨
+     * SKIPPED: 조건 미충족으로 건너뜀
+     * REJECTED: 유효성 검증 실패로 거부됨
+     */
+    enum IntegrationStatus { CREATED, UPDATED, SKIPPED, REJECTED }
 
     /**
      * 특정 게임 도메인의 페어링 정책을 나타내는 레코드입니다. (하위 호환성 유지)
@@ -88,6 +98,7 @@ public interface KnowledgeBaseService {
                 .filter(n -> subject == null || !n.equalsIgnoreCase(subject))
                 .findFirst();
     }
+
     /**
      * ✨ 기본 도메인 추정(휴리스틱). 구현체가 따로 제공하지 않아도 바로 사용 가능.
      */
@@ -97,5 +108,28 @@ public interface KnowledgeBaseService {
         if (s.contains("학원") || s.contains("아카데미") || s.contains("academy")) return "EDU";
         if (s.contains("가격") || s.contains("스펙") || s.matches(".*\\b[a-z]{1,4}\\d+[a-z]*\\b.*")) return "PRODUCT";
         return "GENERAL";
+    }
+
+    /**
+     * ✨ [신규 추가] LLM 에이전트가 검증 및 합성한 지식을 시스템에 통합하는 API입니다.
+     * 이 메서드는 에이전트가 발견한 새로운 사실을 데이터베이스에 저장(쓰기)하는 역할을 합니다.
+     * 'default'로 구현되어 있어, 이 메서드를 구현하지 않은 기존 클래스에 영향을 주지 않고 안전하게 동작합니다.
+     *
+     * @param domain 지식이 속한 도메인 (예: "PRODUCT")
+     * @param entityName 지식의 주체 엔티티 (예: "Galaxy Z Fold 8")
+     * @param structuredDataJson 속성-값 쌍으로 구조화된 지식 데이터 (JSON 형식)
+     * @param sources 해당 지식의 출처 URL 목록
+     * @param confidenceScore 지식의 신뢰도 점수 (0.0 ~ 1.0)
+     * @return 통합 처리 결과 (CREATED, UPDATED, SKIPPED 등)
+     */
+    default IntegrationStatus integrateVerifiedKnowledge(
+            String domain,
+            String entityName,
+            String structuredDataJson,
+            List<String> sources,
+            double confidenceScore
+    ) {
+        // 기본 구현: 실제 DB 저장 로직이 없으면 'SKIPPED'를 반환하여 안전하게 통과시킵니다.
+        return IntegrationStatus.SKIPPED;
     }
 }

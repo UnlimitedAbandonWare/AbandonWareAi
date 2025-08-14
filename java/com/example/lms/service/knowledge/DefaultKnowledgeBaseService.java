@@ -1,14 +1,15 @@
-// src/main/java/com/example/lms/service/knowledge/DefaultKnowledgeBaseService.java
 package com.example.lms.service.knowledge;
 
 import com.example.lms.domain.knowledge.DomainKnowledge;
 import com.example.lms.repository.DomainKnowledgeRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
@@ -68,15 +69,6 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
         return candidates;
     }
 
-    private static Set<String> csvSet(String csv) {
-        if (csv == null || csv.isBlank()) return Set.of();
-        LinkedHashSet<String> out = new LinkedHashSet<>();
-        for (String t : csv.split("[,\\s]+")) {
-            if (!t.isBlank()) out.add(t.trim().toUpperCase(Locale.ROOT));
-        }
-        return out;
-    }
-
     @Override
     public Map<String, Set<String>> getAllRelationships(String domain, String entityName) {
         return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
@@ -90,10 +82,30 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
                                 Set<String> vals = csvSet(a.getAttributeValue());
                                 if (!vals.isEmpty()) map.put(key, vals);
                             });
-                    return map.isEmpty()
-                            ? Collections.<String, Set<String>>emptyMap()
-                            : Collections.unmodifiableMap(map);
+                    // 수정된 라인: 삼항 연산자 없이 바로 unmodifiableMap을 반환하여 타입 추론 오류 해결
+                    return Collections.unmodifiableMap(map);
                 })
                 .orElseGet(Collections::emptyMap);
+    }
+
+    private static Set<String> csvSet(String csv) {
+        if (csv == null || csv.isBlank()) return Set.of();
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String t : csv.split("[,\\s]+")) {
+            if (!t.isBlank()) out.add(t.trim().toUpperCase(Locale.ROOT));
+        }
+        return out;
+    }
+
+    /**
+     * [신규 재정의] 검증된 지식 통합 API의 구현체입니다.
+     * 현재는 실제 데이터베이스에 저장하지 않고, 통합 시도에 대한 로그만 기록합니다.
+     * 향후 DB 엔티티 구조가 확정되면 이 부분에 실제 영속화 로직이 구현될 것입니다.
+     */
+    @Override
+    public IntegrationStatus integrateVerifiedKnowledge(String domain, String entityName, String structuredDataJson, List<String> sources, double confidenceScore) {
+        log.info("[KB][INTEGRATE] domain={}, entity={}, conf={}, sources={} (persist=SKIPPED)",
+                domain, entityName, String.format("%.2f", confidenceScore), (sources == null ? 0 : sources.size()));
+        return IntegrationStatus.SKIPPED;
     }
 }
