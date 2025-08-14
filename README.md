@@ -1,228 +1,406 @@
 AbandonWare Hybrid RAG AI Chatbot Service: A Domain‑Agnostic Knowledge‑Driven Agent
-Introduction and Background
-1) 목표 패키지 계층 (Layered Architecture)
-com.example.lms
-├─ app                  # 부팅/진단/헬스 (애플리케이션 entry)
-├─ config               # 공통 설정(보안/캐시/빈/프로퍼티/웹)
-├─ api
-│  ├─ rest              # REST 컨트롤러 (JSON/SSE)
-│  ├─ mvc               # MVC/Thymeleaf 컨트롤러
-│  ├─ ws                # WebSocket/Netty 어댑터
-│  └─ dto               # 요청/응답 DTO
-├─ domain               # 도메인(엔티티/값객체/도메인서비스/정책/규칙)
-│  ├─ model             # 엔티티·값객체
-│  ├─ model.enums       # 열거형
-│  ├─ knowledge         # 도메인지식(VO/정책)
-│  └─ rule              # 규칙/정책(페어링/스코어링 등)
-├─ application          # 유스케이스/오케스트레이션/비즈 로직
-│  ├─ service           # 서비스(Facade/유스케이스)
-│  ├─ chat              # 채팅 파이프라인(히스토리/프롬프트/검증)
-│  ├─ rag               # RAG 체인(핸들러/검색/재랭크/오케스트라)
-│  ├─ verification      # 팩트/출처 검증
-│  ├─ translation       # 번역 유스케이스
-│  └─ strategy          # 전략/가중치/하이퍼파라미터
-├─ infrastructure       # 외부 어댑터(영속성/클라이언트/파일/검색/LLM)
-│  ├─ persistence       # JPA/저장소/메모리 저장체
-│  │  └─ repository     # Spring Data Repository
-│  ├─ llm               # LangChain4j/OpenAI/Gemini 연동
-│  ├─ search            # Naver 등 웹검색/크롤링
-│  ├─ messaging         # Netty Config 등(전송 스택 하부)
-│  ├─ storage           # 파일 스토리지
-│  └─ security          # 시큐리티 어댑터(UserDetails 등)
-├─ prompt               # PromptBuilder/Context/SystemPrompt
-├─ util                 # 범용 유틸/헬퍼/메타/토큰
-└─ support              # 인터셉터/스코프/공통 가드
-
-2) 파일 이동 규칙 (원본 → 목표 패키지)
-A. app (부팅/헬스)
-
-LmsApplication.java, boot/StartupVersionPurityCheck.java, boot/VersionPurityHealthIndicator.java
-→ app
-
-B. config (설정/프로퍼티/웹 전반)
-
-config/*.java 전부 (예: AppSecurityConfig, CacheConfig, LangChainConfig, OpenAiConfig,
-OpenAiProperties, GoogleTranslateProperties, MatrixConfig, MemoryConfig,
-QueryTransformerConfig, RestTemplateConfig, RetrieverChainConfig,
-SchedulingConfig, SessionConfig, WebClientConfig, WebConfig, WebMvcConfig)
-→ config
-
-KakaoProperties.java → config (외부 프로퍼티 바인딩)
-
-C. api (어댑터 계층)
-REST
-
-api/*.java 중 API/웹훅/관리 REST:
-AdminController, ChatApiController, FeedbackController, FileUploadController,
-KakaoAdminController, KakaoOAuthController, KakaoTriggerController,
-KakaoUuidController, KakaoWebhookController, ModelSettingsController,
-PkiUploadPageController, PkiValidationController, SettingsController,
-TranslateController
-→ api.rest
-
-MVC (Thymeleaf)
-
-web/*.java 내 페이지/폼 컨트롤러:
-AssignmentController, AttendanceController, AuthController, CourseController,
-EnrollmentController, ExamController, NoticeController, PageController,
-ProfessorController, QuestionController, RegistrationController,
-StudentController, UploadController
-→ api.mvc
-
-WS/Netty
-
-netty/*.java : ChatChannelInitializer, ChatWebSocketHandler, NettyServerConfig
-→ api.ws (구현종속 설정은 infrastructure.messaging으로 내릴 수 있음.
-네티 서버 설정만 infrastructure.messaging, 핸들러/초기화는 api.ws로 두는 분리도 OK)
-
-DTO
-
-dto/*.java 전부 → api.dto
-(예: ChatRequestDto, ChatResponseDto, ChatStreamEvent, MessageDto,
-ModelInfoDto, FeedbackDto, FineTuningOptionsDto, KakaoFormDto, KakaoFriends,
-AssignmentDTO, GoogleTranslateDto, LoginForm, SignupForm…)
-
-D. domain (모델/정책)
-엔티티/값객체
-
-scoring/*.java 내 도메인 모델성 클래스 (ex. Administrator가 진짜 사용자/권한 모델이면 domain.model)
-
-knowledge/*.java 중 순수 값/개념: DomainKnowledge, EntityAttribute → domain.knowledge
-
-domain 루트의 모델들 전부:
-Assignment, Attendance, Category, ChatMessage, ChatSession, Choice,
-Comment, ConfigurationSetting, Course, Enrollment, Exam, Grade,
-Hyperparameter, Notice, NoticeType, Professor, Question, QuestionType,
-Rental, Rule, Setting, Status, Student, Submission, SubmissionStatus,
-TrainingJob, TranslationRule, TranslationSample, UploadToken, User
-→ domain.model
-
-Enum
-
-domain/enums/*.java : RulePhase, SourceCredibility, TranslationRoute
-→ domain.model.enums
-
-도메인 정책/규칙
-
-페어링/룰/스코어링의 도메인 규칙에 해당하는 것:
-policy/PairingPolicy, scoring/*(룰/관계/요소제약 등 도메인 규칙성)
-→ domain.rule (or domain.policy / domain.scoring로 세분)
-
-E. application (유스케이스/체인/전략)
-서비스(유스케이스 Facade)
-
-service/*.java 대부분 (쓰임새 기준 유스케이스):
-AdminService, AssignmentService, AttendanceService, ChatService,
-CourseService, EnrollmentService, ExamService, KakaoFriendService,
-KakaoOAuthService, ModelSettingsService, NoticeService, NoticeServiceImpl,
-ProfessorService, QuestionService, SettingsService, StudentService,
-SubmissionService, SubmissionServiceImpl, TrainingService,
-TranslationService, TranslationTrainingService, UploadTokenService,
-UserService
-→ application.service
-
-세부 모듈화:
-
-번역: translation/* → application.translation
-
-검증: verification/*(ClaimVerifierService, SourceAnalyzerService, …) → application.verification
-
-전략/튜닝: strategy/*, tuning/*, ml/*(Bandit/Performance) → application.strategy
-
-질의 변환: DefaultQueryTransformer, QueryTransformer → application.chat (또는 application.service.query)
-
-히스토리: ChatHistoryService, ChatHistoryServiceImpl, DefaultChatHistoryService
-→ 인터페이스는 application.chat, 구현은 영속 의존 시 infrastructure.persistence로 이동 권장
-
-RAG 체인
-
-rag/* :
-
-체인/핸들러: handler/*(SelfAskHandler, AnalyzeHandler, WebSearchHandler, VectorDbHandler,
-DefaultRetrievalHandlerChain, RetrievalHandler, AbstractRetrievalHandler,
-PairingGuardHandler, EvidenceRepairHandler, MemoryHandler, MemoryWriteInterceptor)
-
-검색/퓨전: search/*(EnhancedSearchService, WebSearchRetriever, TavilyWebSearchRetriever,
-SelfAskWebSearchRetriever, AnalyzeWebSearchRetriever, HybridRetriever, SearchContext)
-
-재랭크: rerank/*(CrossEncoderReranker, EmbeddingCrossEncoderReranker,
-EmbeddingModelCrossEncoderReranker, DefaultLightWeightRanker, LightWeightRanker,
-ElementConstraintScorer, RelationshipRuleScorer, SimpleReranker)
-
-오케스트라/분류/게이트: ContextOrchestrator, ModelBasedQueryComplexityClassifier,
-QueryComplexityClassifier, QueryComplexityGate, RelevanceScoringService,
-Reinforcement*, SnippetPruner, SourceEntropyPolicy,
-SelfAskPlanner, ScoredContent
-→ 모두 application.rag 하위(handler, search, rerank, orchestrator, policy)로 정리
-
-프리/가드/프리프로세서:
-pre/*, guard/*, detector/* → application.rag.preprocess / application.rag.guard
-
-검증/품질
-
-verification/* : FactVerifierService, FactStatusClassifier, FactVerificationStatus
-→ application.verification
-
-번역/NER/불확실성/보정
-
-ner/*, correction/*, disambiguation/*, fallback/*
-→ application.translation (세부: ner, correction, disambiguation, fallback)
-
-F. infrastructure (외부/영속/클라이언트)
-Repository
-
-repository/*.java 전부 → infrastructure.persistence.repository
-(Spring Data 인터페이스이지만, JPA 종속이므로 infra로 내림이 깔끔함)
-
-메모리/히스토리 구현체
-
-memory/PersistentChatMemory.java → infrastructure.persistence.memory
-
-외부 클라이언트/LLM
-
-client/*.java : OpenAiClient, GeminiClient, GTranslateClient, EmbeddingClient, OpenAiModelDto
-→ infrastructure.llm (번역 API는 infrastructure.search 또는 infrastructure.external.translate)
-
-llm/*.java : LangChain4jLlmClient, LlmClient, DynamicChatModelFactory, GPTService, LangChainChatService
-→ infrastructure.llm
-(ModelRouter, ModelInfo는 라우팅 정책이면 application.chat로,
-단순 외부모델 매핑/조회면 infrastructure.llm 유지)
-
-검색/크롤링
-
-NaverSearchService, PageContentScraper, GenericDocClassifier
-→ infrastructure.search
-
-파일/스토리지
-
-storage/* : FileStorageService, LocalFileStorageService → infrastructure.storage
-
-시큐리티 어댑터
-
-security/CustomUserDetailsService → infrastructure.security
-
-메시징/네트워킹
-
-netty/NettyServerConfig → infrastructure.messaging
-(WS 핸들러/초기화는 api.ws, 설정은 infra로 분리 추천)
-
-G. prompt (프롬프트 파이프라인)
-
-prompt/*.java : PromptBuilder, PromptContext, PromptEngine, DefaultPromptEngine, SystemPrompt
-→ prompt
-
-H. support / common / util
-
-common/* : ChatSessionScope, ReqLogInterceptor → support
-
-guard/* 중 공통 위생/정화: AnswerSanitizer, GenshinRecommendationSanitizer, EvidenceGate, MemoryAsEvidenceAdapter
-→ 정책 성격에 따라 application.rag.guard 또는 support.guard로 배치
-
-util/* : FileStorage, HashUtil, MLCalibrationUtil, MetadataUtils,
-ProductAliasNormalizer, RelevanceConfidenceEvaluator, RelevanceScorer,
-SoftmaxUtil, StreamTokenUtil, StreamUtils, TextSimilarityUtil,
-TokenCounter, TraceMetaUtil, MetaMarkers
-→ util
+src/main/java/com/example/lms
+├─ app/
+│  ├─ LmsApplication.java
+│  ├─ StartupVersionPurityCheck.java
+│  ├─ VersionPurityHealthIndicator.java
+│  └─ init/
+│     └─ AdminInitializer.java
+│
+├─ config/
+│  ├─ AppSecurityConfig.java
+│  ├─ CacheConfig.java
+│  ├─ GoogleTranslateProperties.java
+│  ├─ LangChainConfig.java
+│  ├─ MatrixConfig.java
+│  ├─ MemoryConfig.java
+│  ├─ OpenAiConfig.java
+│  ├─ OpenAiProperties.java
+│  ├─ QueryTransformerConfig.java
+│  ├─ RestTemplateConfig.java
+│  ├─ RetrieverChainConfig.java
+│  ├─ SchedulingConfig.java
+│  ├─ SessionConfig.java
+│  ├─ WebClientConfig.java
+│  ├─ WebConfig.java
+│  └─ WebMvcConfig.java
+│
+├─ api/
+│  ├─ rest/
+│  │  ├─ AdminController.java
+│  │  ├─ ChatApiController.java
+│  │  ├─ FeedbackController.java
+│  │  ├─ FileUploadController.java
+│  │  ├─ KakaoAdminController.java
+│  │  ├─ KakaoOAuthController.java
+│  │  ├─ KakaoTriggerController.java
+│  │  ├─ KakaoUuidController.java
+│  │  ├─ KakaoWebhookController.java
+│  │  ├─ ModelSettingsController.java
+│  │  ├─ PkiUploadPageController.java
+│  │  ├─ PkiValidationController.java
+│  │  ├─ SettingsController.java
+│  │  ├─ TranslateController.java
+│  │  ├─ AdaptiveTranslateController.java
+│  │  ├─ RentalController.java
+│  │  ├─ TrainingController.java
+│  │  └─ TranslationController.java
+│  ├─ mvc/
+│  │  ├─ AssignmentController.java
+│  │  ├─ AttendanceController.java
+│  │  ├─ AuthController.java
+│  │  ├─ CourseController.java
+│  │  ├─ EnrollmentController.java
+│  │  ├─ ExamController.java
+│  │  ├─ NoticeController.java
+│  │  ├─ PageController.java
+│  │  ├─ ProfessorController.java
+│  │  ├─ QuestionController.java
+│  │  ├─ RegistrationController.java
+│  │  ├─ StudentController.java
+│  │  └─ UploadController.java
+│  ├─ ws/
+│  │  ├─ ChatChannelInitializer.java
+│  │  └─ ChatWebSocketHandler.java
+│  └─ dto/
+│     ├─ AssignmentDTO.java
+│     ├─ ChatMessageDto.java
+│     ├─ ChatRequestDto.java
+│     ├─ ChatResponse.java
+│     ├─ ChatResponseDto.java
+│     ├─ ChatStreamEvent.java
+│     ├─ FeedbackDto.java
+│     ├─ FineTuningOptionsDto.java
+│     ├─ KakaoFormDto.java
+│     ├─ KakaoFriends.java
+│     ├─ MessageDto.java
+│     ├─ ModelInfoDto.java
+│     └─ payload/
+│        └─ KakaoWebhookPayload.java
+│
+├─ domain/
+│  ├─ model/
+│  │  ├─ Administrator.java
+│  │  ├─ Assignment.java
+│  │  ├─ Attendance.java
+│  │  ├─ Category.java
+│  │  ├─ ChatMessage.java
+│  │  ├─ ChatSession.java
+│  │  ├─ Choice.java
+│  │  ├─ Comment.java
+│  │  ├─ ConfigurationSetting.java
+│  │  ├─ Course.java
+│  │  ├─ Enrollment.java
+│  │  ├─ Exam.java
+│  │  ├─ Grade.java
+│  │  ├─ Hyperparameter.java
+│  │  ├─ Notice.java
+│  │  ├─ NoticeType.java
+│  │  ├─ Professor.java
+│  │  ├─ Question.java
+│  │  ├─ QuestionType.java
+│  │  ├─ Rental.java
+│  │  ├─ Rule.java
+│  │  ├─ Setting.java
+│  │  ├─ Status.java
+│  │  ├─ Student.java
+│  │  ├─ Submission.java
+│  │  ├─ SubmissionStatus.java
+│  │  ├─ TrainingJob.java
+│  │  ├─ TranslationRule.java
+│  │  ├─ TranslationSample.java
+│  │  ├─ UploadToken.java
+│  │  ├─ User.java
+│  │  ├─ ApiKey.java
+│  │  ├─ ApiKeyUsage.java
+│  │  ├─ AppConfig.java
+│  │  ├─ CorrectedSample.java
+│  │  ├─ CurrentModel.java
+│  │  ├─ ModelEntity.java
+│  │  ├─ TranslationMemory.java
+│  │  └─ converter/
+│  │     └─ MemoryStatusConverter.java
+│  ├─ model/enums/
+│  │  ├─ RulePhase.java
+│  │  ├─ SourceCredibility.java
+│  │  └─ TranslationRoute.java
+│  ├─ knowledge/
+│  │  ├─ DomainKnowledge.java
+│  │  ├─ EntityAttribute.java
+│  │  └─ genshin/
+│  │     ├─ ElementLexicon.java
+│  │     ├─ GenshinElement.java
+│  │     └─ GenshinElementLexicon.java
+│  └─ rule/
+│     └─ PairingPolicy.java
+│
+├─ application/
+│  ├─ service/
+│  │  ├─ AdminService.java
+│  │  ├─ AdminSessionService.java
+│  │  ├─ AdvancedTranslationService.java
+│  │  ├─ AssignmentQueryService.java
+│  │  ├─ AssignmentService.java
+│  │  ├─ AttendanceService.java
+│  │  ├─ CommentService.java
+│  │  ├─ CourseService.java
+│  │  ├─ EnrollmentService.java
+│  │  ├─ ExamService.java
+│  │  ├─ ModelSettingsService.java
+│  │  ├─ NoticeService.java
+│  │  ├─ NoticeServiceImpl.java
+│  │  ├─ NotificationService.java
+│  │  ├─ ProfessorService.java
+│  │  ├─ QuestionService.java
+│  │  ├─ SettingsService.java
+│  │  ├─ StudentService.java
+│  │  ├─ SubmissionQueryService.java
+│  │  ├─ SubmissionQueryServiceImpl.java
+│  │  ├─ SubmissionService.java
+│  │  ├─ SubmissionServiceImpl.java
+│  │  ├─ TrainingService.java
+│  │  ├─ TranslationService.java
+│  │  ├─ UploadTokenService.java
+│  │  └─ UserService.java
+│  ├─ chat/
+│  │  ├─ ChatService.java
+│  │  ├─ ChatHistoryService.java
+│  │  ├─ ChatHistoryServiceImpl.java
+│  │  ├─ DefaultChatHistoryService.java
+│  │  ├─ PromptService.java
+│  │  ├─ DefaultQueryTransformer.java
+│  │  ├─ transform/
+│  │  │  ├─ MatrixTransformer.java
+│  │  │  ├─ ParsedQuery.java
+│  │  │  └─ QueryTransformer.java
+│  │  ├─ answer/
+│  │  │  ├─ AnswerExpanderService.java
+│  │  │  └─ LengthVerifierService.java
+│  │  ├─ disambiguation/
+│  │  │  ├─ DisambiguationResult.java
+│  │  │  ├─ NonGameEntityHeuristics.java
+│  │  │  └─ QueryDisambiguationService.java
+│  │  ├─ fallback/
+│  │  │  ├─ FallbackHeuristics.java
+│  │  │  ├─ FallbackResult.java
+│  │  │  └─ SmartFallbackService.java
+│  │  └─ verbosity/
+│  │     ├─ SectionSpecGenerator.java
+│  │     ├─ VerbosityDetector.java
+│  │     └─ VerbosityProfile.java
+│  ├─ translation/
+│  │  ├─ AdaptiveTranslationService.java
+│  │  ├─ TranslationTrainingService.java
+│  │  ├─ impl/
+│  │  │  └─ TranslationTrainingServiceImpl.java
+│  │  ├─ ner/
+│  │  │  ├─ LLMNamedEntityExtractor.java
+│  │  │  └─ NamedEntityExtractor.java
+│  │  └─ correction/
+│  │     ├─ DefaultDomainTermDictionary.java
+│  │     ├─ DefaultQueryCorrectionService.java
+│  │     ├─ DomainTermDictionary.java
+│  │     ├─ InMemoryDomainTermDictionary.java
+│  │     ├─ LLMQueryCorrectionService.java
+│  │     └─ QueryCorrectionService.java
+│  ├─ verification/
+│  │  ├─ ClaimVerifierService.java
+│  │  ├─ FactStatusClassifier.java
+│  │  ├─ FactVerificationStatus.java
+│  │  ├─ FactVerifierService.java
+│  │  └─ SourceAnalyzerService.java
+│  ├─ rag/
+│  │  ├─ LangChainRAGService.java
+│  │  ├─ HybridRetriever.java
+│  │  ├─ SearchContext.java
+│  │  ├─ ScoredContent.java
+│  │  ├─ policy/
+│  │  │  ├─ AuthorityScorer.java
+│  │  │  ├─ SourceEntropyPolicy.java
+│  │  │  └─ RuleEngine.java
+│  │  ├─ handler/
+│  │  │  ├─ AbstractRetrievalHandler.java
+│  │  │  ├─ AnalyzeHandler.java
+│  │  │  ├─ DefaultRetrievalHandlerChain.java
+│  │  │  ├─ EvidenceRepairHandler.java
+│  │  │  ├─ MemoryHandler.java
+│  │  │  ├─ MemoryWriteInterceptor.java
+│  │  │  ├─ PairingGuardHandler.java
+│  │  │  ├─ RetrievalHandler.java
+│  │  │  ├─ SelfAskHandler.java
+│  │  │  ├─ VectorDbHandler.java
+│  │  │  └─ WebSearchHandler.java
+│  │  ├─ search/
+│  │  │  ├─ AnalyzeWebSearchRetriever.java
+│  │  │  ├─ EnhancedSearchService.java
+│  │  │  ├─ SelfAskWebSearchRetriever.java
+│  │  │  ├─ TavilyWebSearchRetriever.java
+│  │  │  └─ WebSearchRetriever.java
+│  │  ├─ rerank/
+│  │  │  ├─ CrossEncoderReranker.java
+│  │  │  ├─ DefaultLightWeightRanker.java
+│  │  │  ├─ ElementConstraintScorer.java
+│  │  │  ├─ EmbeddingCrossEncoderReranker.java
+│  │  │  ├─ EmbeddingModelCrossEncoderReranker.java
+│  │  │  ├─ LightWeightRanker.java
+│  │  │  ├─ NoopCrossEncoderReranker.java
+│  │  │  └─ SimpleReranker.java
+│  │  ├─ orchestrator/
+│  │  │  ├─ ContextOrchestrator.java
+│  │  │  ├─ ModelBasedQueryComplexityClassifier.java
+│  │  │  ├─ QueryComplexityClassifier.java
+│  │  │  └─ QueryComplexityGate.java
+│  │  ├─ preprocess/
+│  │  │  ├─ CognitiveState.java
+│  │  │  ├─ CognitiveStateExtractor.java
+│  │  │  ├─ CompositeQueryContextPreprocessor.java
+│  │  │  ├─ DefaultGuardrailQueryPreprocessor.java
+│  │  │  ├─ DefaultQueryContextPreprocessor.java
+│  │  │  ├─ GuardrailQueryPreprocessor.java
+│  │  │  └─ QueryContextPreprocessor.java
+│  │  ├─ guard/
+│  │  │  ├─ EvidenceGate.java
+│  │  │  └─ MemoryAsEvidenceAdapter.java
+│  │  ├─ energy/
+│  │  │  ├─ ContextEnergyModel.java
+│  │  │  └─ ContradictionScorer.java
+│  │  ├─ filter/
+│  │  │  └─ GenericDocClassifier.java
+│  │  ├─ fusion/
+│  │  │  └─ ReciprocalRankFuser.java
+│  │  ├─ subject/
+│  │  │  └─ SubjectResolver.java
+│  │  └─ quality/
+│  │     └─ AnswerQualityEvaluator.java
+│  ├─ strategy/
+│  │  ├─ StrategyDecisionTracker.java
+│  │  ├─ StrategyHyperparams.java
+│  │  ├─ StrategySelectorService.java
+│  │  ├─ tuning/
+│  │  │  ├─ DynamicHyperparameterTuner.java
+│  │  │  └─ StrategyWeightTuner.java
+│  │  ├─ ml/
+│  │  │  ├─ BanditSelector.java
+│  │  │  └─ PerformanceMetricService.java
+│  │  ├─ reinforcement/
+│  │  │  ├─ ReinforcementQueue.java
+│  │  │  ├─ ReinforcementTask.java
+│  │  │  ├─ RewardHyperparameterTuner.java
+│  │  │  └─ RewardScoringEngine.java
+│  │  └─ scoring/
+│  │     ├─ AdaptiveScoringService.java
+│  │     └─ RelevanceScoringService.java
+│  └─ query/
+│     ├─ QueryAugmentationService.java
+│     └─ EmbeddingStoreManager.java
+│
+├─ infrastructure/
+│  ├─ persistence/
+│  │  ├─ repository/
+│  │  │  ├─ AdminRepository.java
+│  │  │  ├─ AdministratorRepository.java
+│  │  │  ├─ ApiKeyRepository.java
+│  │  │  ├─ ApiKeyUsageRepository.java
+│  │  │  ├─ AppConfigRepository.java
+│  │  │  ├─ AssignmentRepository.java
+│  │  │  ├─ AttendanceRepository.java
+│  │  │  ├─ ChatMessageRepository.java
+│  │  │  ├─ ChatSessionRepository.java
+│  │  │  ├─ ChoiceRepository.java
+│  │  │  ├─ CommentRepository.java
+│  │  │  ├─ ConfigRepository.java
+│  │  │  ├─ ConfigurationSettingRepository.java
+│  │  │  ├─ CorrectedSampleRepository.java
+│  │  │  ├─ CourseRepository.java
+│  │  │  ├─ CurrentModelRepository.java
+│  │  │  ├─ DomainKnowledgeRepository.java
+│  │  │  ├─ EnrollmentRepository.java
+│  │  │  ├─ ExamRepository.java
+│  │  │  ├─ GradeRepository.java
+│  │  │  ├─ HyperparameterRepository.java
+│  │  │  ├─ MemoryRepository.java
+│  │  │  ├─ ModelEntityRepository.java
+│  │  │  ├─ ModelInfoRepository.java
+│  │  │  ├─ ModelRepository.java
+│  │  │  ├─ NoticeRepository.java
+│  │  │  ├─ ProfessorRepository.java
+│  │  │  ├─ QuestionRepository.java
+│  │  │  ├─ RentalRepository.java
+│  │  │  ├─ RuleRepository.java
+│  │  │  ├─ SampleRepository.java
+│  │  │  ├─ SettingRepository.java
+│  │  │  ├─ StudentRepository.java
+│  │  │  ├─ SubmissionRepository.java
+│  │  │  ├─ SynergyStatRepository.java
+│  │  │  ├─ TrainingJobRepository.java
+│  │  │  ├─ TrainingSampleRepository.java
+│  │  │  ├─ TranslationMemoryRepository.java
+│  │  │  └─ UploadTokenRepository.java
+│  │  ├─ memory/
+│  │  │  └─ PersistentChatMemory.java
+│  │  └─ projection/
+│  │     └─ UuidsProjection.java
+│  ├─ llm/
+│  │  ├─ LlmClient.java
+│  │  ├─ LangChain4jLlmClient.java
+│  │  ├─ DynamicChatModelFactory.java
+│  │  ├─ GPTService.java
+│  │  ├─ LangChainChatService.java
+│  │  ├─ client/
+│  │  │  ├─ EmbeddingClient.java
+│  │  │  ├─ GTranslateClient.java
+│  │  │  ├─ GeminiClient.java
+│  │  │  └─ OpenAiClient.java
+│  │  └─ model/
+│  │     ├─ ModelInfo.java
+│  │     ├─ OpenAiModelDto.java
+│  │     └─ routing/
+│  │        └─ ModelRouter.java
+│  ├─ search/
+│  │  ├─ NaverSearchService.java
+│  │  └─ extract/
+│  │     └─ PageContentScraper.java
+│  ├─ messaging/
+│  │  └─ NettyServerConfig.java
+│  ├─ storage/
+│  │  ├─ FileStorageService.java
+│  │  └─ LocalFileStorageService.java
+│  ├─ security/
+│  │  ├─ CustomUserDetailsService.java
+│  │  ├─ ApiKeyManager.java
+│  │  └─ AdminAuthInterceptor.java
+│  └─ external/
+│     └─ kakao/
+│        ├─ KakaoMessageService.java
+│        └─ KakaoOAuthServiceImpl.java
+│
+├─ prompt/
+│  ├─ DefaultPromptEngine.java
+│  ├─ PromptBuilder.java
+│  ├─ PromptContext.java
+│  ├─ PromptEngine.java
+│  └─ SystemPrompt.java
+│
+├─ support/
+│  ├─ scope/
+│  │  └─ ChatSessionScope.java
+│  └─ web/
+│     └─ ReqLogInterceptor.java
+│
+└─ util/
+   ├─ FileStorage.java
+   ├─ HashUtil.java
+   ├─ MLCalibrationUtil.java
+   ├─ MetadataUtils.java
+   ├─ ProductAliasNormalizer.java
+   ├─ RelevanceConfidenceEvaluator.java
+   ├─ RelevanceScorer.java
+   ├─ SoftmaxUtil.java
+   ├─ StreamTokenUtil.java
+   ├─ StreamUtils.java
+   ├─ TextSimilarityUtil.java
+   ├─ TokenCounter.java
+   └─ TraceMetaUtil.java
 
 I. resources (정적/템플릿/설정)
 src/main/resources
