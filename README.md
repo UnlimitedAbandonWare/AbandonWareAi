@@ -402,6 +402,7 @@ src/main/java/com/example/lms
    ├─ TokenCounter.java
    └─ TraceMetaUtil.java
 
+
 I. resources (정적/템플릿/설정)
 src/main/resources
 ├─ static/
