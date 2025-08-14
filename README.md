@@ -1049,7 +1049,273 @@ Here are partial, git-style patch hunks you can apply to README.md to incorporat
 +Verbosity Policy Tests:
 +* Issue queries containing “상세히/깊게/ultra” signals and confirm: (a) `ModelRouter` selects the MoE model, (b) `ContextOrchestrator` raises document caps (14/18), and (c) answers meet minimum word counts or trigger a single expansion pass.
 +* For `brief`, verify that smaller caps/outputs are enforced and no post-expansion occurs.
+Got it, (AbandonWare). Here’s a code-free, surgical plan you can hand to your future self (or a reviewer) to implement in small PRs. It’s organized by phases, calls out exact files/packages to touch or add, and reuses what’s already in your repo.
 
+Phase 0 — Stop Rule & Build Hygiene (must pass before anything else)
+
+0.1 Classpath purity (LangChain4j 1.0.1 only)
+
+Keep/finish: src/main/java/com/example/lms/boot/StartupVersionPurityCheck.java
+
+Action: On mismatch (0.2.x vs 1.0.x) fail fast and dump offending artifacts.
+No downstream work proceeds until this is green.
+
+0.2 Local boot sanity
+
+If you use Spring Cloud Config by default: set local override spring.cloud.config.enabled=false (profile local) to stop http://localhost:8888/application/default noise during bootRun.
+
+Phase 1 — Model Truth & Routing (fix the “always Diluc / wrong header” axis)
+
+1.1 Precise model reporting
+
+Modify: src/main/java/com/example/lms/api/ChatApiController.java
+Source of truth for X-Model-Used = DTO value only (no wrapper/simpleName leaks).
+
+Modify: src/main/java/com/example/lms/service/ChatService.java
+Ensure there is one return path that sets modelUsed before any return/emit. (Your “unreachable statement @462” is from a return/throw above; collapse branches.)
+
+Modify: src/main/java/com/example/lms/model/ModelRouter.java
+Add a resolveModelName(ChatModel) that asks the factory for the effective model id (reuse your DynamicChatModelFactory).
+
+1.2 Intent+Verbosity → MOE selection
+
+Modify: ModelRouter to route PAIRING/RECOMMENDATION with verbosity ∈ {deep, ultra} to moe (e.g., gpt-4o, low temp).
+
+Reuse: existing DynamicChatModelFactory knobs (temperature/top-p/maxtokens) to enforce low-variance on high-stakes intents.
+
+Config: keep keys you already drafted (openai.model.moe, verbosity token budgets) in application.yml.
+
+1.3 “No string concat in ChatService”
+
+Audit/Modify: ChatService — remove any inline prompt concatenation; all prompts must go through PromptBuilder.build(PromptContext).
+
+Phase 2 — Prompt & Context Contract (make the router + handlers predictable)
+
+2.1 PromptContext contract expansion
+
+Modify: src/main/java/com/example/lms/prompt/PromptContext.java
+Keep your fields for: verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience, citationStyle, plus subject, protectedTerms, lastSources.
+
+2.2 Central PromptBuilder policy
+
+Modify: src/main/java/com/example/lms/prompt/PromptBuilder.java
+
+Inject anchor lines (subject, protectedTerms) and the conservative mode when evidence is weak.
+
+Enforce minimum words for deep|ultra; one optional post-expansion hop only if short.
+
+2.3 Query hygiene & intent
+
+Modify: service.rag.pre.GuardrailQueryPreprocessor and/or QueryContextPreprocessor
+
+Detect PAIRING beyond strict keywords (“잘 어울리”, “시너지”) and flag follow-ups (지시대명사형).
+
+Inject protected terms from KB or prior subject into PromptContext.
+
+Phase 3 — Retrieval Chain (respect handler order; add two smart links)
+
+3.1 Chain of Responsibility is the contract
+
+Verify/Modify: HybridRetriever wiring order is exactly:
+SelfAskHandler → AnalyzeHandler(Query Hygiene) → WebHandler → VectorDbHandler.
+Failures return partials; nothing throws through the chain.
+
+3.2 New handlers (no code here, just plan)
+
+Add: service.rag.handler.MemoryHandler
+Purpose: inject recent verified session snippets up front (anchor the subject).
+
+Add: service.rag.handler.EvidenceRepairHandler
+Purpose: if evidence is thin, do one anchored re-search (subject + domain-preferred sites).
+
+Wire: Put MemoryHandler at the front, EvidenceRepairHandler at the tail of the chain in your @Configuration that assembles handlers.
+
+3.3 Fusion stays simple and proven
+
+Reuse: your RRF/Borda fusion & AuthorityScorer; feed them the augmented candidate pools.
+
+Phase 4 — Knowledge Base First (de-hardcode domain rules)
+
+4.1 Entities & repos (if not already merged)
+
+Add: domain/DomainKnowledge, domain/EntityAttribute (JPA)
+
+Add: repo/DomainKnowledgeRepository, repo/EntityAttributeRepository
+
+4.2 KB service abstraction
+
+Add: service.knowledge.KnowledgeBaseService (+ DefaultKnowledgeBaseService)
+Methods you’ll call from elsewhere:
+
+Optional<String> getAttribute(domain, entity, key)
+
+Map<String, Set<String>> getInteractionRules(domain, entity)
+
+List<String> getAllEntityNames(domain)
+
+4.3 Subject resolution
+
+Add/Modify: service.rag.subject.SubjectResolver to use KB lists and heuristics (longest match; domain hint).
+Feed subject back into PromptContext and preferred site filters.
+
+Phase 5 — Reranking that learns (and stops “Diluc drift”)
+
+5.1 Relationship rules instead of hard-coded element lists
+
+Add: service.rag.rank.RelationshipRuleScorer
+Uses KB interactionRules to boost/penalize candidate texts.
+
+5.2 Adaptive synergy
+
+Keep/finish: SynergyStat + AdaptiveScoringService
+
+Integrate inside EmbeddingModelCrossEncoderReranker (additive or small multiplicative).
+
+Fix earlier compile warnings: ensure there is one @Component on each reranker class; add missing logger field (@Slf4j or Logger).
+
+5.3 Authority weighting
+
+Reuse: AuthorityScorer with your curated domain weights (e.g., namu.wiki, hoyolab.com > generic blogs).
+Make sure WebHandler passes source hostnames to rankers.
+
+Phase 6 — Hallucination suppression (multi-layer, soft-fail)
+
+6.1 Evidence gate
+
+Add: service.rag.guard.EvidenceGate
+Configurable min evidence; treat follow-ups more leniently.
+
+6.2 Claims verification
+
+Add: service.verification.ClaimVerifierService
+Extract claims from the draft and prune unsupported lines.
+
+6.3 FactVerifierService ordering
+
+Modify: service/FactVerifierService to run:
+EvidenceGate → (if weak: soft-fail path) → ClaimVerifierService → AnswerSanitizers.
+Soft-fail means filter + conservative output, not hard “정보 없음” unless empty.
+
+6.4 Sanitizers
+
+Keep/extend: GenshinRecommendationSanitizer (rename to a generic policy chain if needed) and register in order before style polishing.
+
+Phase 7 — Controller/Service glue & compile breakages
+
+7.1 Unreachable statement @ ChatService:462
+
+Refactor that method to a single exit (collect modelUsed, ragUsed, result) then return/emit once.
+Also ensure contextOrchestrator is injected (you previously missed the field).
+
+7.2 Logging & annotations
+
+Fix: classes complaining about log missing => add @Slf4j or a private static final Logger.
+
+Fix: “Component is not a repeatable annotation type” => remove duplicate @Component occurrences; only one stereotype per class.
+
+7.3 SSE & headers
+
+Modify: in ChatApiController SSE endpoints, always include final sse(done) with accurate modelUsed and ragUsed.
+
+Phase 8 — Config keys (you already drafted; just wire them)
+
+8.1 application.yml (or properties)
+
+abandonware.answer.detail.min-words.{brief,standard,deep,ultra}
+
+abandonware.answer.token-out.{...}
+
+orchestrator.max-docs{.,.deep,.ultra}
+
+reranker.keep-top-n.{...}
+
+openai.model.moe
+
+verifier.evidence.min-count, verifier.evidence.min-count.followup
+
+search.preferred.domains (CSV; used by EvidenceRepairHandler)
+
+8.2 Feature flags
+
+retrieval.mode (RETRIEVAL_ON|RAG_ONLY|RETRIEVAL_OFF)
+
+history.max-messages cap to keep memory small but useful.
+
+Phase 9 — Tests & rollout (what to prove before merge)
+
+9.1 Unit
+
+ModelRouter: intent+verbosity → moe routed; resolveModelName returns API id.
+
+PromptBuilder: enforces min-words for deep|ultra, injects anchors/protected terms.
+
+EvidenceGate: follow-up threshold behaves leniently.
+
+RelationshipRuleScorer: KB rules change scores as expected.
+
+ClaimVerifierService: removes unsupported claims deterministically on mock contexts.
+
+9.2 Integration (smoke)
+
+Multi-turn: “에스코피에 뭐야?” → “더 자세히” → “예시도”
+
+Final X-Model-Used shows the real model id.
+
+Chain survives partial failures and still returns anchored output.
+
+Pairing queries route to moe under deep|ultra.
+
+9.3 Observability
+
+Add DEBUG logs (guarded) at: chosen model, handler path taken, fusion top-k, evidence tally, prune counts.
+
+Phase 10 — Repo/PR logistics (small, reviewable steps)
+
+PR-1: Phase 0 (purity guard) + local config toggle.
+
+PR-2: Model truth (Phase 1) + controller/header accuracy.
+
+PR-3: Prompt contract (Phase 2) + ChatService concat removal.
+
+PR-4: Chain wiring + new handlers stubs (Phase 3).
+
+PR-5: KB service + subject resolver (Phase 4).
+
+PR-6: Reranking integration (Phase 5).
+
+PR-7: Verification stack (Phase 6).
+
+PR-8: Config keys + docs; test plan (Phases 8–9).
+
+Each PR should compile standalone and include a README snippet update (you already prepared patch hunks).
+
+What you already have that we’ll reuse (don’t reinvent)
+
+DynamicChatModelFactory (for effective model id & low-temp profiles)
+
+AuthorityScorer, RRF/Borda fusion
+
+StrategySelectorService + bandit logic (keep as is; just feed better evidence)
+
+MemoryReinforcementService (+ energy/annealing)
+
+SSE streaming in ChatApiController
+
+Caffeine caches
+
+Acceptance Criteria (fast checks)
+
+X-Model-Used never prints lc:OpenAiChatModel; it shows the actual model id used.
+
+Pairing queries with deep|ultra always pick the moe route.
+
+Multi-turn “follow-up” no longer drifts to unrelated subjects; subject anchor persists.
+
+Without enough evidence, output is conservative (soft-fail) rather than wrong (“Diluc”).
+
+No handler crash aborts the chain; partials flow downstream.
+
+If you want, I can turn this into a checklist markdown for your PR template next.
 
 These hunks only add the necessary README content to document:
 
