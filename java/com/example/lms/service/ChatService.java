@@ -632,8 +632,9 @@ public class ChatService {
             String joinedContext = Stream.of(unifiedCtx, hintWebCtx)
                     .filter(StringUtils::hasText)
                     .collect(Collectors.joining("\n"));
+            String memCtx = Optional.ofNullable(memoryHandler.loadForSession(req.getSessionId())).orElse("");
             String verified = shouldVerify(joinedContext, req)
-                    ? verifier.verify(correctedMsg, joinedContext, draft, "gpt-4o")
+                    ? verifier.verify(correctedMsg, joinedContext, memCtx, draft, "gpt-4o")
                     : draft;
 
             /* ─── ② (선택) 폴리싱 ─── */
@@ -734,9 +735,11 @@ public class ChatService {
                     .filter(StringUtils::hasText)
                     .collect(Collectors.joining("\n\n"));
 
+            String memCtx = Optional.ofNullable(memoryHandler.loadForSession(req.getSessionId())).orElse("");
             String verified = shouldVerify(joinedContext, req)
-                    ? verifier.verify(correctedMsg, joinedContext, draft, "gpt-4o") // gpt-4o 검증
+                    ? verifier.verify(correctedMsg, joinedContext, memCtx, draft, "gpt-4o")
                     : draft;
+
             /* ③ 경고 배너 추가 및 (선택적) 답변 폴리싱 */
             boolean insufficientContext = !StringUtils.hasText(joinedContext);
             boolean verifiedUsed = shouldVerify(joinedContext, req);

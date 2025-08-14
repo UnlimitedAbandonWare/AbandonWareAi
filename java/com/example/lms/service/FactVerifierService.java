@@ -1,238 +1,228 @@
-package com.example.lms.service;
-import com.example.lms.domain.enums.SourceCredibility;                // ★ 추가
-import com.example.lms.service.verification.SourceAnalyzerService;    // ★ 추가
+
+        package com.example.lms.service;
+
+import com.example.lms.domain.enums.SourceCredibility;
+import com.example.lms.service.ner.NamedEntityExtractor;
+import com.example.lms.service.rag.guard.EvidenceGate;
+import com.example.lms.service.verification.ClaimVerifierService;
+import com.example.lms.service.verification.FactStatusClassifier;
+import com.example.lms.service.verification.FactVerificationStatus;
+import com.example.lms.service.verification.SourceAnalyzerService;
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
-/* 🔴 기타 import 유지 */
 import com.theokanning.openai.completion.chat.ChatMessageRole;
 import com.theokanning.openai.service.OpenAiService;
-import java.util.Objects;
-import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-import java.util.ArrayList;
-import java.util.List;
+
+import java.util.*;
 import java.util.regex.Pattern;
-import com.example.lms.service.verification.FactVerificationStatus;
-import com.example.lms.service.verification.FactStatusClassifier;
-import com.example.lms.service.rag.guard.EvidenceGate;
-import com.example.lms.service.rag.guard.MemoryAsEvidenceAdapter;
-import org.springframework.beans.factory.annotation.Autowired;
-import java.util.Arrays;
+
+/**
+ * 답변 생성의 최종 단계에서 사실 여부를 검증하는 서비스입니다.
+ * 소스 신뢰도 분석, 증거 충분성 평가, LLM을 이용한 주장 검증 및 수정 등 여러 단계를 조율합니다.
+ */
 @Slf4j
 @Service
 public class FactVerifierService {
-    private final SourceAnalyzerService sourceAnalyzer;   // ★ 신규 의존성
+
+    private final SourceAnalyzerService sourceAnalyzer;
     private final OpenAiService openAi;
     private final FactStatusClassifier classifier;
-    private final com.example.lms.service.verification.ClaimVerifierService claimVerifier; // + NEW
-    private final EvidenceGate evidenceGate;              //  NEW
-    private final MemoryAsEvidenceAdapter memAdapter;     //  NEW
-    // 개체 추출기(선택 주입). 없으면 기존 정규식 폴백.
-    @Autowired(required = false)
-    private com.example.lms.service.ner.NamedEntityExtractor entityExtractor;
+    private final ClaimVerifierService claimVerifier;
+    private final EvidenceGate evidenceGate;
 
+    // 선택적으로 주입되는 의존성
+    @Autowired(required = false)
+    private NamedEntityExtractor entityExtractor;
+
+    // 생성자를 통해 모든 필수 의존성을 주입받습니다.
     public FactVerifierService(OpenAiService openAi,
                                FactStatusClassifier classifier,
                                SourceAnalyzerService sourceAnalyzer,
-                               com.example.lms.service.verification.ClaimVerifierService claimVerifier,
-                               EvidenceGate evidenceGate,
-                               MemoryAsEvidenceAdapter memAdapter) {
-        // <<<<<<<<<<<< 여기에 코드를 삽입
+                               ClaimVerifierService claimVerifier,
+                               EvidenceGate evidenceGate) {
         this.openAi = Objects.requireNonNull(openAi, "openAi");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
         this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
         this.claimVerifier = Objects.requireNonNull(claimVerifier, "claimVerifier");
         this.evidenceGate = Objects.requireNonNull(evidenceGate, "evidenceGate");
-        this.memAdapter = Objects.requireNonNull(memAdapter, "memAdapter");
     }
-
 
     private static final int MIN_CONTEXT_CHARS = 80;
-    /** 컨텍스트가 질문과 같은 ‘도메인/개체’인지 먼저 점검하는 메타 단계 */
+
+    /** 컨텍스트-질문 정합성 메타 점검용 프롬프트 */
     private static final String META_TEMPLATE = """
-            You are a meta fact-checker.
-            Decide if the CONTEXT can safely answer the QUESTION without hallucination.
-            Output exactly one of: CONSISTENT | MISMATCH | INSUFFICIENT
-            and a one-sentence reason (in Korean).
+        You are a meta fact-checker.
+        Decide if the CONTEXT can safely answer the QUESTION without hallucination.
+        Output exactly one of: CONSISTENT | MISMATCH | INSUFFICIENT
+        and a one-sentence reason (in Korean).
 
-            QUESTION:
-            %s
+        QUESTION:
+        %s
 
-            CONTEXT:
-            %s
-            """;
+        CONTEXT:
+        %s
+        """;
 
-    private static final String TEMPLATE = """
-            You are a senior investigative journalist and fact‑checker.
+    /** LLM 기반 답변 수정용 프롬프트 */
+    private static final String CORRECTION_TEMPLATE = """
+        You are a senior investigative journalist and fact‑checker.
 
-            ## TASK
-            1. Read the **Question**, **Context**, and **Draft answer** below.
-            2. Compare the Draft with the Context (Context has higher authority).
-            3. A fact is verified only if **at least two independent Context lines** state the same information.
-            4. Remove or explicitly mark any named entities (characters/items/regions) that **do not appear in Context**.
-                        4-1. For any **pairing/synergy** claims (e.g., "A works well with B"):
-                            - Treat as VERIFIED only if Context contains an explicit synergy cue
-                              (e.g., "잘 어울린다", "시너지", "조합", "함께 쓰면 좋다") relating A↔B.
-                            - Mere **stat comparisons**, **co-mentions**, or **example lists** are NOT sufficient.
-            5. If the Draft is fully consistent, reply exactly:
-               STATUS: PASS
-               CONTENT:
-               <copy the draft verbatim>
-            6. If the Draft contains factual errors or misses key info, fix it **concisely** (max 20%% longer) and reply:
-               STATUS: CORRECTED
-               CONTENT:
-               <your revised answer in Korean>
-            7. If the Context is insufficient to verify, reply:
-               STATUS: INSUFFICIENT
-               CONTENT:
-               <copy the draft verbatim>
+        ## TASK
+        1. Read the **Question**, **Context**, and **Draft answer** below.
+        2. Compare the Draft with the Context (Context has higher authority).
+        3. A fact is verified only if **at least two independent Context lines** state the same information.
+        4. Remove or explicitly mark any named entities (characters/items/regions) that **do not appear in Context**.
+           4-1. For any **pairing/synergy** claims (e.g., "A works well with B"):
+               - Treat as VERIFIED only if Context contains an explicit synergy cue
+                 (e.g., "잘 어울린다", "시너지", "조합", "함께 쓰면 좋다") relating A↔B.
+               - Mere **stat comparisons**, **co-mentions**, or **example lists** are NOT sufficient.
+        5. If the Draft is fully consistent, reply exactly:
+           STATUS: PASS
+           CONTENT:
+           <copy the draft verbatim>
+        6. If the Draft contains factual errors or misses key info, fix it **concisely** (max 20%% longer) and reply:
+           STATUS: CORRECTED
+           CONTENT:
+           <your revised answer in Korean>
+        7. If the Context is insufficient to verify, reply:
+           STATUS: INSUFFICIENT
+           CONTENT:
+           <copy the draft verbatim>
 
-            ## QUESTION
-            %s
+        ## QUESTION
+        %s
 
-            ## CONTEXT
-            %s
+        ## CONTEXT
+        %s
 
-            ## DRAFT
-            %s
-            """;
+        ## DRAFT
+        %s
+        """;
 
-    /** 하위호환: 기존 시그니처는 memory=null로 위임 */
-    public String verify(String question, String context, String draft, String model) {
-        return verify(question, context, /*memory*/ null, draft, model);
+// 클래스 내 다른 verify(...)들 바로 위/아래 아무 곳에 추가
+
+    /** 하위호환: (question, context, memory, draft, model) */
+    public String verify(String question, String context, String memory, String draft, String model) {
+        return verify(question, context, memory, draft, model, false);
     }
-
-    /** 메모리 증거를 별도 인자로 받아 EvidenceGate에 반영 */
-    public String verify(String question,
-                         String context,
-                         String memory,
-                         String draft,
-                         String model) {
+    /** 메모리 증거와 후속 질문 여부까지 반영하는 핵심 검증 메서드 */
+    public String verify(String question, String context, String memory, String draft, String model, boolean isFollowUp) {
         if (!StringUtils.hasText(draft)) return "";
-        // ✅ 컨텍스트가 빈약해도 즉시 "정보 없음"으로 보내지 않고 SOFT-FAIL 경로 유지
-        boolean hasCtx = StringUtils.hasText(context) && context.length() >= MIN_CONTEXT_CHARS;
-        boolean hasMem = StringUtils.hasText(memory) && memory.length() >= 40; // 간이 컷
-        if (!hasCtx && !hasMem) {
-            var res = claimVerifier.verifyClaims("", draft, model);
-            return res.verifiedAnswer();
+
+        // --- 1. 사전 검사 (Pre-checks) ---
+        boolean hasSufficientContext = StringUtils.hasText(context) && context.length() >= MIN_CONTEXT_CHARS;
+        boolean hasSufficientMemory = StringUtils.hasText(memory) && memory.length() >= 40;
+
+        // 컨텍스트와 메모리가 모두 빈약하면, LLM에 의존하지 않고 시너지 주장 등만 간단히 필터링
+        if (!hasSufficientContext && !hasSufficientMemory) {
+            var result = claimVerifier.verifyClaims("", draft, model);
+            return result.verifiedAnswer();
         }
 
         if (StringUtils.hasText(context) && context.contains("[검색 결과 없음]")) return draft;
-        // ── 0) META‑CHECK: 컨텍스트가 아예 다른 대상을 가리키는지(또는 부족한지) 1차 판별 ──
 
-        // ★ 0) 소스 신뢰도 메타 점검: 팬 추측/상충이면 즉시 차단
+        // --- 2. 메타 검증 (Meta-Verification) ---
+        // 2a. 소스 신뢰도 분석: 팬 추측/상충 정보는 조기 차단
         try {
-            SourceCredibility cred = sourceAnalyzer.analyze(question, context);
-            if (cred == SourceCredibility.FAN_MADE_SPECULATION
-                    || cred == SourceCredibility.CONFLICTING) {
-                log.warn("[Meta-Verify] 낮은 신뢰도({}) 탐지 → 답변 차단", cred);
-                return "웹에서 찾은 정보는 공식 발표가 아닌 팬 커뮤니티의 추측일 가능성이 높습니다. "
-               + "이에 기반한 답변은 부정확할 수 있어 제공하지 않습니다.";
+            String mergedContext = mergeContext(context, memory);
+            SourceCredibility credibility = sourceAnalyzer.analyze(question, mergedContext);
+            if (credibility == SourceCredibility.FAN_MADE_SPECULATION || credibility == SourceCredibility.CONFLICTING) {
+                log.warn("[Meta-Verify] 낮은 신뢰도({}) 탐지 -> 답변 차단", credibility);
+                return "웹에서 찾은 정보는 공식 발표가 아니거나, 커뮤니티의 추측일 가능성이 높습니다. 이에 기반한 답변은 부정확할 수 있어 제공하지 않습니다.";
             }
         } catch (Exception e) {
-            log.debug("[Meta-Verify] source analysis 실패: {}", e.toString());
+            log.debug("[Meta-Verify] Source analysis failed: {}", e.toString());
         }
+
+        // 2b. LLM을 이용한 질문-컨텍스트 정합성 분석
         try {
             String metaPrompt = String.format(META_TEMPLATE, question, context);
-            ChatCompletionRequest metaReq = ChatCompletionRequest.builder()
-                    .model(model)
-                    .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), metaPrompt)))
-                    .temperature(0d)
-                    .topP(0.05d)
-                    .build();
-            String metaRaw = openAi.createChatCompletion(metaReq)
-                    .getChoices().get(0).getMessage().getContent();
-            String verdict = (metaRaw == null ? "" : metaRaw).trim().toUpperCase();
-            if (verdict.startsWith("MISMATCH")) {
-                // 예: 질문은 ‘게임 캐릭터’, 컨텍스트는 ‘요리사’일 때
-                log.debug("[Verify] META‑CHECK=MISMATCH → 정보 없음");
+            String metaVerdict = callOpenAi(metaPrompt, model, 0.0, 0.05, 5);
+            if (metaVerdict.trim().toUpperCase(Locale.ROOT).startsWith("MISMATCH")) {
+                log.debug("[Verify] META-CHECK detected MISMATCH -> '정보 없음' 반환");
                 return "정보 없음";
             }
-            // INSUFFICIENT은 아래 일반 검증 단계로 이어서 처리
         } catch (Exception e) {
-            log.debug("[Verify] META‑CHECK failed: {}", e.toString());
+            log.debug("[Verify] META-CHECK failed: {}", e.toString());
         }
 
-
+        // --- 3. 핵심 검증 및 답변 재구성 ---
         FactVerificationStatus status = classifier.classify(question, context, draft, model);
-        // LLM 기반 개체 추출 사용(없으면 정규식 폴백)
-        var entities = (entityExtractor != null) ? entityExtractor.extract(draft) : extractEntities(draft);
-        boolean grounded = groundedInContext(context, entities, 2);
 
-        // ✅ 증거 게이트: 메모리/KB 포함(후속질의 완화는 상위에서 isFollowUp 전달 시 확장)
-        boolean enoughEvidence = evidenceGate.hasSufficientCoverage(
-                question,
-                toLines(context),   // RAG snippets (List<String>)
-                context,            // RAG unified context (String)
-                toLines(memory),    // Memory snippets (List<String>)
-                List.of(),          // KB snippets (없으면 빈 리스트)
-                /*followUp*/ false
-        );
+        boolean isGrounded = isGroundedInContext(context, extractEntities(draft), 2);
+        boolean hasEnoughEvidence = evidenceGate.hasSufficientCoverage(
+                question, toLines(context), toLines(memory), List.of(), isFollowUp);
 
+        // 근거가 부족하면(grounding 또는 evidence 부족) LLM을 통한 공격적인 수정을 피하고,
+        // ClaimVerifier의 보수적인 필터링(SOFT-FAIL)만 거쳐서 반환
+        if (!isGrounded || !hasEnoughEvidence) {
+            log.debug("[Verify] 근거 부족(grounded: {}, evidence: {}) -> SOFT-FAIL 필터만 적용", isGrounded, hasEnoughEvidence);
+            var result = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
+            return result.verifiedAnswer().isBlank() ? "정보 없음" : result.verifiedAnswer();
+        }
+
+        // 근거가 충분할 때의 로직
         switch (status) {
-            case PASS, INSUFFICIENT -> {
-                // ✅ 엄격 차단 대신: 근거 부족이면 SOFT‑FAIL 필터링 후 출력
-                if (!grounded || !enoughEvidence) {
-                    log.debug("[Verify] grounding/evidence 부족 → SOFT-FAIL 필터만 적용");
-                    var res = claimVerifier.verifyClaims(mergeCtx(context, memory), draft, model);
-                    return res.verifiedAnswer().isBlank() ? "정보 없음" : res.verifiedAnswer();
-                }
-                // PASS여도 조합/시너지 등 unsupported claim 제거
-                var res = claimVerifier.verifyClaims(mergeCtx(context, memory), draft, model);
-                return res.verifiedAnswer();
-            }
-            case CORRECTED -> {
-                if (!grounded || !enoughEvidence) {
-                    log.debug("[Verify] CORRECTED도 grounding/evidence 부족 → SOFT-FAIL 필터 후 출력");
-                    var res = claimVerifier.verifyClaims(mergeCtx(context, memory), draft, model);
-                    return res.verifiedAnswer().isBlank() ? "정보 없음" : res.verifiedAnswer();
-                }
-                String gPrompt = String.format(TEMPLATE, question, context, draft);
-                ChatCompletionRequest req = ChatCompletionRequest.builder()
-                        .model(model)
-                        .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), gPrompt)))
-                        .temperature(0d)
-                        .topP(0.05d)
-                        .build();
+            case PASS, INSUFFICIENT:
+                // PASS 상태여도, 미지원 주장(unsupported claims)은 제거해야 함
+                var passResult = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
+                return passResult.verifiedAnswer();
+
+            case CORRECTED:
+                // CORRECTED 상태이고 근거도 충분하면, LLM을 통해 답변을 적극적으로 수정
+                log.debug("[Verify] CORRECTED 상태이며 근거 충분 -> LLM 기반 수정 시도");
+                String correctionPrompt = String.format(CORRECTION_TEMPLATE, question, context, draft);
                 try {
-                    String raw = openAi.createChatCompletion(req)
-                            .getChoices().get(0).getMessage().getContent();
-                    int split = raw.indexOf("CONTENT:");
-                    String corrected = (split > -1 ? raw.substring(split + 8).trim() : raw.trim());
-                    var res = claimVerifier.verifyClaims(mergeCtx(context, memory), corrected, model);
-                    return res.verifiedAnswer();
+                    String rawResponse = callOpenAi(correctionPrompt, model, 0.0, 0.05, 256);
+                    int contentStartIndex = rawResponse.indexOf("CONTENT:");
+                    String correctedText = (contentStartIndex > -1) ? rawResponse.substring(contentStartIndex + 8).trim() : rawResponse.trim();
+
+                    // 수정된 답변도 마지막으로 한번 더 검증
+                    var finalResult = claimVerifier.verifyClaims(mergeContext(context, memory), correctedText, model);
+                    return finalResult.verifiedAnswer();
                 } catch (Exception e) {
-                    log.error("Correction generation failed – fallback to '정보 없음'", e);
+                    log.error("Correction generation failed, falling back to '정보 없음'", e);
                     return "정보 없음";
                 }
-            }
-            default -> {
+
+            default:
                 return draft;
-            }
         }
     }
 
-    private static String mergeCtx(String ctx, String mem) {
-        String c = (ctx == null ? "" : ctx);
-        String m = (mem == null || mem.isBlank()) ? "" : ("\n\n### LONG-TERM MEMORY\n" + mem);
-        return c + m;
+    // --- Private Helper Methods ---
+
+    private String callOpenAi(String prompt, String model, double temp, double topP, int maxTokens) {
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+                .model(model)
+                .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
+                .temperature(temp)
+                .topP(topP)
+                .maxTokens(maxTokens)
+                .build();
+        return openAi.createChatCompletion(request).getChoices().get(0).getMessage().getContent();
     }
 
-    /** 간단 개체 추출(LLM 추출기 없을 시 폴백용) */
-    private static List<String> extractEntities(String text) {
+    private static String mergeContext(String ctx, String mem) {
+        String contextPart = (ctx == null) ? "" : ctx;
+        String memoryPart = (mem == null || mem.isBlank()) ? "" : ("\n\n### LONG-TERM MEMORY\n" + mem);
+        return contextPart + memoryPart;
+    }
+
+    private List<String> extractEntities(String text) {
+        if (entityExtractor != null) {
+            return entityExtractor.extract(text);
+        }
+        // 폴백: 간단한 정규식 기반 개체 추출
         List<String> out = new ArrayList<>();
         if (text == null || text.isBlank()) return out;
         String[] patterns = {
                 "(?i)\\b(Core\\s+Ultra\\s+\\d+\\s*\\d*[A-Z]?)\\b",
                 "(?i)\\b(Ryzen\\s+[3579]\\s+\\d{3,5}[A-Z]?)\\b",
-                "(?i)\\b(Arc\\s+Graphics)\\b",
-                "(?i)\\b([A-Z]{1,3}\\d{1,4}[A-Z]?)\\b",
-                "(?i)(코어\\s*울트라\\s*\\d+\\s*\\d*[A-Z]?)",
-                "(?i)(라데온|인텔|AMD)",
-                // + 게임 고유명사 예시
                 "(?i)(다이루크|후리나|푸리나|원신|genshin|에스코피에|escoffier)"
         };
         for (String p : patterns) {
@@ -245,28 +235,28 @@ public class FactVerifierService {
         return out;
     }
 
-    /** util: split into non-empty lines */
     private static List<String> toLines(String s) {
-        if (s == null || s.isBlank()) return List.of();
+        if (s == null || s.isBlank()) return Collections.emptyList();
         return Arrays.stream(s.split("\\R+"))
                 .map(String::trim)
                 .filter(t -> !t.isEmpty())
                 .toList();
     }
 
-    /** 개체가 서로 다른 컨텍스트 라인에 최소 minLines 등장하는지 */
-    private static boolean groundedInContext(String context, List<String> entities, int minLines) {
-        if (context == null || context.isBlank() || entities == null || entities.isEmpty()) return false;
-        String[] lines = context.split("\\R+");
-        int ok = 0;
-        for (String e : entities) {
-            int c = 0;
-            for (String ln : lines) {
-                if (ln.toLowerCase().contains(e.toLowerCase())) c++;
-                if (c >= minLines) break;
-            }
-            if (c >= minLines) ok++;
+    private static boolean isGroundedInContext(String context, List<String> entities, int minLines) {
+        if (context == null || context.isBlank() || entities == null || entities.isEmpty()) {
+            return entities == null || entities.isEmpty(); // 개체가 없으면 grounding은 의미 없으므로 true
         }
-        return ok > 0;
+        String[] lines = context.split("\\R+");
+        int entitiesFound = 0;
+        for (String entity : entities) {
+            long lineCount = Arrays.stream(lines)
+                    .filter(line -> line.toLowerCase(Locale.ROOT).contains(entity.toLowerCase(Locale.ROOT)))
+                    .count();
+            if (lineCount >= minLines) {
+                entitiesFound++;
+            }
+        }
+        return entitiesFound >= entities.size(); // 모든 개체가 최소 기준을 만족해야 함
     }
 }

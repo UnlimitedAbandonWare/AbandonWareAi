@@ -9,20 +9,33 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
+/**
+ * 초안 답변을 컨텍스트와 비교하여 PASS, CORRECTED, INSUFFICIENT 상태로 분류합니다.
+ * <p>
+ * 빠른 휴리스틱을 먼저 실행하고, 조건이 충족되면 LLM을 이용한 정교한 분류를 시도합니다.
+ * LLM 호출이 실패하면 안전하게 휴리스틱 결과로 폴백(Fallback)합니다.
+ * </p>
+ */
 @Slf4j
 @Service("factStatusClassifier")
 @RequiredArgsConstructor
 public class FactStatusClassifier {
 
-    /** 선택적 주입: 없으면 휴리스틱만 사용 */
+    /** OpenAiService는 선택적으로 주입됩니다. 없으면 휴리스틱 분류만 동작합니다. */
     private final ObjectProvider<OpenAiService> openAiProvider;
 
-    private static final String CLS_TEMPLATE = """
+    private static final String CLASSIFICATION_TEMPLATE = """
         You are a classification model.
-        Read the Question / Context / Draft and answer with exactly one token:
-        PASS, CORRECTED or INSUFFICIENT.
+        Read the Question, Context, and Draft Answer, then respond with exactly one token that best describes the situation:
+        PASS, CORRECTED, or INSUFFICIENT.
+
+        - PASS: The Draft is factually correct and fully supported by the Context.
+        - CORRECTED: The Draft has factual errors, exaggerations, or omissions that need correction based on the Context.
+        - INSUFFICIENT: The Context is not enough to verify the Draft, or the Draft is empty/meaningless.
 
         ## QUESTION
         %s
@@ -35,87 +48,101 @@ public class FactStatusClassifier {
         """;
 
     /**
-     * 간단 휴리스틱 + (가능 시) OpenAI 분류 호출.
-     * - draft 비어있음/“정보 없음” 포함 → INSUFFICIENT
-     * - 컨텍스트 짧음(<80자) → PASS (보수적 허용)
-     * - 그 외: OpenAI로 1토큰 분류 시도 → 실패 시 휴리스틱 결과 유지
+     * 휴리스틱과 LLM(사용 가능 시)을 이용해 검증 상태를 분류합니다.
      */
-    public FactVerificationStatus classify(String q, String ctx, String draft, String model) {
-        // 1) 휴리스틱
-        FactVerificationStatus heuristic = heuristicClassify(ctx, draft);
-        if (heuristic != FactVerificationStatus.PASS) {
-            return heuristic; // INSUFFICIENT 즉시 반환
+    public FactVerificationStatus classify(String question, String context, String draft, String model) {
+        // 1. 강화된 휴리스틱 분류를 먼저 실행합니다.
+        FactVerificationStatus heuristicStatus = heuristicClassify(question, context, draft);
+        if (heuristicStatus == FactVerificationStatus.INSUFFICIENT) {
+            // 정보 부족은 더 검사할 필요 없이 즉시 반환합니다.
+            return heuristicStatus;
         }
 
-        // 컨텍스트가 충분히 길면 LLM 분류 시도
-        if (!isBlank(ctx) && ctx.length() >= 80) {
-            OpenAiService openAi = openAiProvider.getIfAvailable();
-            if (openAi != null && !isBlank(model)) {
-                try {
-                    String prompt = String.format(CLS_TEMPLATE, nz(q), nz(ctx), nz(draft));
-                    ChatCompletionRequest req = ChatCompletionRequest.builder()
-                            .model(model)
-                            .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
-                            .temperature(0d)
-                            .topP(0d)
-                            .maxTokens(1)
-                            .build();
+        // 2. LLM 사용이 가능하면, 정밀 분류를 시도합니다.
+        OpenAiService openAi = openAiProvider.getIfAvailable();
+        if (openAi != null && isNotBlank(context) && context.length() >= 80 && isNotBlank(model)) {
+            try {
+                String prompt = String.format(CLASSIFICATION_TEMPLATE, toNn(question), toNn(context), toNn(draft));
+                ChatCompletionRequest request = ChatCompletionRequest.builder()
+                        .model(model)
+                        .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
+                        .temperature(0.0)
+                        .topP(0.05)
+                        .maxTokens(2) // "CORRECTED" 등 2토큰 단어 고려
+                        .build();
 
-                    String raw = openAi.createChatCompletion(req)
-                            .getChoices().get(0).getMessage().getContent();
+                String rawResponse = openAi.createChatCompletion(request)
+                        .getChoices().get(0).getMessage().getContent();
 
-                    FactVerificationStatus byLlm = parseLabel(raw);
-                    if (byLlm != FactVerificationStatus.UNKNOWN) {
-                        return byLlm;
-                    }
-                } catch (Exception e) {
-                    log.debug("FactStatusClassifier LLM 분류 실패, 휴리스틱 결과로 폴백: {}", e.toString());
+                FactVerificationStatus llmStatus = parseLabel(rawResponse);
+                if (llmStatus != FactVerificationStatus.UNKNOWN) {
+                    // LLM이 성공적으로 분류했다면 그 결과를 최종적으로 신뢰합니다.
+                    return llmStatus;
                 }
+            } catch (Exception e) {
+                log.debug("FactStatusClassifier LLM 분류 실패, 휴리스틱 결과로 폴백: {}", e.toString());
             }
         }
 
-        // 2) 폴백: 휴리스틱 결과(PASS)
-        return heuristic; // 기본 PASS
+        // 3. LLM 분류에 실패했거나 조건이 안 되면, 휴리스틱 결과를 최종 결과로 사용합니다.
+        return heuristicStatus;
     }
 
-    // ----------------- 내부 로직 -----------------
+    // --- Private Helper Methods ---
 
-    private FactVerificationStatus heuristicClassify(String ctx, String draft) {
-        if (isBlank(draft)) return FactVerificationStatus.INSUFFICIENT;
-        String d = draft.trim();
-        String dl = d.toLowerCase();
-        if (dl.contains("정보 없음") || dl.contains("no information") || dl.contains("not found")) {
+    /**
+     * LLM 호출 없이, 간단한 규칙으로 상태를 빠르게 분류하는 휴리스틱 메서드입니다.
+     * (V1의 질문-컨텍스트 관련성 로직 통합)
+     */
+    private FactVerificationStatus heuristicClassify(String question, String context, String draft) {
+        if (isBlank(draft) || draft.trim().toLowerCase().contains("정보 없음")) {
             return FactVerificationStatus.INSUFFICIENT;
         }
-        // 컨텍스트 부족이면 보수적으로 PASS
-        if (isBlank(ctx) || ctx.length() < 80) return FactVerificationStatus.PASS;
-
-        // (옵션) 간단 키워드 기반 교정 신호
-        String cl = ctx.toLowerCase();
-        if ((cl.contains("오류") || cl.contains("틀림") || cl.contains("정정") || cl.contains("contradict"))
-                && !dl.contains("정정")) {
-            // 컨텍스트에 수정 신호가 강하면 CORRECTED 후보지만,
-            // 최종 결정은 LLM 시도 후 실패 시 PASS로 둠.
-            // 필요 시 여기서 CORRECTED 반환하도록 조정 가능.
+        if (isBlank(context)) {
+            return FactVerificationStatus.INSUFFICIENT;
         }
 
+        // V1의 로직: 질문의 핵심 토큰이 컨텍스트에 없으면 관련 없는 내용일 가능성이 높음
+        String[] qTokens = Arrays.stream(toNn(question).toLowerCase(Locale.ROOT).split("\\s+"))
+                .filter(t -> t.length() >= 2)
+                .toArray(String[]::new);
+
+        if (qTokens.length > 0) {
+            String cLower = context.toLowerCase(Locale.ROOT);
+            long hits = Arrays.stream(qTokens).filter(cLower::contains).count();
+            if (hits == 0) {
+                // 컨텍스트가 질문과 전혀 관련 없어 보이면, 교정이 필요하다고 판단
+                return FactVerificationStatus.CORRECTED;
+            }
+        }
+
+        // 위 조건들에 걸리지 않으면 기본적으로 PASS로 간주
         return FactVerificationStatus.PASS;
     }
 
-    private FactVerificationStatus parseLabel(String raw) {
-        if (raw == null) return FactVerificationStatus.UNKNOWN;
-        String up = raw.trim().toUpperCase();
-        if (up.startsWith("PASS"))         return FactVerificationStatus.PASS;
-        if (up.startsWith("CORRECTED"))    return FactVerificationStatus.CORRECTED;
-        if (up.startsWith("INSUFFICIENT")) return FactVerificationStatus.INSUFFICIENT;
-        return FactVerificationStatus.UNKNOWN;
-    }
+    /**
+     * LLM의 텍스트 응답을 FactVerificationStatus enum으로 파싱합니다.
+     */
+    private FactVerificationStatus parseLabel(String rawResponse) {
+        if (isBlank(rawResponse)) return FactVerificationStatus.INSUFFICIENT;
 
+        String upperResponse = rawResponse.trim().toUpperCase();
+        if (upperResponse.startsWith("PASS")) return FactVerificationStatus.PASS;
+        if (upperResponse.startsWith("CORRECTED")) return FactVerificationStatus.CORRECTED;
+        if (upperResponse.startsWith("INSUFFICIENT")) return FactVerificationStatus.INSUFFICIENT;
+
+        return FactVerificationStatus.INSUFFICIENT;
+    }
+    // 클래스 내부 private helpers 근처에 추가
     private boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
     }
 
-    private String nz(String s) {
+    private boolean isNotBlank(String s) {
+        return s != null && !s.trim().isEmpty();
+    }
+
+    private String toNn(String s) {
         return s == null ? "" : s;
     }
 }

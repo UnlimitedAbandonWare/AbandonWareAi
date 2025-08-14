@@ -1,4 +1,3 @@
-// src/main/java/com/example/lms/domain/enums/SourceCredibility.java
 package com.example.lms.domain.enums;
 
 /**
@@ -11,26 +10,26 @@ package com.example.lms.domain.enums;
 public enum SourceCredibility {
 
     /**
-     * 1차 공식 출처: 정부, 게임 제작사, 공식 기술 문서, 공식 블로그 등.
+     * 1차 공식 출처: 제조사, 정부, 학교, 병원, 공식 기술 문서, 보도자료 등.
      * 가장 높은 신뢰도를 가집니다.
      */
     OFFICIAL,
 
     /**
-     * 신뢰도 높은 위키: 공식 자료는 아니지만, 잘 관리되고 검증된 정보를 제공하는 위키피디아, 나무위키, Fandom 등.
+     * 신뢰도 높은 출처: 공식 자료는 아니지만, 주요 언론, 학술 자료, 잘 관리되고 검증된 위키(위키피디아, Fandom 등)의 정보.
      * 공식 다음으로 높은 신뢰도를 가집니다.
      */
-    RELIABLE_WIKI,
+    RELIABLE,
 
     /**
-     * 커뮤니티 주도 정보: 활발한 커뮤니티(예: Reddit, DCInside)나 전문 블로그에서 생성된 정보.
+     * 커뮤니티 주도 정보: 활발한 포럼(예: Reddit, DCInside), 커뮤니티, 요약 기사, 전문 블로그에서 생성된 정보.
      * 유용할 수 있으나 검증이 필요합니다.
      */
-    COMMUNITY_DRIVEN,
+    COMMUNITY,
 
     /**
-     * 팬 창작물 또는 추측성 정보: 개인 팬 페이지, 확인되지 않은 루머, 추측에 기반한 내용.
-     * 신뢰도가 낮아 주의가 필요합니다.
+     * 팬 창작물 또는 추측성 정보: 개인 팬 페이지, 확인되지 않은 루머, 유출, 추측에 기반한 내용.
+     * 신뢰도가 낮아 답변에 인용 시 주의가 필요합니다.
      */
     FAN_MADE_SPECULATION,
 
@@ -41,8 +40,13 @@ public enum SourceCredibility {
     CONFLICTING,
 
     /**
+     * 근거 부족: 주어진 컨텍스트만으로는 질문에 대한 판단을 내리기에 정보가 충분하지 않은 경우.
+     */
+    INSUFFICIENT,
+
+    /**
      * 알 수 없음: 출처의 신뢰도를 판단할 수 없는 경우.
-     * 기본값으로 사용되며, 가장 낮은 신뢰도로 취급됩니다.
+     * 기본값으로 사용되며, 일반적으로 낮은 신뢰도로 취급됩니다.
      */
     UNKNOWN
 }
