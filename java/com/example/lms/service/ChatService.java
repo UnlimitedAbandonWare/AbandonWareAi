@@ -444,15 +444,37 @@ public class ChatService {
         // 1-c) 메모리 컨텍스트(항상 시도) — 전담 핸들러 사용
         String memoryCtx = memoryHandler.loadForSession(req.getSessionId());
 
-        // ── 2) 컨텍스트 생성(Verbosity-aware) ────────────────────────
-        String unifiedCtx = contextOrchestrator.orchestrate(
-                userQuery,
-                vectorDocs,
-                topDocs,
-                rules,
-                vp,
-                memoryCtx
-        );
+        // ── 2) 명시적 맥락 생성(Verbosity-aware) ────────────────────────
+        // 세션 ID(Long) 파싱: 최근 assistant 답변 & 히스토리 조회에 사용
+        Long sessionIdLong = parseNumericSessionId(req.getSessionId());
+        String lastAnswer = (sessionIdLong == null)
+                ? null
+                : chatHistoryService.getLastAssistantMessage(sessionIdLong).orElse(null);
+        String historyStr = (sessionIdLong == null)
+                ? ""
+                : String.join("\n", chatHistoryService.getFormattedRecentHistory(sessionIdLong, Math.max(2, Math.min(maxHistory, 8))));
+
+        // PromptContext에 모든 상태를 '명시적으로' 수집
+        var ctx = com.example.lms.prompt.PromptContext.builder()
+                .userQuery(userQuery)
+                .lastAssistantAnswer(lastAnswer)
+                .history(historyStr)
+                .web(topDocs)                // 웹/하이브리드 결과 (비어있을 수 있음)
+                .rag(vectorDocs)             // 벡터 RAG 결과 (비어있을 수 있음)
+                .memory(memoryCtx)           // 세션 장기 메모리 요약
+                .interactionRules(rules)     // 동적 관계 규칙
+                .verbosityHint(vp.hint())    // brief|standard|deep|ultra
+                .minWordCount(vp.minWordCount())
+                .sectionSpec(sections)
+                .citationStyle("inline")
+                .build();
+
+        // PromptBuilder가 컨텍스트 본문과 시스템 인스트럭션을 분리 생성
+        String ctxText  = promptBuilder.build(ctx);
+        String instrTxt = promptBuilder.buildInstructions(ctx);
+        // (기존 출력 정책과 병합 — 섹션 강제 등)
+        String outputPolicy = buildOutputPolicy(vp, sections);
+        String unifiedCtx   = ctxText; // 컨텍스트는 별도 System 메시지로
 
         // ── 3) 모델 라우팅(상세도/리스크/의도) ───────────────────────
         ChatModel model = modelRouter.route(
@@ -463,12 +485,17 @@ public class ChatService {
         );
 
         // ── 4) 메시지 구성(출력정책 포함) ────────────────────────────
-        String outputPolicy = buildOutputPolicy(vp, sections);   // 기존 헬퍼: 섹션/최소길이/인용스타일 등
         var msgs = new ArrayList<dev.langchain4j.data.message.ChatMessage>();
+        // ① 컨텍스트(자료 영역)
         msgs.add(dev.langchain4j.data.message.SystemMessage.from(unifiedCtx));
+        // ② 빌더 인스트럭션(우선)  ③ 출력 정책(보조) — 분리 주입
+        if (org.springframework.util.StringUtils.hasText(instrTxt)) {
+            msgs.add(dev.langchain4j.data.message.SystemMessage.from(instrTxt));
+        }
         if (org.springframework.util.StringUtils.hasText(outputPolicy)) {
             msgs.add(dev.langchain4j.data.message.SystemMessage.from(outputPolicy));
         }
+        // ④ 사용자 질문
         msgs.add(dev.langchain4j.data.message.UserMessage.from(userQuery));
 
         // ── 5) 단일 호출 → 초안 ─────────────────────────────────────
@@ -504,6 +531,17 @@ public class ChatService {
         boolean ragUsed = evidence.contains("WEB") || evidence.contains("RAG");
         return ChatResult.of(out, modelUsed, ragUsed, java.util.Collections.unmodifiableSet(evidence));
     } // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
+
+
+    /**
+     * 세션 ID(Object) → Long 변환. "123" 형태만 Long, 그외는 null.
+     */
+    private static Long parseNumericSessionId(Object raw) {
+        if (raw == null) return null;
+        String s = String.valueOf(raw).trim();
+        return s.matches("\\d+") ? Long.valueOf(s) : null;
+    }
+
 // ------------------------------------------------------------------------
 
     private static String buildOutputPolicy(VerbosityProfile vp, List<String> sections) {
