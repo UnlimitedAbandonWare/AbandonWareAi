@@ -1,5 +1,6 @@
-  package com.example.lms.prompt;
+package com.example.lms.prompt;
 
+import com.example.lms.service.rag.pre.CognitiveState;
 import dev.langchain4j.rag.content.Content;
 
 import java.util.*;
@@ -25,6 +26,7 @@ public record PromptContext(
         String subject,               // 대화의 핵심 주제 (예: "Nahida")
         Set<String> protectedTerms,   // 원본 형태를 유지해야 할 고유명사
         Map<String, Set<String>> interactionRules, // 동적으로 적용될 관계 규칙
+        CognitiveState cognitiveState,  // ✅ [추가] 인지 상태(추상도/증거/시간/복잡도)
 
         // ───── 4. 출력 정책 ─────
         String verbosityHint,         // 답변 상세도 힌트 (brief, standard, deep, ultra)
@@ -58,6 +60,7 @@ public record PromptContext(
         private String subject;
         private Set<String> protectedTerms = Collections.emptySet();
         private Map<String, Set<String>> interactionRules = Collections.emptyMap();
+        private CognitiveState cognitiveState; // ✅ [추가]
         private String verbosityHint = "standard";
         private Integer minWordCount;
         private List<String> sectionSpec = Collections.emptyList();
@@ -76,6 +79,7 @@ public record PromptContext(
         public Builder subject(String v) { this.subject = v; return this; }
         public Builder protectedTerms(Set<String> v) { this.protectedTerms = (v == null ? Collections.emptySet() : v); return this; }
         public Builder interactionRules(Map<String, Set<String>> v) { this.interactionRules = (v == null ? Collections.emptyMap() : v); return this; }
+        public Builder cognitiveState(CognitiveState v) { this.cognitiveState = v; return this; } // ✅ [추가]
         public Builder verbosityHint(String v) { this.verbosityHint = (v == null || v.isBlank() ? "standard" : v); return this; }
         public Builder minWordCount(Integer v) { this.minWordCount = v; return this; }
         public Builder sectionSpec(List<String> v) { this.sectionSpec = (v == null ? Collections.emptyList() : v); return this; }
@@ -92,6 +96,7 @@ public record PromptContext(
                     userQuery, lastAssistantAnswer, history,
                     web, rag, memory,
                     domain, intent, subject, protectedTerms, interactionRules,
+                    cognitiveState, // ✅ [추가]
                     verbosityHint, minWordCount, sectionSpec, targetTokenBudgetOut,
                     audience, citationStyle
             );

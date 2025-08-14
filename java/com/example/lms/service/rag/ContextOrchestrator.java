@@ -4,6 +4,10 @@ package com.example.lms.service.rag;
 import com.example.lms.prompt.PromptContext;
 import com.example.lms.prompt.PromptEngine;
 import com.example.lms.service.verbosity.VerbosityProfile;
+import com.example.lms.service.rag.energy.ContradictionScorer;
+import com.example.lms.service.rag.energy.ContextEnergyModel;
+import com.example.lms.service.rag.auth.AuthorityScorer;
+import com.example.lms.service.config.HyperparameterService;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +25,10 @@ import java.util.stream.Collectors;
 public class ContextOrchestrator {
 
     private final PromptEngine promptEngine;
+    private final AuthorityScorer authorityScorer;
+    private final ContradictionScorer contradictionScorer;
+    private final ContextEnergyModel energyModel;
+    private final HyperparameterService hp;
 
     @Value("${orchestrator.max-docs:10}")
     private int maxDocs;
@@ -34,6 +42,8 @@ public class ContextOrchestrator {
 
     @Value("${orchestrator.min-top-score:0.60}")
     private double minTopScore;
+    @Value("${orchestrator.energy.enabled:true}")
+    private boolean energyBasedSelection;
 
     // '최신성' 요구 쿼리를 감지하기 위한 정규식
     private static final Pattern TIMELY = Pattern.compile("(?i)(공지|업데이트|패치|스케줄|일정|news|update|patch|release)");
@@ -106,7 +116,7 @@ public class ContextOrchestrator {
             uniq.putIfAbsent(hashOf(s.text()), s);
         }
 
-        // 3. 점수 내림차순으로 상위 N개 문서 선택 (Verbosity에 따라 캡 상향)
+        // 3. (기본) 점수 상위 캡 결정
         int cap = this.maxDocs;
         String hint = profile != null ? profile.hint() : null;
         if ("deep".equalsIgnoreCase(hint)) {
@@ -115,11 +125,18 @@ public class ContextOrchestrator {
             cap = Math.max(cap, maxDocsUltra);
         }
 
-        List<Content> finalDocs = uniq.values().stream()
-                .sorted(Comparator.comparingDouble(s -> -s.score)) // 점수 내림차순 정렬
-                .limit(Math.max(1, cap))
+        List<Content> candidates = uniq.values().stream()
+                .sorted(Comparator.comparingDouble(s -> -s.score))
                 .map(s -> s.content)
                 .collect(Collectors.toList());
+
+        // 3-B. 에너지 기반 선택 (Authority/Redundancy/Contradiction/Recency 등)
+        List<Content> finalDocs = energyBasedSelection
+                ? energyModel.selectByEnergy(
+                Optional.ofNullable(query).orElse(""),
+                candidates,
+                Math.max(1, cap))
+                : candidates.stream().limit(Math.max(1, cap)).toList();
 
         // 4. 안전장치: 가장 높은 점수가 기준 미달이면 신뢰할 수 없는 정보로 판단하고 차단
         double topScore = uniq.values().stream().mapToDouble(Scored::score).max().orElse(0.0);

@@ -19,6 +19,8 @@ import org.springframework.stereotype.Component;
 // imports
 import com.example.lms.service.rag.rerank.LightWeightRanker;
 import com.example.lms.service.rag.rerank.ElementConstraintScorer;  //  신규 재랭커
+import com.example.lms.transform.QueryTransformer;
+import com.example.lms.prompt.PromptContext;
 
 import java.lang.reflect.Method;
 import java.util.*;
@@ -55,6 +57,7 @@ public class HybridRetriever implements ContentRetriever {
     private final RelevanceScoringService relevanceScoringService;
     private final HyperparameterService hp; // ★ NEW: 동적 가중치 로더
     private final ElementConstraintScorer elementConstraintScorer; // ★ NEW: 원소 제약 재랭커
+    private final QueryTransformer queryTransformer;               // ★ NEW: 상태 기반 질의 생성
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
     private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
@@ -294,6 +297,20 @@ public class HybridRetriever implements ContentRetriever {
         // 클래스 종료는 파일 말미로 이동 (헬퍼 메서드 포함)
 
     } // retrieveAll 끝
+
+
+    // ─────────────────────────────────────────────
+    // 상태 기반 검색: CognitiveState/PromptContext를 반영해 쿼리 확장 → 병렬 검색
+    // ─────────────────────────────────────────────
+    public List<Content> retrieveStateDriven(PromptContext ctx, int limit) {
+        String userQ = Optional.ofNullable(ctx.userQuery()).orElse("");
+        String lastA = ctx.lastAssistantAnswer();
+        String subject = ctx.subject();
+        // QueryTransformer의 확장 API 활용
+        List<String> queries = queryTransformer.transformEnhanced(userQ, lastA, subject);
+        if (queries.isEmpty()) queries = List.of(userQ);
+        return retrieveAll(queries, Math.max(1, limit));
+    }
 
     // ───────────────────────────── 헬퍼들 ─────────────────────────────
 

@@ -260,6 +260,30 @@ public class MemoryReinforcementService {
                     log.debug("[StrategyPerf] update skipped: {}", e.toString());
                 }
             });
+
+            // ─────────────────────────────────────────────
+            // ★ 공명형 동조: 전역 하이퍼파라미터 미세 조정
+            //    - 성공: 활용↑(온도↓, ε↓), 신뢰/Authority 가중↑
+            //    - 실패: 탐험↑(온도↑, ε↑), 신뢰 가중↓
+            // ─────────────────────────────────────────────
+            try {
+                double step = hp.getDouble("reinforce.step", 0.02);
+                double dir  = positive ?+ 1.0 : -1.0;
+                // Retrieval 랭킹 가중치
+                hp.adjust("retrieval.rank.w.auth",  dir * step, 0.0, 1.0, 0.10);
+                hp.adjust("retrieval.rank.w.rel",   dir * step, 0.0, 1.0, 0.60);
+                // 에너지 함수 가중
+                hp.adjust("energy.weight.confidence", dir * step, 0.0, 1.0, 0.20);
+                hp.adjust("energy.weight.recency",    dir * step, 0.0, 1.0, 0.15);
+                // 전략 탐색/온도
+                hp.adjust("strategy.temperature",    -dir * step, 0.20, 2.5, 1.0);
+                hp.adjust("strategy.epsilon",        -dir * step, 0.01, 0.50, 0.10);
+                // 성공률/보상 가중
+                hp.adjust("strategy.weight.success_rate", dir * step, 0.0, 1.0, 0.65);
+                hp.adjust("strategy.weight.reward",      dir * step, 0.0, 1.0, 0.30);
+            } catch (Exception tuneEx) {
+                log.debug("[Reinforce] hyperparam tune skipped: {}", tuneEx.toString());
+            }
         } catch (Exception e) {
             log.error("[Feedback] applyFeedback failed", e);
             throw e;

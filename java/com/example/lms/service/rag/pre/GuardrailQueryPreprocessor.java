@@ -4,6 +4,8 @@ package com.example.lms.service.rag.pre;
 import com.example.lms.service.rag.detector.GameDomainDetector;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.service.subject.SubjectResolver;
+import com.example.lms.service.rag.pre.CognitiveState;
+import com.example.lms.service.rag.pre.CognitiveStateExtractor;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -30,13 +32,15 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
     private final GameDomainDetector domainDetector;
     private final KnowledgeBaseService knowledgeBase;
     private final SubjectResolver subjectResolver;
-
+    private final CognitiveStateExtractor cognitiveStateExtractor;
     public GuardrailQueryPreprocessor(GameDomainDetector detector,
                                       KnowledgeBaseService knowledgeBase,
-                                      SubjectResolver subjectResolver) {
+                                      SubjectResolver subjectResolver,
+                                      CognitiveStateExtractor cognitiveStateExtractor) {
         this.domainDetector = detector;
         this.knowledgeBase = knowledgeBase;
         this.subjectResolver = subjectResolver;
+        this.cognitiveStateExtractor = cognitiveStateExtractor;
     }
 
     // ── 간단 오타 사전(필요 시 Settings로 이관)
@@ -100,6 +104,12 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
 
         // 6) 매우 짧은 단어가 아니면 소문자 통일(검색 일관성)
         return s.length() <= 2 ? s : s.toLowerCase(Locale.ROOT);
+    }
+
+    /** LLM/휴리스틱으로 CognitiveState 추출(옵션) */
+    public java.util.Optional<CognitiveState> extractCognitiveState(String q) {
+        try { return java.util.Optional.ofNullable(cognitiveStateExtractor.extract(q)); }
+        catch (Exception e) { return java.util.Optional.empty(); }
     }
     /** 단순 후속질의(지시대명사형) 탐지 */
     public boolean isFollowUpLike(String q) {

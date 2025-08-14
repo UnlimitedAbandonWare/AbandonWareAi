@@ -9,7 +9,7 @@ import org.jsoup.Jsoup;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
+import dev.langchain4j.data.message.UserMessage;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -26,6 +26,10 @@ import java.util.stream.Collectors;
 public class SnippetPruner {
 
     private final EmbeddingModel embeddingModel;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private dev.langchain4j.model.chat.ChatModel chatModel; // (옵션) LLM 절사용
+
+
 
     // --- 설정 값 ---
     @Value("${memory.reinforce.pruning.enabled:true}")
@@ -36,6 +40,9 @@ public class SnippetPruner {
 
     @Value("${memory.reinforce.pruning.min-sentences:1}")
     private int minSentences;
+    @Value("${memory.reinforce.pruning.llm.enabled:false}")
+    private boolean llmPruningEnabled;
+
 
     /**
      * 프루닝(가지치기) 결과 구조체
@@ -85,13 +92,21 @@ public class SnippetPruner {
         }
 
         try {
-            // 1. 주요 전략: 임베딩 기반 프루닝 시도
-            return pruneByEmbedding(q, rawSnippet);
+            // 1) 임베딩 기반
+            Result r = pruneByEmbedding(q, rawSnippet);
+            if (r.keptSentences() >= Math.max(1, minSentences)) return r;
         } catch (Exception e) {
-            // 2. 대체 전략: 임베딩 실패 시 토큰 기반 프루닝으로 자동 전환
-            log.warn("[Pruner] Embedding-based pruning failed. Falling back to token-based method. Reason: {}", e.getMessage());
-            return pruneByTokenMatching(q, rawSnippet);
+            log.warn("[Pruner] embed pruning failed → {}", e.toString());
         }
+        // 2) (옵션) LLM 절사
+        if (llmPruningEnabled && chatModel != null) {
+            try {
+                Result r = pruneByLLM(q, rawSnippet);
+                if (r.keptSentences() > 0) return r;
+            } catch (Exception ignore) {}
+        }
+        // 3) 토큰 기반
+        return pruneByTokenMatching(q, rawSnippet);
     }
 
     // ===================================================================================
@@ -226,5 +241,30 @@ public class SnippetPruner {
     private static double clamp01(double val) {
         if (Double.isNaN(val) || Double.isInfinite(val)) return 0.0;
         return Math.max(0.0, Math.min(1.0, val));
+    }
+
+    // ----------------------------------------------------------
+    // LLM 기반 절사 (옵션)
+    // ----------------------------------------------------------
+    private Result pruneByLLM(String query, String snippet) {
+        if (chatModel == null) return Result.passThrough(snippet);
+        String prompt = """
+            아래 "문서"에서 질문과 직접 관련된 핵심 문장만 남겨 한 단락으로 요약해 주세요.
+            - 문서의 사실만 사용 (추가 추론 금지)
+            - 중요 문장이 없으면 빈 문자열
+            질문: %s
+            문서:
+            %s
+            """.formatted(query, stripHtml(snippet));
+        String refined = chatModel
+                .chat(java.util.List.of(UserMessage.from(prompt)))
+                .aiMessage()
+                .text();
+        refined = safe(refined).trim();
+        if (refined.isBlank()) return new Result("", 0.0, 0.0, 0, 1);
+        // 근사치 메타
+        List<String> ss = splitSentences(refined);
+        double approx = Math.min(1.0, Math.max(0.0, (double) ss.size() / Math.max(1, splitSentences(stripHtml(snippet)).size())));
+        return new Result(refined, 0.8, approx, ss.size(), Math.max(1, splitSentences(stripHtml(snippet)).size()));
     }
 }

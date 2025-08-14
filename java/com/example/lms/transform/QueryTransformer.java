@@ -22,6 +22,8 @@ import java.util.Arrays;
 import com.example.lms.search.SmartQueryPlanner;
 import com.example.lms.search.QueryHygieneFilter;
 import static com.example.lms.search.QueryHygieneFilter.sanitize;
+import com.example.lms.prompt.PromptContext;
+import com.example.lms.service.rag.pre.CognitiveState;
 
 /**
  * 쿼리 오타를 교정해 주는 Transformer
@@ -178,6 +180,42 @@ public class QueryTransformer {
     /** LLM이 제시한 추가 검색어(최대 3개)를 반환 – 실패 시 빈 리스트 */
     private List<String> generateVariantsWithLLM(String q) {
         return generateVariantsWithLLM(q, null);
+    }
+
+    // ───────────────────────────────────────
+    // CognitiveState 기반 확장
+    // ───────────────────────────────────────
+    public List<String> expandWithCognitiveState(PromptContext ctx, String baseQuery) {
+        CognitiveState cs = ctx == null ? null : ctx.cognitiveState();
+        if (cs == null) return generateVariantsWithLLM(baseQuery, ctx == null ? null : ctx.subject());
+        String subject = ctx.subject();
+        // 추상도/증거유형/시간민감도에 맞춘 특화 프롬프트
+        String prompt = """
+            당신은 한국어 RAG 서브쿼리 생성기입니다.
+            다음 제약에 따라 **정확히 3개**의 키워드형 서브쿼리를 한 줄에 하나씩 만드세요.
+            [추상도=%s, 시간민감도=%s, 증거유형=%s, 복잡도=%s]
+            - 주제(anchor): "%s"
+            - 원문: "%s"
+            - 불필요한 설명/기호 금지, 쿼리만 출력
+            """.formatted(
+                cs.abstractionLevel(), cs.temporalSensitivity(),
+                String.join("/", cs.evidenceTypes()), cs.complexityBudget(),
+                Objects.toString(subject, "사용자 주제(추측 금지)"),
+                baseQuery
+        );
+        String ans = llmCache.get(prompt);
+        if (ans == null || ans.isBlank()) {
+            return generateVariantsWithLLM(baseQuery, subject);
+        }
+        List<String> raw = Arrays.stream(ans.split("\\r?\\n"))
+                .map(this::cleanUp)
+                .filter(s -> s!=null && !s.isBlank())
+                .limit(MAX_VARIANTS)
+                .toList();
+        // 의도 버프 얹기
+        QueryIntent intent = classifyIntent(baseQuery);
+        List<String> buffed = raw.stream().map(q -> boostWithIntent(q, intent)).toList();
+        return dedupBySimilarity(buffed, 0.86);
     }
 
     /** ✨ subject 앵커 지원 버전 */
