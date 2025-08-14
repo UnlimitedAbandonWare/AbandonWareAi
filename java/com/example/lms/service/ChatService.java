@@ -457,7 +457,14 @@ public class ChatService {
 
         // ── 7) 후처리/강화/리턴 ──────────────────────────────────────
         reinforce(sessionKey, userQuery, out);  // 기존 강화 로직 사용
-        return ChatResult.of(out, "lc:" + getModelName(model), true);
+        // ✅ 실제 모델명으로 보고 (실패 시 안전 폴백)
+        String modelUsed;
+        try {
+            modelUsed = modelRouter.resolveModelName(model);
+        } catch (Exception e) {
+            modelUsed = "lc:" + getModelName(model);
+        }
+        return ChatResult.of(out, modelUsed, true);
     } // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 // ------------------------------------------------------------------------
 
@@ -669,7 +676,8 @@ public class ChatService {
             String out = ruleEngine.apply(finalText, "ko", RulePhase.POST);
 
             reinforceAssistantAnswer(sessionKey, correctedMsg, out);
-            return ChatResult.of(out, "lc:" + cleanModel, req.isUseRag());
+            String modelUsed = modelRouter.resolveModelName(dynamicChatModel);
+            return ChatResult.of(out, modelUsed, req.isUseRag());
 
         } catch (Exception ex) {
             log.error("[LangChain4j] API 호출 중 심각한 오류 발생. SessionKey: {}", sessionKey, ex);

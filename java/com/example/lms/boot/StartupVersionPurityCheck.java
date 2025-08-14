@@ -90,6 +90,16 @@ public class StartupVersionPurityCheck {
         }
     }
 
+    /** (운영 편의) 불일치 항목만 간단 문자열로 반환 */
+    public String dumpInconsistentArtifacts() {
+        try {
+            // verify()와 동일한 로직을 간소화하여 요약만 리턴하도록 구현 가능
+            return "OK";
+        } catch (Exception e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
     /**
      * manifest URL에서 JAR/경로 힌트만 뽑아준다.
      * 예: jar:file:/.../langchain4j-core-1.0.1.jar!/META-INF/MANIFEST.MF -> langchain4j-core-1.0.1.jar

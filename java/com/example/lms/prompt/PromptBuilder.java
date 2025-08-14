@@ -63,6 +63,13 @@ public class PromptBuilder {
             if (StringUtils.hasText(ctx.domain())) {
                 sys.append("- Domain: ").append(ctx.domain()).append("\n");
             }
+            if (StringUtils.hasText(ctx.subject())) {
+                sys.append("- Primary subject anchor: ").append(ctx.subject()).append("\n");
+            }
+            if (ctx.protectedTerms() != null && !ctx.protectedTerms().isEmpty()) {
+                sys.append("- Do not alter these entity strings: ")
+                        .append(String.join(", ", ctx.protectedTerms())).append('\n');
+            }
             Map<String, Set<String>> rules = ctx.interactionRules();
             if (rules != null && !rules.isEmpty()) {
                 sys.append("### DYNAMIC RELATIONSHIP RULES\n");
@@ -75,8 +82,9 @@ public class PromptBuilder {
                 });
             }
 
-            // RECOMMENDATION/PAIRING 공통 보수적 가드
+            // RECOMMENDATION/PAIRING 공통 보수적 가드 + 근거부족 분기
             sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
+            sys.append("- If evidence is weak but related to the same subject, provide a conservative summary and add a short 'clarify' question instead of refusing outright.\n");
 
             // ▼ Verbosity/Output policy (섹션/최소길이/상세도 강제)
             String vh = Objects.toString(ctx.verbosityHint(), "standard");

@@ -16,6 +16,7 @@ import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 
 import lombok.extern.slf4j.Slf4j;
+import com.example.lms.service.rag.guard.EvidenceGate;
 import lombok.RequiredArgsConstructor;
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;
 import com.example.lms.prompt.PromptBuilder;
@@ -83,6 +84,7 @@ public class LangChainRAGService {
     private final QueryContextPreprocessor    preprocessor;   //  의도/도메인/원소 제약 주입원
     private final PromptBuilder               promptBuilder;
     private final AnswerSanitizer             answerSanitizer;
+    private final EvidenceGate                evidenceGate;   // ✅ 주입
 
     /**
      * 대화 기록을 제한된 크기로 유지하기 위해 Caffeine LRU 캐시를 사용한다.
@@ -186,10 +188,8 @@ public class LangChainRAGService {
         String history = conversationMemory.asMap().getOrDefault(sessionId, "No history yet.");
 
         // ── Evidence Gate: PAIRING/RECOMMENDATION에서 증거 부족 시 LLM 호출 차단
-        com.example.lms.service.rag.guard.EvidenceGate gate =
-                new com.example.lms.service.rag.guard.EvidenceGate();
-        int minEv =  (externalContext != null && org.springframework.util.StringUtils.hasText(externalContext)) ? 2 : 1;
-        boolean ok = gate.hasSufficientCoverage(query, ragSnippets, externalContext, minEv);
+        int minEv = (org.springframework.util.StringUtils.hasText(externalContext)) ? 2 : 1;
+        boolean ok = evidenceGate.hasSufficientCoverage(query, ragSnippets, externalContext, minEv);
         if (("PAIRING".equalsIgnoreCase(intent) || "RECOMMENDATION".equalsIgnoreCase(intent)) && !ok) {
             return "정보 없음";
         }

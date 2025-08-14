@@ -101,6 +101,22 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
         // 6) 매우 짧은 단어가 아니면 소문자 통일(검색 일관성)
         return s.length() <= 2 ? s : s.toLowerCase(Locale.ROOT);
     }
+    /** 단순 후속질의(지시대명사형) 탐지 */
+    public boolean isFollowUpLike(String q) {
+        if (!StringUtils.hasText(q)) return false;
+        String s = q.trim();
+        return s.matches("(?i)^(더\\s*자세히|그건\\?|그건요|그리고\\?|추가로|더 알려줘|detail|more).*");
+    }
+
+    /** 주어진 lastSubject를 앵커로 유지하여 정제 (필요시 호출) */
+    public String enrichWithAnchor(String original, String lastSubject) {
+        String e = enrich(original);
+        if (!StringUtils.hasText(lastSubject)) return e;
+        if (isFollowUpLike(original) && !e.contains(lastSubject)) {
+            return lastSubject + " " + e;
+        }
+        return e;
+    }
 
     // ── 대소문자 무시 포함 여부 체크
     private static boolean containsIgnoreCase(Set<String> set, String value) {

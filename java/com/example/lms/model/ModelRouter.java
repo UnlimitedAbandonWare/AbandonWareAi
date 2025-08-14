@@ -116,5 +116,14 @@ public class ModelRouter {
                             "Provide @Bean utilityChatModel/moeChatModel or enable DynamicChatModelFactory."
             );
         }
+
+    }
+
+    /** ✅ 실제 SDK에 내려간 모델명 해석(가능한 한 정확히) */
+    public String resolveModelName(ChatModel model) {
+        if (factory == null || model == null) {
+            return (model == null) ? "unknown" : model.getClass().getSimpleName();
+        }
+        return factory.effectiveModelName(model);
     }
 }

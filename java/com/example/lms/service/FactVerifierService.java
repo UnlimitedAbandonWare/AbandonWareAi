@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.regex.Pattern;
 import com.example.lms.service.verification.FactVerificationStatus;
 import com.example.lms.service.verification.FactStatusClassifier;
+import com.example.lms.service.rag.guard.EvidenceGate;
+import com.example.lms.service.rag.guard.MemoryAsEvidenceAdapter;
 import org.springframework.beans.factory.annotation.Autowired;
 @Slf4j
 @Service
@@ -25,6 +27,8 @@ public class FactVerifierService {
     private final OpenAiService openAi;
     private final FactStatusClassifier classifier;
     private final com.example.lms.service.verification.ClaimVerifierService claimVerifier; // + NEW
+    private final EvidenceGate evidenceGate;              //  NEW
+    private final MemoryAsEvidenceAdapter memAdapter;     //  NEW
     // 개체 추출기(선택 주입). 없으면 기존 정규식 폴백.
     @Autowired(required = false)
     private com.example.lms.service.ner.NamedEntityExtractor entityExtractor;
@@ -32,12 +36,16 @@ public class FactVerifierService {
     public FactVerifierService(OpenAiService openAi,
                                FactStatusClassifier classifier,
                                SourceAnalyzerService sourceAnalyzer,
-                               com.example.lms.service.verification.ClaimVerifierService claimVerifier) {
+                               com.example.lms.service.verification.ClaimVerifierService claimVerifier,
+                               EvidenceGate evidenceGate,
+                               MemoryAsEvidenceAdapter memAdapter) {
         // <<<<<<<<<<<< 여기에 코드를 삽입
         this.openAi = Objects.requireNonNull(openAi, "openAi");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
         this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
         this.claimVerifier = Objects.requireNonNull(claimVerifier, "claimVerifier");
+        this.evidenceGate = Objects.requireNonNull(evidenceGate, "evidenceGate");
+        this.memAdapter = Objects.requireNonNull(memAdapter, "memAdapter");
     }
 
 
@@ -96,7 +104,11 @@ public class FactVerifierService {
                          String draft,
                          String model) {
         if (!StringUtils.hasText(draft)) return "";
-        if (!StringUtils.hasText(context) || context.length() < MIN_CONTEXT_CHARS) return draft;
+        // ✅ 컨텍스트가 빈약해도 즉시 "정보 없음"으로 보내지 않고 SOFT-FAIL 경로 유지
+        if (!StringUtils.hasText(context) || context.length() < MIN_CONTEXT_CHARS) {
+            var res = claimVerifier.verifyClaims("", draft, model);
+            return res.verifiedAnswer();
+        }
 
         if (context.contains("[검색 결과 없음]")) return draft;
         // ── 0) META‑CHECK: 컨텍스트가 아예 다른 대상을 가리키는지(또는 부족한지) 1차 판별 ──
@@ -140,21 +152,33 @@ public class FactVerifierService {
         var entities = (entityExtractor != null) ? entityExtractor.extract(draft) : extractEntities(draft);
         boolean grounded = groundedInContext(context, entities, 2);
 
+        // ✅ 증거 게이트: 메모리/KB 포함(후속질의 완화는 상위에서 isFollowUp 전달 시 확장)
+        boolean enoughEvidence = evidenceGate.hasSufficientCoverage(
+                question,
+                List.of(context), // ragSnippets 대용(이미 통합 컨텍스트)
+                context,
+                /*memory*/ null,
+                /*kb*/ null,
+                /*followUp*/ false
+        );
+
         switch (status) {
             case PASS, INSUFFICIENT -> {
-                if (!grounded) {
-                    // + 컨텍스트 근거 부족 → 환각 가능성 → 답변 차단
-                    log.debug("[Verify] grounding 실패 → 정보 없음");
-                    return "정보 없음";
+                // ✅ 엄격 차단 대신: 근거 부족이면 SOFT‑FAIL 필터링 후 출력
+                if (!grounded || !enoughEvidence) {
+                    log.debug("[Verify] grounding/evidence 부족 → SOFT-FAIL 필터만 적용");
+                    var res = claimVerifier.verifyClaims(context, draft, model);
+                    return res.verifiedAnswer().isBlank() ? "정보 없음" : res.verifiedAnswer();
                 }
                 // PASS여도 조합/시너지 등 unsupported claim 제거
                 var res = claimVerifier.verifyClaims(context, draft, model);
                 return res.verifiedAnswer();
             }
             case CORRECTED -> {
-                if (!grounded) {
-                    log.debug("[Verify] CORRECTED 스킵(grounding 실패) -> 정보 없음");
-                    return "정보 없음";
+                if (!grounded || !enoughEvidence) {
+                    log.debug("[Verify] CORRECTED도 grounding/evidence 부족 → SOFT-FAIL 필터 후 출력");
+                    var res = claimVerifier.verifyClaims(context, draft, model);
+                    return res.verifiedAnswer().isBlank() ? "정보 없음" : res.verifiedAnswer();
                 }
                 String gPrompt = String.format(TEMPLATE, question, context, draft);
                 ChatCompletionRequest req = ChatCompletionRequest.builder()

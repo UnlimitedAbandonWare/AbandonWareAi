@@ -42,4 +42,33 @@ public class DynamicChatModelFactory {
         }
         return lc(modelId, temperature, topP, maxTokens);
     }
+
+    /** ✅ ChatModel 인스턴스에서 실제 modelName을 최대한 복원 */
+    public String effectiveModelName(ChatModel model) {
+        try {
+            // OpenAiChatModel (langchain4j) 우선
+            if (model instanceof OpenAiChatModel m) {
+                // 1) 공개 메서드
+                try {
+                    var meth = m.getClass().getDeclaredMethod("modelName");
+                    meth.setAccessible(true);
+                    Object v = meth.invoke(m);
+                    if (v != null) return v.toString();
+                } catch (NoSuchMethodException ignore) {}
+                // 2) 필드 리플렉션
+                try {
+                    var f = m.getClass().getDeclaredField("modelName");
+                    f.setAccessible(true);
+                    Object v = f.get(m);
+                    if (v != null) return v.toString();
+                } catch (NoSuchFieldException ignore) {}
+            }
+            // 기타 모델: toString() 내 표기가 있으면 사용
+            String s = String.valueOf(model);
+            if (s.contains("gpt-")) return s;
+            return model.getClass().getSimpleName();
+        } catch (Throwable t) {
+            return model.getClass().getSimpleName();
+        }
+    }
 }

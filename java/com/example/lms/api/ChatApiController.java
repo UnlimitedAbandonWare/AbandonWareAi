@@ -80,9 +80,11 @@ public class ChatApiController {
         return Mono.fromCallable(() -> {
                     ChatResponseDto body = handleChat(req, username);
                     ResponseEntity.BodyBuilder ok = ResponseEntity.ok();
-                    ok.header("X-Model-Used",
-                            (body.getModelUsed() == null || body.getModelUsed().isBlank())
-                                    ? FALLBACK_MODEL : body.getModelUsed());
+                    // ✅ 실제 사용 모델명만 기록 (래퍼명 금지, 빈값이면 설정값으로 폴백)
+                    String modelHdr = (body.getModelUsed() != null && !body.getModelUsed().isBlank())
+                            ? body.getModelUsed()
+                            : settingsService.getAllSettings().getOrDefault(KEY_DEFAULT_MODEL, FALLBACK_MODEL);
+                    ok.header("X-Model-Used", modelHdr);
                     if (body.isRagUsed()) ok.header("X-RAG-Used", "true");
                     ok.header("X-User", username);
                     ok.header("Access-Control-Expose-Headers", EXPOSE_HEADERS);

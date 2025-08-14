@@ -41,7 +41,11 @@ public record PromptContext(
         Integer targetTokenBudgetOut,  // 출력 토큰 버짓
         List<String> sectionSpec,      // 필수 섹션 헤더
         String  audience,              // dev|pm|enduser
-        String  citationStyle          // 예: "inline"
+        String  citationStyle,         // 예: "inline"
+        // ▼ 앵커 보존/보호
+        String  subject,
+        Set<String> protectedTerms,
+        List<String> lastSources
 ) {}
 
 
