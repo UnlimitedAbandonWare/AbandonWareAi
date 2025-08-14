@@ -177,14 +177,27 @@ public class QueryTransformer {
 
     /** LLM이 제시한 추가 검색어(최대 3개)를 반환 – 실패 시 빈 리스트 */
     private List<String> generateVariantsWithLLM(String q) {
+        return generateVariantsWithLLM(q, null);
+    }
+
+    /** ✨ subject 앵커 지원 버전 */
+    private List<String> generateVariantsWithLLM(String q, @Nullable String subject) {
         try {
+            String anchor = (subject == null || subject.isBlank())
+                    ? "the user's main topic (do NOT guess)"
+                    : subject;
             String prompt = """
-            아래 문장을 한국어 맞춤법에 맞게 교정‧변형하여
-            검색 엔진에 넣기 좋은 **3가지** 버전으로 제안해 주세요.
-            서로 다른 종류의 제품을 동시에 지칭할 수 있다면, 각각의 제품을 명확히 구분하는 검색어를 만들어주세요.
-            - 불필요한 설명 없이 각 안을 한 줄씩만 출력
-            문장: "%s"
-            """.formatted(q);
+            You are a Korean RAG query generator.
+            Create exactly **3** concise, keyword-style search queries (one per line).
+
+            RULES:
+            - **Anchor Focus**: Stay strictly on this subject → "%s".
+            - **No Acronym Expansion** without explicit evidence (e.g., 'DW' ≠ 'Deutsche Welle').
+            - Prefer terms relevant to the subject's likely domain (e.g., for academies: 수강후기, 커리큘럼, 위치, 등록).
+            - Output **only** queries, one per line. No bullets or explanations.
+
+            Original: "%s"
+            """.formatted(anchor, q);
             String ans = llmCache.get(prompt);
             if (ans == null || ans.isBlank()) {
                 return List.of();
@@ -192,6 +205,8 @@ public class QueryTransformer {
             return Arrays.stream(ans.split("\\r?\\n"))
                     .map(this::cleanUp)                       // 앞머리 제거·트림
                     .filter(s -> s != null && !s.isBlank())
+                    // ✨ subject가 있으면, subject 토큰과 최소 하나는 겹치도록 필터링
+                    .filter(s -> subject == null || !Collections.disjoint(tokens(s), tokens(subject)))
                     .limit(MAX_VARIANTS)                      // 안전 상한
                     .toList();
         } catch (Exception e) {
@@ -203,6 +218,14 @@ public class QueryTransformer {
     // 새 API: 사용자 질의 + GPT 답변에서 힌트를 섞어 검색용 다중 쿼리 생성
     // ─────────────────────────────────────────────────────────────
     public List<String> transformEnhanced(String userPrompt, @Nullable String assistantAnswer) {
+        // 하위호환: subject 없이 호출되면 null로 위임
+        return transformEnhanced(userPrompt, assistantAnswer, null);
+    }
+
+    /** ✨ Subject 앵커 지원 오버로드 */
+    public List<String> transformEnhanced(String userPrompt,
+                                          @Nullable String assistantAnswer,
+                                          @Nullable String subject) {
         /* ① “원소 감지” – Intent 분류 */
         QueryIntent intent = classifyIntent(userPrompt);
         //  원본 질문 토큰을 미리 계산 -- 힌트 검증용
@@ -236,6 +259,8 @@ public class QueryTransformer {
                 .filter(s -> !DOMAIN_SCOPE_PREFIX.matcher(s).find())          // domain‑scope 제거
                 .filter(s -> !UNWANTED_WORD_PATTERN.matcher(s).find()
                         || UNWANTED_WORD_PATTERN.matcher(userPrompt).find()) // 원문에 없으면 차단
+                // ✨ subject가 주어졌다면 subject 토큰과의 교집합이 있어야 함
+                .filter(s -> subject == null || !Collections.disjoint(tokens(s), tokens(subject)))
                 .distinct()
                 .toList();
         /* 결과가 없으면 원본 질문만 반환 */

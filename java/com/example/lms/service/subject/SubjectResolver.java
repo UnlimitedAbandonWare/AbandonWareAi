@@ -6,67 +6,53 @@ import org.springframework.stereotype.Component;
 
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 메인 SubjectResolver (통합판)
- * 우선순위:
- *  1) KnowledgeBase에 등록된 도메인 엔티티(CHARACTER) 이름 매칭
- *  2) 폴백 휴리스틱(따옴표 안 토큰 → 첫 토큰(2+자))
+ * 사용자 쿼리에서 핵심 주제어를 추출하는 메인 해석기 (통합 버전).
  */
-@Component // 빈 이름 기본: "subjectResolver"
+@Component("subjectResolver")
 @RequiredArgsConstructor
 public class SubjectResolver {
 
     private final KnowledgeBaseService kb;
 
-    /**
-     * KB 기반 탐지(도메인 내 캐릭터명 포함 시 즉시 반환) + 휴리스틱 폴백.
-     */
+    private static final Pattern QUOTED_PATTERN   = Pattern.compile("[\"“”'’`](.+?)[\"“”'’`]");
+    private static final Pattern COMPOUND_PATTERN = Pattern.compile("(?i)\\b([a-z]{1,4}\\d+[a-z]*|\\d+[a-z]{1,4}|[가-힣A-Za-z]{2,20}학원|아카데미|Academy)\\b");
+    private static final Pattern ACRONYM_PATTERN  = Pattern.compile("\\b[A-Z]{2,5}\\b");
+
     public Optional<String> resolve(String query, String domain) {
         if (query == null || query.isBlank()) return Optional.empty();
 
-        // 1) KB 매칭
         if (domain != null && !domain.isBlank()) {
-            String s = query.toLowerCase(Locale.ROOT);
+            String lower = query.toLowerCase(Locale.ROOT);
             for (String name : kb.listEntityNames(domain, "CHARACTER")) {
-                if (s.contains(name.toLowerCase(Locale.ROOT))) {
+                if (lower.contains(name.toLowerCase(Locale.ROOT))) {
                     return Optional.of(name);
                 }
             }
         }
-
-        // 2) 휴리스틱 폴백 (이전 rag/subject/SubjectResolver의 로직 흡수)
-        String guess = heuristicGuess(query);
-        return guess.isBlank() ? Optional.empty() : Optional.of(guess);
+        return heuristicGuess(query);
     }
 
-    /** Reranker 등 DI 없이 정적으로 쓰도록 제공 */
+    private Optional<String> heuristicGuess(String query) {
+        Matcher m1 = QUOTED_PATTERN.matcher(query);
+        if (m1.find()) return Optional.ofNullable(m1.group(1)).map(String::trim).filter(s -> !s.isBlank());
+
+        Matcher m2 = COMPOUND_PATTERN.matcher(query);
+        if (m2.find()) return Optional.ofNullable(m2.group(0)).map(String::trim).filter(s -> !s.isBlank());
+
+        Matcher m3 = ACRONYM_PATTERN.matcher(query);
+        if (m3.find()) return Optional.ofNullable(m3.group(0)).map(String::trim).filter(s -> !s.isBlank());
+
+        String cleaned = query.replaceAll("[^\\p{IsHangul}A-Za-z0-9 ]", " ").trim();
+        if (cleaned.isBlank()) return Optional.empty();
+        String first = cleaned.split("\\s+")[0];
+        return (first.length() >= 2 && first.length() <= 12) ? Optional.of(first) : Optional.empty();
+    }
+
     public static String guessSubjectFromQueryStatic(KnowledgeBaseService kb, String domain, String query) {
         return new SubjectResolver(kb).resolve(query, domain).orElse("");
     }
-
-    // ─────────────────────────────
-    // 내부 휴리스틱 (따옴표 > 첫 토큰)
-    // ─────────────────────────────
-    private static final Pattern QUOTED = Pattern.compile("\"([^\"]{2,})\"");
-
-    private static String heuristicGuess(String query) {
-        String q = query.trim();
-
-        // 큰따옴표 내부 토큰이 있으면 우선 사용
-        var m = QUOTED.matcher(q);
-        if (m.find()) {
-            String t = safeTrim(m.group(1));
-            if (t.length() >= 2) return t;
-        }
-
-        // 한글/영문 혼합 고려: 첫 토큰(2자 이상)
-        String ko = q.replaceAll("[\"“”`']", "").split("\\s+")[0];
-        if (ko != null && ko.length() >= 2) return ko;
-
-        return "";
-    }
-
-    private static String safeTrim(String s) { return s == null ? "" : s.trim(); }
 }

@@ -2,6 +2,8 @@
 package com.example.lms.search;
 
 import com.example.lms.transform.QueryTransformer;
+import com.example.lms.service.subject.SubjectResolver;
+import com.example.lms.service.knowledge.KnowledgeBaseService;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
@@ -17,14 +19,22 @@ import java.util.Objects;
 public class SmartQueryPlanner {
 
     private final QueryTransformer transformer;
+    private final SubjectResolver subjectResolver;
+    private final KnowledgeBaseService knowledgeBase;
 
     /**
      * 의존성 주입을 위한 생성자.
      * 여러 QueryTransformer 빈 중 'queryTransformer'를 명시적으로 주입받습니다.
      * @param transformer 쿼리 변환을 수행할 트랜스포머
      */
-    public SmartQueryPlanner(@Qualifier("queryTransformer") QueryTransformer transformer) {
+    public SmartQueryPlanner(
+            @Qualifier("queryTransformer") QueryTransformer transformer,
+            SubjectResolver subjectResolver,
+            KnowledgeBaseService knowledgeBase
+    ) {
         this.transformer = transformer;
+        this.subjectResolver = subjectResolver;
+        this.knowledgeBase = knowledgeBase;
     }
 
     /**
@@ -42,10 +52,15 @@ public class SmartQueryPlanner {
         // 쿼리 개수를 1개 이상 4개 이하로 보정
         int cap = Math.max(1, Math.min(4, maxQueries));
 
-        // QueryTransformer를 통해 원시 쿼리 목록 생성
+        // 0) 도메인/주제 추정 → 앵커
+        String domain = knowledgeBase.inferDomain(userPrompt);
+        String subject = subjectResolver.resolve(userPrompt, domain).orElse(null);
+
+        // QueryTransformer를 통해 원시 쿼리 목록 생성(주제 앵커 전달)
         List<String> raw = transformer.transformEnhanced(
                 Objects.toString(userPrompt, ""),
-                assistantDraft
+                assistantDraft,
+                subject
         );
 
         // 위생 필터를 적용하여 최종 쿼리 목록 반환
@@ -83,6 +98,25 @@ public class SmartQueryPlanner {
         // 2. [수정] 앵커링 및 정제 작업을 QueryHygieneFilter.sanitizeAnchored 메서드에 모두 위임합니다.
         //    - 이 클래스 내에서 앵커를 미리 추가하는 중복 로직을 제거했습니다.
         return QueryHygieneFilter.sanitizeAnchored(raw, cap, 0.80, subjectPrimary, subjectAlias);
+    }
+
+    /**
+     * ✨ 새 오버로드: (주제 미지정) → SubjectResolver로 자동 추정 후 앵커 적용
+     */
+    public List<String> planAnchored(
+            String userPrompt,
+            @Nullable String assistantDraft,
+            int maxQueries
+    ) {
+        int cap = Math.max(1, Math.min(4, maxQueries));
+        String domain = knowledgeBase.inferDomain(userPrompt);
+        String subject = subjectResolver.resolve(userPrompt, domain).orElse(null);
+        List<String> raw = transformer.transformEnhanced(
+                Objects.toString(userPrompt, ""),
+                assistantDraft,
+                subject
+        );
+        return QueryHygieneFilter.sanitizeAnchored(raw, cap, 0.80, subject, null);
     }
 
     // ⬅️ [제거] 이 메서드는 QueryHygieneFilter.sanitizeAnchored 내부 로직과 중복되므로 제거합니다.

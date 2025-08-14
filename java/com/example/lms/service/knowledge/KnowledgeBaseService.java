@@ -88,4 +88,14 @@ public interface KnowledgeBaseService {
                 .filter(n -> subject == null || !n.equalsIgnoreCase(subject))
                 .findFirst();
     }
+    /**
+     * ✨ 기본 도메인 추정(휴리스틱). 구현체가 따로 제공하지 않아도 바로 사용 가능.
+     */
+    default String inferDomain(String userPrompt) {
+        if (userPrompt == null) return "GENERAL";
+        String s = userPrompt.toLowerCase(java.util.Locale.ROOT);
+        if (s.contains("학원") || s.contains("아카데미") || s.contains("academy")) return "EDU";
+        if (s.contains("가격") || s.contains("스펙") || s.matches(".*\\b[a-z]{1,4}\\d+[a-z]*\\b.*")) return "PRODUCT";
+        return "GENERAL";
+    }
 }

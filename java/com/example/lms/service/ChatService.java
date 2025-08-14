@@ -32,7 +32,7 @@ import java.util.Collections;
 import java.util.List;
 import com.example.lms.service.QueryAugmentationService;
 import com.example.lms.prompt.PromptEngine;
-
+import org.springframework.cache.annotation.Cacheable;
 import com.example.lms.service.fallback.SmartFallbackService;
 import com.example.lms.service.disambiguation.QueryDisambiguationService;
 import com.example.lms.service.disambiguation.DisambiguationResult;
@@ -336,6 +336,10 @@ public class ChatService {
      * RAG · WebSearch · Stand-Alone · Retrieval OFF 모두 처리하는 통합 메서드
      */
     // ① 1-인자 래퍼 ─ 컨트롤러가 호출
+    @Cacheable(
+            value = "chatResponses",
+            key = "#req.message + ':' + #req.useRag + ':' + #req.useWebSearch"
+    )
     public ChatResult continueChat(ChatRequestDto req) {
         Function<String, List<String>> defaultProvider =
                 q -> searchService.searchSnippets(q, 5);    // 네이버 Top-5
