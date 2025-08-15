@@ -1,4 +1,7 @@
-package com.example.lms.service.rag.auth;
+
+
+// src/main/java/com/example/lms/service/rag/auth/AuthorityScorer.java
+        package com.example.lms.service.rag.auth;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;

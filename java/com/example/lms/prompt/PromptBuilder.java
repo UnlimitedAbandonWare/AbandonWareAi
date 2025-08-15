@@ -1,5 +1,6 @@
+
 // src/main/java/com/example/lms/prompt/PromptBuilder.java
-package com.example.lms.prompt;
+        package com.example.lms.prompt;
 
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
@@ -68,6 +69,8 @@ public class PromptBuilder {
         sys.append("- Earlier sections have higher authority: VECTOR RAG > HISTORY > WEB SEARCH.\n");
         sys.append("- Ground every claim in the provided sections; if evidence is insufficient, reply \"정보 없음\".\n");
         sys.append("- Cite specific snippets or sources inline when possible.\n");
+        // [MERGED] 엄격한 컨텍스트 한정 규칙 추가
+        sys.append("- 답변은 제공된 컨텍스트와 문서 근거에 기반해야 합니다. 컨텍스트에 없는 새로운 정보나 추측을 답변에 포함하지 마세요. 정보가 부족하면 '정보 없음'이라고 답하세요.\n");
 
         if (ctx != null) {
             // [NEW] 후속 질문이면 '이전 답변'을 주제로 확장하라고 강제

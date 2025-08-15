@@ -1,5 +1,5 @@
-
-        package com.example.lms.service;
+// src/main/java/com/example/lms/service/FactVerifierService.java
+package com.example.lms.service;
 
 import com.example.lms.domain.enums.SourceCredibility;
 import com.example.lms.service.ner.NamedEntityExtractor;
@@ -7,6 +7,7 @@ import com.example.lms.service.rag.guard.EvidenceGate;
 import com.example.lms.service.verification.ClaimVerifierService;
 import com.example.lms.service.verification.FactStatusClassifier;
 import com.example.lms.service.verification.FactVerificationStatus;
+import com.example.lms.service.verification.NamedEntityValidator;
 import com.example.lms.service.verification.SourceAnalyzerService;
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
@@ -37,6 +38,10 @@ public class FactVerifierService {
     // 선택적으로 주입되는 의존성
     @Autowired(required = false)
     private NamedEntityExtractor entityExtractor;
+
+    // [NEW] 선택적으로 주입되는 엔티티 검증기
+    @Autowired(required = false)
+    private NamedEntityValidator namedEntityValidator;
 
     // 생성자를 통해 모든 필수 의존성을 주입받습니다.
     public FactVerifierService(OpenAiService openAi,
@@ -69,7 +74,7 @@ public class FactVerifierService {
 
     /** LLM 기반 답변 수정용 프롬프트 */
     private static final String CORRECTION_TEMPLATE = """
-        You are a senior investigative journalist and fact‑checker.
+        You are a senior investigative journalist and fact-checker.
 
         ## TASK
         1. Read the **Question**, **Context**, and **Draft answer** below.
@@ -103,22 +108,37 @@ public class FactVerifierService {
         %s
         """;
 
-// 클래스 내 다른 verify(...)들 바로 위/아래 아무 곳에 추가
-
     /** 하위호환: (question, context, memory, draft, model) */
     public String verify(String question, String context, String memory, String draft, String model) {
         return verify(question, context, memory, draft, model, false);
     }
+
     /** 메모리 증거와 후속 질문 여부까지 반영하는 핵심 검증 메서드 */
     public String verify(String question, String context, String memory, String draft, String model, boolean isFollowUp) {
         if (!StringUtils.hasText(draft)) return "";
+
+        // --- 0. 초기 엔티티 검증: 답변에 등장하는 모든 엔티티가 근거에 존재하는지 확인 ---
+        if (namedEntityValidator != null) {
+            List<String> evidenceList = new ArrayList<>();
+            if (StringUtils.hasText(context)) evidenceList.add(context);
+            if (StringUtils.hasText(memory)) evidenceList.add(memory);
+
+            NamedEntityValidator.ValidationResult vr =
+                    namedEntityValidator.validateAnswerEntities(draft, evidenceList);
+
+            if (vr.isEntityMismatch()) {
+                log.warn("[Verify] Unsupported entities detected: {}", vr.getMissingEntities());
+                // If unsupported entities are present, we conservatively return "정보 없음"
+                return "정보 없음";
+            }
+        }
 
         // --- 1. 사전 검사 (Pre-checks) ---
         boolean hasSufficientContext = StringUtils.hasText(context) && context.length() >= MIN_CONTEXT_CHARS;
         boolean hasSufficientMemory = StringUtils.hasText(memory) && memory.length() >= 40;
 
         // 컨텍스트와 메모리가 모두 빈약하면, LLM에 의존하지 않고 시너지 주장 등만 간단히 필터링
-        if (!hasSufficientContext && !hasSufficientMemory) {
+        if (!hasSufficientContext && !hasSufficientMemory) { // ← 오타 수정됨
             var result = claimVerifier.verifyClaims("", draft, model);
             return result.verifiedAnswer();
         }

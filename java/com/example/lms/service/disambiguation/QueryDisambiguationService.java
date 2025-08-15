@@ -50,8 +50,8 @@ public class QueryDisambiguationService {
         RULES:
         - Do NOT invent characters/items/places that do not exist in the referenced domain (e.g., Genshin Impact).
                                   - If the user query includes a proper noun that the system already recognizes (in-domain dictionary),
-                                                                                                                                                                                                                                                                                                                                            DO NOT rewrite or append any notes. Keep the original query as rewrittenQuery and set confidence="high".
-                                                                                                                                                                                                                                                                                                                                          - Do not append speculative notes such as "(존재하지 않는 요소 가능성)". Such notes are prohibited.
+                                                                                                                                                                                                                                                                                                                                                DO NOT rewrite or append any notes. Keep the original query as rewrittenQuery and set confidence="high".
+                                                                                                                                                                                                                                                                                                                                              - Do not append speculative notes such as "(존재하지 않는 요소 가능성)". Such notes are prohibited.
 
         [Conversation history, oldest→latest]
         %s
