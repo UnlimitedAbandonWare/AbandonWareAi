@@ -1722,5 +1722,186 @@ src/main/java/com/example/lms
 - The feature is disabled by default and can be enabled via configuration property `agent.knowledge-curation.enabled`.on” – explains the commit message prefixes used in this project.
 
 “Mermaid Documentation” – useful for creating diagrams to document system flows.
+(AbandonWare), here’s a precise, code-free refactor plan that maps directly to your repo layout. It assumes LangChain4j 1.0.1 “version purity,” the Chain-of-Responsibility order SelfAsk → Analyze → Web → Vector, and PromptBuilder.build(PromptContext) as the only way to compose prompts.
+
+0) Stop-the-world gate: LangChain4j version purity
+
+app/StartupVersionPurityCheck.java — keep as fail-fast. Add a build-time guard too:
+
+Gradle: resolutionStrategy.failOnVersionConflict + strict platform on dev.langchain4j:* 1.0.1.
+
+If any 0.2.x detected, abort startup; print offending coordinates. Do nothing else until this is green.
+
+app/VersionPurityHealthIndicator.java — expose detected modules under /actuator/health for ops.
+
+1) Firm up the retrieval chain and failure isolation
+
+application/rag/handler/DefaultRetrievalHandlerChain.java — enforce handler order: MemoryHandler → SelfAskHandler → AnalyzeHandler → WebSearchHandler → VectorDbHandler → EvidenceRepairHandler. Each handler must catch all internal exceptions and return partial results (never throw up the chain).
+
+application/rag/HybridRetriever.java — make it the single entry. Add “result envelope” (docs + warnings + timing) so downstream can degrade gracefully.
+
+application/rag/handler/EvidenceRepairHandler.java — ensure it only triggers when EvidenceGate says “insufficient,” then run a single bounded expansion via SmartQueryPlanner.
+
+2) Query hygiene & disambiguation (fix “keeps recommending Diluc” at the source)
+
+application/translation/correction/DefaultQueryCorrectionService.java — keep surface fixes only.
+
+application/translation/LLMQueryCorrectionService.java — run after dictionary/protected-term check.
+
+application/translation/DefaultDomainTermDictionary.java — expand to store protected terms per domain; expose findKnownTerms(query).
+
+application/disambiguation/QueryDisambiguationService.java — add “pre-dictionary bypass”: if query contains protected terms, skip LLM rewrite and mark confidence=high.
+
+application/rag/preprocess/DefaultGuardrailQueryPreprocessor.java — inject protectedTerms and dynamic interaction rules into PromptContext; strip domain prefixes; cap expansions via SmartQueryPlanner.
+
+application/rag/orchestrator/QueryComplexityGate.java — tag complex queries for SelfAsk; simple queries bypass.
+
+3) Subject resolution backed by a centralized KB
+
+application/rag/subject/SubjectResolver.java — refactor to call a KB service, not static lists.
+
+application/rag/subject/KnowledgeBaseService (new interface) & application/rag/subject/DefaultKnowledgeBaseService (new impl) — read from:
+
+infrastructure/persistence/repository/DomainKnowledgeRepository.java
+
+infrastructure/persistence/repository/EntityAttributeRepository.java
+Add small Caffeine cache; expose methods: getAllEntityNames(domain), getAttributes(domain, entity), getInteractionRules(domain, entity).
+
+domain/knowledge — keep entities; no code change.
+
+rag/policy/RuleEngine.java — source interaction rules from KnowledgeBaseService instead of hard-coded policy.
+
+4) Retrieval scoring that respects authority and rules
+
+rag/policy/AuthorityScorer.java — ensure weights are loaded from config (official, wiki, community, blog buckets). Apply in WebSearchHandler ranking pre-pass.
+
+rag/fusion/ReciprocalRankFuser.java — unify lists (web, vector, memory). Keep small k to control cross-encoder cost.
+
+rag/rerank/RelationshipRuleScorer (new) — compute boosts/penalties from KB rules (PREFERRED_PARTNER, DISCOURAGED_PAIR, CONTAINS, IS_PART_OF). Compose with cross-encoder score.
+
+5) Adaptive reranking (use feedback to fight “default Diluc”)
+
+strategy/scoring/AdaptiveScoringService.java — ensure it exposes synergyBonus(domain, subject, partner).
+
+rag/rerank/EmbeddingModelCrossEncoderReranker.java — add finalScore = cross + ruleBoost + synergyBonus. Clamp/normalize. Gate by minimum authority.
+
+api/rest/FeedbackController.java — ensure 👍/👎 updates synergy_stat via infrastructure/persistence/repository/SynergyStatRepository.java (add if missing).
+
+6) Hallucination suppression & entity grounding (hard block off-context names)
+
+application/verification/NamedEntityValidator.java (new) — lightweight regex/heuristic NER; validate that every named entity in the draft appears in context or memory; if not, short-circuit as “정보 없음.”
+
+application/verification/FactVerifierService.java — add verify(..., boolean isFollowUp) overload; call:
+
+guard/EvidenceGate.hasSufficientCoverage(...)
+
+ClaimVerifierService for per-claim support
+
+NamedEntityValidator early, pre-LLM
+If evidence weak ⇒ “soft fail” path (claims filter only).
+
+rag/guard/EvidenceGate.java — treat follow-ups more leniently only if PREVIOUS_ANSWER section is present; otherwise hold thresholds.
+
+rag/guard/MemoryAsEvidenceAdapter.java — make session snippets usable as evidence lines.
+
+7) Prompting discipline (no string concat in ChatService)
+
+prompt/PromptContext.java — ensure fields: userQuery, lastAssistantAnswer, history, web, rag, memory, domain, subject, protectedTerms, interactionRules, verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience, citationStyle.
+
+prompt/PromptBuilder.java — always include sections in this order when present: PREVIOUS_ANSWER (only for follow-ups) → VECTOR RAG → HISTORY → LIVE WEB → LONG-TERM MEMORY. Add clear instruction that answers must be strictly grounded; if insufficient evidence, reply “정보 없음.”
+
+application/chat/ChatService.java — never assemble prompts manually. Build PromptContext, then PromptBuilder.build(...) + buildInstructions(...). Detect follow-ups (simple heuristic: lastAnswer exists or “more/explain/why” patterns) and set sectionSpec accordingly.
+
+8) Model routing to a high-tier MoE when it matters
+
+infrastructure/llm/model/routing/ModelRouter.java — route intents {PAIRING, EXPLANATION, ANALYSIS} with verbosity ∈ {deep, ultra} to openai.model.moe (config: gpt-4o). Temperature ≤ 0.3, higher output token budget. For brief/standard or low-stakes, use mid-tier.
+
+infrastructure/llm/DynamicChatModelFactory.java — read per-intent/verbosity params (temp, topP, tokenOut) from config.
+
+api/dto/ChatResponseDto.java & api/dto/ChatStreamEvent.java — ensure modelUsed and ragUsed are populated in the final SSE event.
+
+9) Memory reinforcement that doesn’t poison retrieval
+
+strategy/reinforcement/MemoryReinforcementService.java — enforce min/max snippet length from config; include confidence and recency in energy; anneal temperature by hit count. Skip reinforcement if content outside bounds.
+
+rag/handler/MemoryHandler.java — load top-energy session snippets into PromptContext.memory; per-session cache honored.
+
+rag/handler/MemoryWriteInterceptor.java — persist verified final answers only (post-verifier), never drafts.
+
+10) Chain stability and compile-time hygiene
+
+application/chat/ChatHistoryService.java vs ChatHistoryServiceImpl vs DefaultChatHistoryService — collapse to one impl; guarantee getLastAssistantMessage(Long) signature used by ChatService. Add null-safe Optional.
+
+application/rag/orchestrator/ContextOrchestrator.java — accept targetTokenBudgetOut from VerbosityProfile; enforce dedupe and authority-first packing.
+
+app/StartupVersionPurityCheck.java — on mismatch, print coordinates and exit(1). Keep health indicator green path.
+
+11) Configuration keys you should wire (no code, just where they live)
+
+application.yml
+
+abandonware.answer.detail.min-words.{brief|standard|deep|ultra}
+
+abandonware.answer.token-out.{brief|standard|deep|ultra}
+
+orchestrator.max-docs.{default|deep|ultra}
+
+reranker.keep-top-n.{brief|standard|deep|ultra}
+
+openai.model.moe = gpt-4o
+
+search.authority.weights.{official|wiki|community|blog} = comma CSV domain:weight
+
+memory.snippet.min-length / max-length
+
+agent.knowledge-curation.enabled (keep false by default)
+
+config/RetrieverChainConfig.java — assemble the handler order from config toggles (feature flags) to let you A/B test.
+
+12) Targeted fixes for “always Diluc” symptom
+
+Disambiguation layer: pre-dictionary bypass prevents LLM from “correcting” valid Genshin entities to popular ones.
+
+EvidenceGate: require subject mention frequency ≥ threshold and at least one rule-aligned partner present in context before pairing answers are allowed.
+
+NamedEntityValidator: if the recommended partner isn’t in context/memory lines → block with “정보 없음.”
+
+RelationshipRuleScorer + AdaptiveScoringService: boost rule-consistent, feedback-positive pairs; demote generic “popular” pairs when unsupported in current evidence.
+
+AuthorityScorer: prioritize hoyolab.com/official over fandom/blog noise to reduce wrong co-mention bias.
+
+ModelRouter: deep/ultra pairing/explanation → MoE (gpt-4o) with low temperature to reduce random defaults.
+
+13) Tests & diagnostics to lock this down
+
+@SpringBootTest smoke: ensures all beans above wire; assert VersionPurityHealthIndicator returns OK for 1.0.1.
+
+Retrieval chain tests: simulate handler failures; verify partial results propagate and no exceptions leak.
+
+SubjectResolver tests: overlapping names; longest-match wins; dictionary bypass.
+
+Verifier tests: unsupported entities → “정보 없음”; evidence insufficient → soft-fail (claims filtered).
+
+Reranker tests: confirm ruleBoost and synergyBonus change ordering deterministically.
+
+SSE contract test: last event contains modelUsed and ragUsed.
+
+14) Rollout plan (safe and quick)
+
+Ship Track 0 purity guard; block any mixed LangChain4j.
+
+Land Track 7 PromptBuilder enforcement + ChatService routing to it (no behavior change intended, just centralization).
+
+Insert Track 1 handler order with graceful error envelopes.
+
+Enable Track 6 validator + EvidenceGate; monitor “정보 없음” rate.
+
+Turn on Track 5 adaptive rerank and Track 4 authority weights.
+
+Flip ModelRouter MoE rule for deep/ultra pairing/explanation.
+
+Migrate SubjectResolver to KB (Track 3), then remove any static lexicons.
+
+This plan keeps your architecture aligned with the rules you set (HybridRetriever entry; handlers order; prompt centralization), hardens verification so “Diluc default” cannot slip through, and guarantees that high-stakes, deep/ultra requests are routed to the higher-tier MoE automatically.
 
 This version maintains the full core content with no information loss, removes redundancies, adds extensive developer guidance, and includes all critical patches. It should be clear and informative for Jammini or any reviewer to understand the entire project without diving into source files.
