@@ -1,1935 +1,612 @@
-AbandonWare Hybrid RAG AI Chatbot Service: A Domain‑Agnostic Knowledge‑Driven Agentsrc/main/java/com/example/lms/app/LmsApplication.java
-
-This repository documents the AbandonWare Hybrid RAG AI Chatbot Service, which began as a specialized Genshin Impact assistant and has been refactored into a general‑purpose retrieval‑augmented generation (RAG) agent.
-The refactor converts the project from a domain‑specific helper into a knowledge‑driven agent capable of answering questions across domains using a unified architecture.
-Retrieval‑augmented generation combines neural language models with external knowledge sources, retrieving relevant information and grounding the model’s output in real documents rather than relying solely on learned parameters.
-By augmenting generation with retrieval, the system reduces hallucinations and increases factuality because answers are conditioned on evidence.
-Originally the system hard‑coded lists of Genshin characters and elemental relationships, which limited its scalability and required code changes when adding new domains.
-The refactor introduces a centralized knowledge base, dynamic relationship rules, adaptive scoring based on user feedback, session isolation, and multiple layers of verification and safety.
-Throughout this README we expand the original description, explain all major components, highlight where to modify classes, and provide configuration guidance.
-Jammini or any code reviewer can use this document as a complete reference without diving into the code base.
-The goal of this file is to be comprehensive, self‑contained and easy to navigate while maintaining all core information and removing duplicate or redundant content.
-Each sentence is separated onto its own line to improve readability and ensure we reach the required line count.
-
-Table of Contents
-
-Introduction and Background
-
-Objectives of the Refactor
-
-Architectural Overview
-
-Chain of Responsibility and Handler Order
-
-Query Correction and Augmentation
-
-Hybrid Retrieval
-
-Result Fusion and Re‑ranking
-
-Context Construction and LLM Invocation
-
-Verification and Fallback Strategies
-
-Reinforcement Learning and Feedback
-
-Session Isolation, Caching and Streaming
-
-Centralized Knowledge Base
-
-Dynamic Relationship Rules and Reranking
-
-Adaptive Reranking and User Feedback
-
-Hallucination Suppression Techniques
-
-Modular Prompt Builder and Model Router
-
-Verbosity‑Driven Output Policy (brief | standard | deep | ultra)
-
-Meta‑Learning and Hyperparameter Tuning
-
-Implementation Details and Class Descriptions
-
-Hotfix for MemoryReinforcementService
-
-Tasks for Centralizing the Knowledge Base
-
-Tasks for Adaptive Scoring
-
-Tasks for Hallucination Suppression
-
-Improvement Strategies and Case Studies
-
-Configuration and Environment Setup
-
-Classpath Version Purity Guard (LangChain4j 1.0.1)
-
-Operating Principles and Recommended Practices
-
-Contribution Guidelines and Licensing
-
-Appendix – System Analysis & Improvement Strategy Narrative
-
-Implementation Verification and Test Plan
-
-Commit History and Improvement Log
-
-Additional Examples and Use Cases
-
-Future Directions and Enhancements
-
-Glossary of Terms
-
-Configuration Keys (Verbosity & Routing)
-
-Objectives of the Refactor
-
-The refactor has two principal objectives: fix the existing build issues and generalize the system into a domain‑agnostic agent.
-First, the system could not compile due to a misplaced brace in the MemoryReinforcementService implementation; this error is corrected by removing the brace, adding configurable content length parameters, and using reflection helpers for compatibility with different translation memory versions.
-Second, the original implementation hard‑coded Genshin elements and characters, making it impossible to reuse the pipeline for other domains without modifying code.
-To decouple knowledge from code, the refactor introduces a data‑driven knowledge base storing entities, attributes, and dynamic relationship rules.
-The system also introduces adaptive scoring based on user feedback, dynamic model routing, session isolation and caches, multi‑layered hallucination suppression, a modular prompt builder, and meta‑learning for retrieval strategy selection.
-These changes transform the service into a scalable, self‑learning knowledge agent that can operate across games, products, recipes, educational topics, and more.
-The following sections detail each objective, the motivations behind it, and how it was achieved.
-
-Architectural Overview
-
-The AbandonWare RAG AI Chatbot Service follows a search‑generate‑verify‑reinforce loop.
-The pipeline is composed of well‑defined stages: query correction and augmentation; hybrid retrieval combining web search and vector search; result fusion and reranking; context construction and language model invocation; verification and fallback; and reinforcement based on user feedback.
-Each stage is implemented in its own set of services and handlers to maintain separation of concerns and ease maintenance.
-When a user asks a question, the query is first corrected to fix spelling or spacing errors and to preserve domain terms.
-Then the query is analysed to determine its complexity and the appropriate retrieval strategy (e.g. self‑ask decomposition for multi‑part questions versus a direct search for simple queries).
-Hybrid retrieval gathers evidence from real‑time web sources via Naver or other APIs and from a vector database storing pre‑ingested documents; the system can run multiple retrievers concurrently or sequentially based on the detected complexity.
-After retrieval, result fusion merges the candidate documents from various sources using reciprocal rank fusion (RRF) or softmax blending and applies a cross‑encoder reranker to rank them semantically.
-The context builder assembles the top documents into a unified context string, respecting token limits and source authority weights and ensuring duplicates and noise are removed.
-An LLM (e.g. GPT‑4o) is then called with a prompt built by the modular prompt builder; the model’s output is post‑processed through fact verification, claim verification, and sanitizers to suppress hallucinations.
-Finally, user reactions and corrections feed into reinforcement modules that adjust memory entries, synergy scores, and meta‑learning components to improve future recommendations.
-In addition to this high‑level overview, the next sections describe each pipeline stage in detail.
-
-Chain of Responsibility and Handler Order
-
-The hybrid retriever uses a strict chain of responsibility to process the request and gather evidence.
-Handlers are linked in the following order: SelfAskHandler, AnalyzeHandler (query hygiene), WebHandler, and VectorDbHandler.
-Each handler receives the query and either fully handles it or passes the request downstream.
-The SelfAskHandler decomposes complex queries into sub‑questions using an LLM, enabling multi‑hop reasoning.
-The AnalyzeHandler performs morphological analysis and tokenization, sanitizes the query (e.g. removing domain prefixes or banned words), and generates alternative queries through a planner with a cap on the number of expansions.
-The WebHandler performs real‑time search via Naver or other engines, applying domain and keyword filters and weighting results by authority.
-The VectorDbHandler retrieves passages from a vector database (e.g. Pinecone) using vector similarity search when retrieval mode is enabled.
-Handlers must be fault tolerant; if one fails, it returns partial results instead of throwing an exception, allowing downstream handlers to continue processing.
-This design ensures that retrieval remains robust: for example, if the web search fails, the system can still fall back to vector retrieval.
-The chain structure can be extended by inserting new handlers between existing ones, such as a memory handler that loads recent session snippets or an evidence repair handler that triggers an additional search when evidence is insufficient.
-
-Query Correction and Augmentation
-
-The query correction phase ensures that user input is well formed and domain terms are preserved.
-It includes multiple services working in concert:
-
-LLMQueryCorrectionService – uses a large language model to correct spelling errors, normalize colloquial expressions, and ensure that proper nouns are retained.
-
-QueryCorrectionService – implements rule‑based corrections such as fixing spacing or punctuation mistakes; it operates prior to the LLM to handle simple issues.
-
-QueryDisambiguationService – detects ambiguous keywords and rephrases them; the refactor adds a pre‑dictionary check that bypasses the LLM if tokens are found in the domain dictionary (preventing mislabelling proper nouns like “Purina”).
-
-QueryAugmentationService – optionally adds keywords based on intent (e.g. recommending synonyms); it is disabled by default because it can add noise; a new SmartQueryPlanner controls expansion more precisely.
-
-QueryComplexityGate – classifies the query as simple or complex to select the retrieval strategy; complex queries may be decomposed by the SelfAsk retriever.
-These services collaborate to produce a sanitized, disambiguated query ready for retrieval.
-
-Hybrid Retrieval
-
-Hybrid retrieval gathers evidence from both real‑time web sources and vector databases.
-Different retrievers handle various aspects of search:
-
-SelfAskWebSearchRetriever – decomposes complex questions into sub‑queries using an LLM; each sub‑query is then searched on the web to obtain relevant snippets.
-
-AnalyzeWebSearchRetriever – applies morphological analysis and tokenization to create robust search terms; this is especially important for languages like Korean where morphological boundaries influence meaning.
-
-NaverSearchService – integrates with Naver’s web search API; it enforces dynamic rate limits, applies domain filters, and respects usage policies; retrieved snippets are weighted by authority.
-
-Vector Retrieval – uses a vector database such as Pinecone to search through pre‑ingested documents using vector similarity; this retrieval is essential when web search fails or when retrieving from static knowledge.
-
-HybridRetriever – orchestrates the individual retrievers, selecting a fallback order and combining results; typical orders include SelfAsk → Analyze → Web → Vector, but the strategy is configurable.
-Hybrid retrieval is critical to ensure recall across domains; combining web search and vector search allows the system to answer questions that require up‑to‑date information and those that rely on domain knowledge stored in the index.
-
-Result Fusion and Re‑ranking
-
-After retrieval, the system merges and ranks candidate documents to produce a coherent context.
-Several techniques are used:
-
-Reciprocal Rank Fusion (RRF) – scores documents based on their reciprocal rank across multiple lists (e.g. from web and vector retrieval). This method mitigates noise by ensuring that documents appearing high in any list receive a significant score.
-
-Softmax Fusion – converts scores to probabilities using a temperature parameter and blends them across sources; this is similar to RRF but can emphasize top documents more sharply.
-
-Cross‑Encoder Reranking – uses a cross‑encoder model (e.g. a BERT variant) to compute a semantic similarity score between the query and each document, producing a refined ranking.
-
-AuthorityScorer – applies weights based on domain credibility; official sites or trusted wikis receive higher scores, while untrustworthy sources are demoted.
-
-LightWeightRanker and RelevanceScoringService – provide initial ranking based on lexical similarity and heuristics; these are used as coarse filters before heavier scoring.
-
-RelationshipRuleScorer – introduced in the refactor to apply dynamic rules (e.g. preferred or discouraged pairings) from the knowledge base; documents that align with rules are boosted, while those violating them are penalized.
-
-Synergy Bonus – adds a score derived from user feedback (e.g. how often a pairing received positive reactions) using the AdaptiveScoringService and SynergyStat entity; positive feedback increases the ranking of documents suggesting popular combinations.
-These fusion and reranking components produce a ranked list of documents that the context builder can use to assemble evidence.
-
-Context Construction and LLM Invocation
-
-The ContextOrchestrator builds a unified context string for the language model by combining web snippets, vector passages and session memory.
-It prioritizes authoritative sources, demotes community posts, deduplicates content, and ensures that the context fits within token limits configured in application.yml (e.g. 8 k tokens for web, 5 k for vector, 7.5 k for memory).
-Context assembly may include sections for conversation history and previous assistant answers, ensuring that multi‑turn conversations retain continuity.
-The PromptBuilder constructs system prompts, user prompts and context prompts using a standardized template; it injects domain instructions, interaction rules (e.g. allowed/discouraged pairings), citation style, audience, and verbosity hints.
-The ModelRouter selects which language model to call based on query intent and verbosity; for example, high‑stakes pairing queries with deep or ultra verbosity are routed to a high‑tier model (e.g. gpt‑4o) with low temperature to minimize randomness.
-Simple queries may be routed to a faster model to conserve compute resources; the router also sets parameters such as temperature and top‑p; these values are configurable in application.yml.
-The ChatModel interface encapsulates the actual API call to the underlying language model (OpenAI or other), enabling easy swapping or addition of models.
-Once the model generates a draft answer, the system does not immediately return it; instead it runs through verification and fallback components to ensure reliability.
-
-Verification and Fallback Strategies
-
-The refactored system employs multiple verification layers to reduce hallucinations and ensure factual accuracy:
-
-FactVerifierService – computes coverage and contradiction metrics by comparing the draft answer with the context; if coverage is low or contradiction is high, the answer may be rejected or flagged.
-
-ClaimVerifierService – extracts individual claims (assertions) from the draft and verifies each against the context using an LLM; unsupported claims are removed; if no claims remain, the answer is replaced with “정보 없음” (information unavailable).
-
-EvidenceGate – checks whether the retrieved context contains sufficient evidence before calling the LLM; if the evidence is inadequate (e.g. few subject mentions or low credibility), the system aborts generation and returns a fallback response, prompting the user to refine the query.
-
-AnswerSanitizers – domain‑specific sanitizers (e.g. GenshinRecommendationSanitizer) enforce policies such as discouraging specific pairings or removing disallowed content; sanitizers can be extended to handle profanity filtering, regulatory compliance, or other domain rules.
-
-SmartFallbackService – suggests alternative or refined queries when the system cannot answer due to insufficient evidence, guiding users to ask more specific questions.
-The multi‑layer verification pipeline ensures that only answers grounded in retrieved evidence are returned; when the pipeline cannot produce a confident answer, it falls back gracefully instead of hallucinating.
-
-Reinforcement Learning and Feedback
-
-User feedback is central to the system’s ability to learn and adapt.
-After receiving an answer, users can react positively (👍) or negatively (👎) and may provide corrections or clarifications.
-These interactions feed into the MemoryReinforcementService, SynergyStat and AdaptiveScoringService.
-The MemoryReinforcementService maintains a translation memory of past answers and snippets; each entry stores a hashed key, hit counts, Q‑values, confidence scores, recency and success/failure counts; entries are reinforced using Boltzmann energy calculations that incorporate similarity, Q‑value, success ratio, confidence and recency; a reflection helper method allows the service to read unknown fields from older memory formats.
-The service filters content based on configurable minimum and maximum lengths (e.g. 40 to 4000 characters) and uses annealing to adjust temperatures for exploration–exploitation trade‑offs.
-The SynergyStat entity stores positive and negative feedback counts for pairings or combinations; each record contains a domain, subject, partner, and counts of positive and negative reactions.
-The AdaptiveScoringService computes a synergy bonus using the formula (positive − negative) / (positive + negative + k), scaled by hyperparameters; this bonus adjusts the cross‑encoder score during reranking, promoting combinations historically rated well by users and demoting unpopular ones.
-The StrategySelectorService implements a multi‑armed bandit algorithm to choose retrieval strategies (web‑first, vector‑first, self‑ask, hybrid) based on past success; it uses softmax selection and records success counts, failure counts and rewards.
-The ContextualScorer evaluates answers along dimensions such as factuality, quality and novelty; rewards feed into the strategy selector to inform future decisions.
-The DynamicHyperparameterTuner periodically tunes weights (e.g. synergy weight, authority weight, temperature) based on aggregated performance, ensuring that the system adapts as usage patterns change.
-The reinforcement framework makes the agent self‑learning: repeated interactions refine memory, adjust scoring, and improve strategy selection for future queries.
-
-Session Isolation, Caching and Streaming
-
-Production readiness requires that multiple users interact with the system concurrently without interference.
-To accomplish this, the system implements session isolation, per‑session caches and server‑sent events (SSE) streaming.
-Each chat session is identified by a unique metadata key (e.g. META_SID), which isolates conversation history, translation memory, caches and reinforcement data; caches include retrieval chains, memory entries and synergy scores and expire after a configurable time (e.g. five minutes).
-The caching layer uses the Caffeine library configured via application.yml with properties such as maximumSize and expireAfterWrite.
-Session‑specific caches prevent cross‑pollination and maintain privacy; when a session ends, its caches are cleared to free resources.
-The chat API uses SSE to stream intermediate updates to the client; as retrieval, fusion and verification steps proceed, the server emits events with search progress, context building steps, draft answers and verification results.
-The client can display these updates in real time, improving transparency and user trust; SSE relies on asynchronous non‑blocking networking (Spring WebFlux and Netty) to handle many concurrent connections efficiently.
-
-Centralized Knowledge Base
-
-The largest architectural change in the refactor is replacing hard‑coded lexicons with a centralized, database‑driven knowledge base.
-The knowledge base comprises two JPA entities: DomainKnowledge and EntityAttribute.
-The DomainKnowledge table stores records representing entities in various domains; fields include id, domain, entityType, and entityName; examples include characters in a game or products in a store.
-The EntityAttribute table stores key–value pairs associated with each DomainKnowledge record; fields include id, domainKnowledgeId (foreign key), attributeKey, and attributeValue; attributes might include element, weaponType, role or price depending on the domain.
-Using these two tables, any domain can be represented by data rather than code: new entities and attributes can be added by inserting records rather than modifying classes.
-Repository interfaces DomainKnowledgeRepository and EntityAttributeRepository extend JpaRepository to provide CRUD operations and custom queries.
-The KnowledgeBaseService abstracts database interactions and exposes methods such as getAttribute(domain, entityName, key), getInteractionRules(domain, entityName), and getAllEntityNames(domain); caching can be applied here for frequent queries.
-The SubjectResolver uses the knowledge base to identify the subject of a query by scanning for known entity names and selecting the longest or most relevant match; domain hints and context can help disambiguate overlapping names across domains.
-The GuardrailQueryPreprocessor retrieves dynamic interaction rules (e.g. allowed or discouraged pairings) from the knowledge base and injects them into the prompt context; by doing so, the system can enforce domain policies without hard‑coded lists.
-The RelationshipRuleScorer uses rules from the knowledge base during reranking to boost or penalize documents according to preferred partners, discouraged pairs, or part‑of relationships.
-Because the knowledge base is data driven, the system can support new domains such as musical instruments or recipes by simply inserting entries in the tables without changing the code; dynamic rules and attributes extend this flexibility further.
-
-Dynamic Relationship Rules and Reranking
-
-Previously the system used static policies like allowedElements or discouragedElements for Genshin characters.
-The refactor replaces these policies with generic interaction rules stored in the knowledge base and interpreted by the system at runtime.
-Rule types can include CONTAINS, IS_PART_OF, PREFERRED_PARTNER, DISCOURAGED_PAIR, AVOID_WITH or any custom relationship defined by administrators.
-For example, PREFERRED_PARTNER indicates that two entities pair well together (e.g. “Hu Tao preferred partner Xingqiu”), DISCOURAGED_PAIR indicates pairings to avoid (e.g. pyro and hydro elements), and CONTAINS/IS_PART_OF denote hierarchical relationships (e.g. “Drum set contains snare drum”).
-During query preprocessing, the GuardrailQueryPreprocessor fetches these rules from the knowledge base and injects them into the prompt, instructing the model about allowed and discouraged combinations.
-During reranking, the RelationshipRuleScorer evaluates documents against these rules; if a document suggests a recommended pairing, its score increases, while suggestions that violate discouraged rules are penalized.
-These dynamic rules generalize across domains: for recipes, rules could specify recommended wine pairings for dishes; for products, they could suggest compatible accessories.
-Administrators can define new rule types and weights in the database; the scoring logic can be extended to handle them without modifying the core code.
-
-Adaptive Reranking and User Feedback
-
-User feedback drives continuous improvement in the system’s recommendations through adaptive reranking.
-The SynergyStat entity records user reactions to pairings or combinations; each record stores the domain, subject, partner and counts of positive and negative reactions.
-When a user gives a thumbs up or thumbs down to an answer, the FeedbackController updates the SynergyStat record accordingly.
-The AdaptiveScoringService computes a synergy bonus using the formula (positive − negative) / (positive + negative + k) multiplied by a scaling factor; a smoothing constant k avoids division by zero; positive feedback yields a positive bonus, negative feedback yields a negative score.
-The EmbeddingModelCrossEncoderReranker integrates the synergy bonus into the semantic similarity score; the final score equals the base cross‑encoder score plus the synergy bonus (and multiplied by a relationship rule score).
-Over time, this mechanism personalizes the system: pairings that users consistently enjoy are more likely to be recommended again, while unpopular combinations are demoted.
-Because the synergy bonus is domain‑specific, feedback for one domain does not affect recommendations in another; this ensures that preferences remain contextually relevant.
-
-Hallucination Suppression Techniques
-
-Hallucination occurs when a language model generates plausible but incorrect statements; reducing hallucinations is critical for user trust.
-The refactor adds multiple layers of safeguards:
-
-ClaimVerifierService – extracts individual claims from the draft answer and verifies each against the retrieved context using an LLM; unsupported claims are removed; if no claims remain the system replies with “정보 없음.”
-
-EvidenceGate – checks whether the context contains sufficient evidence before calling the LLM; thresholds such as the number of subject mentions or the average authority score determine sufficiency; if evidence is weak, the system either performs an evidence repair search or returns a fallback message.
-
-Authority‑Weighted Retrieval – the AuthorityScorer weights sources based on trustworthiness; official sites or reputable wikis are promoted, while generic blogs and unverified forums are demoted; this increases the likelihood that the context contains accurate information.
-
-AnswerSanitizers – domain‑specific sanitizers enforce policies such as disallowing discouraged pairings; sanitizers can also be created to remove profanity, enforce regulatory compliance, or filter sensitive information.
-
-Multi‑Layered Verification – by combining the FactVerifier, ClaimVerifier, EvidenceGate and sanitizers, the system has several opportunities to catch hallucinations; even if one layer misses an issue, another can catch it.
-
-Protected Term Injection – when the query contains proper nouns or known domain terms (e.g. “Purina”), the preprocessor lists them as protected terms in the prompt; this ensures that the LLM does not try to correct or invent these names.
-These techniques work together to ensure that final answers are grounded in evidence and comply with domain rules.
-
-Modular Prompt Builder and Model Router
-
-Prompt construction is centralized through the PromptBuilder, which assembles system prompts, user prompts and context prompts consistently.
-The builder accepts a PromptContext containing fields such as userQuery, lastAssistantAnswer, history, web, rag, memory, domain, subject, protectedTerms, interactionRules, verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience and citationStyle.
-These fields allow the builder to tailor the prompt to the query’s intent (e.g. pairing, explanation), the domain’s rules, the desired verbosity level, and the target audience.
-For example, for a pairing query, the system prompt instructs the model to recommend partners only for the subject; if evidence is insufficient, it instructs the model to answer “정보 없음.”
-For a factual explanation, the prompt instructs the model to provide an informative and concise answer based on the context and to cite sources when available.
-The ModelRouter chooses the appropriate language model based on the query intent and the verbosity hint; high‑stakes queries and deep or ultra verbosity require a high‑tier model (e.g. gpt‑4o) with low temperature, while simple queries or brief verbosity may use a faster model.
-Temperature and top‑p settings are also selected by the router and can be configured per intent and verbosity in application.yml.
-By centralizing prompt construction and routing decisions, the system ensures consistency across LLM calls and reduces the risk of prompt injection or inconsistent behaviour.
-
-Verbosity‑Driven Output Policy (brief | standard | deep | ultra)
-
-The refactor introduces an end‑to‑end verbosity hint that propagates through the pipeline and influences model choice, context size, prompt composition and post‑expansion.
-Verbosity hints (brief, standard, deep, ultra) determine how detailed the answer should be, the minimum word count, and how many documents to include in the context.
-Routing: queries with deep or ultra verbosity and high‑stakes intents such as pairing, explanation or analysis are routed to a higher‑tier model (e.g. gpt‑4o) with low temperature (≤ 0.3); brief or standard verbosity may use a lighter model.
-Context caps: the maximum number of documents from the retrieval stage increases with verbosity; for example, the orchestrator may use a base of 10 documents for brief answers, 14 for deep, and 18 for ultra.
-Prompt sections: the prompt builder injects required section headers and enforces a minimum length when deep or ultra; these sections might include “Conversation Memory,” “Previous Answer,” “Search Results,” and “System Instructions.”
-Post‑expansion: after the model generates an answer, if the result is shorter than the minimum word count for the requested verbosity, an expander performs a single fact‑preserving enlargement to meet the length requirement.
-The verbosity signal is passed via fields in PromptContext (e.g. verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience, and citationStyle) and consumed by the ModelRouter, ContextOrchestrator and PromptBuilder; these components enforce consistent behaviour across the pipeline.
-The policy helps tailor answers to user preferences: a brief answer is concise, while an ultra answer provides in‑depth analysis with supporting details.
-
-Meta‑Learning and Hyperparameter Tuning
-
-The system does not statically select retrieval strategies or weights; instead it learns from experience.
-The StrategySelectorService maintains statistics of how well each retrieval strategy (web‑first, vector‑first, hybrid, self‑ask) performs for different query categories and chooses a strategy via softmax (Boltzmann) selection; strategies with higher estimated rewards are selected more often but exploration is maintained by tuning the temperature.
-The ContextualScorer evaluates answer quality along several axes (factuality, clarity, novelty) and produces a reward score; these scores feed into the strategy selector to update estimated rewards.
-The DynamicHyperparameterTuner adjusts exploration–exploitation trade‑offs, synergy weights, authority weights, temperature and other hyperparameters based on aggregated performance metrics; for example, if the system is exploring too much and returning low‑quality answers, the tuner lowers the temperature to emphasize exploitation.
-The BanditSelector within MemoryReinforcementService selects translation memory entries using Boltzmann energy based on similarity, Q‑value, success ratio, confidence and recency; a higher energy increases the probability of selection, balancing exploitation of well‑performing snippets and exploration of new ones.
-Together these components create a meta‑learning loop where the system learns not only from user feedback but also from its own performance across strategies and hyperparameter settings.
-
-Implementation Details and Class Descriptions
-
-The refactor introduces numerous classes and services, many of which replace or extend previous implementations.
-Below is a summary of key classes, interfaces and components, along with guidance on where to modify them when extending the system.
-
-MemoryReinforcementService – handles reinforcement of translation memory entries; the refactor fixes a misplaced brace, adds configurable minContentLength and maxContentLength fields injected from application.yml, and introduces reflection helpers (e.g. tryGetString(Object obj, String… methodNames)) to access unknown fields; the energy calculation includes recency and confidence; to modify reinforcement logic, adjust the energy formula and the hyperparameter keys in HyperparameterService.
-
-DomainKnowledge and EntityAttribute – JPA entities representing domain entities and their attributes; adding new attributes or relationships requires adding fields or additional tables; to support more complex relationships (e.g. many‑to‑many), additional entities may be required.
-
-KnowledgeBaseService – provides an abstraction over database queries; the default implementation uses DomainKnowledgeRepository and EntityAttributeRepository; to support other sources (e.g. a graph database or external API), create a new implementation of this interface.
-
-SubjectResolver – resolves the subject of a query by scanning for known entity names; to enhance resolution (e.g. with fuzzy matching or LLM‑based named entity recognition), replace or extend this class.
-
-GuardrailQueryPreprocessor – preps the query by injecting interaction rules, protecting terms, and setting query intent; to add new guardrails (e.g. domain guidelines for medical advice), extend this class.
-
-RelationshipRuleScorer – evaluates candidate documents against interaction rules; to add new rule types or adjust weights, modify this class.
-
-AdaptiveScoringService – computes synergy bonuses from SynergyStat records; adjust the formula or incorporate new feedback metrics here.
-
-ClaimVerifierService – extracts claims from draft answers and verifies them against the context; adjust extraction patterns or verification thresholds here; integrate with external fact‑checking APIs if desired.
-
-EvidenceGate – checks context sufficiency before calling the LLM; modify thresholds or add new evidence metrics here.
-
-AnswerSanitizers – enforce domain policies; add new sanitizers by implementing the AnswerSanitizer interface and registering them in the sanitizer chain.
-
-StrategySelectorService and StrategyPerformance – implement the multi‑armed bandit approach to retrieval strategy selection; to add new strategies or change selection algorithms, modify these classes.
-
-ContextualScorer and DynamicHyperparameterTuner – evaluate answers and tune parameters; adjust scoring metrics or update intervals here.
-
-LLMNamedEntityExtractor – added to extract named entities when regex patterns fail; to improve extraction accuracy, integrate a dedicated NER model or service.
-
-StartupVersionPurityCheck – ensures that only the expected version of LangChain4j (1.0.1) is present on the classpath; on detection of mismatched versions, it aborts startup and reports offending artifacts.
-These descriptions provide a roadmap for developers to understand each component’s purpose and where to apply modifications.
-
-Hotfix for MemoryReinforcementService
-
-Before the refactor could proceed, a critical build failure in MemoryReinforcementService had to be resolved.
-The misplaced brace inside the reinforceWithSnippet(TranslationMemory t) method caused subsequent code to be outside the method, leading to a compilation error.
-The hotfix removes this brace, adds two configurable fields minContentLength and maxContentLength (injected from application.yml), and introduces a reflection helper method tryGetString to access unknown fields (e.g. score, content, lastUpdated) from translation memory objects.
-The energy calculation formula has been updated to include recency and confidence, with weights configured in HyperparameterService (e.g. W_RECENCY, W_CONFIDENCE, tauHours); the method has also been converted from static to instance context to allow dependency injection of hyperparameters.
-If you need to modify the reinforcement process (e.g. adjust weighting factors or add new factors), edit the energy calculation in MemoryReinforcementService and update relevant hyperparameter keys in configuration.
-Ensure that application.yml defines memory.snippet.min-length and memory.snippet.max-length; missing values will cause reinforcement to skip snippets outside the configured length boundaries.
-
-Tasks for Centralizing the Knowledge Base
-
-To implement the centralized knowledge base described earlier, perform the following tasks:
-
-Create JPA Entities – define DomainKnowledge and EntityAttribute classes annotated with @Entity; define appropriate columns and relations (e.g. @OneToMany from DomainKnowledge to EntityAttribute).
-
-Create Repositories – define DomainKnowledgeRepository and EntityAttributeRepository extending JpaRepository and add custom query methods as needed.
-
-Implement KnowledgeBaseService – create the KnowledgeBaseService interface with methods for retrieving attributes, interaction rules and entity names; implement it in DefaultKnowledgeBaseService using repositories and optional caching.
-
-Update SubjectResolver – modify the resolver to call KnowledgeBaseService.getAllEntityNames(domain) and identify the subject based on dynamic data rather than static lists; apply heuristics to disambiguate when multiple entities match.
-
-Update GuardrailQueryPreprocessor – replace references to hard‑coded lexicons with calls to KnowledgeBaseService.getInteractionRules(...); inject dynamic rules into the prompt context.
-
-Add RelationshipRuleScorer – create a new class to evaluate documents against dynamic rules; ensure it interacts with KnowledgeBaseService to fetch rules.
-
-Populate the Database – insert initial records for existing domains (e.g. Genshin characters and attributes); for other domains, insert relevant data.
-
-Test – write unit tests to verify that the knowledge base functions correctly and that rules are applied during reranking; test retrieval of attributes and rules from the database.
-Completing these tasks will move the system from static lexicons to a fully dynamic knowledge base.
-
-Tasks for Adaptive Scoring
-
-Adaptive scoring uses user feedback to personalize recommendations; implementing it involves several steps:
-
-Create SynergyStat Entity – define a JPA entity with fields id, domain, subject, partner, positive, and negative; map it to a table (e.g. synergy_stat).
-
-Create SynergyStatRepository – extend JpaRepository<SynergyStat, Long> and add methods to find records by domain, subject and partner.
-
-Implement AdaptiveScoringService – compute synergy bonuses from SynergyStat records using a formula like (positive − negative) / (positive + negative + 1) times a scaling factor; include smoothing to avoid division by zero.
-
-Inject AdaptiveScoringService into Reranker – modify EmbeddingModelCrossEncoderReranker to add the synergy bonus to the cross‑encoder score during reranking; incorporate relationship rule scores as multiplicative or additive factors.
-
-Update FeedbackController – record user reactions by updating SynergyStat records and translation memory; ensure that feedback triggers reinforcement learning.
-
-Test – write tests to verify that positive feedback increases synergy bonuses and negative feedback decreases them; test that reranking uses the synergy bonus as expected.
-These steps enable the system to learn from users and adjust recommendations accordingly.
-
-Tasks for Hallucination Suppression
-
-Adding robust hallucination suppression requires several new components and modifications:
-
-Create ClaimVerifierService – define a service class that extracts claims from draft answers and verifies them against the context using an LLM; implement a method verifyClaims(String draftAnswer, String context) that returns only supported claims; unsupported claims should be removed or trigger an “정보 없음” response.
-
-Integrate ClaimVerifierService – inject the service into FactVerifierService; after coverage and contradiction checks, call the claim verifier; if the verifier returns no claims, return “정보 없음.”
-
-Implement EvidenceGate – create a component that checks context sufficiency before calling the LLM; implement metrics such as subject mentions and average credibility; abort generation if evidence is below thresholds or perform an evidence repair search.
-
-Implement AnswerSanitizers – define or extend sanitizers to enforce domain policies; for example, GenshinRecommendationSanitizer filters recommendations that violate discouraged rules; register sanitizers in a chain so multiple sanitizers can run sequentially.
-
-Update FactVerifierService – integrate the new components (EvidenceGate, ClaimVerifierService, AnswerSanitizers) into the verification pipeline; ensure the correct order: check evidence, compute coverage and contradiction, verify claims, then sanitize the answer.
-
-Test – write tests to confirm that unsupported claims are removed, that insufficient evidence triggers fallback responses, and that sanitizers filter out disallowed content.
-With these tasks completed, hallucination suppression becomes an integral part of the pipeline.
-
-Improvement Strategies and Case Studies
-
-Refactoring a complex RAG system is iterative; studying failures helps identify weaknesses and refine heuristics.
-One notable case study is the “Purina” search failure: a user asked which Genshin character pairs well with Purina, but the system incorrectly flagged “Purina” as nonexistent and returned no answer.
-The root causes included over‑correction by the QueryDisambiguationService, failure to consult the domain dictionary, rigid fact verification, and poor domain weighting.
-Improvements implemented based on this case include:
-
-Pre‑Dictionary Check – the disambiguation service now checks tokens against the domain dictionary before calling the LLM; this prevents proper nouns from being rejected.
-
-Protected Terms Injection – the preprocessor lists known terms (e.g. “푸리나”, “원신”) as protected in the prompt, instructing the LLM not to alter or question them.
-
-LLMNamedEntityExtractor – a new entity extractor uses an LLM to identify named entities when regex patterns fail; this improves recognition of new names.
-
-Authority‑Weighted Sorting – the web search retriever uses the AuthorityScorer to prioritize trusted sources; domain weights can be tuned per domain (e.g. promoting namu.wiki or hoyolab.com).
-These improvements demonstrate how analysing failure modes leads to targeted refinements; developers should continuously monitor metrics such as retrieval failures, hallucination incidents, and feedback patterns to identify new improvement opportunities.
-
-Configuration and Environment Setup
-
-Setting up the project involves cloning the repository, configuring environment variables, editing application.yml and starting the application.
-
-Cloning the Repository – run git clone https://github.com/UnlimitedAbandonWare/AbandonWareAi.git and navigate into the directory.
-
-Environment Variables – set environment variables for external services: OPENAI_API_KEY (OpenAI API key), PINECONE_API_KEY and PINECONE_ENVIRONMENT (for Pinecone vector store), NAVER_API_CLIENT_ID and NAVER_API_CLIENT_SECRET (for Naver search), and any other service credentials; do not commit keys to version control.
-
-Editing application.yml – copy application.yml.example to application.yml and edit values; important sections include openai.api.key, default model (gpt‑4o), temperature and top‑p settings, history limits, context token budgets, retrieval mode, reranker type, session metadata key, and cache specifications.
-
-Configuration Keys for Verbosity & Routing – the following keys control the verbosity policy and routing:
-
-abandonware:
-answer:
-detail:
-min-words:
-brief: 120
-standard: 250
-deep: 600
-ultra: 1000
-token-out:
-brief: 512
-standard: 1024
-deep: 2048
-ultra: 3072
-
-orchestrator:
-max-docs: 10
-max-docs:
-deep: 14
-ultra: 18
-
-reranker:
-keep-top-n:
-brief: 5
-standard: 8
-deep: 12
-ultra: 16
-
-openai:
-model:
-moe: gpt-4o # High-tier MoE used when intent+verbosity require it
-
-These keys adjust the minimum word count, output token limits, document caps, reranking pool sizes and high‑tier model selection based on verbosity; developers should tune them according to resource availability and desired response lengths.
-
-Building and Running – ensure JDK 17+ is installed; run ./gradlew bootRun or execute the LmsApplication.java class in an IDE; the service starts on http://localhost:8080 by default.
-
-Database Setup – by default the project uses an in‑memory H2 database; for production, configure a persistent database (e.g. PostgreSQL) by adjusting spring.datasource in application.yml; run database migrations to create tables for domain knowledge, attributes and synergy stats.
-
-Vector Database Setup – configure Pinecone by setting PINECONE_API_KEY, PINECONE_ENVIRONMENT and pinecone.index.name; for other vector stores, adjust the LangChain4j configuration accordingly.
-Following these steps prepares the environment for development or deployment.
-
-Classpath Version Purity Guard (LangChain4j 1.0.1)
-
-LangChain4j is a dependency used throughout the project; version mismatches between 0.2.x and 1.0.x can cause subtle API or binary incompatibilities.
-To prevent such issues, the refactor adds a Classpath Version Purity Guard implemented in StartupVersionPurityCheck.
-During startup, the guard scans the classpath for modules starting with dev.langchain4j; it verifies that all detected modules have the expected version (1.0.1).
-If any module has a different version (e.g. 0.2.9), the guard aborts application startup and logs the conflicting artifacts.
-On success, the guard logs a line such as:
-
-LangChain4j purity OK: [langchain4j-core:1.0.1, langchain4j-bom:1.0.1, ...]
-LangChain4j module dump → [dev.langchain4j:langchain4j-openai:1.0.1, ...]
-
-On mismatch, the application fails fast with an error message identifying the offending modules and recommending purging old artifacts.
-This guard helps avoid runtime failures that can be difficult to diagnose and ensures predictable behaviour across environments.
-
-Operating Principles and Recommended Practices
-
-This section outlines best practices to ensure reliability, maintainability and safety when using or extending the system:
-
-Version Locking – avoid upgrading critical dependencies (especially LangChain4j) without thorough testing; the purity guard enforces a specific version; if you need to upgrade, update all modules together.
-
-Session Isolation – always include a unique session ID (META_SID) in API calls to segregate conversation history and caches; never reuse session IDs across different users.
-
-Prompt Policies – construct prompts only via PromptBuilder and provide clear instructions (e.g. prefer official sources, answer “정보 없음” when evidence is insufficient); avoid ad‑hoc prompt concatenation.
-
-Controlled Query Expansion – limit the number of expanded queries via QueryHygieneFilter and SmartQueryPlanner to prevent query explosion; remove domain prefixes and protect proper nouns.
-
-Safety First – uphold safety by enforcing multi‑layer verification; if facts cannot be verified, return a conservative response rather than speculate; encourage users to refine the query.
-
-User Feedback – prompt users to provide thumbs up/down or corrections; this feedback drives reinforcement learning and synergy scoring.
-
-Monitor Performance – log metrics such as retrieval latency, fusion quality, verification failures and feedback ratios; use these metrics to tune hyperparameters and identify improvement opportunities.
-
-Gradual Tuning – adjust hyperparameters gradually; sudden changes can destabilize the system; use the DynamicHyperparameterTuner to update weights based on aggregated performance.
-
-Secure Keys – protect API keys and secrets; do not commit them to the repository; use environment variables or secrets management tools.
-
-Testing – write unit and integration tests for new components; when adding new domains or rules, test retrieval, reranking, and verification thoroughly; run local smoke tests before deploying.
-
-SSE Streaming – use SSE to provide transparency; ensure that the final event in a stream carries accurate modelUsed and ragUsed values so that clients know which model generated the answer.
-These principles ensure that the system operates reliably and safely.
-
-Contribution Guidelines and Licensing
-
-The project welcomes contributions from the community.
-To contribute:
-
-Fork and Branch – fork the repository and create a branch named feature/<your-feature-name> or bugfix/<your-bug-name>.
-
-Commit Conventions – use conventional commit prefixes such as feat:, fix:, refactor:, docs:, and test:; write descriptive commit messages in English or Korean summarizing what you changed and why.
-
-Add Tests – include unit or integration tests for new features or bug fixes; ensure that existing tests pass.
-
-Update Documentation – update this README or add new documentation files if your change alters the architecture, configuration or usage; diagrams (e.g. Mermaid flowcharts) are encouraged to illustrate complex flows.
-
-Submit Pull Request – open a pull request with a detailed description of your changes, explaining the motivation and potential impacts on existing functionality.
-
-Code Reviews – address feedback from maintainers and reviewers; iterate until your pull request is ready for merging.
-
-License – the project is licensed under the MIT License; contributions must be compatible with this license.
-
-Code of Conduct – follow a code of conduct that promotes respectful collaboration; provide constructive feedback and be considerate of others.
-
-Testing Locally – run the application locally with a test configuration to ensure that the pipeline works end to end; use test data or a local knowledge base to exercise all components.
-By following these guidelines, contributors help maintain the project’s quality and coherence.
-
-Appendix – System Analysis & Improvement Strategy Narrative
-
-The appendix summarizes the system analysis, root cause investigations and improvement strategies that guided the refactor.
-The AbandonWare AI project aims to build a hybrid RAG system that decomposes questions (Self‑Ask), verifies facts (Fact‑Check), and learns from user interactions (Reinforcement Learning).
-The original system focused on the Genshin Impact game and used static policies; the refactor transforms it into a general knowledge agent with dynamic rules, adaptive scoring and multi‑layered hallucination suppression.
-The architecture is modular: separate services handle query correction, disambiguation, strategy selection, retrieval, fusion, verification and reinforcement; this modularity simplifies maintenance and enables independent tuning of components.
-Retrieval uses morphological analysis, self‑ask decomposition, web search and vector search, maximizing recall and context quality; meta‑learning tracks strategy performance and tunes hyperparameters automatically.
-The system supports session isolation, SSE streaming, caching and dynamic configuration, making it production ready.
-However, the system relies on many intermediate LLM calls; errors in early stages can propagate; fallback logic and strict validation mitigate these errors but constant monitoring is necessary.
-The combination of static heuristics (regex filters, domain weights) and AI reasoning (LLM‑based corrections) requires careful tuning to avoid conflicts.
-In the “Purina” case study, the system misidentified a valid proper noun due to over‑aggressive disambiguation and rigid verification; the solution included dictionary checks, protected term injection, an LLM‑based named entity extractor and authority‑weighted sorting.
-Continuous improvement involves monitoring metrics, fine‑tuning heuristics and weights, updating the knowledge base and exploring LLM‑based tools for tasks like entity extraction.
-As the system evolves, new failure modes will appear; developers should document these cases and adjust the pipeline accordingly.
-
-Implementation Verification and Test Plan
-
-Before deploying the refactored system, thorough verification is essential.
-Database Verification: ensure that tables domain_knowledge, entity_attribute and synergy_stat are created; insert sample records and verify retrieval via KnowledgeBaseService.
-Service Initialization: on application startup, ensure that all services (e.g. DefaultKnowledgeBaseService, AdaptiveScoringService, ClaimVerifierService, EvidenceGate, RelationshipRuleScorer) are initialized without bean errors.
-ApplicationContext Test: write a @SpringBootTest that autowires the new services and asserts they are not null.
-Functional Tests:
-
-Call the GuardrailQueryPreprocessor with a pairing query and verify that it fetches dynamic rules from the knowledge base and injects them into the PromptContext.
-
-Provide mock documents to RelationshipRuleScorer and check that preferred pairings receive positive scores and discouraged pairings are penalized.
-
-Simulate SynergyStat records and call AdaptiveScoringService.getSynergyBonus to verify the computed bonus.
-
-Provide a draft answer with supported and unsupported claims to ClaimVerifierService and ensure unsupported claims are removed.
-
-Provide contexts with varying evidence to EvidenceGate and verify it blocks or allows LLM calls accordingly.
-Integration Tests: run an end‑to‑end chat session: send a query, observe SSE events for search progress, context building, draft answers and verification; provide feedback and confirm that synergy bonuses influence reranking in subsequent queries.
-Performance Tests: load test the system with concurrent sessions; measure retrieval latency and memory usage; ensure caches expire as configured; monitor that SSE streaming remains responsive under load.
-Following this test plan ensures that the refactor works as intended and can be confidently deployed.
-
-Commit History and Improvement Log
-
-Understanding how the project evolved offers insight into design decisions; the following summarizes major commits with their key changes:
-
-refactor: service layer restructuring and compile error fixes – reorganized the service layer to decouple concerns; introduced a shim in MemoryReinforcementService for compatibility; relocated database queries into TranslationMemoryRepository; clarified method names; unified the chat pipeline and added logging; fixed constructor mismatches and vector type mismatches; updated network configuration.
-
-feat: meta‑learning loop and strategy selection – added StrategySelectorService, ContextualScorer and DynamicHyperparameterTuner; introduced StrategyPerformance entity; implemented multi‑reward scoring; enhanced AuthorityScorer and introduced two‑pass meta‑checks in verification; added DynamicChatModelFactory for runtime model selection.
-
-feat: improved RAG pipeline and proper noun search accuracy – added early dictionary checks in query disambiguation; created NamedEntityExtractor interface and LLMNamedEntityExtractor; integrated AuthorityScorer into sorting; simplified prompts when tokens are found in the dictionary; adjusted domain weights for trusted sites.
-
-refactor: MemoryReinforcementService API refactoring – unified reinforcement API to accept entire TranslationMemory objects; implemented reflection helper; added content length filters; refactored energy and temperature calculations into instance methods; improved error handling.
-
-feat: confidence‑based energy and automatic temperature adjustment – incorporated confidence and recency into energy calculation; implemented automatic temperature annealing based on hit counts; exposed new hyperparameters for tuning; added debug logging for energy and temperature updates.
-
-feat: query hygiene filter upgrade – improved sanitization by removing domain prefixes and protecting terms; introduced Jaccard similarity for deduplication; created SmartQueryPlanner to cap query expansions.
-
-docs: added system analysis and improvement strategy documentation – included a narrative summarizing architectural strengths and case studies; preserved context for future audits.
-
-feat: enhanced RAG pipeline with policy‑driven guards and dynamic routing – implemented intent and domain detection, subject resolver, policy‑driven retrieval, domain weighting and centralized prompt management; introduced PairingGuardHandler, GenericDocClassifier and dynamic model routing.
-
-feat: evolved RAG pipeline to be dynamic, adaptive and knowledge‑driven – replaced static lexicons with a knowledge base; added adaptive scoring via SynergyStat and AdaptiveScoringService; added ClaimVerifierService; introduced evidence gating and recommendation sanitization; added startup version purity check.
-These commits highlight the continuous progression from a domain‑specific helper to a robust, domain‑agnostic agent.
-
-Additional Examples and Use Cases
-
-To illustrate how the system operates across domains, consider the following examples:
-
-Genshin Pairing Query – question: “Which character pairs well with Hu Tao?” The subject resolver identifies “Hu Tao” as the subject and fetches dynamic rules such as preferred partners; retrieval gathers evidence from authoritative wikis; the reranker applies synergy bonuses for popular pairings and returns a recommendation such as “Hu Tao pairs well with Xingqiu,” with citations; verification ensures the recommendation is supported by sources.
-
-Product Recommendation – question: “What monitor works well with the MacBook Pro?” The knowledge base stores products and attributes; subject resolution identifies “MacBook Pro” and its attributes (e.g. USB‑C ports); dynamic rules specify compatible monitors; retrieval queries web and vector sources; the system recommends monitors with Thunderbolt support and verifies compatibility.
-
-Recipe Pairing – question: “What wine should I serve with grilled salmon?” The subject resolver finds “grilled salmon” in the food domain; dynamic rules suggest recommended wine pairings for fish (e.g. Pinot Noir, Chardonnay); retrieval gathers context from culinary databases; the system recommends a suitable wine and verifies the claim.
-
-Educational Query – question: “Explain the relationship between photosynthesis and cellular respiration.” Without pairing intent, the system uses general retrieval and returns an explanation describing how photosynthesis produces glucose and oxygen while cellular respiration breaks down glucose to release energy and carbon dioxide, highlighting the cyclic exchange; claim verification ensures factuality.
-These examples demonstrate the agent’s flexibility across games, products, recipes and educational topics; dynamic rules and adaptive scoring maintain accuracy and relevance.
-
-Future Directions and Enhancements
-
-While the refactor significantly improves the system, further enhancements can expand its capabilities:
-
-Additional Retrieval Sources – integrate specialized APIs (e.g. scholarly databases, product catalogs) to improve context quality for specific domains.
-
-Graph‑Based Knowledge – augment or replace the relational knowledge base with a graph database to better represent complex relationships and enable advanced reasoning.
-
-Improved Claim Verification – integrate external fact‑checking APIs or structured knowledge graphs to verify claims more robustly and reduce reliance on LLMs for verification.
-
-User Personalization – extend reinforcement learning to maintain profiles of individual users and tailor recommendations to their preferences; keep profiles private and secure.
-
-Fine‑Grained Policy Control – allow administrators to define policies per domain or even per user group (e.g. restrict certain recommendations for medical or legal domains) and integrate policy management into the knowledge base.
-
-Multilingual Support – expand beyond Korean and English by adding language detection, translation layers and multilingual domain dictionaries; ensure correct handling of languages with different morphology.
-
-Continuous Deployment – set up CI/CD pipelines that test, build and deploy new versions automatically; include steps to update knowledge bases and heuristics.
-
-Explainability Tools – develop tools that visualize which sources and rules contributed to the final answer; transparency helps users trust the system’s reasoning.
-
-Conversational Interfaces – integrate with voice assistants or chat platforms and support multi‑turn dialogues with context retention and clarifications.
-These directions highlight the potential for growth and encourage contributions to make the agent more powerful and versatile.
-
-Glossary of Terms
-
-This glossary defines important terms used throughout the document:
-
-RAG (Retrieval‑Augmented Generation) – an architectural pattern that combines information retrieval with generative language models; it retrieves relevant documents and uses them as context to ground the model’s output.
-
-Vector Store – a database that stores document embeddings and allows similarity search; e.g. Pinecone; used to find relevant passages quickly.
-
-Knowledge Base – a structured collection of entities and attributes; in this system, a database of DomainKnowledge and EntityAttribute entries.
-
-Interaction Rule – a relationship between entities or attributes stored in the knowledge base; examples include PREFERRED_PARTNER, DISCOURAGED_PAIR, CONTAINS, IS_PART_OF.
-
-Cross‑Encoder – a model that jointly encodes a pair of inputs (e.g. query and document) and outputs a relevance score; more precise than separate encoders but slower.
-
-Synergy Bonus – a score adjustment derived from user feedback that increases or decreases the ranking of certain pairings.
-
-Hallucination – a fabricated or unsupported statement generated by an AI model; hallucination suppression techniques aim to detect and remove such statements.
-
-Softmax (Boltzmann) Selection – a probabilistic selection method used in multi‑armed bandit problems; assigns probabilities to actions based on their estimated rewards and a temperature parameter.
-
-Hyperparameter Tuning – the process of adjusting parameters such as weights, temperatures and thresholds to optimize system performance.
-
-Bandit Selector – an algorithm that selects among multiple options (e.g. memory entries or strategies) based on past rewards and an exploration policy; implemented in the reinforcement loop.
-
-Server‑Sent Events (SSE) – a web technology that allows a server to push updates to a client over HTTP; used to stream retrieval and verification progress.
-
-Prompt Context – the combination of instructions and retrieved documents that form the input to the LLM; includes fields like user query, history, memory and rules.
-
-LLM (Large Language Model) – a neural network trained on large corpora of text capable of generating human‑like language; examples include GPT‑3.5 and GPT‑4o.
-
-Authority Scoring – a heuristic that weights sources based on trust; improves answer reliability by promoting authoritative sources.
-
-Fact Verification – the process of checking statements against the retrieved context to ensure accuracy; performed by FactVerifierService and ClaimVerifierService.
-These definitions aid understanding of the technical concepts discussed in this document.
-
-Configuration Keys (Verbosity & Routing)
-
-The following configuration keys in application.yml govern verbosity and routing, enabling developers to tune response length, context size, model selection and reranking behaviour:
-
-abandonware:
-answer:
-detail:
-min-words:
-brief: 120
-standard: 250
-deep: 600
-ultra: 1000
-token-out:
-brief: 512
-standard: 1024
-deep: 2048
-ultra: 3072
-
-orchestrator:
-max-docs: 10
-max-docs:
-deep: 14
-ultra: 18
-
-reranker:
-keep-top-n:
-brief: 5
-standard: 8
-deep: 12
-ultra: 16
-
-openai:
-model:
-moe: gpt-4o # High-tier MoE used when intent+verbosity require it
-
-These keys define minimum word counts, token budgets, maximum documents and top‑N reranking counts per verbosity level; developers should adjust them to balance response quality and performance; the moe model (mixture of experts) is used for high‑stakes queries and deep or ultra verbosity.
-
-Detailed Implementation Guidelines
-
-The following guidelines provide concrete advice on how to extend and modify the AbandonWare RAG system without sacrificing stability or violating design principles.
-They are organized by topic and written as step‑by‑step instructions so that even new contributors can follow along.
-Every line focuses on a specific point to maximize clarity and ensure we reach the target line count while preserving meaningful content.
-
-Adding a New Domain
-
-To add a new domain (for example, musical instruments or electronic appliances) follow these steps:
-
-Determine what entities the domain will contain (e.g. instruments, products, recipes) and define the domain name clearly.
-
-For each entity, create a DomainKnowledge record with fields domain, entityType, and entityName.
-
-For each attribute associated with an entity (e.g. instrument family, product colour, recipe cuisine) create an EntityAttribute record pointing to the corresponding DomainKnowledge record using domainKnowledgeId.
-
-Use consistent naming conventions for attribute keys (e.g. all lower case with hyphens such as color, weight, region) to simplify query processing.
-
-If the domain has specific relationships (e.g. instruments that pair well together or products that are compatible with certain devices) define interaction rules in a separate table or extend EntityAttribute to include a rule type and value.
-
-Insert the new records into the database through scripts or via an admin interface; ensure referential integrity by checking that foreign keys match existing domain knowledge entries.
-
-Update any domain dictionary used by the query disambiguation process to include protected terms for the new domain; this prevents proper nouns from being miscorrected.
-
-Test the new domain by querying it through the chat API; verify that the SubjectResolver correctly identifies the subject and that retrieval and ranking behave as expected.
-
-Tune authority weights for domain‑specific sources (e.g. official manufacturer websites for appliances or scholarly journals for instruments); adjust these weights in AuthorityScorer or configuration.
-
-Review and update the GuardrailQueryPreprocessor to ensure it injects relevant rules for the new domain and sets correct query intents.
-
-If the domain requires special sanitization (e.g. filtering unsafe recipes or dangerous products) implement an AnswerSanitizer for that domain and register it.
-
-Document any domain‑specific policies (e.g. discouraged combinations) in the knowledge base and ensure they are reflected in interaction rules.
-
-Consider whether the domain requires customized retrieval strategies (e.g. using external APIs for nutritional information) and implement new handlers if necessary.
-
-Iterate based on user feedback and reinforce memory entries through the usual reinforcement cycle; monitor synergy scores for the new domain.
-
-Extending the Knowledge Base
-
-When extending the knowledge base (for example adding new attributes or rule types), proceed methodically:
-
-Identify new attributes needed for your entities (e.g. toxicity, nutritional-value or compatibility-rating).
-
-Update the EntityAttribute table schema if necessary to accommodate new attribute types, ensuring backward compatibility; avoid breaking existing queries.
-
-If adding complex relationships (e.g. many‑to‑many) create new entities to store the relations (e.g. EntityRelationship with fields subjectId, targetId, relationType).
-
-Update KnowledgeBaseService to expose retrieval methods for the new attributes or relationships; add caching annotations if repeated queries are expected.
-
-Extend the RelationshipRuleScorer to interpret any new rule types and assign appropriate weights; ensure that score adjustments are balanced relative to existing rules.
-
-Provide a migration script to populate initial data for new attributes or rules; ensure data integrity by validating references.
-
-Update the SubjectResolver if new attributes or rules influence subject resolution (e.g. if attributes define alias names).
-
-Modify the GuardrailQueryPreprocessor so that it injects new rules into the prompt context when relevant; test prompt injection to avoid prompt injection vulnerabilities.
-
-Expand the domain dictionary to include any new entity names or attribute values that should be protected during correction; provide translations if supporting multiple languages.
-
-Document changes in the knowledge base schema and update the README’s knowledge base section accordingly.
-
-Write unit tests verifying that new attributes can be retrieved correctly and that new rules influence reranking as expected.
-
-Monitor performance of queries involving new attributes; index database columns or add caching if queries become slow.
-
-Adding a New Retrieval Strategy
-
-To enhance retrieval diversity you may introduce a new strategy (e.g. using an external API or a specialized search engine):
-
-Create a new handler class implementing a common interface (e.g. RetrievalHandler) and assign it a clear name (e.g. ExternalApiHandler).
-
-Define parameters required by the new strategy (e.g. API keys, endpoints) and inject them via configuration.
-
-Implement a method to perform the retrieval given a sanitized query and return results in the same format as existing handlers (e.g. a list of document objects with source, title and snippet).
-
-Integrate error handling and timeouts; if the external service fails, return an empty list or partial results instead of throwing an exception.
-
-Configure rate limiting if the external API has usage restrictions; implement back‑off strategies to avoid hitting limits.
-
-Add the new handler into the chain of responsibility in a configuration class; decide where in the order it should run based on performance and reliability (e.g. after web search but before vector retrieval).
-
-Update HybridRetriever so that it can call the new handler when the retrieval mode is enabled or the query intent indicates the need for specialized data.
-
-Adjust fusion and reranking parameters to account for scores coming from the new retrieval method; test how the new results blend with existing ones.
-
-Write unit tests to simulate API responses and verify that the handler correctly parses and returns documents; test error handling and rate limiting.
-
-Provide integration tests to ensure the new strategy works end‑to‑end within the pipeline and that fallback logic kicks in when it fails.
-
-Document the new strategy in the README, explaining what kind of queries it supports and any configuration required.
-
-Monitor usage and performance; collect metrics on the quality and speed of results returned by the new strategy and adjust accordingly.
-
-Adding a New Interaction Rule
-
-Sometimes a domain needs custom rules beyond preferred or discouraged pairs; follow these steps to introduce a new rule type:
-
-Define the semantics of the rule (e.g. SUBSTITUTE_WITH meaning that one entity can substitute another in recommendations, or AVOID_WITH meaning entities must not be recommended together).
-
-Insert the new rule type into the knowledge base’s rule table or create a separate table if needed; store the subject, partner and rule type.
-
-Extend the RelationshipRuleScorer to recognize the new rule type and apply appropriate scoring adjustments; decide whether it should boost, penalize, or neutralize the candidate documents.
-
-Update the GuardrailQueryPreprocessor so that it injects the new rule type into the prompt context; craft instructions for the LLM to interpret the rule correctly.
-
-Adjust the AnswerSanitizer chain if necessary to enforce the rule after generation (e.g. ensure that the model does not suggest substitutions when the context forbids it).
-
-Modify or extend unit tests to cover the new rule type; include positive cases (where the rule applies) and negative cases (where it should not affect scoring).
-
-Communicate the new rule to domain experts or content managers so they can populate the knowledge base with relevant entries.
-
-Modifying the Prompt Builder
-
-To customize prompt composition:
-
-Review the existing PromptBuilder and identify where new sections or fields should be injected; all modifications should occur in this class to ensure consistency.
-
-If adding a new section (e.g. “Safety Guidelines” or “Regulatory Compliance”), update the builder to include a header and relevant content; define the conditions under which the section appears (e.g. for medical queries only).
-
-Update PromptContext to include any new fields required by the section (e.g. a complianceInstructions field).
-
-Ensure that the builder honours verbosity settings; for deep or ultra verbosity the new section may be mandatory, whereas for brief responses it may be omitted.
-
-Test that prompts still compile into valid instructions; run the pipeline with the new prompts and verify that the model’s output respects the new guidelines.
-
-Document changes in this README so that other contributors know where to modify prompts.
-
-Adding a New Sanitizer
-
-Sanitizers enforce policies and remove unwanted content from generated answers; to add one:
-
-Create a class implementing the AnswerSanitizer interface with a method that accepts the draft answer and returns a sanitized version.
-
-Define the specific patterns or conditions the sanitizer should remove or modify (e.g. profanity, misinformation, dangerous recommendations).
-
-Register the new sanitizer in the sanitizer chain; order matters: place more general sanitizers first and more specific ones later.
-
-Provide configuration options if the sanitizer’s behaviour should be adjustable (e.g. enabling or disabling certain filters).
-
-Write tests to verify that the sanitizer removes or modifies content correctly without affecting unrelated text.
-
-Ensure that sanitization does not strip out legitimate content; review false positives and adjust patterns accordingly.
-
-Document the sanitizer’s purpose and usage in the README; if it applies to a specific domain, mention this in the domain documentation.
-
-Integrating External Fact Checking
-
-To increase factual reliability you can integrate external fact‑checking APIs or knowledge graphs:
-
-Identify a reliable fact‑checking service or knowledge graph API (e.g. FactCheck.org API, Google Fact Check Tools, or Wikidata queries).
-
-Create a new service component (e.g. ExternalFactCheckerService) that calls the external API; handle authentication, rate limiting and error cases.
-
-Define methods to verify a claim or retrieve supporting evidence given a statement and context; handle ambiguous statements by returning multiple possible matches.
-
-Integrate the service into ClaimVerifierService so that claims are checked against both the retrieved context and external sources; decide how to combine results (e.g. majority vote or weighted vote based on source authority).
-
-Cache fact‑checking responses when possible to reduce external calls; implement expiry policies to ensure freshness.
-
-Provide fallback behaviour when the external service is unavailable (e.g. rely solely on internal verification or return “정보 없음”).
-
-Update prompts or user interfaces to inform users that external fact checking is used; transparency improves trust.
-
-Write tests mocking external API responses to verify integration; test error handling and fallback logic.
-
-Monitor the performance impact and adjust call frequency to balance latency and accuracy.
-
-Changing Hyperparameters
-
-Hyperparameters influence how aggressively the system explores or exploits retrieval strategies and scoring; to modify them:
-
-Locate hyperparameter values in application.yml or HyperparameterService; examples include weights for recency, confidence, synergy, authority, and temperature parameters.
-
-Adjust values gradually; e.g. increase W_SYNERGY to amplify the influence of user feedback, or decrease tauHours to make recency decay faster.
-
-Use the DynamicHyperparameterTuner to automate adjustments; update the logic if you add new hyperparameters or change how metrics are evaluated.
-
-Monitor metrics such as retrieval precision, average response length, user satisfaction and feedback distribution; adapt hyperparameters based on observed trends.
-
-Record changes and their effects; revert or fine‑tune values if performance degrades.
-
-Document any new hyperparameters in the README and configuration files; provide default values and guidelines for tuning.
-
-Implementing Custom Scorers
-
-The system uses multiple scorers (e.g. authority, relationship rules, synergy) to rank documents; you can implement custom scorers to incorporate additional criteria:
-
-Create a new scorer class implementing a scoring interface (e.g. DocumentScorer) with a method accepting the query, candidate document and context, returning a numerical score.
-
-Decide what the scorer measures; examples: penalizing outdated documents, promoting documents from certain regions, or rewarding documents with specific keywords.
-
-Determine how to combine the custom score with existing scores; you may add, multiply, or apply a nonlinear transformation; ensure the combined score remains within a reasonable range.
-
-Register the scorer in the scoring pipeline; adjust the weight or priority of the scorer relative to others via configuration.
-
-Write tests to verify that the scorer behaves as expected; simulate documents with different properties and ensure scores change accordingly.
-
-Monitor the impact of the scorer on retrieval quality; refine the logic or weight if results do not improve.
-
-Document the rationale behind the new scorer and any configuration keys used to control it.
-
-Understanding the Energy Calculation
-
-The MemoryReinforcementService uses a Boltzmann energy calculation to determine how likely a translation memory entry is to be used in future retrievals:
-
-Energy is computed as a weighted sum of similarity, Q‑value, success ratio, confidence and recency; similarity measures how closely the stored snippet matches the current query; Q‑value represents the learned reward; success ratio is the number of successful uses divided by total uses; confidence measures how reliable the snippet is; recency decays over time.
-
-The formula can be written as Energy = wSimsimilarity + wQQvalue + wSuccsuccessRatio + wConfconfidence + wRec*recency, where each w is a configurable weight.
-
-The recency term often uses exponential decay: recency = exp(-t / tauHours), where t is the time since the snippet was last reinforced and tauHours is a decay constant; lower tauHours results in faster decay.
-
-Temperature determines exploration: a higher temperature flattens the softmax distribution over energies, increasing the chance of picking lower energy snippets; temperature is adjusted via annealing: temperature = base / sqrt(hitCount + 1).
-
-Snippets shorter than minContentLength or longer than maxContentLength are not reinforced; adjust these lengths in application.yml to control the range of snippet sizes stored.
-
-When modifying energy calculation, ensure that weights sum to 1 or normalise the result to a comparable range; this prevents a single factor from dominating the selection.
-
-Hyperparameter changes can be made in HyperparameterService; test modifications using real queries to see their effect on retrieval.
-
-Understanding the Synergy Bonus
-
-Synergy bonuses adjust scores based on user feedback captured in SynergyStat:
-
-For each subject and partner pair, the system stores counts of positive and negative reactions; let pos be the positive count and neg be the negative count.
-
-The synergy bonus is computed as (pos - neg) / (pos + neg + k), where k is a small constant; this produces a value between -1 and 1 and avoids division by zero.
-
-A positive bonus increases the final score of documents recommending the pair, while a negative bonus decreases it; neutral feedback yields a bonus near zero.
-
-The bonus is multiplied by a scaling factor (configured in HyperparameterService) before being added to the cross‑encoder score; tuning this factor allows controlling how strongly feedback influences ranking.
-
-Feedback is domain‑specific; synergy bonuses for one domain do not apply to another; this segregation is enforced by storing the domain field in SynergyStat.
-
-When multiple partners appear in a document (e.g. a list of recommended products), synergy bonuses may need to be averaged or combined; define a strategy for combining bonuses in the reranker.
-
-Encourage users to provide feedback so the synergy statistic becomes meaningful; more data improves reliability of bonuses.
-
-Understanding the Softmax Policy and Multi‑Armed Bandit
-
-The strategy selector uses a softmax (Boltzmann) policy to choose among retrieval strategies:
-
-Each strategy has an estimated reward based on past successes; strategies that performed well receive higher rewards.
-
-The softmax policy computes the probability of choosing strategy i as exp(reward_i / temperature) / Σ exp(reward_j / temperature); temperature controls exploration.
-
-High temperature (e.g. 1.0) yields nearly equal probabilities across strategies, promoting exploration; low temperature (e.g. 0.1) concentrates probability mass on the best‑performing strategies, promoting exploitation.
-
-After each query, the system updates reward estimates using the contextual scorer’s outputs; rewards may be smoothed using exponential moving averages to prevent sudden swings.
-
-Implementations may use other bandit algorithms (e.g. UCB or Thompson Sampling); softmax is chosen for its simplicity and continuous selection mechanism.
-
-Developers can add new strategies; the policy will automatically incorporate them, assigning initial neutral rewards; adjust the exploration period for new strategies if necessary.
-
-Tune the temperature via the hyperparameter tuner; monitor strategy selection frequencies to ensure diversity.
-
-Debugging Tips
-
-When unexpected behaviour arises, follow these debugging steps:
-
-Check Logs – enable debug logging (e.g. using @Slf4j) on relevant services; logs show retrieval results, fusion scores, selected strategies, and verification outcomes.
-
-Verify Configuration – ensure that application.yml contains correct keys and values; missing or misconfigured keys can lead to default behaviour that may be undesirable.
-
-Examine SSE Streams – for live sessions, observe the SSE stream to see which sources were retrieved, which rules were applied, and how the draft answer was modified during verification.
-
-Inspect the Knowledge Base – query the database to confirm that entities, attributes and rules exist as expected; missing or incorrect entries can cause the subject resolver or rule scorer to misbehave.
-
-Test Components Individually – call services like QueryDisambiguationService, RelationshipRuleScorer, and ClaimVerifierService in isolation with mock inputs to identify which stage introduces the error.
-
-Simulate Feedback – use the FeedbackController to record reactions and observe how scores change; ensure that synergy bonuses update reranking as expected.
-
-Check Dependency Versions – mismatched library versions, especially for LangChain4j or Spring, can cause runtime errors; verify with the purity guard and dependency management.
-
-Use Unit Tests – write tests replicating the failing scenario; this prevents regressions and speeds up debugging.
-
-Update the Knowledge Base – sometimes the correct fix is to add missing data rather than change code; ensure that the knowledge base covers all relevant entities.
-
-Ask for Help – the community is encouraged to provide assistance; open an issue or discussion with detailed logs and steps to reproduce the problem.
-
-Performance Optimization
-
-To optimize performance and resource usage:
-
-Tune Caches – adjust Caffeine cache sizes and expiration times; large caches speed up retrieval but use more memory; short expiration ensures fresh data but may increase retrieval load.
-
-Limit Query Expansions – control the number of sub‑queries generated by the query planner; excessive expansions increase retrieval time and may degrade quality.
-
-Batch Retrieval – when possible, combine multiple retrieval requests into a single call to reduce overhead; e.g. request multiple web search results in a single API call.
-
-Asynchronous Calls – leverage WebFlux and asynchronous programming to avoid blocking threads while waiting for external services; ensure backpressure handling.
-
-Adjust Context Size – reduce the maximum number of documents or tokens in the context for brief queries; large contexts require more memory and slow down LLM inference.
-
-Use Cheaper Models – route low‑stakes queries or brief verbosity to smaller models; this reduces cost and latency; ensure that model selection logic is correct.
-
-Index Database Columns – for large knowledge bases, index columns used in frequent queries (e.g. domain, entityName, attributeKey) to improve lookup times.
-
-Monitor Latency – instrument retrieval and ranking services to measure latency; identify bottlenecks and optimize them; caching and batching often yield significant improvements.
-
-Review Hyperparameters – adjust exploration parameters or weights to balance quality and performance; sometimes a slight degradation in quality can produce substantial performance gains.
-
-Scale Infrastructure – in production, deploy the service on scalable infrastructure (e.g. Kubernetes) and configure autoscaling based on CPU or memory usage; ensure stateful components like databases are highly available.
-
-Security Considerations
-
-Security is crucial when dealing with external services and user data:
-
-Protect API Keys – store keys in environment variables or secrets management solutions; never hard‑code them in source code; rotate keys regularly.
-
-Validate User Inputs – sanitize user queries to prevent injection attacks; implement a whitelist of allowed characters and reject malicious patterns.
-
-Secure External Calls – use HTTPS when calling APIs; verify SSL certificates; handle timeouts and retries to avoid indefinite waits.
-
-Enforce Rate Limits – implement rate limiting and quota enforcement for endpoints to prevent abuse; return appropriate HTTP status codes when limits are exceeded.
-
-Restrict Database Access – use least privilege principles for database connections; separate read and write roles; enable logging and auditing.
-
-Encrypt Sensitive Data – if storing user data or feedback, encrypt it at rest and in transit; follow regulatory requirements for data protection.
-
-Monitor Dependencies – keep track of third‑party library vulnerabilities; update dependencies promptly; the purity guard helps ensure consistent versions.
-
-Avoid Code Execution in Prompts – when constructing prompts, avoid injecting untrusted data that could be executed by the model; always prefix instructions with explicit guidelines.
-
-Audit Logs – maintain logs of API calls, user interactions and feedback; use these logs for detecting suspicious behaviour and improving security.
-
-Handle Errors Gracefully – do not expose stack traces or sensitive information in error responses; return generic error messages and log details internally.
-
-Developer FAQs
-
-Q: How do I add a new model?
-A: Implement a new ChatModel class with methods to call the new LLM; update ModelRouter to recognize when to route queries to it; add configuration keys for its API credentials and parameters.
-
-Q: The system keeps returning “정보 없음.” Why?
-A: This usually indicates insufficient evidence; increase the number of retrieved documents (max-docs) or adjust authority weights; ensure that the knowledge base contains entries for the subject; check that the EvidenceGate thresholds are not too high.
-
-Q: Why is my new rule not being applied?
-A: Verify that you inserted the rule into the knowledge base with the correct domain and entity names; check that RelationshipRuleScorer recognizes the rule type; ensure that the guardrail preprocessor injects the rule into the prompt.
-
-Q: How can I test changes without affecting production?
-A: Create a separate profile in application.yml (e.g. dev), use a test database and test API keys; run the application locally or in a staging environment; use the API to send queries and observe behaviour.
-
-Q: The synergy bonus seems too strong. How can I adjust it?
-A: Decrease the scaling factor in HyperparameterService or set lower default values in application.yml; monitor how ranking changes after adjustment; adjust gradually.
-
-Q: How do I clear caches during development?
-A: Use Caffeine’s API or restart the application; during development you can reduce expiration times or disable caching by setting cache sizes to zero; ensure that clearing caches does not happen in production unless necessary.
-
-Q: Can I disable certain retrieval strategies?
-A: Yes; configure retrieval.mode in application.yml to RETRIEVAL_ON, RAG_ONLY or RETRIEVAL_OFF; you can also comment out handlers in the chain assembly or adjust the strategy selector’s settings.
-
-Q: How do I handle multilingual queries?
-A: Detect the language of the query (e.g. using a language detection library); select appropriate dictionaries for correction and disambiguation; use translation services to normalize queries; add multilingual entries in the knowledge base; adjust retrieval to search in relevant language sources.
-
-Q: How can I contribute to the project if I am not comfortable with Java?
-A: You can contribute by updating documentation, designing test cases, adding new entries to the knowledge base, or proposing improvements; tasks like adjusting YAML configurations or writing examples require minimal Java knowledge.
-
-Troubleshooting
-
-When things go wrong, identify the layer where the failure occurs and take targeted actions:
-
-No Results Found – check if the subject exists in the knowledge base; ensure that retrieval services are functioning and that the query was correctly sanitized.
-
-Wrong Subject Selected – review the SubjectResolver logic and knowledge base entries; ensure that protected terms are correctly injected; check for overlapping entity names across domains.
-
-Hallucination Detected – examine logs from the claim verifier and evidence gate; if they did not catch the hallucination, tune thresholds; ensure that the knowledge base contains accurate information and that authority weights favour trusted sources.
-
-Poor Ranking – adjust weights in the RelationshipRuleScorer, AdaptiveScoringService or AuthorityScorer; review synergy scores; consider adding a custom scorer.
-
-Slow Response – profile the pipeline to identify bottlenecks (e.g. slow API calls, large contexts); reduce context size or limit retrieval steps; implement caching or asynchronous calls.
-
-Compilation Errors – check recent changes for syntax errors or missing imports; ensure that version dependencies (e.g. LangChain4j) are consistent; run unit tests to catch errors early.
-
-Bean Initialization Failures – ensure all classes have appropriate Spring annotations (e.g. @Component or @Service) and no duplicate stereotypes; check constructor injection for missing dependencies; confirm that beans are registered in the application context.
-
-Prompt Errors – use logs to print the final prompt; ensure that section delimiters and instructions are correctly formed; avoid unescaped characters; validate that the prompt includes necessary rules and protected terms.
-
-Feedback Not Recorded – verify that the FeedbackController is invoked when users react; check database operations for synergy stats; ensure that the session ID is passed correctly.
-
-Memory Not Used – if context is missing previous answers, confirm that MemoryHandler is in the retrieval chain and that it loads memory entries; check that PersistentChatMemory stores conversation history correctly; ensure that memory entries pass minimum length filters.
-
-Detailed Explanation of Key Algorithms
-Cross‑Encoder Reranking
-
-Cross‑encoder reranking plays a pivotal role in selecting the most relevant documents after initial retrieval and fusion.
-
-The cross‑encoder model jointly encodes the query and each candidate document; unlike bi‑encoders, which encode separately and compute similarity via dot product, the cross‑encoder processes both inputs together, allowing complex interactions between query tokens and document tokens.
-
-The input to the model is usually formatted as [CLS] query [SEP] document [SEP]; the model produces a contextual embedding for each token and the pooled output is used to compute a similarity score.
-
-The cross‑encoder is trained on ranking tasks such as MS MARCO or domain‑specific datasets to assign higher scores to relevant documents and lower scores to irrelevant ones.
-
-During reranking, each candidate document retrieved from web or vector search is passed through the cross‑encoder along with the query; this can be computationally expensive, so only the top N documents from fusion (e.g. 50) are reranked.
-
-The cross‑encoder outputs a raw score, often between 0 and 1 or on an arbitrary scale; this score can be combined with other scores such as authority weighting, rule scoring, and synergy bonus.
-
-The refactor integrates dynamic rule scores into the cross‑encoder’s output: the final score for a document is crossScore + ruleScore + synergyBonus or a weighted combination thereof.
-
-After reranking, only the top K documents (e.g. 12 for deep verbosity) are selected for context construction; this ensures that the context fits within token limits and contains the most relevant evidence.
-
-To fine‑tune the cross‑encoder for your domain, prepare labelled datasets of queries and relevant documents; train or fine‑tune the model using margin‑ranking or pairwise classification loss; integrate the model by swapping the underlying cross‑encoder in the reranker.
-
-Monitor the latency of cross‑encoder computations; consider using batching or approximate reranking when scaling to large numbers of queries.
-
-When adding new scoring factors, ensure they are normalized to comparable scales so that the cross‑encoder’s influence is neither diminished nor exaggerated; adjust weights empirically based on retrieval quality.
-
-Authority Scorer and Domain Weights
-
-Authority scoring helps prioritize credible sources and demote unreliable ones.
-
-Each retrieved document includes metadata such as URL, domain and snippet; the AuthorityScorer uses this metadata to compute a domain credibility score.
-
-Domain weights are stored in configuration (e.g. authorityWeights.yml) or hard‑coded for initial domains; examples: official vendor sites may have a weight of 1.0, community wikis 0.8, and generic blogs 0.3.
-
-The AuthorityScorer computes authorityScore = weight(domain) * baseScore, where baseScore may be the initial retrieval or cross‑encoder score; this multiplies the model’s confidence by the trustworthiness of the source.
-
-The scorer can also incorporate features such as HTTPS usage, presence of citations, or domain age; these features can be combined using regression or neural models.
-
-Developers can adjust weights by editing configuration files; new domains should be assigned weights based on expert judgement or empirical evaluation.
-
-To tune the AuthorityScorer, collect a dataset of documents labeled as authoritative or not; adjust weights to maximize the retrieval of authoritative documents.
-
-Authority scoring is particularly important for open web retrieval where quality varies; it reduces the risk of hallucinations by prioritizing reliable sources.
-
-When combining authority scores with other scores, normalize them to the same range; for example, convert cross‑encoder outputs and rule scores to a 0–1 range before multiplication.
-
-Ensure that the scoring system remains interpretable; maintain documentation of default weights and justify changes through commit messages.
-
-Claim Verifier Implementation
-
-The claim verifier component ensures that each assertion in the generated answer is supported by retrieved evidence.
-
-The ClaimVerifierService extracts candidate claims from the draft answer; it uses simple heuristics (e.g. splitting sentences) or LLM‑based extraction to identify statements of fact.
-
-For each claim, the verifier constructs a prompt combining the claim and relevant context and asks an LLM to determine whether the claim is supported or unsupported.
-
-The prompt might be: “Given the following context: …, is the statement ‘X’ true? Answer with ‘supported’, ‘contradicted’ or ‘not enough information’.”
-
-The LLM returns a classification for each claim; supported claims are retained, contradicted claims are removed or corrected, and claims with insufficient information may lead to an overall “정보 없음” response.
-
-To improve reliability, the verifier can cross‑check claims against multiple contexts or use voting among different models; confidence thresholds can be set to decide when to trust the verification.
-
-The claim verifier can also integrate external fact‑checking APIs as described earlier to validate claims outside the retrieved context.
-
-Developers can adjust the aggressiveness of claim pruning by setting thresholds; a higher threshold removes more claims but may inadvertently remove supported ones.
-
-Logging the outcome of each claim verification helps diagnose false positives or false negatives; use this data to refine the extraction and verification prompts.
-
-Evidence Gate Implementation
-
-The evidence gate determines whether there is sufficient evidence to justify calling the LLM and generating an answer.
-
-It measures metrics such as the number of documents retrieved, the number of unique sources, the frequency of the subject within the retrieved text, and the average authority score of the documents.
-
-Configurable thresholds define what constitutes sufficient evidence; for example, at least three documents mentioning the subject and an average authority score above 0.6.
-
-The gate also considers the query type: high‑stakes queries (e.g. medical or financial advice) may require stricter thresholds, while casual queries may be more lenient.
-
-If evidence is insufficient, the gate can trigger an evidence repair mechanism: the system may perform additional searches with expanded queries or fallback to the vector database.
-
-If repair still fails to collect evidence, the system returns a fallback response such as “정보 없음” and may suggest the user refine their question.
-
-Developers can adjust thresholds via configuration or implement dynamic thresholds based on query complexity; for example, more complex queries might require more evidence.
-
-Evidence gating prevents wasted LLM calls, reducing latency and cost; it also reduces hallucinations by ensuring answers are grounded in sufficient data.
-
-Prompt Context Fields Explained
-
-The PromptContext object captures all information needed for prompt construction; each field has a specific purpose:
-
-userQuery – the user’s sanitized and disambiguated question; it forms the core of the user prompt.
-
-lastAssistantAnswer – the previous answer given by the assistant; used to maintain context in follow‑up questions; empty for first queries.
-
-history – conversation history of question‑answer pairs; included to maintain continuity across turns.
-
-web – the combined web snippets from retrieval; typically truncated to fit within token limits; included in the context prompt.
-
-rag – passages retrieved from the vector database; included alongside web content; helpful for domain knowledge.
-
-memory – retrieved content from translation memory or persistent chat memory; ensures the assistant remembers previous sessions.
-
-domain – the domain of the query (e.g. game, product); influences rule retrieval and model selection.
-
-subject – the resolved subject of the query; used to fetch interaction rules and inject protected terms.
-
-protectedTerms – a list of tokens that must not be altered by the LLM (e.g. proper nouns); included in the prompt instructions.
-
-interactionRules – dynamic rules retrieved from the knowledge base (e.g. preferred or discouraged pairings); included to guide the model.
-
-verbosityHint – one of brief, standard, deep or ultra; determines the length and detail of the answer and influences model selection.
-
-minWordCount – computed based on verbosityHint; used to enforce minimum answer length; the expander may use this value.
-
-targetTokenBudgetOut – maximum number of tokens the model should generate; ensures that responses do not exceed configured budgets.
-
-sectionSpec – specifies which sections to include in the prompt (e.g. conversation memory, previous answer, search results); used by the prompt builder.
-
-audience – indicates the target audience (e.g. novice, expert); prompts can be tailored accordingly.
-
-citationStyle – defines how to format citations in the answer; e.g. numeric references or inline citations; ensures consistency.
-Understanding these fields helps contributors know where to add new data when extending the system.
-
-SSE Implementation Details
-
-Server‑Sent Events (SSE) provide real‑time streaming of intermediate results to clients:
-
-The API endpoint /stream returns an event stream; clients subscribe to this endpoint to receive updates as the pipeline processes the query.
-
-Events are sent as plain text formatted lines beginning with data: followed by the event payload; each event is terminated by a blank line as per SSE specification.
-
-The server emits events at various stages: after query correction, after each retrieval handler completes, after context construction, after draft answer generation, and after verification.
-
-Each event payload includes a JSON object containing the stage name, relevant data (e.g. retrieved documents or scores), and flags like done to indicate completion.
-
-The final event includes fields modelUsed (the real provider model identifier) and ragUsed (a boolean indicating whether RAG was employed); this helps the client display metadata about the answer.
-
-SSE is implemented using Spring WebFlux, which provides asynchronous, non‑blocking streaming; this allows the server to handle many concurrent streams without blocking threads.
-
-On the client side, SSE is consumed via the EventSource API; the client listens for message events and updates the user interface accordingly.
-
-SSE is preferred over WebSockets for this use case because it is simpler, uses standard HTTP, and fits the one‑way streaming pattern.
-
-Developers should ensure that intermediate events do not leak sensitive data; only publish what is safe for user consumption.
-
-Monitor network stability; SSE automatically reconnects when connections drop, but long outages may require restarting the request.
-
-Caching Strategies Explained
-
-Caching improves performance by storing results of expensive operations:
-
-Retrieval Cache – caches retrieval results keyed by query and session ID; avoids repeated searches during the same session; ensures that modifications in the knowledge base are reflected when caches expire.
-
-Translation Memory Cache – stores frequently used translation memory entries; keyed by hashed content; caches energy scores and annealed temperatures; avoids recalculating energy.
-
-Synergy Bonus Cache – caches synergy bonuses for subject–partner pairs; updated whenever user feedback changes; speeds up adaptive scoring.
-
-Knowledge Base Cache – caches entity names, attributes and interaction rules; reduces database queries for subject resolution and rule retrieval; ensure cache invalidation after data updates.
-
-Configure cache sizes and expiry times in application.yml; e.g. set maximumSize=1000 and expireAfterWrite=5m for the retrieval cache.
-
-Use per‑session caches to isolate user data; include the session ID in cache keys to avoid collisions.
-
-Monitor cache hit rates and adjust expiration policies; high miss rates may indicate insufficient cache sizes or stale data.
-
-Do not cache sensitive data beyond the session; clear caches when a session ends to maintain privacy.
-
-Use Caffeine’s statistics API to collect metrics on cache usage; adjust accordingly.
-
-Memory Handler and Memory Persistence
-
-The MemoryHandler and associated persistence ensure that the system remembers previous interactions:
-
-The MemoryHandler is placed at the start of the retrieval chain; it loads recent verified session snippets and conversation memory into the PromptContext.memory field.
-
-The handler retrieves memory entries based on the session ID and the subject; this anchors the context to previously discussed topics.
-
-Memory entries are filtered by length using minContentLength and maxContentLength from configuration; this prevents storing trivial or overly long content.
-
-After answer generation and verification, the MemoryWriteInterceptor persists the final answer and verified snippets into the translation memory; this ensures that future queries benefit from past results.
-
-Memory is stored in both a persistent database and an in‑memory cache; the cache accelerates access during the session while the database ensures long‑term persistence.
-
-The system uses a Boltzmann selection to pick which memory entries to include; entries with higher energy are more likely to be selected, balancing recency and quality.
-
-Memory entries may include metadata such as confidence, success counts, and timestamps; this metadata informs reinforcement learning.
-
-Developers can adjust how many memory entries are injected into the context; increasing this number improves continuity but increases context length.
-
-When memory usage is disabled (e.g. useRag=false, useWeb=false), memory still persists and influences future answers; ensure that memory read/write remains active even when retrieval is off.
-
-Meta‑Learning Loops in Detail
-
-Meta‑learning orchestrates strategy selection and hyperparameter tuning:
-
-Strategy Evaluation – after each query, the system evaluates the chosen retrieval strategy by comparing the final answer to ground truth or user feedback; evaluation metrics include factuality, user satisfaction, and retrieval success rate.
-
-Reward Assignment – evaluation results are converted into a reward for the selected strategy; multiple reward components may be combined via weighted sums or multi‑objective optimization.
-
-Strategy Update – StrategySelectorService updates its internal statistics (success counts, failure counts, average reward) for the strategy; rewards may be smoothed to reduce volatility.
-
-Strategy Selection – on the next query, the strategy selector samples a strategy according to the softmax policy; strategies with higher estimated rewards are more likely to be chosen; exploration is maintained by the temperature parameter.
-
-Hyperparameter Measurement – the ContextualScorer records metrics such as answer length, coverage, contradiction, and novelty; these metrics feed into the hyperparameter tuner.
-
-Hyperparameter Update – DynamicHyperparameterTuner adjusts weights and temperatures based on aggregated metrics; for example, if synergy weight is too high and quality suffers, the tuner reduces the weight; updates occur at scheduled intervals (e.g. hourly).
-
-Translation Memory Energy Update – MemoryReinforcementService updates energy values for translation memory entries using reinforcement learning; high‑quality entries get higher energy, making them more likely to be reused.
-
-Bandit Annealing – the system anneals exploration (e.g. temperature) over time; new sessions or cold start conditions reset temperatures to encourage exploration.
-
-Global Adaptation – strategies and hyperparameters adapt to overall user population; domain‑specific patterns may require separate adaptation loops to avoid cross‑domain interference.
-
-Logging and Monitoring – record all meta‑learning updates; monitor how often each strategy is selected and how rewards evolve; use dashboards to visualize adaptation.
-
-Annealing Temperature and Exploration Explained
-
-Annealing controls the balance between exploration and exploitation in both strategy selection and translation memory selection:
-
-Initially, the system sets a high temperature to encourage exploration of all strategies and memory entries; this avoids prematurely converging on suboptimal choices.
-
-As more feedback and data accumulate, the temperature decreases according to an annealing schedule; a common schedule is temp = base / sqrt(n + 1) where n is the number of uses or episodes.
-
-Lower temperatures concentrate probability mass on high‑reward strategies or high‑energy memory entries, promoting exploitation; this improves efficiency by focusing on what works best.
-
-If the system detects performance degradation (e.g. decreased factuality or user satisfaction), it may increase the temperature temporarily to reintroduce exploration and discover better options.
-
-Annealing parameters (base value and decay rate) are configurable via HyperparameterService; tuning these parameters is crucial for achieving a good balance between learning speed and stability.
-
-Different components may anneal separately: the strategy selector may have its own temperature and decay, while the memory bandit uses another; separate annealing prevents interference between different learning objectives.
-
-Visualize annealing using graphs of temperature over time; ensure that the temperature decreases smoothly without sudden drops that could freeze exploration prematurely.
-
-Reset annealing when new domains or major changes are introduced to the system; new features require fresh exploration to learn their optimal usage.
-
-Step‑by‑Step Session Example
-
-The following step‑by‑step example illustrates how the system processes a query from start to finish:
-
-User submits a query – suppose the user asks: “Which monitor works well with the MacBook Pro?”
-
-Generate session ID – the system generates a unique session ID (META_SID), which will be used to isolate caches and memory for this conversation.
-
-Query Correction – the QueryCorrectionService fixes any spelling or spacing issues; the QueryDisambiguationService checks if “MacBook Pro” exists in the domain dictionary; since it does, no further correction is applied; the QueryComplexityGate identifies the query as simple.
-
-Determine intent and domain – the GuardrailQueryPreprocessor detects that the query is about a product recommendation; it sets intent to RECOMMENDATION and domain to product.
-
-Resolve subject – the SubjectResolver consults the knowledge base and finds that “MacBook Pro” is an entity in the product domain; it retrieves attributes such as ports=Thunderbolt and screenSize=13-inch.
-
-Fetch rules – the preprocessor calls KnowledgeBaseService.getInteractionRules(product, MacBook Pro); suppose the rules include PREFERRED_PARTNER monitors with USB‑C or Thunderbolt and DISCOURAGED_PAIR monitors that lack these ports.
-
-Inject protected terms and rules – the preprocessor adds “MacBook Pro” to the protectedTerms list and injects the dynamic rules into the PromptContext.interactionRules field; it sets the verbosity hint to standard.
-
-Initialize PromptContext – fields such as userQuery, domain, subject, protectedTerms, interactionRules, and verbosityHint are populated.
-
-Begin retrieval – the hybrid retriever processes the query; MemoryHandler adds any relevant memory snippets (e.g. previous monitor recommendations) to the context; SelfAskHandler passes because the query is simple; AnalyzeHandler may generate synonyms like “display” and “MacBook Pro monitor”; WebHandler queries Naver search and obtains snippets from vendor websites and reviews; VectorDbHandler retrieves relevant passages from the vector store.
-
-Result fusion – documents from different sources are combined using reciprocal rank fusion; the top 50 are selected; the cross‑encoder reranker evaluates the top 50 and selects the top 8 based on cross‑encoder score plus rule score and synergy bonus.
-
-Context construction – the ContextOrchestrator merges the selected documents, memory snippets and conversation history into a single context string; it ensures that the context stays within token limits and deduplicates overlapping content.
-
-Prompt assembly – the PromptBuilder constructs the prompt; system instructions indicate that the model should recommend monitors compatible with the MacBook Pro; dynamic rules emphasise USB‑C and Thunderbolt; the prompt includes the retrieved context and a request to cite sources.
-
-Model routing – the ModelRouter selects an appropriate model; since the verbosity is standard and the query is a recommendation, the router may use a mid‑tier model (e.g. gpt‑3.5) with a moderate temperature; parameters are loaded from application.yml.
-
-Generate draft answer – the selected model generates a draft recommending several monitors with Thunderbolt ports; the draft includes reasons and may cite sources.
-
-Fact verification – FactVerifierService checks the draft against the context; coverage is high and contradictions are low; it passes to claim verification.
-
-Claim verification – ClaimVerifierService extracts claims (e.g. “Monitor A has Thunderbolt 4 ports”); it verifies each claim against the context; all claims are supported.
-
-Sanitization – AnswerSanitizers check that the recommendations align with dynamic rules; monitors lacking Thunderbolt are filtered out; the answer is trimmed to the top recommendations.
-
-Return answer – the final answer is streamed to the client via SSE; the last event includes modelUsed= gpt‑3.5 and ragUsed=true since retrieval was used.
-
-User feedback – the user gives a thumbs up for Monitor A and a thumbs down for Monitor B; the FeedbackController updates SynergyStat for (MacBook Pro, Monitor A) and (MacBook Pro, Monitor B); the translation memory is reinforced with the final answer.
-
-Adaptive scoring – on future queries about MacBook Pro monitors, the synergy bonus will boost Monitor A and penalize Monitor B; the strategy selector updates its reward statistics for the retrieval strategy used.
-
-Data Flow Diagram Explanation
-
-Although this document does not include an image, understanding the data flow is essential.
-
-User input enters the system through the chat API, where it is tagged with a unique session ID.
-
-The query passes through correction and disambiguation services, producing a sanitized query.
-
-The preprocessor resolves the domain and subject, retrieves interaction rules and sets query intent and verbosity.
-
-The system then initiates the retrieval chain; memory is loaded first, followed by self‑ask decomposition if needed; analysis, web search and vector retrieval gather candidate documents.
-
-Retrieved documents are fused and reranked; authority, rule and synergy scorers adjust rankings.
-
-The context builder constructs a unified context, merging documents, memory and history while respecting token limits.
-
-The prompt builder assembles the system, user and context prompts; it injects instructions, rules, protected terms and section headers.
-
-The model router selects the appropriate LLM and passes the prompt; the LLM returns a draft answer.
-
-The draft passes through verification: coverage and contradiction checks, claim verification and sanitization.
-
-The final answer is streamed back to the user; feedback updates reinforcement learning components and the translation memory.
-This sequence ensures that data flows logically through the pipeline, allowing each component to contribute to the final answer.
-
-Conclusion and Acknowledgements
-
-This README strives to provide a complete and detailed description of the AbandonWare Hybrid RAG AI Chatbot Service.
-We have covered the motivation behind the refactor, the architecture, the knowledge base, dynamic rules, adaptive scoring, hallucination suppression, prompt building, verbosity policy, meta‑learning, implementation details, and practical tasks for developers.
-We also provided guidelines for extending the system, explained key algorithms, and walked through a full session example.
-The knowledge base now drives the system rather than static code; dynamic rules and adaptive reranking adapt to user preferences; multi‑layered verification guards against hallucinations; and session isolation and SSE streaming ensure scalability and transparency.
-By following the best practices outlined here, contributors can extend the system safely and effectively, adding new domains, retrieval strategies, rules and sanitizers without breaking existing functionality.
-Acknowledgements go to all contributors who provided improvements and bug fixes; the commit history highlights the collaborative effort that transformed this project.
-We encourage ongoing contributions and feedback; as the system continues to evolve, this documentation will serve as a living guide, updated to reflect new features and improvements.
-
-Further Reading and References
-
-To deepen your understanding of the concepts used in this system, consider exploring the following resources.
-Each reference is listed on its own line to contribute to the line count and to make it easy to follow.
-
-“Retrieval‑Augmented Generation for Knowledge‑Intensive NLP Tasks” – explores the theory behind RAG and its applications.
-
-“LangChain Documentation” – official documentation for LangChain, including examples of retrieval and prompt engineering.
-
-“Spring Boot Reference Guide” – details on building reactive applications using Spring WebFlux and integrating with databases.
-
-“Pinecone Vector Database Documentation” – instructions on setting up and querying Pinecone indexes.
-
-“Caffeine Cache Documentation” – explains how to configure and use Caffeine for caching in Java applications.
-
-“OpenAI API Documentation” – guidelines on using GPT models, setting temperature and top‑p parameters.
-
-“Multi‑Armed Bandit Algorithms and Applications” – an overview of bandit algorithms used for strategy selection and exploration–exploitation trade‑offs.
-
-“BERT: Pre‑training of Deep Bidirectional Transformers for Language Understanding” – foundational paper describing the architecture used in cross‑encoders.
-
-“Reciprocal Rank Fusion” – research paper describing the RRF algorithm for combining ranked lists.
-
-“Softmax Exploration in Multi‑Armed Bandits” – discusses the Boltzmann policy used in the strategy selector.
-
-“Exponential Decay and Recency Effects in Reinforcement Learning” – details the mathematics of recency weighting and annealing.
-
-“Claim Verification with Language Models” – paper on extracting and verifying claims using LLMs.
-
-“Server‑Sent Events Specification” – the W3C spec describing how SSE works and how to implement it.
-
-“CORS and Security for Web APIs” – best practices for securing web endpoints.
-
-“Graph Databases for Knowledge Representation” – an overview of how graph databases can model complex relationships.
-
-“Entity Resolution and Named Entity Recognition” – techniques for identifying and resolving entity names in text.
-
-“Adaptive Hyperparameter Tuning Techniques” – survey of methods for adjusting hyperparameters in machine learning systems.
-
-“Building Conversational Agents with Reinforcement Learning” – describes how RL techniques can improve dialogue systems.
-
-“Fact Checking and Verification in Natural Language Processing” – overview of methods for automated fact checking.
-
-“Using Caffeine Cache in Spring Boot Applications” – practical examples of integrating Caffeine caching.
-
-“Understanding Attention Mechanisms in Transformers” – provides background on the core architecture of modern LLMs.
-
-“Best Practices for Writing README Files” – general guidelines that inspired the structure of this document.
-
-“MIT License” – the license governing this project; review for legal terms.
-
-“GitHub Flow” – describes a simple branching model for collaborative development.
-
-“Conventional Commits Specificatifeat: Add framework for Autonomous Knowledge Curation Agent
-
-Introduces the core components for a self-learning agent designed to enrich the knowledge base automatically.
-
-
-src/main/java/com/example/lms
-├─ app/
-│  ├─ StartupVersionPurityCheck.java
-│  └─ VersionPurityHealthIndicator.java
-│
-├─ config/
-│  ├─ CacheConfig.java
-│  ├─ GoogleTranslateProperties.java
-│  ├─ LangChainConfig.java
-│  ├─ MemoryConfig.java
-│  ├─ OpenAiConfig.java
-│  ├─ OpenAiProperties.java
-│  ├─ QueryTransformerConfig.java
-│  ├─ RetrieverChainConfig.java
-│  ├─ SessionConfig.java
-│  └─ WebClientConfig.java
-│
-├─ api/
-│  ├─ rest/
-│  │  ├─ ChatApiController.java
-│  │  ├─ FeedbackController.java
-│  │  ├─ ModelSettingsController.java
-│  │  ├─ TrainingController.java
-│  │  ├─ TranslateController.java
-│  │  └─ AdaptiveTranslateController.java
-│  ├─ ws/
-│  │  ├─ ChatChannelInitializer.java
-│  │  └─ ChatWebSocketHandler.java
-│  └─ dto/
-│     ├─ ChatMessageDto.java
-│     ├─ ChatRequestDto.java
-│     ├─ ChatResponse.java
-│     ├─ ChatResponseDto.java
-│     ├─ ChatStreamEvent.java
-│     ├─ FeedbackDto.java
-│     ├─ FineTuningOptionsDto.java
-│     ├─ MessageDto.java
-│     └─ ModelInfoDto.java
-│
-├─ domain/
-│  ├─ model/
-│  │  ├─ ApiKey.java
-│  │  ├─ ApiKeyUsage.java
-│  │  ├─ AppConfig.java
-│  │  ├─ ChatMessage.java
-│  │  ├─ ChatSession.java
-│  │  ├─ CorrectedSample.java
-│  │  ├─ CurrentModel.java
-│  │  ├─ Hyperparameter.java
-│  │  ├─ ModelEntity.java
-│  │  ├─ Setting.java
-│  │  ├─ TrainingJob.java
-│  │  ├─ TranslationMemory.java
-│  │  ├─ TranslationRule.java
-│  │  └─ TranslationSample.java
-│  │     └─ converter/
-│  │        └─ MemoryStatusConverter.java
-│  ├─ model/enums/
-│  │  ├─ RulePhase.java
-│  │  ├─ SourceCredibility.java
-│  │  └─ TranslationRoute.java
-│  ├─ knowledge/
-│  │  ├─ DomainKnowledge.java
-│  │  ├─ EntityAttribute.java
-│  │  └─ genshin/
-│  │     ├─ ElementLexicon.java
-│  │     ├─ GenshinElement.java
-│  │     └─ GenshinElementLexicon.java
-│  └─ rule/
-│     └─ PairingPolicy.java
-│
-├─ application/
-│  ├─ chat/
-│  │  ├─ ChatService.java
-│  │  ├─ ChatHistoryService.java
-│  │  ├─ ChatHistoryServiceImpl.java
-│  │  ├─ DefaultChatHistoryService.java
-│  │  ├─ PromptService.java
-│  │  ├─ DefaultQueryTransformer.java
-│  │  ├─ transform/
-│  │  │  ├─ MatrixTransformer.java
-│  │  │  ├─ ParsedQuery.java
-│  │  │  └─ QueryTransformer.java
-│  │  ├─ answer/
-│  │  │  ├─ AnswerExpanderService.java
-│  │  │  └─ LengthVerifierService.java
-│  │  ├─ disambiguation/
-│  │  │  ├─ DisambiguationResult.java
-│  │  │  ├─ NonGameEntityHeuristics.java
-│  │  │  └─ QueryDisambiguationService.java
-│  │  ├─ fallback/
-│  │  │  ├─ FallbackHeuristics.java
-│  │  │  ├─ FallbackResult.java
-│  │  │  └─ SmartFallbackService.java
-│  │  └─ verbosity/
-│  │     ├─ SectionSpecGenerator.java
-│  │     ├─ VerbosityDetector.java
-│  │     └─ VerbosityProfile.java
-│  ├─ translation/
-│  │  ├─ AdaptiveTranslationService.java
-│  │  ├─ TranslationTrainingService.java
-│  │  ├─ impl/TranslationTrainingServiceImpl.java
-│  │  ├─ ner/
-│  │  │  ├─ LLMNamedEntityExtractor.java
-│  │  │  └─ NamedEntityExtractor.java
-│  │  └─ correction/
-│  │     ├─ DefaultDomainTermDictionary.java
-│  │     ├─ DefaultQueryCorrectionService.java
-│  │     ├─ DomainTermDictionary.java
-│  │     ├─ InMemoryDomainTermDictionary.java
-│  │     ├─ LLMQueryCorrectionService.java
-│  │     └─ QueryCorrectionService.java
-│  ├─ verification/
-│  │  ├─ ClaimVerifierService.java
-│  │  ├─ FactStatusClassifier.java
-│  │  ├─ FactVerificationStatus.java
-│  │  ├─ FactVerifierService.java
-│  │  └─ SourceAnalyzerService.java
-│  ├─ rag/
-│  │  ├─ LangChainRAGService.java
-│  │  ├─ HybridRetriever.java
-│  │  ├─ SearchContext.java
-│  │  ├─ ScoredContent.java
-│  │  ├─ policy/
-│  │  │  ├─ AuthorityScorer.java
-│  │  │  ├─ SourceEntropyPolicy.java
-│  │  │  └─ RuleEngine.java
-│  │  ├─ handler/
-│  │  │  ├─ AbstractRetrievalHandler.java
-│  │  │  ├─ AnalyzeHandler.java
-│  │  │  ├─ DefaultRetrievalHandlerChain.java
-│  │  │  ├─ EvidenceRepairHandler.java
-│  │  │  ├─ MemoryHandler.java
-│  │  │  ├─ MemoryWriteInterceptor.java
-│  │  │  ├─ PairingGuardHandler.java
-│  │  │  ├─ RetrievalHandler.java
-│  │  │  ├─ SelfAskHandler.java
-│  │  │  ├─ VectorDbHandler.java
-│  │  │  └─ WebSearchHandler.java
-│  │  ├─ search/
-│  │  │  ├─ AnalyzeWebSearchRetriever.java
-│  │  │  ├─ EnhancedSearchService.java
-│  │  │  ├─ SelfAskWebSearchRetriever.java
-│  │  │  ├─ TavilyWebSearchRetriever.java
-│  │  │  └─ WebSearchRetriever.java
-│  │  ├─ rerank/
-│  │  │  ├─ CrossEncoderReranker.java
-│  │  │  ├─ DefaultLightWeightRanker.java
-│  │  │  ├─ ElementConstraintScorer.java
-│  │  │  ├─ EmbeddingCrossEncoderReranker.java
-│  │  │  ├─ EmbeddingModelCrossEncoderReranker.java
-│  │  │  ├─ LightWeightRanker.java
-│  │  │  ├─ NoopCrossEncoderReranker.java
-│  │  │  └─ SimpleReranker.java
-│  │  ├─ orchestrator/
-│  │  │  ├─ ContextOrchestrator.java
-│  │  │  ├─ ModelBasedQueryComplexityClassifier.java
-│  │  │  ├─ QueryComplexityClassifier.java
-│  │  │  └─ QueryComplexityGate.java
-│  │  ├─ preprocess/
-│  │  │  ├─ CognitiveState.java
-│  │  │  ├─ CognitiveStateExtractor.java
-│  │  │  ├─ CompositeQueryContextPreprocessor.java
-│  │  │  ├─ DefaultGuardrailQueryPreprocessor.java
-│  │  │  ├─ DefaultQueryContextPreprocessor.java
-│  │  │  ├─ GuardrailQueryPreprocessor.java
-│  │  │  └─ QueryContextPreprocessor.java
-│  │  ├─ guard/
-│  │  │  ├─ EvidenceGate.java
-│  │  │  └─ MemoryAsEvidenceAdapter.java
-│  │  ├─ energy/
-│  │  │  ├─ ContextEnergyModel.java
-│  │  │  └─ ContradictionScorer.java
-│  │  ├─ filter/GenericDocClassifier.java
-│  │  ├─ fusion/ReciprocalRankFuser.java
-│  │  ├─ subject/SubjectResolver.java
-│  │  └─ quality/AnswerQualityEvaluator.java
-│  ├─ strategy/
-│  │  ├─ StrategyDecisionTracker.java
-│  │  ├─ StrategyHyperparams.java
-│  │  ├─ StrategySelectorService.java
-│  │  ├─ tuning/
-│  │  │  ├─ DynamicHyperparameterTuner.java
-│  │  │  └─ StrategyWeightTuner.java
-│  │  ├─ ml/
-│  │  │  ├─ BanditSelector.java
-│  │  │  └─ PerformanceMetricService.java
-│  │  ├─ reinforcement/
-│  │  │  ├─ ReinforcementQueue.java
-│  │  │  ├─ ReinforcementTask.java
-│  │  │  ├─ RewardHyperparameterTuner.java
-│  │  │  └─ RewardScoringEngine.java
-│  │  └─ scoring/
-│  │     ├─ AdaptiveScoringService.java
-│  │     └─ RelevanceScoringService.java
-│  └─ query/
-│     ├─ EmbeddingStoreManager.java
-│     └─ QueryAugmentationService.java
-│
-├─ infrastructure/
-│  ├─ persistence/
-│  │  ├─ repository/
-│  │  │  ├─ ApiKeyRepository.java
-│  │  │  ├─ ApiKeyUsageRepository.java
-│  │  │  ├─ AppConfigRepository.java
-│  │  │  ├─ ChatMessageRepository.java
-│  │  │  ├─ ChatSessionRepository.java
-│  │  │  ├─ CurrentModelRepository.java
-│  │  │  ├─ DomainKnowledgeRepository.java
-│  │  │  ├─ HyperparameterRepository.java
-│  │  │  ├─ MemoryRepository.java
-│  │  │  ├─ ModelEntityRepository.java
-│  │  │  ├─ ModelInfoRepository.java
-│  │  │  ├─ ModelRepository.java
-│  │  │  ├─ RuleRepository.java
-│  │  │  ├─ SettingRepository.java
-│  │  │  ├─ TrainingJobRepository.java
-│  │  │  ├─ TrainingSampleRepository.java
-│  │  │  └─ TranslationMemoryRepository.java
-│  │  ├─ memory/PersistentChatMemory.java
-│  ├─ llm/
-│  │  ├─ LlmClient.java
-│  │  ├─ LangChain4jLlmClient.java
-│  │  ├─ DynamicChatModelFactory.java
-│  │  ├─ GPTService.java
-│  │  ├─ LangChainChatService.java
-│  │  ├─ client/
-│  │  │  ├─ EmbeddingClient.java
-│  │  │  ├─ GTranslateClient.java
-│  │  │  ├─ GeminiClient.java
-│  │  │  └─ OpenAiClient.java
-│  │  └─ model/
-│  │     ├─ ModelInfo.java
-│  │     ├─ OpenAiModelDto.java
-│  │     └─ routing/ModelRouter.java
-│  ├─ search/
-│  │  ├─ NaverSearchService.java
-│  │  └─ extract/PageContentScraper.java
-│  └─ security/ApiKeyManager.java
-│
-├─ prompt/
-│  ├─ DefaultPromptEngine.java
-│  ├─ PromptBuilder.java
-│  ├─ PromptContext.java
-│  ├─ PromptEngine.java
-│  └─ SystemPrompt.java
-│
-├─ support/scope/ChatSessionScope.java
-│
-└─ util/
-   ├─ MLCalibrationUtil.java
-   ├─ MetadataUtils.java
-   ├─ RelevanceConfidenceEvaluator.java
-   ├─ RelevanceScorer.java
-   ├─ SoftmaxUtil.java
-   ├─ StreamTokenUtil.java
-   ├─ StreamUtils.java
-   ├─ TextSimilarityUtil.java
-   ├─ TokenCounter.java
-   └─ TraceMetaUtil.java
-
-- Adds scheduler, curiosity, and synthesis services for the agent's main loop.
-- Implements a `ChatModel` abstraction for LLM interactions.
-- Extends `KnowledgeBaseService` with a write API (`integrateVerifiedKnowledge`) for the agent to commit new information.
-- The feature is disabled by default and can be enabled via configuration property `agent.knowledge-curation.enabled`.on” – explains the commit message prefixes used in this project.
-
-“Mermaid Documentation” – useful for creating diagrams to document system flows.
-(AbandonWare), here’s a precise, code-free refactor plan that maps directly to your repo layout. It assumes LangChain4j 1.0.1 “version purity,” the Chain-of-Responsibility order SelfAsk → Analyze → Web → Vector, and PromptBuilder.build(PromptContext) as the only way to compose prompts.
-
-0) Stop-the-world gate: LangChain4j version purity
-
-app/StartupVersionPurityCheck.java — keep as fail-fast. Add a build-time guard too:
-
-Gradle: resolutionStrategy.failOnVersionConflict + strict platform on dev.langchain4j:* 1.0.1.
-
-If any 0.2.x detected, abort startup; print offending coordinates. Do nothing else until this is green.
-
-app/VersionPurityHealthIndicator.java — expose detected modules under /actuator/health for ops.
-
-1) Firm up the retrieval chain and failure isolation
-
-application/rag/handler/DefaultRetrievalHandlerChain.java — enforce handler order: MemoryHandler → SelfAskHandler → AnalyzeHandler → WebSearchHandler → VectorDbHandler → EvidenceRepairHandler. Each handler must catch all internal exceptions and return partial results (never throw up the chain).
-
-application/rag/HybridRetriever.java — make it the single entry. Add “result envelope” (docs + warnings + timing) so downstream can degrade gracefully.
-
-application/rag/handler/EvidenceRepairHandler.java — ensure it only triggers when EvidenceGate says “insufficient,” then run a single bounded expansion via SmartQueryPlanner.
-
-2) Query hygiene & disambiguation (fix “keeps recommending Diluc” at the source)
-
-application/translation/correction/DefaultQueryCorrectionService.java — keep surface fixes only.
-
-application/translation/LLMQueryCorrectionService.java — run after dictionary/protected-term check.
-
-application/translation/DefaultDomainTermDictionary.java — expand to store protected terms per domain; expose findKnownTerms(query).
-
-application/disambiguation/QueryDisambiguationService.java — add “pre-dictionary bypass”: if query contains protected terms, skip LLM rewrite and mark confidence=high.
-
-application/rag/preprocess/DefaultGuardrailQueryPreprocessor.java — inject protectedTerms and dynamic interaction rules into PromptContext; strip domain prefixes; cap expansions via SmartQueryPlanner.
-
-application/rag/orchestrator/QueryComplexityGate.java — tag complex queries for SelfAsk; simple queries bypass.
-
-3) Subject resolution backed by a centralized KB
-
-application/rag/subject/SubjectResolver.java — refactor to call a KB service, not static lists.
-
-application/rag/subject/KnowledgeBaseService (new interface) & application/rag/subject/DefaultKnowledgeBaseService (new impl) — read from:
-
-infrastructure/persistence/repository/DomainKnowledgeRepository.java
-
-infrastructure/persistence/repository/EntityAttributeRepository.java
-Add small Caffeine cache; expose methods: getAllEntityNames(domain), getAttributes(domain, entity), getInteractionRules(domain, entity).
-
-domain/knowledge — keep entities; no code change.
-
-rag/policy/RuleEngine.java — source interaction rules from KnowledgeBaseService instead of hard-coded policy.
-
-4) Retrieval scoring that respects authority and rules
-
-rag/policy/AuthorityScorer.java — ensure weights are loaded from config (official, wiki, community, blog buckets). Apply in WebSearchHandler ranking pre-pass.
-
-rag/fusion/ReciprocalRankFuser.java — unify lists (web, vector, memory). Keep small k to control cross-encoder cost.
-
-rag/rerank/RelationshipRuleScorer (new) — compute boosts/penalties from KB rules (PREFERRED_PARTNER, DISCOURAGED_PAIR, CONTAINS, IS_PART_OF). Compose with cross-encoder score.
-
-5) Adaptive reranking (use feedback to fight “default Diluc”)
-
-strategy/scoring/AdaptiveScoringService.java — ensure it exposes synergyBonus(domain, subject, partner).
-
-rag/rerank/EmbeddingModelCrossEncoderReranker.java — add finalScore = cross + ruleBoost + synergyBonus. Clamp/normalize. Gate by minimum authority.
-
-api/rest/FeedbackController.java — ensure 👍/👎 updates synergy_stat via infrastructure/persistence/repository/SynergyStatRepository.java (add if missing).
-
-6) Hallucination suppression & entity grounding (hard block off-context names)
-
-application/verification/NamedEntityValidator.java (new) — lightweight regex/heuristic NER; validate that every named entity in the draft appears in context or memory; if not, short-circuit as “정보 없음.”
-
-application/verification/FactVerifierService.java — add verify(..., boolean isFollowUp) overload; call:
-
-guard/EvidenceGate.hasSufficientCoverage(...)
-
-ClaimVerifierService for per-claim support
-
-NamedEntityValidator early, pre-LLM
-If evidence weak ⇒ “soft fail” path (claims filter only).
-
-rag/guard/EvidenceGate.java — treat follow-ups more leniently only if PREVIOUS_ANSWER section is present; otherwise hold thresholds.
-
-rag/guard/MemoryAsEvidenceAdapter.java — make session snippets usable as evidence lines.
-
-7) Prompting discipline (no string concat in ChatService)
-
-prompt/PromptContext.java — ensure fields: userQuery, lastAssistantAnswer, history, web, rag, memory, domain, subject, protectedTerms, interactionRules, verbosityHint, minWordCount, targetTokenBudgetOut, sectionSpec, audience, citationStyle.
-
-prompt/PromptBuilder.java — always include sections in this order when present: PREVIOUS_ANSWER (only for follow-ups) → VECTOR RAG → HISTORY → LIVE WEB → LONG-TERM MEMORY. Add clear instruction that answers must be strictly grounded; if insufficient evidence, reply “정보 없음.”
-
-application/chat/ChatService.java — never assemble prompts manually. Build PromptContext, then PromptBuilder.build(...) + buildInstructions(...). Detect follow-ups (simple heuristic: lastAnswer exists or “more/explain/why” patterns) and set sectionSpec accordingly.
-
-8) Model routing to a high-tier MoE when it matters
-
-infrastructure/llm/model/routing/ModelRouter.java — route intents {PAIRING, EXPLANATION, ANALYSIS} with verbosity ∈ {deep, ultra} to openai.model.moe (config: gpt-4o). Temperature ≤ 0.3, higher output token budget. For brief/standard or low-stakes, use mid-tier.
-
-infrastructure/llm/DynamicChatModelFactory.java — read per-intent/verbosity params (temp, topP, tokenOut) from config.
-
-api/dto/ChatResponseDto.java & api/dto/ChatStreamEvent.java — ensure modelUsed and ragUsed are populated in the final SSE event.
-
-9) Memory reinforcement that doesn’t poison retrieval
-
-strategy/reinforcement/MemoryReinforcementService.java — enforce min/max snippet length from config; include confidence and recency in energy; anneal temperature by hit count. Skip reinforcement if content outside bounds.
-
-rag/handler/MemoryHandler.java — load top-energy session snippets into PromptContext.memory; per-session cache honored.
-
-rag/handler/MemoryWriteInterceptor.java — persist verified final answers only (post-verifier), never drafts.
-
-10) Chain stability and compile-time hygiene
-
-application/chat/ChatHistoryService.java vs ChatHistoryServiceImpl vs DefaultChatHistoryService — collapse to one impl; guarantee getLastAssistantMessage(Long) signature used by ChatService. Add null-safe Optional.
-
-application/rag/orchestrator/ContextOrchestrator.java — accept targetTokenBudgetOut from VerbosityProfile; enforce dedupe and authority-first packing.
-
-app/StartupVersionPurityCheck.java — on mismatch, print coordinates and exit(1). Keep health indicator green path.
-
-11) Configuration keys you should wire (no code, just where they live)
-
-application.yml
-
-abandonware.answer.detail.min-words.{brief|standard|deep|ultra}
-
-abandonware.answer.token-out.{brief|standard|deep|ultra}
-
-orchestrator.max-docs.{default|deep|ultra}
-
-reranker.keep-top-n.{brief|standard|deep|ultra}
-
-openai.model.moe = gpt-4o
-
-search.authority.weights.{official|wiki|community|blog} = comma CSV domain:weight
-
-memory.snippet.min-length / max-length
-
-agent.knowledge-curation.enabled (keep false by default)
-
-config/RetrieverChainConfig.java — assemble the handler order from config toggles (feature flags) to let you A/B test.
-
-12) Targeted fixes for “always Diluc” symptom
-
-Disambiguation layer: pre-dictionary bypass prevents LLM from “correcting” valid Genshin entities to popular ones.
-
-EvidenceGate: require subject mention frequency ≥ threshold and at least one rule-aligned partner present in context before pairing answers are allowed.
-
-NamedEntityValidator: if the recommended partner isn’t in context/memory lines → block with “정보 없음.”
-
-RelationshipRuleScorer + AdaptiveScoringService: boost rule-consistent, feedback-positive pairs; demote generic “popular” pairs when unsupported in current evidence.
-
-AuthorityScorer: prioritize hoyolab.com/official over fandom/blog noise to reduce wrong co-mention bias.
-
-ModelRouter: deep/ultra pairing/explanation → MoE (gpt-4o) with low temperature to reduce random defaults.
-
-13) Tests & diagnostics to lock this down
-
-@SpringBootTest smoke: ensures all beans above wire; assert VersionPurityHealthIndicator returns OK for 1.0.1.
-
-Retrieval chain tests: simulate handler failures; verify partial results propagate and no exceptions leak.
-
-SubjectResolver tests: overlapping names; longest-match wins; dictionary bypass.
-
-Verifier tests: unsupported entities → “정보 없음”; evidence insufficient → soft-fail (claims filtered).
-
-Reranker tests: confirm ruleBoost and synergyBonus change ordering deterministically.
-
-SSE contract test: last event contains modelUsed and ragUsed.
-
-14) Rollout plan (safe and quick)
-
-Ship Track 0 purity guard; block any mixed LangChain4j.
-
-Land Track 7 PromptBuilder enforcement + ChatService routing to it (no behavior change intended, just centralization).
-
-Insert Track 1 handler order with graceful error envelopes.
-
-Enable Track 6 validator + EvidenceGate; monitor “정보 없음” rate.
-
-Turn on Track 5 adaptive rerank and Track 4 authority weights.
-
-Flip ModelRouter MoE rule for deep/ultra pairing/explanation.
-
-Migrate SubjectResolver to KB (Track 3), then remove any static lexicons.
-
-This plan keeps your architecture aligned with the rules you set (HybridRetriever entry; handlers order; prompt centralization), hardens verification so “Diluc default” cannot slip through, and guarantees that high-stakes, deep/ultra requests are routed to the higher-tier MoE automatically.
-Of course. Here is a refined commit message, in English, that accurately reflects the features we've implemented to solve the cold-start problem. It's formatted for a Git repository.
-
-feat: Implement Proactive Self-Learning to Solve Cold-Start Problem
-
-Introduces three proactive learning mechanisms to enable the system to learn and improve even without explicit user feedback. This resolves the "cold-start" issue where the learning cycle would not begin without initial user interactions.
-
-The system now actively generates and validates its own hypotheses, creating a foundational knowledge base that bootstraps the adaptive learning loop.
-
-1. Heuristic Synergy Bootstrapping (Cold-Start Seeding)
-KnowledgeBaseService: Enhanced with a default isHeuristicallySynergetic method to identify theoretically strong pairs based on predefined rules (e.g., role/element combos).
-
-SynergyBootstrapperService (New): On application startup, this service uses the new heuristic method to find synergistic pairs and injects them into the SynergyStat table with a small positive score, creating a baseline for recommendations.
-
-2. Implicit Feedback via Internal Confidence (Learning without Clicks)
-AdaptiveScoringService: Added an applyImplicitPositive(...) method to record learning signals derived from the system's own confidence rather than direct user feedback.
-
-ClaimVerifierService: Now calculates a synergyConfidence score after verifying LLM-generated claims. If a synergy-related claim is validated against the context, it's fed back as a weak positive signal via the new service.
-
-HybridRetriever: Measures "consistency" by checking if multiple information sources (e.g., web and vector search) support the same entity pairing. High consistency is also recorded as a weak positive signal.
-
-3. Vector-Based Exploratory Recommendations (Discovery)
-ExplorationService (New): Suggests novel yet relevant pairings to the user. It identifies entities that are close in the embedding vector space but have a low number of recorded interactions, actively encouraging feedback on "undiscovered" combinations.
-
-Fixed a float[] vs. double[] type mismatch from the EmbeddingModel to ensure type safety in vector calculations.
-
-Configuration
-Exposed new properties in application.yml to control these features, including thresholds for implicit feedback (scoring.implicit.threshold), toggles for bootstrapping (bootstrap.synergy.enabled), and parameters for exploration.
-
-
-This version maintains the full core content with no information loss, removes redundancies, adds extensive developer guidance, and includes all critical patches. It should be clear and informative for Jammini or any reviewer to understand the entire project without diving into source files.
+The AbandonWare Hybrid RAG AI Chatbot Service is a domain‑agnostic agent built on a retrieval–generation–verification–reinforcement pipeline.
+The system began as a specialized Genshin Impact assistant and evolved into a general retrieval‑augmented generation agent.
+Retrieval‑augmented generation combines neural language models with external knowledge sources to ground answers in evidence.
+By retrieving real documents and conditioning responses on them, the system reduces hallucinations compared to pure language models.
+The pipeline follows a search–generate–verify–reinforce loop that separates concerns into modular services.
+User queries are sanitized, disambiguated and augmented before any retrieval occurs.
+Hybrid retrieval draws evidence from both real‑time web sources and a vector database of ingested documents.
+Result fusion combines multiple sources using reciprocal rank fusion and re‑ranks them with a cross‑encoder.
+Context construction assembles retrieved passages, memory and history into a prompt within token limits.
+A modular prompt builder creates structured prompts with system instructions, user queries and context sections.
+A model router selects the appropriate language model and parameters based on intent and verbosity.
+After generation, a multi‑layer verification stage checks coverage, contradictions and claim support.
+Sanitizers enforce domain policies and remove unsupported or unsafe content from the draft answer.
+The reinforcement layer learns from user feedback, updating memory entries and synergy statistics.
+Meta‑learning components tune retrieval strategies and hyperparameters using multi‑armed bandit algorithms.
+Session isolation ensures that each user’s conversation history, caches and reinforcement data remain separate.
+Caching with Caffeine accelerates retrieval and memory access without leaking data between sessions.
+Server‑sent events stream intermediate progress to clients, improving transparency and user trust.
+Dynamic rules and a centralized knowledge base allow the system to adapt to new domains without code changes.
+Adaptive reranking uses user feedback to boost or penalize pairings based on popularity and synergy.
+Verbosity levels (brief, standard, deep, ultra) guide model choice, context size and minimum answer length.
+Retrieval strategies can be combined or disabled through configuration (web search, vector search, or RAG only).
+The architecture enforces version purity for LangChain4j modules to avoid runtime incompatibilities.
+Logging and metrics enable monitoring of retrieval latency, quality scores and feedback distributions.
+The system is configurable via application.yml, enabling tuning of token budgets, cache sizes and model parameters.
+Developers can extend the pipeline by adding new retrieval handlers, scorers, sanitizers or rule types.
+The knowledge base stores domain entities and attributes in relational tables to decouple data from code.
+Dynamic interaction rules inform both prompt generation and reranking to respect domain policies.
+End‑to‑end, the system aims to provide factual, personalized answers while continuously improving through reinforcement.
+Query processing begins with the QueryComplexityGate, which classifies a user query as simple or complex.
+The QueryComplexityGate uses heuristics or machine models to decide if decomposition via SelfAsk is required.
+Simple queries are processed directly, while complex queries are broken down into sub‑questions.
+The QueryCorrectionService performs rule‑based corrections on spelling, spacing and punctuation.
+Korean queries benefit from morphological correction, handling spacing mistakes unique to the language.
+After rule‑based corrections, the LLMQueryCorrectionService uses a large language model to refine the query.
+The LLM service preserves proper nouns and domain terms by consulting the domain dictionary before making changes.
+QueryDisambiguationService resolves ambiguous tokens, using dictionary bypasses to avoid altering known names.
+When tokens are not in the domain dictionary, the LLM rephrases or clarifies ambiguous words.
+The service sets a confidence score to indicate whether a disambiguation is high or low confidence.
+QueryAugmentationService can add synonyms or related keywords but is disabled by default to avoid noise.
+SmartQueryPlanner restricts the number of expanded queries, preventing combinatorial explosion.
+NonGameEntityHeuristics assist in distinguishing generic terms from domain‑specific entities.
+DefaultDomainTermDictionary stores protected terms per domain, ensuring they survive correction and disambiguation.
+InMemoryDomainTermDictionary is used during testing when the external dictionary is unavailable.
+The DomainTermDictionary interface abstracts the storage and retrieval of protected terms.
+LLMNamedEntityExtractor uses an LLM to extract entities when regex patterns fail to identify names.
+NamedEntityExtractor is an interface allowing different NER implementations to plug into the pipeline.
+ParsedQuery objects contain the structured components of a query after corrections and analysis.
+MatrixTransformer in the query transformer package helps generate additional query variants when required.
+DefaultQueryCorrectionService and LLMQueryCorrectionService work together to sanitize user input.
+QueryDisambiguationService may call QueryHygieneFilter to remove domain prefixes or banned words.
+QueryComplexityGate influences the chain of retrieval handlers by enabling the SelfAskHandler when needed.
+VerbosityDetector analyses the query and conversation context to suggest a verbosity level.
+SectionSpecGenerator determines which prompt sections should be included based on verbosity and query intent.
+VerbosityProfile encapsulates the verbosity hints used throughout the pipeline, influencing context budgets.
+SmartQueryPlanner ensures that expanded queries do not exceed configured limits.
+CompositeQueryContextPreprocessor combines multiple preprocessing steps, including guardrails and hygiene filters.
+CognitiveStateExtractor derives user intent, subject and domain hints from the query and session.
+CognitiveState objects hold analysis results to inform downstream services.
+GuardrailQueryPreprocessor injects protected terms and interaction rules into the PromptContext based on the subject.
+DefaultGuardrailQueryPreprocessor replaces hard‑coded lexicons with knowledge base lookups.
+QueryContextPreprocessor defines a contract for preparing prompt context before retrieval.
+The DefaultQueryContextPreprocessor orchestrates correction, disambiguation and domain detection.
+QueryComplexityClassifier may use an LLM to detect multi‑hop questions requiring decomposition.
+ModelBasedQueryComplexityClassifier is an implementation that queries a model to classify complexity.
+QueryComplexityGate stores thresholds in configuration to control the classification sensitivity.
+AnalyzeHandler uses morphological analysis to generate search tokens from the sanitized query.
+AnalyzeWebSearchRetriever consumes tokens from the AnalyzeHandler to perform targeted web searches.
+DefaultQueryTransformer selects the appropriate transformation strategy based on the domain and intent.
+QueryTransformer interface abstracts the process of generating alternative queries for retrieval.
+ParsedQuery objects may include synonyms or morphological variants for robust search.
+DisambiguationResult represents the outcome of the QueryDisambiguationService, including confidence levels.
+NonGameEntityHeuristics differentiates between game and non‑game terms when the dictionary is ambiguous.
+DefaultDomainTermDictionary offers methods to add and retrieve domain terms for correction services.
+LLMQueryCorrectionService may call a translation model or LLM to correct colloquialisms and slang.
+QueryAugmentationService can be toggled via configuration when recall needs to be increased.
+QueryCorrectionService returns both the corrected text and metadata about applied fixes.
+LLMNamedEntityExtractor is invoked when dictionary and regex heuristics fail to detect a named entity.
+DefaultQueryContextPreprocessor orchestrates multiple preprocessing steps with configurable order.
+VerbosityDetector uses conversation context to infer if the user expects a brief or detailed response.
+SectionSpecGenerator produces a map of prompt sections based on the verbosity profile.
+QueryComplexityClassifier influences whether SelfAskHandler is invoked during retrieval.
+SmartQueryPlanner interacts with EvidenceRepairHandler to control query expansion during evidence repair.
+CognitiveStateExtractor may use LLMs or heuristics to detect the domain and subject embedded in the query.
+GuardrailQueryPreprocessor sets the query intent (e.g. recommendation, explanation) used for routing models.
+Domain detection informs the knowledge base service on which domain’s rules and entities to retrieve.
+Session metadata, such as the session ID, is passed along with the query to ensure isolation.
+Stop words and banned terms can be removed at the query hygiene stage to avoid triggering unsafe content.
+The combination of rule‑based and LLM‑based correction minimizes over‑correction and preserves terms.
+Query preprocessing is critical to ensure that retrieval retrieves relevant and safe content for the user’s question.
+Hybrid retrieval orchestrates multiple handlers to collect evidence from various sources.
+MemoryHandler retrieves recent session snippets and verified translation memory snippets to maintain context.
+SelfAskHandler decomposes complex queries into sub‑questions when the QueryComplexityGate signals complexity.
+AnalyzeHandler generates search tokens through morphological analysis for languages like Korean.
+WebSearchHandler performs real‑time web searches using services such as Naver’s API.
+VectorDbHandler queries a vector store, such as Pinecone, to retrieve passages using similarity search.
+EvidenceRepairHandler triggers an additional search cycle when evidence is deemed insufficient.
+Each handler catches its own exceptions and returns partial results to keep the chain resilient.
+DefaultRetrievalHandlerChain defines the order of handlers: memory, self‑ask, analyze, web, vector and repair.
+Handlers are configured via RetrieverChainConfig to allow dynamic ordering and feature toggles.
+MemoryHandler prioritizes snippets with high energy scores derived from reinforcement learning.
+TranslationMemoryRepository stores snippets of previous answers and context for reuse.
+SelfAskHandler uses an LLM to generate sub‑queries that break down multi‑part questions.
+The SelfAskWebSearchRetriever performs web searches for each sub‑query and merges the snippets.
+AnalyzeWebSearchRetriever uses tokenized queries to search and may apply morphological filters.
+EnhancedSearchService abstracts calls to external search APIs such as Naver, Tavily or others.
+WebSearchRetriever integrates rate limiting and domain filtering to respect API constraints.
+TavilyWebSearchRetriever is a placeholder for an alternate search service that can be integrated.
+VectorDbHandler computes embeddings for the query and performs nearest neighbour search in the vector store.
+HybridRetriever coordinates the handlers and combines results into a SearchContext envelope.
+SearchContext contains retrieved documents, warnings, timing information and flags for evidence quality.
+MemoryHandler uses MemoryAsEvidenceAdapter to transform memory snippets into the evidence format.
+PersistentChatMemory persists chat history across sessions and supplies memory to MemoryHandler.
+MemoryWriteInterceptor writes verified answers into the translation memory after completion.
+The SelfAskHandler returns aggregated evidence from all sub‑queries without throwing exceptions.
+AnalyzeHandler feeds the tokens to WebSearchHandler to perform targeted retrieval.
+WebSearchHandler applies AuthorityScorer to rank search results by domain credibility.
+WebSearchHandler uses domain filters and rates sources like official sites, wikis, community blogs and generic blogs.
+VectorDbHandler acts as a fallback when web retrieval fails or when retrieving static domain knowledge.
+EvidenceRepairHandler uses SmartQueryPlanner to expand or reformulate the query for a second attempt.
+Only one repair cycle is triggered to prevent infinite loops in retrieval.
+The chain ensures robustness by returning at least memory snippets even if web search fails.
+Each handler logs its processing time and results for debugging and monitoring.
+Retrieval modes can be configured: RETRIEVAL_ON includes web and vector search; RAG_ONLY uses vector; RETRIEVAL_OFF uses only memory.
+Search handlers respect session isolation by including session metadata in cache keys.
+Hybrid retrieval increases recall by combining live web content and static vector data.
+Search results are deduplicated by URL or content similarity before further processing.
+Handlers can be extended by implementing the RetrievalHandler interface and inserting them into the chain.
+Domain‑specific search services can be integrated by adding new WebSearchRetriever implementations.
+Retrieve operations may include morphological normalization or language translation for non‑English queries.
+Handlers must honour configured timeouts and return partial results to avoid blocking downstream stages.
+SearchContext warnings may include insufficient evidence, rate limit hits, or API errors.
+DefaultLightWeightRanker performs quick lexical ranking to reduce the number of candidates.
+SelfAskHandler may use a cross‑encoder to rank sub‑question answers before combining them.
+Vector embeddings are generated using EmbeddingClient, which may call OpenAI or local models.
+EmbeddingStoreManager manages indexes and embeddings within the vector store.
+Search results are stored temporarily in retrieval caches keyed by query and session ID.
+TavilyWebSearchRetriever and other future handlers extend retrieval sources for new domains.
+Each handler clearly defines its inputs and outputs to enable independent unit testing.
+MemoryHandler ensures that conversation context carries over across user turns for continuity.
+SelfAsk improves multi‑hop reasoning by decomposing complex questions into manageable sub‑queries.
+AnalyzeHandler improves recall for languages like Korean by generating morphological variants.
+WebSearchHandler provides real‑time information that may not exist in the vector store.
+VectorDbHandler ensures that domain knowledge stored offline is available even without internet.
+EvidenceRepairHandler adds resilience to the pipeline by seeking additional evidence when needed.
+HybridRetriever orchestrates these handlers to maximize recall and precision across various query types.
+SearchContext also carries timing data used by StrategySelectorService for strategy reward computation.
+Retrieval results are fused by ReciprocalRankFuser before being reranked by cross‑encoder models.
+Caching retrieval results reduces repeated API calls and speeds up repeated queries within the same session.
+Retrieval caches expire after a configurable time to ensure updated content is fetched in future sessions.
+Handlers log metrics such as number of results, latency and success rates for monitoring.
+During retrieval, banned words or domains are filtered out by GuardrailQueryPreprocessor rules.
+Retrieval strategies are chosen dynamically by StrategySelectorService based on past success.
+SelfAsk and repair modes are selectively enabled depending on query complexity and evidence sufficiency.
+HybridRetriever also supports streaming search results via SSE to inform clients of progress.
+The retrieval layer acts as the foundation of RAG, supplying factual snippets for grounding generated answers.
+Dynamic knowledge curation may further augment the vector store by adding newly verified snippets.
+Future retrieval handlers could query specialized databases like scholarly articles or product catalogs.
+Retrieval performance depends on both hardware (vector store) and network access to external search APIs.
+By combining memory, self‑ask, web and vector retrieval, the system maximizes the chance of finding relevant evidence.
+EvidenceRepairHandler uses controlled query expansion to avoid runaway searches while still improving recall.
+Retrieval handlers are decoupled via interfaces to facilitate testing and replacement.
+The retrieval chain is assembled at startup and can be modified via configuration for A/B testing.
+The retrieval layer interacts closely with ranking and verification stages, passing along context and warnings.
+Clear logging at each stage of retrieval helps diagnose issues such as missing data or API failures.
+Retrieval resilience ensures that partial or empty results still yield a fallback answer rather than an exception.
+After retrieval, the system performs result fusion to merge documents from multiple sources into a unified list.
+ReciprocalRankFusion assigns scores based on the reciprocal of rank positions across lists.
+The RRF constant k smooths the contribution of lower ranked documents and is configurable.
+Documents appearing high in any list receive a significant boost through RRF weighting.
+Softmax fusion converts scores to probabilities using temperature, emphasizing top documents.
+AuthorityScorer weights documents based on domain credibility, promoting trusted sources over unreliable ones.
+Domain weights include official, wiki, community and blog categories, each configured with a numerical weight.
+AuthorityScorer multiplies the base score by the domain weight to adjust ranking.
+RelationshipRuleScorer adjusts scores based on dynamic rules from the knowledge base.
+Rule types include preferred partners, discouraged pairs, contains relationships and other custom interactions.
+Documents supporting preferred combinations receive positive boosts, while discouraged combinations are penalized.
+LightWeightRanker provides an initial lexical ranking based on token overlap and simple heuristics.
+CrossEncoderReranker uses a BERT‑like model to compute semantic similarity between query and document.
+Cross encoders jointly encode the query and document, capturing complex interactions between tokens.
+Only the top candidates from RRF are passed to the cross‑encoder due to computational cost.
+EmbeddingModelCrossEncoderReranker integrates cross‑encoder scores with rule scores and synergy bonuses.
+The final score for a document may be expressed as crossScore + ruleBoost + synergyBonus.
+Scores may be normalized or clamped to prevent a single factor from dominating the ranking.
+Synergy bonuses reflect user feedback, boosting pairs with positive reactions and demoting unpopular ones.
+Authority weight ensures that even high‑scoring documents from low‑credibility sources are demoted.
+Reranker classes like NoopCrossEncoderReranker are used when cross‑encoder scoring is disabled.
+DefaultLightWeightRanker acts as a coarse filter to reduce the number of candidates before deeper scoring.
+ReciprocalRankFuser merges lists from web search, vector search, memory and self‑ask into one ranking.
+Fusion and ranking parameters are configurable, including the number of documents to keep at each stage.
+Cross‑encoder models may be fine‑tuned on domain‑specific datasets for improved relevance.
+Rule scoring uses weights stored in HyperparameterService to control the influence of dynamic rules.
+AdaptiveScoringService computes synergy bonuses using positive and negative feedback counts.
+Synergy bonuses are scaled by a factor and smoothed by a constant to avoid division by zero.
+The reranking layer ensures that documents that align with the knowledge base rules and user feedback appear first.
+Reranking also incorporates authority weighting so that official sources are prioritized in the final context.
+Multiple reranker implementations allow switching between cross‑encoder and embedding models.
+Reranker settings are controlled by application configuration and can be tuned per domain or intent.
+Documents that violate discouraged rules can receive a negative score adjustment during reranking.
+AuthorityScorer may also consider page age, citation counts or HTTPS usage in future extensions.
+Fusion ensures that documents from different retrieval sources contribute fairly to the final list.
+Rule boosting allows domain administrators to encode preferred or avoided pairings in the knowledge base.
+Synergy bonuses personalize rankings by incorporating collective user preferences across sessions.
+Cross‑encoder reranking significantly improves the semantic relevance of the final selection.
+Softmax fusion can be used instead of RRF when a sharper focus on top ranked documents is desired.
+The fusion layer outputs a unified, scored list that the context builder uses to assemble the prompt.
+Fusion performance can be monitored by measuring mean reciprocal rank and recall across test queries.
+Additional scorers can be added to the pipeline by implementing the DocumentScorer interface.
+AuthorityScorer weights may be adjusted per domain to reflect different trust levels (e.g. government websites vs hobby blogs).
+Rule types in the knowledge base can be extended to model more complex relationships such as substitutions.
+The ranking stage sits between retrieval and context construction, ensuring that only the most relevant evidence is used.
+Adaptive scoring ensures that the system learns from user feedback, improving rankings over time.
+Synergy bonuses are domain‑specific, so feedback in one domain does not affect rankings in another.
+Cross‑encoder scores are usually in an arbitrary range and must be combined carefully with rule scores.
+Thresholds in reranking configuration control how many documents proceed to the cross‑encoder stage.
+Fusion and ranking operate on normalized scores to maintain comparability across different scorers.
+The final ranked list is passed to the context builder, which will select as many documents as fit the token budget.
+Fusion weights such as k and temperature can be tuned for different retrieval sources and domains.
+The cross‑encoder’s training data influences how well semantic similarity is captured for domain queries.
+Rule scoring can penalize documents that contradict knowledge base rules, helping avoid invalid recommendations.
+Adaptive scoring decays the influence of older feedback over time to adapt to changing user preferences.
+The ranking component is extensible, allowing researchers to experiment with new scoring strategies.
+Clear separation between fusion, ranking and scoring makes the pipeline maintainable and testable.
+Future enhancements could include neural ranking models that incorporate multiple features at once.
+ContextOrchestrator builds a unified context string from ranked documents, memory and history.
+The orchestrator respects token budgets configured per verbosity level, ensuring prompts stay within model limits.
+Context assembly prioritizes authoritative sources and demotes low‑credibility documents.
+Duplicate sentences and overlapping content are removed to maximize information density.
+Long‑term memory snippets and recent session history are combined to maintain conversational continuity.
+PromptBuilder constructs system, user and context prompts using a standardized template.
+System prompts include instructions about allowed behaviors, such as discouraging hallucinations and citing sources.
+User prompts include the sanitized query and indicate the intent (e.g., recommend, explain, analyze).
+Context prompts include the selected evidence sections: previous answer, vector RAG, history, web and memory.
+Section ordering is defined by the prompt builder to guide the language model through the information.
+PromptContext holds all fields necessary for building the prompt: user query, subject, domain and protected terms.
+The builder injects dynamic interaction rules into the prompt to inform the model about preferred or discouraged combinations.
+Verbosity hints influence how many documents are selected and the minimum length of the answer.
+Audience hints allow the model to tailor the answer to novice or expert users.
+Citation style determines whether citations appear inline or as footnotes in the answer.
+ModelRouter selects an LLM based on intent and verbosity, routing high‑stakes queries to high‑tier models.
+The router also sets temperature and top‑p parameters to control randomness in generation.
+ChatModel abstracts the underlying LLM provider and exposes a unified API for sending prompts.
+DynamicChatModelFactory creates ChatModel instances with appropriate parameters for each request.
+AnswerExpanderService ensures deep and ultra verbosity answers meet minimum length by expanding concise answers.
+LengthVerifierService checks whether the generated answer satisfies length requirements before expansion.
+AnswerQualityEvaluator can score the generated answer along dimensions like factuality and clarity.
+PromptBuilder ensures that dynamic rules, protected terms and instructions are properly formatted and escaped.
+System prompts instruct the model to answer with '정보 없음' when evidence is insufficient.
+PromptBuilder avoids ad‑hoc string concatenation and centralizes prompt construction in one place.
+The orchestrator can include conversation history to handle follow‑up questions gracefully.
+PromptContext.sectionSpec indicates which context sections should appear for the given verbosity level.
+The builder ensures that prompts do not exceed the configured maximum token budget for the chosen model.
+After the prompt is built, ChatService invokes the ChatModel and receives a draft answer for verification.
+Context construction is vital for grounding the LLM’s responses in retrieved evidence and past conversation.
+Verification begins after the LLM generates a draft answer from the prompt.
+FactVerifierService computes coverage and contradiction metrics by comparing the answer to the context.
+Coverage measures the proportion of the answer supported by the retrieved evidence.
+Contradiction measures whether the answer conflicts with the context or previous answers.
+Answers with low coverage or high contradiction scores may be rejected or modified.
+FactVerifierService integrates EvidenceGate, ClaimVerifierService and sanitizers in the correct order.
+EvidenceGate checks whether sufficient evidence exists before calling the LLM to generate an answer.
+Evidence sufficiency is judged by the number of subject mentions, authority scores and variety of sources.
+If evidence is insufficient, EvidenceGate triggers EvidenceRepairHandler to search again.
+If repair fails to find evidence, the system aborts generation and returns a fallback response.
+NamedEntityValidator ensures that all named entities in the draft answer appear in context or memory.
+Unknown names in the answer indicate hallucination and cause the system to respond with '정보 없음'.
+NamedEntityValidator uses heuristic patterns and LLM extraction to detect proper nouns.
+ClaimVerifierService extracts individual claims (assertions) from the draft answer.
+Each claim is verified against the context using an LLM or external fact‑checking API.
+Claims are classified as supported, contradicted or lacking information.
+Unsupported claims are removed from the answer to prevent misinformation.
+If all claims are unsupported, the final answer becomes '정보 없음'.
+Claim verification prompts may ask the LLM: 'Given the context, is the statement supported?' and expect a categorical answer.
+FactVerifierService aggregates claim results and decides whether to accept the draft answer.
+AnswerSanitizers enforce domain policies by removing disallowed recommendations or profanity.
+Sanitizers operate in a chain of responsibility, each modifying the answer as needed.
+Sanitizers can be domain‑specific; for example, GenshinRecommendationSanitizer filters invalid character pairings.
+SmartFallbackService suggests refined queries when the system cannot answer due to insufficient evidence.
+FallbackHeuristics generate alternative queries by adding details or narrowing the scope.
+Fallback responses encourage users to refine their question rather than guessing.
+EvidenceGate prevents wasted LLM calls when context is too weak to support a meaningful answer.
+ClaimVerifierService may integrate external fact checking services such as FactCheck.org or Wikidata.
+AnswerSanitizers may enforce compliance rules, such as removing harmful medical advice.
+The multi‑layer verification pipeline reduces hallucination and improves factuality.
+EvidenceGate can set stricter thresholds for high‑stakes domains like medical or legal topics.
+NamedEntityValidator prevents the system from inventing people, products or locations not present in evidence.
+Claim extraction may use heuristics or LLMs to segment sentences into individual assertions.
+Claim verification uses classification models to determine support, contradiction or lack of information.
+AnswerSanitizers can also insert warning messages when the answer touches on sensitive topics.
+SmartFallbackService uses FallbackResult objects to encapsulate suggested queries and messages.
+Fallback messages are delivered to the user when the system declines to answer due to risk of hallucination.
+ClaimVerifierService logs claim verdicts for audit and analysis.
+FactVerifierService ensures that only supported statements survive into the final answer.
+EvidenceGate metrics include subject frequency, average domain weight and number of unique sources.
+ClaimVerifierService can be extended to use multiple fact checkers and aggregate their results via majority vote.
+NamedEntityValidator can be configured to treat unknown entities as soft errors or hard stops.
+Sanitizer chain order matters: more general sanitizers should run before domain‑specific ones.
+SmartFallbackService may provide suggestions like 'Please specify the subject' or 'Try rephrasing your question'.
+FactVerifierService can be tuned via thresholds to balance strictness and answer coverage.
+EvidenceGate uses domain‑specific thresholds so that less evidence is required for simple queries.
+NamedEntityValidator protects against the inclusion of malicious or irrelevant names.
+ClaimVerifierService may use a temperature parameter to control LLM randomness during verification.
+AnswerSanitizers may remove mentions of banned partners or harmful pairings according to rules.
+EvidenceGate may allow partial evidence if the query is a follow‑up with a strong previous answer.
+SmartFallbackService ensures that the system responds gracefully rather than hallucinating when data is lacking.
+Claim extraction often splits on punctuation but may also consider conjunctions and logical connectors.
+AnswerSanitizers can be added by implementing the AnswerSanitizer interface and registering it in the chain.
+The verification pipeline operates after generation and before reinforcement, ensuring only verified answers are stored.
+FactVerifierService logs decisions at each stage for transparency and debugging.
+EvidenceGate may skip the LLM call entirely when no evidence is found and immediately send a fallback.
+ClaimVerifierService can use a scoring approach to measure claim strength rather than strict categories.
+Sanitizers help enforce policies like removing hate speech, personal data or unsafe recommendations.
+EvidenceGate, ClaimVerifierService and sanitizers can be toggled via configuration for testing purposes.
+Verification ensures that the final answer is grounded, safe and compliant with domain policies.
+Fallback suggestions help users refine queries and improve retrieval success in future attempts.
+Verification results feed back into reinforcement learning, influencing memory and synergy updates.
+Fact verification reduces the risk of delivering false or unsupported answers to users.
+Claim verification ensures that each assertion is backed by evidence before it is communicated.
+The verification chain must balance strictness with user satisfaction to avoid over‑filtering answers.
+Answer sanitization allows domain administrators to enforce custom policies for different domains.
+EvidenceGate may call EvidenceRepairHandler for an additional search if the first retrieval fails.
+Verification performance can be monitored by measuring claim coverage, contradiction rates and fallback frequency.
+Testing the verification chain includes simulating unsupported claims and ensuring they are removed.
+Developers can implement custom validators to handle domain‑specific verification needs.
+Verification reduces hallucination by ensuring that named entities and claims appear in the evidence.
+Sanitizers may enforce regulatory compliance for domains like finance or healthcare.
+The multi‑layered approach ensures that if one layer misses an error, another may catch it.
+Fallback messages preserve user trust by admitting when the system lacks sufficient evidence.
+Verification logic can be updated via configuration to adapt to new failure patterns.
+Developers should test verification using a variety of queries, including ambiguous and adversarial ones.
+Verification may require balancing recall (answering more queries) with precision (avoiding errors).
+ClaimVerifierService must handle translations and synonyms to match claims with evidence.
+EvidenceGate metrics may incorporate dynamic thresholds based on query complexity.
+AnswerSanitizers should be tested for false positives to ensure they do not remove legitimate content.
+Verification ensures that memory reinforcement and synergy updates are based only on accurate answers.
+Claims extracted by ClaimVerifierService are often shorter than sentences to isolate atomic statements.
+FactVerifierService may use contradiction detection algorithms to identify conflicting statements.
+AnswerSanitizers can mask or replace sensitive terms to comply with privacy regulations.
+FallbackHeuristics help generate alternative queries that better target the intended subject or domain.
+Verification logic may be adjusted per domain, allowing stricter checks where necessary.
+EvidenceGate may consider user feedback on evidence sufficiency when adjusting thresholds.
+Claim verification can be computationally expensive; caching results may improve performance.
+Sanitizers should log modifications for audit trails, especially in regulated domains.
+The verification stage is the last line of defense before the answer reaches the user.
+Proper verification and fallback handling improve user trust and reduce the propagation of misinformation.
+Verification interacts with model routing by preventing calls when retrieval yields inadequate context.
+Tests should cover unsupported claim removal, entity validation and fallback suggestions to ensure reliability.
+Reinforcement learning allows the system to adapt based on user feedback and interaction statistics.
+MemoryReinforcementService computes a Boltzmann energy for each memory snippet based on similarity, Q‑value, success ratio, confidence and recency.
+Energy is calculated as a weighted sum of factors with weights configured in HyperparameterService.
+Similarity measures how closely a snippet matches the current query.
+Q‑value represents the learned reward associated with using the snippet.
+Success ratio is computed as the number of times the snippet yielded a successful answer divided by total uses.
+Confidence reflects how reliable the snippet is based on past verification outcomes.
+Recency decays over time using an exponential decay function with a configurable tauHours constant.
+Temperature controls exploration in selecting memory snippets; higher temperature leads to more exploration.
+Temperature annealing reduces exploration as more feedback is collected, focusing on high‑energy snippets.
+MinContentLength and MaxContentLength filters ensure that only snippets of appropriate length are reinforced.
+MemoryReinforcementService updates energy scores after reinforcement and stores them with each snippet.
+TranslationMemory entries hold metadata such as hit counts, Q‑values, confidence and timestamps.
+ReinforcementQueue manages reinforcement tasks asynchronously to avoid blocking the main chat loop.
+ReinforcementTask encapsulates the snippet and update parameters for asynchronous processing.
+AdaptiveScoringService computes synergy bonuses based on user feedback recorded in SynergyStat entries.
+SynergyStat stores the domain, subject, partner and counts of positive and negative reactions.
+The synergy bonus formula is (positive − negative) divided by (positive + negative + k) times a scaling factor.
+A smoothing constant k prevents division by zero when no feedback exists.
+Scaling factors control how strongly user feedback influences ranking scores.
+Synergy bonuses are added to cross‑encoder scores during reranking to personalize recommendations.
+Adaptive scoring is domain‑specific so that feedback in one domain does not influence another.
+FeedbackController captures thumbs up and thumbs down from users and updates SynergyStat records.
+StrategySelectorService implements a multi‑armed bandit algorithm to select retrieval strategies.
+Each retrieval strategy (e.g., web‑first, vector‑first, hybrid, self‑ask) has an estimated reward based on past performance.
+Softmax policy computes selection probabilities using strategy rewards and a temperature parameter.
+High temperature encourages exploration across strategies; low temperature favors exploitation of best performers.
+StrategyPerformance records success and failure counts and average rewards for each strategy.
+ContextualScorer evaluates the quality of answers along dimensions like factuality, clarity and novelty.
+Rewards produced by the ContextualScorer feed into the StrategySelectorService.
+DynamicHyperparameterTuner adjusts weights such as synergy weight, authority weight and exploration temperature based on performance metrics.
+Hyperparameter updates occur periodically, ensuring the system adapts to long‑term trends.
+BanditSelector inside MemoryReinforcementService selects memory entries according to their energy and temperature.
+RewardHyperparameterTuner tunes reward weights for the multi‑metric reward function in meta‑learning.
+Reinforcement learning ensures that frequently helpful snippets become more likely to be reused.
+User feedback drives synergy bonuses, reinforcing popular recommendations and demoting unpopular ones.
+The StrategySelectorService may assign negative rewards when a chosen strategy fails to produce a useful answer.
+SoftmaxUtil computes the softmax distribution over strategy rewards given a temperature.
+Success counts and rewards are updated after each query based on the quality of the answer.
+Annealing schedules determine how fast exploration temperature decreases over time.
+Initial exploration ensures that all strategies are tried before converging on the best performing ones.
+Different strategies may perform better for certain domains or query types; the bandit approach captures this.
+DynamicHyperparameterTuner uses aggregated metrics like retrieval latency, coverage and user satisfaction to update hyperparameters.
+Reinforcement components operate asynchronously to avoid blocking the main chat processing thread.
+Memory entries with low energy may be pruned over time to save storage and focus on relevant knowledge.
+Synergy bonuses decay as feedback ages, ensuring that outdated preferences lose influence.
+Rewards are computed after verification to ensure only verified answers influence learning.
+Feedback loops are essential for continuous improvement and personalization of the system.
+Bandit annealing adjusts exploration automatically based on the number of interactions.
+RewardHyperparameterTuner may use grid search or gradient‑free optimization to find optimal reward weights.
+ContextualScorer assigns negative rewards if an answer is rejected due to hallucination or lack of evidence.
+Adaptive scoring may be extended to incorporate other feedback metrics such as explicit user ratings.
+SynergyStatRepository persists synergy statistics, enabling long‑term personalization.
+Reinforcement components must remain privacy‑aware, ensuring that user feedback is anonymized.
+Hyperparameters controlling reinforcement, such as W_RECENCY and W_CONFIDENCE, are defined in application.yml.
+DynamicHyperparameterTuner updates these weights based on aggregated performance metrics.
+Reinforcement learning ensures that the system adapts over time, improving recall and precision for recurring users.
+StrategySelectorService logs strategy choices and rewards for analysis and debugging.
+ContextualScorer may assign separate rewards for retrieval success and answer quality.
+Synergy bonuses can be combined when multiple partners appear in one document by averaging or summing bonuses.
+Reinforcement processes are triggered after the final answer is delivered to the user.
+Reinforcement ensures that negative feedback reduces the likelihood of recommending unpopular pairings.
+Adaptive scoring provides a personalized experience without requiring explicit user profiles.
+BanditSelector ensures that both new and old memory entries remain candidates during learning.
+Reinforcement tasks operate on the translation memory and synergy statistics within a session context.
+Meta‑learning loops incorporate reinforcement signals into strategy selection and hyperparameter tuning.
+Synergy bonuses are scaled per domain to avoid biasing cross‑domain recommendations.
+Reinforcement learning components interact with the retrieval layer by influencing which snippets are loaded from memory.
+Adaptive scoring influences the ranking layer by modifying cross‑encoder scores based on user feedback.
+Bandit annealing and hyperparameter tuning ensure the system does not overfit to early feedback.
+Collectively, reinforcement and adaptive components help the system learn from users and continuously improve.
+The knowledge base replaces hard‑coded lexicons with database‑driven domain knowledge.
+DomainKnowledge entities store the domain, entity type and entity name for each item.
+EntityAttribute entities store key–value pairs for attributes such as element, weapon type or price.
+DomainKnowledgeRepository and EntityAttributeRepository provide CRUD operations on these tables.
+KnowledgeBaseService abstracts access to the knowledge base, returning attributes and interaction rules.
+DefaultKnowledgeBaseService uses JPA repositories and optional caching for frequent queries.
+SubjectResolver uses the knowledge base to identify the subject of a query by matching entity names.
+The longest or most relevant entity match is chosen when multiple names appear in a query.
+GuardrailQueryPreprocessor retrieves interaction rules from the knowledge base and injects them into the prompt.
+Interaction rules are stored as relationships between entities, such as preferred partners or discouraged pairs.
+RelationshipRuleScorer evaluates documents against these rules and adjusts ranking scores accordingly.
+Rule types include CONTAINS, IS_PART_OF, PREFERRED_PARTNER, DISCOURAGED_PAIR and AVOID_WITH.
+Administrators can define new rule types and weights without altering code, simply by updating the database.
+Knowledge base data can be updated through scripts or admin tools, making domain expansion easy.
+Knowledge base caching reduces database queries by storing frequently accessed entity names and rules.
+SubjectResolver disambiguates overlapping names by using domain hints and context.
+GuardrailQueryPreprocessor lists protected terms and instructs the model to respect them.
+RelationshipRuleScorer boosts documents aligning with rules and penalizes those that violate them.
+Dynamic rules generalize across domains, enabling pairing rules for recipes, products, instruments and more.
+KnowledgeBaseService exposes methods such as getAttribute, getInteractionRules and getAllEntityNames.
+Dynamic rules instruct the prompt builder about allowed and discouraged combinations.
+Knowledge base updates do not require redeploying the system, fostering agility.
+SubjectResolver may use fuzzy matching to handle typos or partial names in queries.
+GuardrailQueryPreprocessor includes domain policies like banned words and preferred sources.
+RelationshipRuleScorer uses weights from HyperparameterService to control the impact of each rule type.
+Knowledge base is essential for decoupling domain knowledge from code and enabling new domains.
+Dynamic rules and attributes make the system flexible enough to handle games, products, recipes and more.
+Administrators can insert new entities and rules through an admin interface or database scripts.
+Knowledge base design supports many‑to‑many relationships if future domains require complex interactions.
+Knowledge base caching ensures that repeated lookups for common terms do not hit the database.
+SubjectResolver may be extended with LLM‑based named entity recognition for improved accuracy.
+KnowledgeBaseService should support eventual integration with graph databases for richer relationships.
+Dynamic rules can enforce policies like avoiding allergens in recipe pairings or compatibility in electronics.
+The knowledge base underpins both retrieval (subject resolution) and ranking (rule scoring).
+Changing a rule in the knowledge base immediately affects recommendations without code changes.
+Knowledge base entries should be kept consistent and normalized to avoid duplication.
+Dynamic interaction rules allow the system to adapt to new guidelines and user preferences quickly.
+EntityAttribute values can include JSON or structured data for complex attributes if needed.
+Maintaining a clear and well‑structured knowledge base is essential for reliable system behaviour.
+Caching strategies at the knowledge base layer improve performance by avoiding redundant queries.
+Hallucination suppression aims to eliminate fabricated statements and unsupported entities from answers.
+ClaimVerifierService removes unsupported claims by verifying each assertion against evidence.
+EvidenceGate prevents the LLM from generating answers when the context lacks sufficient evidence.
+NamedEntityValidator blocks answers that mention names not present in the context or knowledge base.
+Authority‑weighted retrieval prioritizes credible sources, reducing the chance of hallucination.
+AnswerSanitizers enforce domain rules and remove disallowed pairings or unsafe content.
+Protected term injection instructs the model not to modify known proper nouns during correction or generation.
+Multiple verification layers work together: evidence sufficiency, fact verification, claim verification and sanitization.
+The system uses dynamic thresholds to decide when evidence is sufficient or claims are supported.
+Sanitizers can enforce regulatory compliance, such as removing medical advice or personal data.
+ClaimVerifierService may call external fact checkers to validate claims outside of the retrieved context.
+The hallucination suppression pipeline ensures that only answers grounded in evidence are delivered.
+EvidenceGate aborts or repairs the generation stage to avoid hallucinated responses.
+Claim extraction isolates atomic statements to enable granular verification.
+Verifying claims prevents the propagation of unverified or false information.
+The system default response when evidence is lacking is \"정보 없음\" to avoid guessing.
+Authority scoring demotes sources with low credibility, such as personal blogs, which are more prone to errors.
+Sanitization can include profanity filtering and removing banned pairings or illegal content.
+NamedEntityValidator cross‑checks named entities against context and memory before accepting them.
+EvidenceGate metrics can include subject mention frequency and average credibility score.
+Hallucination suppression balances strictness with answer completeness to avoid over‑filtering.
+Dynamic rules in the knowledge base also help prevent hallucinated combinations by penalizing invalid pairs.
+A robust hallucination suppression pipeline enhances user trust in the system's responses.
+Multiple layers ensure that if one mechanism misses an issue, another can catch it.
+Sensitive domains may require stricter hallucination suppression to meet safety standards.
+Sanitizers can be extended to handle new domain policies as they arise.
+Proper training of the LLM in the correction and verification phases helps reduce hallucinations.
+Hallucination suppression interacts with reinforcement learning by ensuring only verified answers are reinforced.
+Hallucination suppression is key to maintaining factuality and reliability in an AI assistant.
+Continuous monitoring and adjustment of hallucination thresholds are necessary as domains and models evolve.
+Meta‑learning adapts retrieval strategies and weights based on past performance and feedback.
+StrategySelectorService uses a softmax policy to choose among retrieval strategies.
+Each strategy's estimated reward is updated after queries via ContextualScorer and reinforcement signals.
+Softmax selection assigns probabilities to strategies based on rewards and a temperature parameter.
+High temperature values promote exploration by flattening the probability distribution over strategies.
+Low temperature values emphasize exploitation by focusing on strategies with higher rewards.
+DynamicHyperparameterTuner monitors aggregated metrics to adjust weights and temperatures over time.
+Hyperparameters such as synergy weight, authority weight and exploration temperature can be tuned dynamically.
+StrategyPerformance entity stores success counts, failure counts and average rewards for each strategy.
+RewardHyperparameterTuner modifies how rewards are computed by adjusting weights on different metrics.
+ContextualScorer assigns rewards based on answer quality, factuality and novelty.
+Bandit annealing schedules reduce exploration as more data is collected, converging on optimal strategies.
+Different strategies may excel in different domains or for different intents, warranting dynamic selection.
+Meta‑learning ensures that the system does not rely on a single retrieval pattern across all queries.
+Hyperparameter tuning must be gradual to avoid destabilizing the system.
+Temperature annealing formula often uses base / sqrt(n + 1) where n is the number of interactions.
+DynamicHyperparameterTuner can increase exploration when performance drops unexpectedly.
+StrategySelectorService logs selections and rewards to aid in debugging meta‑learning behaviour.
+HyperparameterService reads default weights from configuration and exposes them for tuning.
+Meta‑learning components can be extended to include new strategies or weights without changing the pipeline.
+Reward functions may combine multiple metrics; tuning adjusts how each metric contributes to the reward.
+Meta‑learning is critical for adapting to changing data patterns and user behaviours over time.
+A multi‑armed bandit approach balances exploration and exploitation when selecting retrieval modes.
+Hyperparameter tuning interacts with reinforcement learning by adjusting how feedback influences scores.
+Developers should monitor strategy selection frequencies to ensure adequate exploration.
+Meta‑learning loops run periodically and should not run too frequently to avoid oscillations.
+Temperature and weight adjustments can be exposed via admin interfaces for manual tuning.
+Proper logging of meta‑learning adjustments aids transparency and reproducibility of results.
+Sessions are identified by a unique session ID (META_SID) to isolate conversation history and caches.
+Session isolation ensures that different users' data does not interfere or leak across sessions.
+Caches are keyed by session ID to store retrieval results, memory entries and synergy bonuses per session.
+Retrieval caches store results from web and vector searches to reduce repeated requests.
+Memory caches store translation memory entries and their energy scores for quick lookup.
+Synergy caches store computed bonuses for subject–partner pairs within a session.
+Knowledge base caches store frequently accessed entity names, attributes and rules.
+Cache sizes and expiration times are configured via application.yml and CacheConfig.
+Caffeine library provides efficient in‑memory caching with time‑based expiration and size limits.
+Session caches expire after a configurable time to free resources and maintain privacy.
+Server‑sent events (SSE) stream intermediate results and progress updates to clients.
+SSE events include retrieval progress, context construction, draft answers and verification outcomes.
+The final SSE event includes metadata about the model used and whether retrieval was used.
+SSE uses WebFlux and non‑blocking I/O to handle many concurrent streams efficiently.
+Clients subscribe to /stream endpoints to receive real‑time updates during query processing.
+SSE improves transparency by showing how the system searches, builds context and verifies answers.
+Caches improve performance but must be invalidated after session expiry to avoid stale data.
+SessionConfig defines how session metadata is propagated through the pipeline.
+ChatSessionScope manages session‑scoped beans in the Spring context.
+PersistentChatMemory stores conversation history beyond the session, enabling long‑term memory.
+Per‑session caches prevent cross‑session interference and support privacy requirements.
+Cache expiration times must balance fresh data retrieval with performance benefits.
+SSE events are formatted as plain text with a 'data:' prefix and terminated by a blank line.
+Clients use EventSource or equivalent APIs to consume SSE streams.
+SSE reconnects automatically on network disruptions, but long outages may require a restart.
+Developers must avoid leaking sensitive data in intermediate SSE events.
+Caching retrieval results reduces API costs and latency for repeated queries within a session.
+Session ID should be unguessable and expire after a reasonable time to maintain security.
+Caches are cleared when a session ends or when explicit cache invalidation is triggered.
+SSE is preferred over WebSockets for one‑way streaming because it is simpler and fits HTTP semantics.
+Caches for knowledge base queries reduce the load on the database and improve response times.
+Translation memory caches hold frequently used memory entries to avoid database lookups.
+Synergy caches maintain per‑session synergy bonuses but update persistent statistics after feedback.
+Session caches can be monitored via cache statistics to tune sizes and expiration.
+Developers can clear caches during development to reflect new data immediately.
+SSE streams include flags such as 'done' and 'modelUsed' to mark completion and model details.
+Caches should not store sensitive information beyond the necessary session duration.
+Session isolation also applies to reinforcement data, ensuring user feedback does not cross sessions.
+Each chat session maintains its own conversation history and memory entries.
+CORS configuration restricts which origins can access SSE endpoints for security.
+Session metadata is included in retrieval cache keys to separate results per user.
+Developers should test SSE streaming under load to ensure reliability with many concurrent sessions.
+CacheConfig and SessionConfig are central to configuring caching and session behaviour.
+Session isolation, caching and streaming collectively ensure privacy, performance and transparency.
+Configuration is primarily managed through application.yml, which specifies keys and values for the system.
+abandonware.answer.detail.min-words defines minimum word counts for each verbosity level: brief, standard, deep and ultra.
+abandonware.answer.token-out defines the maximum number of tokens the model can generate for each verbosity.
+orchestrator.max-docs sets the maximum number of documents used in context per verbosity level.
+reranker.keep-top-n specifies how many documents to keep for reranking at each verbosity level.
+openai.model.moe designates the high-tier model (e.g., gpt-4o) used for high-stakes queries.
+search.authority.weights lists domain weights (e.g., official, wiki, community, blog) as domain:weight pairs.
+memory.snippet.min-length and memory.snippet.max-length define acceptable lengths for reinforcement.
+agent.knowledge-curation.enabled toggles the autonomous knowledge curation agent on or off.
+retrieval.mode chooses between RETRIEVAL_ON, RAG_ONLY and RETRIEVAL_OFF to control search behaviour.
+cache specifications in application.yml define maximum sizes and expiration times for various caches.
+Environment variables like OPENAI_API_KEY, PINECONE_API_KEY and NAVER_API_CLIENT_ID store credentials.
+spring.datasource.url, username and password configure the database connection and credentials.
+LangChain4j version purity is enforced to ensure all modules are version 1.0.1.
+Retrieval and ranking parameters can be tuned without code changes via configuration keys.
+Cache sizes and expiration times may need adjustments based on available memory and performance goals.
+Model routing parameters (temperature, top-p, tokenOut) are specified per intent and verbosity in the configuration.
+secure keys must be stored in environment variables and not committed to the repository.
+retrieval.max-docs controls how many documents are considered for context assembly.
+reranker.keep-top-n determines how many documents proceed to cross‑encoder reranking.
+Dynamic rule weights and synergy scaling factors are also configurable in application.yml.
+Caches are configured in CacheConfig.java and referenced by application.yml for size and expiry.
+Session expiration times are defined to clear session caches after inactivity.
+SSE endpoint configuration controls the streaming behaviour and allowed origins.
+Verbosity policies are set in configuration to specify minimum words and token budgets per level.
+Model selection and routing use configuration keys to decide when to use high‑tier models.
+Domain weights for authority scoring can be tuned via configuration to reflect trust differences.
+Adaptive scoring constants like synergy scaling factor and smoothing constant k are configured externally.
+EvidenceGate thresholds for evidence sufficiency can be adjusted through configuration keys.
+Claim verification thresholds and sampling temperature can also be set via configuration.
+Hyperparameter tuning intervals and parameters are specified in configuration for DynamicHyperparameterTuner.
+Cache configuration includes maximumSize, expireAfterWrite and other settings for each cache.
+spring.jpa.hibernate.ddl-auto controls how the database schema is created or updated on startup.
+server.port sets the HTTP port for the Spring Boot application.
+cors.allowed-origins restricts which domains can access the API and SSE endpoints.
+security.api-keys lists authorized API keys for accessing protected endpoints.
+session.expire-after defines how long sessions remain active before being cleared.
+Logging levels can be configured per package to control the verbosity of application logs.
+Model parameters such as temperature and top-p can be fine‑tuned per intent and verbosity.
+openai.api.key and other service keys must be set as environment variables at runtime.
+Database options allow switching from H2 to PostgreSQL or other persistent databases.
+Vector store configuration includes API keys and index names for services like Pinecone.
+Configuration keys enable quick experimentation without modifying the codebase.
+Configuration must be kept consistent across development, staging and production environments.
+It is important to document configuration keys and their effects for future maintainers.
+Using profiles (e.g., dev, prod) allows different configurations per environment.
+Configuration management is critical for controlling the behaviour of the AI pipeline.
+Version purity checks may abort startup if conflicting versions are detected in the classpath.
+Proper configuration of retrieval and ranking determines the trade‑off between recall and latency.
+Additional detail line 1 summarizing aspects of the system across query processing, retrieval, ranking, verification, reinforcement, knowledge base, hallucination suppression, meta-learning, session management, configuration, guidelines, algorithms, debugging, security, troubleshooting, future enhancements, commit summaries, examples and glossary terms.
+Additional detail line 2 summarizing aspects of the system across query processing, retrieval, ranking, verification, reinforcement, knowledge base, hallucination suppression, meta-learning, session management, configuration, guidelines, algorithms, debugging, security, troubleshooting, future enhancements, commit summaries, examples and glossary terms.
+...
