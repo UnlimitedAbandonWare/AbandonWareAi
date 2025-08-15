@@ -1457,69 +1457,33 @@ Introduces the core components for a self-learning agent designed to enrich the 
 
 src/main/java/com/example/lms
 ├─ app/
-│  ├─ LmsApplication.java
 │  ├─ StartupVersionPurityCheck.java
-│  ├─ VersionPurityHealthIndicator.java
-│  └─ init/
-│     └─ AdminInitializer.java
+│  └─ VersionPurityHealthIndicator.java
 │
 ├─ config/
-│  ├─ AppSecurityConfig.java
 │  ├─ CacheConfig.java
 │  ├─ GoogleTranslateProperties.java
 │  ├─ LangChainConfig.java
-│  ├─ MatrixConfig.java
 │  ├─ MemoryConfig.java
 │  ├─ OpenAiConfig.java
 │  ├─ OpenAiProperties.java
 │  ├─ QueryTransformerConfig.java
-│  ├─ RestTemplateConfig.java
 │  ├─ RetrieverChainConfig.java
-│  ├─ SchedulingConfig.java
 │  ├─ SessionConfig.java
-│  ├─ WebClientConfig.java
-│  ├─ WebConfig.java
-│  └─ WebMvcConfig.java
+│  └─ WebClientConfig.java
 │
 ├─ api/
 │  ├─ rest/
-│  │  ├─ AdminController.java
 │  │  ├─ ChatApiController.java
 │  │  ├─ FeedbackController.java
-│  │  ├─ FileUploadController.java
-│  │  ├─ KakaoAdminController.java
-│  │  ├─ KakaoOAuthController.java
-│  │  ├─ KakaoTriggerController.java
-│  │  ├─ KakaoUuidController.java
-│  │  ├─ KakaoWebhookController.java
 │  │  ├─ ModelSettingsController.java
-│  │  ├─ PkiUploadPageController.java
-│  │  ├─ PkiValidationController.java
-│  │  ├─ SettingsController.java
-│  │  ├─ TranslateController.java
-│  │  ├─ AdaptiveTranslateController.java
-│  │  ├─ RentalController.java
 │  │  ├─ TrainingController.java
-│  │  └─ TranslationController.java
-│  ├─ mvc/
-│  │  ├─ AssignmentController.java
-│  │  ├─ AttendanceController.java
-│  │  ├─ AuthController.java
-│  │  ├─ CourseController.java
-│  │  ├─ EnrollmentController.java
-│  │  ├─ ExamController.java
-│  │  ├─ NoticeController.java
-│  │  ├─ PageController.java
-│  │  ├─ ProfessorController.java
-│  │  ├─ QuestionController.java
-│  │  ├─ RegistrationController.java
-│  │  ├─ StudentController.java
-│  │  └─ UploadController.java
+│  │  ├─ TranslateController.java
+│  │  └─ AdaptiveTranslateController.java
 │  ├─ ws/
 │  │  ├─ ChatChannelInitializer.java
 │  │  └─ ChatWebSocketHandler.java
 │  └─ dto/
-│     ├─ AssignmentDTO.java
 │     ├─ ChatMessageDto.java
 │     ├─ ChatRequestDto.java
 │     ├─ ChatResponse.java
@@ -1527,55 +1491,27 @@ src/main/java/com/example/lms
 │     ├─ ChatStreamEvent.java
 │     ├─ FeedbackDto.java
 │     ├─ FineTuningOptionsDto.java
-│     ├─ KakaoFormDto.java
-│     ├─ KakaoFriends.java
 │     ├─ MessageDto.java
-│     ├─ ModelInfoDto.java
-│     └─ payload/
-│        └─ KakaoWebhookPayload.java
+│     └─ ModelInfoDto.java
 │
 ├─ domain/
 │  ├─ model/
-│  │  ├─ Administrator.java
-│  │  ├─ Assignment.java
-│  │  ├─ Attendance.java
-│  │  ├─ Category.java
-│  │  ├─ ChatMessage.java
-│  │  ├─ ChatSession.java
-│  │  ├─ Choice.java
-│  │  ├─ Comment.java
-│  │  ├─ ConfigurationSetting.java
-│  │  ├─ Course.java
-│  │  ├─ Enrollment.java
-│  │  ├─ Exam.java
-│  │  ├─ Grade.java
-│  │  ├─ Hyperparameter.java
-│  │  ├─ Notice.java
-│  │  ├─ NoticeType.java
-│  │  ├─ Professor.java
-│  │  ├─ Question.java
-│  │  ├─ QuestionType.java
-│  │  ├─ Rental.java
-│  │  ├─ Rule.java
-│  │  ├─ Setting.java
-│  │  ├─ Status.java
-│  │  ├─ Student.java
-│  │  ├─ Submission.java
-│  │  ├─ SubmissionStatus.java
-│  │  ├─ TrainingJob.java
-│  │  ├─ TranslationRule.java
-│  │  ├─ TranslationSample.java
-│  │  ├─ UploadToken.java
-│  │  ├─ User.java
 │  │  ├─ ApiKey.java
 │  │  ├─ ApiKeyUsage.java
 │  │  ├─ AppConfig.java
+│  │  ├─ ChatMessage.java
+│  │  ├─ ChatSession.java
 │  │  ├─ CorrectedSample.java
 │  │  ├─ CurrentModel.java
+│  │  ├─ Hyperparameter.java
 │  │  ├─ ModelEntity.java
+│  │  ├─ Setting.java
+│  │  ├─ TrainingJob.java
 │  │  ├─ TranslationMemory.java
-│  │  └─ converter/
-│  │     └─ MemoryStatusConverter.java
+│  │  ├─ TranslationRule.java
+│  │  └─ TranslationSample.java
+│  │     └─ converter/
+│  │        └─ MemoryStatusConverter.java
 │  ├─ model/enums/
 │  │  ├─ RulePhase.java
 │  │  ├─ SourceCredibility.java
@@ -1591,33 +1527,6 @@ src/main/java/com/example/lms
 │     └─ PairingPolicy.java
 │
 ├─ application/
-│  ├─ service/
-│  │  ├─ AdminService.java
-│  │  ├─ AdminSessionService.java
-│  │  ├─ AdvancedTranslationService.java
-│  │  ├─ AssignmentQueryService.java
-│  │  ├─ AssignmentService.java
-│  │  ├─ AttendanceService.java
-│  │  ├─ CommentService.java
-│  │  ├─ CourseService.java
-│  │  ├─ EnrollmentService.java
-│  │  ├─ ExamService.java
-│  │  ├─ ModelSettingsService.java
-│  │  ├─ NoticeService.java
-│  │  ├─ NoticeServiceImpl.java
-│  │  ├─ NotificationService.java
-│  │  ├─ ProfessorService.java
-│  │  ├─ QuestionService.java
-│  │  ├─ SettingsService.java
-│  │  ├─ StudentService.java
-│  │  ├─ SubmissionQueryService.java
-│  │  ├─ SubmissionQueryServiceImpl.java
-│  │  ├─ SubmissionService.java
-│  │  ├─ SubmissionServiceImpl.java
-│  │  ├─ TrainingService.java
-│  │  ├─ TranslationService.java
-│  │  ├─ UploadTokenService.java
-│  │  └─ UserService.java
 │  ├─ chat/
 │  │  ├─ ChatService.java
 │  │  ├─ ChatHistoryService.java
@@ -1647,8 +1556,7 @@ src/main/java/com/example/lms
 │  ├─ translation/
 │  │  ├─ AdaptiveTranslationService.java
 │  │  ├─ TranslationTrainingService.java
-│  │  ├─ impl/
-│  │  │  └─ TranslationTrainingServiceImpl.java
+│  │  ├─ impl/TranslationTrainingServiceImpl.java
 │  │  ├─ ner/
 │  │  │  ├─ LLMNamedEntityExtractor.java
 │  │  │  └─ NamedEntityExtractor.java
@@ -1720,14 +1628,10 @@ src/main/java/com/example/lms
 │  │  ├─ energy/
 │  │  │  ├─ ContextEnergyModel.java
 │  │  │  └─ ContradictionScorer.java
-│  │  ├─ filter/
-│  │  │  └─ GenericDocClassifier.java
-│  │  ├─ fusion/
-│  │  │  └─ ReciprocalRankFuser.java
-│  │  ├─ subject/
-│  │  │  └─ SubjectResolver.java
-│  │  └─ quality/
-│  │     └─ AnswerQualityEvaluator.java
+│  │  ├─ filter/GenericDocClassifier.java
+│  │  ├─ fusion/ReciprocalRankFuser.java
+│  │  ├─ subject/SubjectResolver.java
+│  │  └─ quality/AnswerQualityEvaluator.java
 │  ├─ strategy/
 │  │  ├─ StrategyDecisionTracker.java
 │  │  ├─ StrategyHyperparams.java
@@ -1747,55 +1651,30 @@ src/main/java/com/example/lms
 │  │     ├─ AdaptiveScoringService.java
 │  │     └─ RelevanceScoringService.java
 │  └─ query/
-│     ├─ QueryAugmentationService.java
-│     └─ EmbeddingStoreManager.java
+│     ├─ EmbeddingStoreManager.java
+│     └─ QueryAugmentationService.java
 │
 ├─ infrastructure/
 │  ├─ persistence/
 │  │  ├─ repository/
-│  │  │  ├─ AdminRepository.java
-│  │  │  ├─ AdministratorRepository.java
 │  │  │  ├─ ApiKeyRepository.java
 │  │  │  ├─ ApiKeyUsageRepository.java
 │  │  │  ├─ AppConfigRepository.java
-│  │  │  ├─ AssignmentRepository.java
-│  │  │  ├─ AttendanceRepository.java
 │  │  │  ├─ ChatMessageRepository.java
 │  │  │  ├─ ChatSessionRepository.java
-│  │  │  ├─ ChoiceRepository.java
-│  │  │  ├─ CommentRepository.java
-│  │  │  ├─ ConfigRepository.java
-│  │  │  ├─ ConfigurationSettingRepository.java
-│  │  │  ├─ CorrectedSampleRepository.java
-│  │  │  ├─ CourseRepository.java
 │  │  │  ├─ CurrentModelRepository.java
 │  │  │  ├─ DomainKnowledgeRepository.java
-│  │  │  ├─ EnrollmentRepository.java
-│  │  │  ├─ ExamRepository.java
-│  │  │  ├─ GradeRepository.java
 │  │  │  ├─ HyperparameterRepository.java
 │  │  │  ├─ MemoryRepository.java
 │  │  │  ├─ ModelEntityRepository.java
 │  │  │  ├─ ModelInfoRepository.java
 │  │  │  ├─ ModelRepository.java
-│  │  │  ├─ NoticeRepository.java
-│  │  │  ├─ ProfessorRepository.java
-│  │  │  ├─ QuestionRepository.java
-│  │  │  ├─ RentalRepository.java
 │  │  │  ├─ RuleRepository.java
-│  │  │  ├─ SampleRepository.java
 │  │  │  ├─ SettingRepository.java
-│  │  │  ├─ StudentRepository.java
-│  │  │  ├─ SubmissionRepository.java
-│  │  │  ├─ SynergyStatRepository.java
 │  │  │  ├─ TrainingJobRepository.java
 │  │  │  ├─ TrainingSampleRepository.java
-│  │  │  ├─ TranslationMemoryRepository.java
-│  │  │  └─ UploadTokenRepository.java
-│  │  ├─ memory/
-│  │  │  └─ PersistentChatMemory.java
-│  │  └─ projection/
-│  │     └─ UuidsProjection.java
+│  │  │  └─ TranslationMemoryRepository.java
+│  │  ├─ memory/PersistentChatMemory.java
 │  ├─ llm/
 │  │  ├─ LlmClient.java
 │  │  ├─ LangChain4jLlmClient.java
@@ -1810,25 +1689,11 @@ src/main/java/com/example/lms
 │  │  └─ model/
 │  │     ├─ ModelInfo.java
 │  │     ├─ OpenAiModelDto.java
-│  │     └─ routing/
-│  │        └─ ModelRouter.java
+│  │     └─ routing/ModelRouter.java
 │  ├─ search/
 │  │  ├─ NaverSearchService.java
-│  │  └─ extract/
-│  │     └─ PageContentScraper.java
-│  ├─ messaging/
-│  │  └─ NettyServerConfig.java
-│  ├─ storage/
-│  │  ├─ FileStorageService.java
-│  │  └─ LocalFileStorageService.java
-│  ├─ security/
-│  │  ├─ CustomUserDetailsService.java
-│  │  ├─ ApiKeyManager.java
-│  │  └─ AdminAuthInterceptor.java
-│  └─ external/
-│     └─ kakao/
-│        ├─ KakaoMessageService.java
-│        └─ KakaoOAuthServiceImpl.java
+│  │  └─ extract/PageContentScraper.java
+│  └─ security/ApiKeyManager.java
 │
 ├─ prompt/
 │  ├─ DefaultPromptEngine.java
@@ -1837,18 +1702,11 @@ src/main/java/com/example/lms
 │  ├─ PromptEngine.java
 │  └─ SystemPrompt.java
 │
-├─ support/
-│  ├─ scope/
-│  │  └─ ChatSessionScope.java
-│  └─ web/
-│     └─ ReqLogInterceptor.java
+├─ support/scope/ChatSessionScope.java
 │
 └─ util/
-   ├─ FileStorage.java
-   ├─ HashUtil.java
    ├─ MLCalibrationUtil.java
    ├─ MetadataUtils.java
-   ├─ ProductAliasNormalizer.java
    ├─ RelevanceConfidenceEvaluator.java
    ├─ RelevanceScorer.java
    ├─ SoftmaxUtil.java
@@ -1858,35 +1716,6 @@ src/main/java/com/example/lms
    ├─ TokenCounter.java
    └─ TraceMetaUtil.java
 
-
-I. resources (정적/템플릿/설정)
-src/main/resources
-├─ static/
-│  ├─ js/
-│  │  ├─ chat.js
-│  │  └─ fetch-wrapper.js
-│  └─ .well-known/pki-validation/E7A9589C....txt
-├─ templates/
-│  ├─ admin/notices/{list,detail,form}.html
-│  ├─ chat-ui.html
-│  ├─ dashboard.html
-│  ├─ model-settings.html
-│  ├─ notice-list.html
-│  ├─ assignment/ ...
-│  ├─ attendance/ ...
-│  ├─ auth/{login.html,register.html}
-│  ├─ courses/ ...
-│  ├─ enrollments/ ...
-│  ├─ exam/ ...
-│  ├─ fragments/ ...
-│  ├─ kakao/ ...
-│  ├─ professors/ ...
-│  ├─ rentals/ ...
-│  ├─ students/ ...
-│  ├─ upload/pki-upload.html
-│  ├─ error.html
-│  └─ index.html
-└─ application.yml (또는 profiles)
 - Adds scheduler, curiosity, and synthesis services for the agent's main loop.
 - Implements a `ChatModel` abstraction for LLM interactions.
 - Extends `KnowledgeBaseService` with a write API (`integrateVerifiedKnowledge`) for the agent to commit new information.
