@@ -609,4 +609,30 @@ Version purity checks may abort startup if conflicting versions are detected in 
 Proper configuration of retrieval and ranking determines the trade‑off between recall and latency.
 Additional detail line 1 summarizing aspects of the system across query processing, retrieval, ranking, verification, reinforcement, knowledge base, hallucination suppression, meta-learning, session management, configuration, guidelines, algorithms, debugging, security, troubleshooting, future enhancements, commit summaries, examples and glossary terms.
 Additional detail line 2 summarizing aspects of the system across query processing, retrieval, ranking, verification, reinforcement, knowledge base, hallucination suppression, meta-learning, session management, configuration, guidelines, algorithms, debugging, security, troubleshooting, future enhancements, commit summaries, examples and glossary terms.
+
 ...
+EmbeddingModelCrossEncoderReranker
+feat: Implement exponential scoring decay based on URL credibility.
+
+Improves ranking accuracy by using AuthorityScorer to determine the credibility level of a source URL (e.g., Official, Trusted) and applying a differential penalty to the final ranking score based on its level.
+
+feat: Apply a dynamic synergy weighting bonus at runtime.
+
+Enhances operational flexibility by fetching the synergyWeight value in real-time from HyperparameterService. This allows for immediate adjustments for A/B testing or hotfixes without requiring a redeployment.
+
+AuthorityScorer
+feat: Add a centralized credibility analyzer that classifies source credibility into an enum and maps it to an exponential decay constant.
+
+Implemented getSourceCredibility(), a method that classifies a URL into OFFICIAL, TRUSTED, COMMUNITY, or UNVERIFIED tiers.
+
+Added a decayFor() method that returns a predefined decay value (from 1.0 down to 0.25) for each tier, ensuring a consistent credibility policy across the system.
+
+HyperparameterService
+feat: Add the ability to dynamically fetch the reranking synergy weight (rerank.synergy-weight) at runtime.
+
+Greatly improves operational flexibility by allowing real-time adjustments to the influence of the synergy bonus via system properties or environment variables, eliminating the need for redeployment.
+
+RerankSourceCredibility (Enum)
+feat: Create a new, dedicated RerankSourceCredibility enum for the reranker.
+
+A new type was defined to avoid potential conflicts with the existing SourceCredibility enum and to clearly segregate policies specific to the reranking stage.
