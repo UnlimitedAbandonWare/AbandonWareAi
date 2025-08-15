@@ -34,7 +34,9 @@ public record PromptContext(
         List<String> sectionSpec,     // 답변에 포함될 섹션 헤더 목록 강제
         Integer targetTokenBudgetOut, // 모델의 출력 토큰 예산
         String audience,              // 답변의 대상 독자층 (예: "초보자")
-        String citationStyle          // 출처 표기 스타일 (예: "inline", "footnote")
+        String citationStyle,         // 출처 표기 스타일 (예: "inline", "footnote")
+        List<String> unsupportedClaims,   // 🆕 치유 단계에서 전달될 '미지원 주장' 목록
+        String systemInstruction          // 🆕 특수 지시(예: "CORRECTIVE_REGENERATION")
 ) {
 
     /**
@@ -67,7 +69,8 @@ public record PromptContext(
         private Integer targetTokenBudgetOut;
         private String audience;
         private String citationStyle = "inline";
-
+        private List<String> unsupportedClaims = Collections.emptyList(); // 🆕
+        private String systemInstruction;                                  // 🆕
         public Builder userQuery(String v) { this.userQuery = v; return this; }
         public Builder lastAssistantAnswer(String v) { this.lastAssistantAnswer = v; return this; }
         public Builder history(String v) { this.history = v; return this; }
@@ -87,6 +90,8 @@ public record PromptContext(
         public Builder audience(String v) { this.audience = v; return this; }
         public Builder citationStyle(String v) { this.citationStyle = (v == null || v.isBlank() ? "inline" : v); return this; }
 
+        public Builder unsupportedClaims(List<String> v) { this.unsupportedClaims = (v == null ? Collections.emptyList() : v); return this; } // 🆕
+        public Builder systemInstruction(String v) { this.systemInstruction = (v == null ? "" : v.trim()); return this; }                     // 🆕
         /**
          * 빌더에 설정된 값들을 바탕으로 최종적인 PromptContext 불변 객체를 생성합니다.
          * @return 생성된 PromptContext 인스턴스
@@ -99,6 +104,7 @@ public record PromptContext(
                     cognitiveState, // ✅ [추가]
                     verbosityHint, minWordCount, sectionSpec, targetTokenBudgetOut,
                     audience, citationStyle
+                    , unsupportedClaims, systemInstruction
             );
         }
     }

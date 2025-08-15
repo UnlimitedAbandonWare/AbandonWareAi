@@ -13,6 +13,8 @@ import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
 import com.theokanning.openai.service.OpenAiService;
+import com.example.lms.prompt.PromptBuilder;     // 🆕 치유 프롬프트 빌더
+import com.example.lms.prompt.PromptContext;    // 🆕 치유 컨텍스트
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -34,6 +36,7 @@ public class FactVerifierService {
     private final FactStatusClassifier classifier;
     private final ClaimVerifierService claimVerifier;
     private final EvidenceGate evidenceGate;
+    private final PromptBuilder promptBuilder; // 🆕 주입
 
     // 선택적으로 주입되는 의존성
     @Autowired(required = false)
@@ -43,20 +46,22 @@ public class FactVerifierService {
     @Autowired(required = false)
     private NamedEntityValidator namedEntityValidator;
 
-    // 생성자를 통해 모든 필수 의존성을 주입받습니다.
     public FactVerifierService(OpenAiService openAi,
                                FactStatusClassifier classifier,
                                SourceAnalyzerService sourceAnalyzer,
                                ClaimVerifierService claimVerifier,
-                               EvidenceGate evidenceGate) {
+                               EvidenceGate evidenceGate,
+                               PromptBuilder promptBuilder) {
         this.openAi = Objects.requireNonNull(openAi, "openAi");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
         this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
         this.claimVerifier = Objects.requireNonNull(claimVerifier, "claimVerifier");
         this.evidenceGate = Objects.requireNonNull(evidenceGate, "evidenceGate");
+        this.promptBuilder = Objects.requireNonNull(promptBuilder, "promptBuilder");
     }
 
     private static final int MIN_CONTEXT_CHARS = 80;
+    private static final int MAX_HEALING_RETRIES = 2; // 🆕 LLM 호출 최소화 가드
 
     /** 컨텍스트-질문 정합성 메타 점검용 프롬프트 */
     private static final String META_TEMPLATE = """
@@ -115,8 +120,13 @@ public class FactVerifierService {
 
     /** 메모리 증거와 후속 질문 여부까지 반영하는 핵심 검증 메서드 */
     public String verify(String question, String context, String memory, String draft, String model, boolean isFollowUp) {
-        if (!StringUtils.hasText(draft)) return "";
+        return verifyInternal(question, context, memory, draft, model, isFollowUp, 0); // 🆕 Self-Healing 루프 진입
+    }
 
+    // 🆕 치유 반복을 포함한 내부 구현
+    private String verifyInternal(String question, String context, String memory, String draft, String model,
+                                  boolean isFollowUp, int attempt) {
+        if (!StringUtils.hasText(draft)) return "";
         // --- 0. 초기 엔티티 검증: 답변에 등장하는 모든 엔티티가 근거에 존재하는지 확인 ---
         if (namedEntityValidator != null) {
             List<String> evidenceList = new ArrayList<>();
@@ -126,9 +136,17 @@ public class FactVerifierService {
             NamedEntityValidator.ValidationResult vr =
                     namedEntityValidator.validateAnswerEntities(draft, evidenceList);
 
+
             if (vr.isEntityMismatch()) {
-                log.warn("[Verify] Unsupported entities detected: {}", vr.getMissingEntities());
-                // If unsupported entities are present, we conservatively return "정보 없음"
+                log.warn("[Verify] Unsupported entities detected by validator");
+                // 🆕 0-a. 즉시 치유 시도 (최대 재시도 확인)
+                if (attempt < MAX_HEALING_RETRIES) {
+                    List<String> uc = computeUnsupportedEntities(context, memory, draft);
+                    if (!uc.isEmpty()) {
+                        String healed = correctiveRegenerate(question, context, memory, draft, model, uc);
+                        return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                    }
+                }
                 return "정보 없음";
             }
         }
@@ -138,7 +156,7 @@ public class FactVerifierService {
         boolean hasSufficientMemory = StringUtils.hasText(memory) && memory.length() >= 40;
 
         // 컨텍스트와 메모리가 모두 빈약하면, LLM에 의존하지 않고 시너지 주장 등만 간단히 필터링
-        if (!hasSufficientContext && !hasSufficientMemory) { // ← 오타 수정됨
+        if (!hasSufficientContext && !hasSufficientMemory) {
             var result = claimVerifier.verifyClaims("", draft, model);
             return result.verifiedAnswer();
         }
@@ -177,10 +195,16 @@ public class FactVerifierService {
         boolean hasEnoughEvidence = evidenceGate.hasSufficientCoverage(
                 question, toLines(context), toLines(memory), List.of(), isFollowUp);
 
-        // 근거가 부족하면(grounding 또는 evidence 부족) LLM을 통한 공격적인 수정을 피하고,
-        // ClaimVerifier의 보수적인 필터링(SOFT-FAIL)만 거쳐서 반환
+        // 🆕 근거 부족 시: 미지원 주장 치유 → 재검증 (최대 2회), 실패 시 보수적 필터링
         if (!isGrounded || !hasEnoughEvidence) {
-            log.debug("[Verify] 근거 부족(grounded: {}, evidence: {}) -> SOFT-FAIL 필터만 적용", isGrounded, hasEnoughEvidence);
+            log.debug("[Verify] 근거 부족(grounded: {}, evidence: {})", isGrounded, hasEnoughEvidence);
+            if (attempt < MAX_HEALING_RETRIES) {
+                List<String> uc = computeUnsupportedEntities(context, memory, draft);
+                if (!uc.isEmpty()) {
+                    String healed = correctiveRegenerate(question, context, memory, draft, model, uc);
+                    return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                }
+            }
             var result = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
             return result.verifiedAnswer().isBlank() ? "정보 없음" : result.verifiedAnswer();
         }
@@ -190,7 +214,15 @@ public class FactVerifierService {
             case PASS, INSUFFICIENT:
                 // PASS 상태여도, 미지원 주장(unsupported claims)은 제거해야 함
                 var passResult = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
-                return passResult.verifiedAnswer();
+                String passAnswer = passResult.verifiedAnswer();
+                if (attempt < MAX_HEALING_RETRIES) {
+                    List<String> ucPass = computeUnsupportedEntities(context, memory, passAnswer);
+                    if (!ucPass.isEmpty()) {
+                        String healed = correctiveRegenerate(question, context, memory, passAnswer, model, ucPass);
+                        return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                    }
+                }
+                return passAnswer;
 
             case CORRECTED:
                 // CORRECTED 상태이고 근거도 충분하면, LLM을 통해 답변을 적극적으로 수정
@@ -203,7 +235,15 @@ public class FactVerifierService {
 
                     // 수정된 답변도 마지막으로 한번 더 검증
                     var finalResult = claimVerifier.verifyClaims(mergeContext(context, memory), correctedText, model);
-                    return finalResult.verifiedAnswer();
+                    String finalAns = finalResult.verifiedAnswer();
+                    if (attempt < MAX_HEALING_RETRIES) {
+                        List<String> ucFinal = computeUnsupportedEntities(context, memory, finalAns);
+                        if (!ucFinal.isEmpty()) {
+                            String healed = correctiveRegenerate(question, context, memory, finalAns, model, ucFinal);
+                            return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                        }
+                    }
+                    return finalAns;
                 } catch (Exception e) {
                     log.error("Correction generation failed, falling back to '정보 없음'", e);
                     return "정보 없음";
@@ -225,6 +265,68 @@ public class FactVerifierService {
                 .maxTokens(maxTokens)
                 .build();
         return openAi.createChatCompletion(request).getChoices().get(0).getMessage().getContent();
+    }
+
+
+    // 🆕 다중 메시지 버전
+    private String callOpenAi(List<ChatMessage> messages, String model, double temp, double topP, int maxTokens) {
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+                .model(model)
+                .messages(messages)
+                .temperature(temp)
+                .topP(topP)
+                .maxTokens(maxTokens)
+                .build();
+        return openAi.createChatCompletion(request).getChoices().get(0).getMessage().getContent();
+    }
+
+    // 🆕 미지원 주장(개체) 계산: 컨텍스트/메모리에 등장하지 않는 개체를 탐지
+    private List<String> computeUnsupportedEntities(String ctx, String mem, String text) {
+        List<String> entities = extractEntities(text);
+        if (entities.isEmpty()) return List.of();
+        String evidence = (ctx == null ? "" : ctx) + "\n" + (mem == null ? "" : mem);
+        String lowerEv = evidence.toLowerCase(Locale.ROOT);
+        List<String> out = new ArrayList<>();
+        for (String e : entities) {
+            if (e != null && !e.isBlank()) {
+                if (!lowerEv.contains(e.toLowerCase(Locale.ROOT))) out.add(e);
+            }
+        }
+        return out;
+    }
+
+    // 🆕 치유 재생성
+    private String correctiveRegenerate(String question, String context, String memory, String draft, String model, List<String> unsupportedClaims) {
+        try {
+            PromptContext healCtx = PromptContext.builder()
+                    .userQuery(question)
+                    .lastAssistantAnswer(draft)      // DRAFT_ANSWER 섹션에 주입
+                    .unsupportedClaims(unsupportedClaims)
+                    .systemInstruction("CORRECTIVE_REGENERATION")
+                    .citationStyle("inline")
+                    .build();
+            String healCtxSection = promptBuilder.build(healCtx);          // DRAFT_ANSWER 등
+            String healInstr = promptBuilder.buildInstructions(healCtx);      // 치유 규칙 + UNSUPPORTED_CLAIMS
+
+            List<ChatMessage> msgs = new ArrayList<>();
+            // 1) 근거(컨텍스트)를 최우선 System 메시지로
+            if (StringUtils.hasText(context)) {
+                msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), context));
+            }
+            // 2) 치유용 컨텍스트 섹션(DRAFT 포함)
+            if (StringUtils.hasText(healCtxSection)) {
+                msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), healCtxSection));
+            }
+            // 3) 치유용 인스트럭션
+            msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), healInstr));
+            // 4) 사용자 지시: 초안 수정 요청
+            msgs.add(new ChatMessage(ChatMessageRole.USER.value(), "위 지시를 따르고, 미지원 주장을 제거·수정하여 정답을 한국어로 다시 작성하세요."));
+
+            return callOpenAi(msgs, model, 0.2, 1.0, 512);
+        } catch (Exception e) {
+            log.warn("[Self-Healing] correctiveRegenerate failed: {}", e.toString());
+            return draft; // 실패 시 기존 초안 유지
+        }
     }
 
     private static String mergeContext(String ctx, String mem) {

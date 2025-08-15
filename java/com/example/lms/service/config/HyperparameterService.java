@@ -15,6 +15,9 @@ import java.util.stream.Collectors;
 /**
  * DB에 저장된 하이퍼파라미터를 메모리 캐시에 로드하여 애플리케이션 전반에 제공합니다.
  * 동적 튜닝을 지원하며, 일반 조회 및 유효성 검증을 포함한 편의 메서드를 제공합니다.
+ *
+ * 하이퍼파라미터 조회 서비스.
+ * Rerank 시너지 가중치 등 런타임 제어값을 제공합니다.
  */
 @Service
 @RequiredArgsConstructor
@@ -84,7 +87,6 @@ public class HyperparameterService {
         return (value != null && value >= 0.0 && value <= 1.0) ? value : defaultValue;
     }
 
-
     /**
      * 파라미터 값을 int 형으로 조회합니다. 없으면 기본값을 반환합니다.
      * @param key 조회할 파라미터 키
@@ -129,5 +131,20 @@ public class HyperparameterService {
         double next = Math.max(min, Math.min(max, cur + delta));
         set(key, next);
         return next;
+    }
+
+    /**
+     * 리랭크 시너지 가중치 (런타임 튜닝 가능).
+     * 우선순위: -Drerank.synergy-weight → env RERANK_SYNERGY_WEIGHT → 기본값 1.0
+     */
+    public double getRerankSynergyWeight() {
+        String sys = System.getProperty("rerank.synergy-weight");
+        String env = (sys == null ? System.getenv("RERANK_SYNERGY_WEIGHT") : null);
+        String raw = (sys != null ? sys : env);
+        try {
+            return (raw == null) ? 1.0 : Double.parseDouble(raw);
+        } catch (Exception ignored) {
+            return 1.0;
+        }
     }
 }

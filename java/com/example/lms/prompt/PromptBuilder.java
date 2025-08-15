@@ -37,11 +37,22 @@ public class PromptBuilder {
             ### PREVIOUS_ANSWER
             %s
             """;
+    // 🆕 치유 모드에서 사용할 초안 명시 섹션
+    private static final String DRAFT_PREFIX = """
+            ### DRAFT_ANSWER
+            %s
+            """;
 
     /** 컨텍스트 본문(자료 영역) */
     public String build(PromptContext ctx) {
         StringBuilder sb = new StringBuilder();
         if (ctx != null) {
+
+            // 🆕 치유 모드일 때는 초안(DRAFT)을 명시적으로 주입
+            if ("CORRECTIVE_REGENERATION".equalsIgnoreCase(Objects.toString(ctx.systemInstruction(), ""))
+                    && StringUtils.hasText(ctx.lastAssistantAnswer())) {
+                sb.append(DRAFT_PREFIX.formatted(ctx.lastAssistantAnswer()));
+            }
             // [NEW] 후속 질문이면 직전 답변을 먼저 명확히 제공
             if (isFollowUp(ctx.userQuery()) && StringUtils.hasText(ctx.lastAssistantAnswer())) {
                 sb.append(PREV_PREFIX.formatted(ctx.lastAssistantAnswer()));
@@ -73,6 +84,21 @@ public class PromptBuilder {
         sys.append("- 답변은 제공된 컨텍스트와 문서 근거에 기반해야 합니다. 컨텍스트에 없는 새로운 정보나 추측을 답변에 포함하지 마세요. 정보가 부족하면 '정보 없음'이라고 답하세요.\n");
 
         if (ctx != null) {
+            // 🆕 치유 모드 전용 규칙 (인스트럭션 영역에 위치)
+            if ("CORRECTIVE_REGENERATION".equalsIgnoreCase(Objects.toString(ctx.systemInstruction(), ""))) {
+                sys.append("### CORRECTIVE REGENERATION MODE\n");
+                sys.append("- 위의 컨텍스트를 최우선 근거로 하여 'DRAFT_ANSWER'의 오류를 수정하세요.\n");
+                sys.append("- 아래 'UNSUPPORTED_CLAIMS'에 포함된 개체/주장은 **컨텍스트에 근거가 없으므로 제거하거나 수정**해야 합니다.\n");
+                sys.append("- 새로운 개체나 출처를 추가하지 마세요. 근거가 부족하면 해당 문장을 삭제하거나 최종적으로 '정보 없음'으로 답하세요.\n");
+                sys.append("- 한국어로 간결하게, 원문 대비 최대 +20% 길이 내에서 수정하세요.\n");
+                List<String> uc = (ctx.unsupportedClaims() == null ? List.of() : ctx.unsupportedClaims());
+                if (!uc.isEmpty()) {
+                    sys.append("### UNSUPPORTED_CLAIMS\n");
+                    for (String c : uc) {
+                        if (StringUtils.hasText(c)) sys.append("- ").append(c).append('\n');
+                    }
+                }
+            }
             // [NEW] 후속 질문이면 '이전 답변'을 주제로 확장하라고 강제
             if (isFollowUp(ctx.userQuery()) && StringUtils.hasText(ctx.lastAssistantAnswer())) {
                 sys.append("- Treat the section 'PREVIOUS_ANSWER' as the primary subject of the user's new query.\n");
