@@ -636,7 +636,40 @@ AuthorityScorer classifies URLs into credibility tiers such as OFFICIAL, TRUSTED
 An exponential scoring decay is applied based on the URL's credibility tier to penalize less reliable sources.
 HyperparameterService provides a dynamic reranking synergy weight, tunable at runtime via system properties or environment variables.
 A dedicated RerankSourceCredibility enum was created for the reranker to avoid conflicts with the existing SourceCredibility enum.
-RerankSourceCredibility (Enum)
+RerankSourceCredibility (Enum)Of course. Here is the summary formatted for a Git commit message or pull request.
+
+✅ Summary of Changes
+chat-ui.html
+Adds a help button (#sendBtnHelp) that triggers a popover (#helpPopover).
+
+Introduces new CSS styles for the .help-icon and #helpPopover.
+
+Sets type="button" for the send and help buttons to prevent default form submission.
+
+chat.js
+Adds a click event listener in init() for #sendBtnHelp to call the /api/v1/help/context endpoint.
+
+Implements logic to handle the UI states for loading, success, and failure of the help content.
+
+EmbeddingModelCrossEncoderReranker.java
+Injects AuthorityScorer, HyperparameterService, and RerankSourceCredibility dependencies.
+
+Updates the scoring calculation to apply synergyWeight and authorityDecayMultiplier.
+
+Adds safeUrl() and clamp01to2() helper methods.
+
+AuthorityScorer.java
+Implements getSourceCredibility() and decayFor() methods.
+
+Marks the old weightFor() method as @Deprecated and delegates its call to the new implementation.
+
+Enhances the URL host parsing logic for better reliability.
+
+HyperparameterService.java
+Adds the getRerankSynergyWeight() method to provide a dynamic synergy weight at runtime.
+
+RerankSourceCredibility.java
+Creates a new enum class with values: OFFICIAL, TRUSTED, COMMUNITY, UNVERIFIED.
 feat: Create a new, dedicated RerankSourceCredibility enum for the reranker.
 
 A new type was defined to avoid potential conflicts with the existing SourceCredibility enum and to clearly segregate policies specific to the reranking stage.
