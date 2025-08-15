@@ -673,3 +673,137 @@ Creates a new enum class with values: OFFICIAL, TRUSTED, COMMUNITY, UNVERIFIED.
 feat: Create a new, dedicated RerankSourceCredibility enum for the reranker.
 
 A new type was defined to avoid potential conflicts with the existing SourceCredibility enum and to clearly segregate policies specific to the reranking stage.
+✨ Patch Notes — ModelRouter Routing Enhancements
+Summary
+
+MOE escalation rules: Route to the higher-tier (MOE) model using a composite of intent, risk, verbosity, and token-budget signals.
+
+Stability & performance: Resolution order now prefers injected beans → atomic cache (AtomicReference) → dynamic factory.
+
+Operational visibility: Added debug logs for routing decisions and a utility to report the effective SDK model name actually used.
+
+Changes
+1) Heuristic routing, upgraded
+
+Intent escalation: If intent ∈ HIGH_TIER_INTENTS (PAIRING, RECOMMENDATION, EXPLANATION, TUTORIAL, ANALYSIS) → MOE.
+
+Risk escalation: If riskLevel == "HIGH" → MOE.
+
+Verbosity escalation: If verbosityHint ∈ {"deep","ultra"} → MOE.
+
+Token-budget escalation: If targetMaxTokens >= 1536 → MOE (large-answer heuristic).
+
+public ChatModel route(@Nullable String intent,
+                       @Nullable String riskLevel,
+                       @Nullable String verbosityHint,
+                       @Nullable Integer targetMaxTokens)
+
+
+Decision log (DEBUG):
+
+ModelRouter decision intent={}, risk={}, verbosity={}, maxTokens={}, useMoe={}
+
+2) Model resolution path & temperature policy
+
+resolveMoe()
+
+Use injected moe bean if present → reuse cache → otherwise build via DynamicChatModelFactory.
+
+Dynamic build defaults: temperature=0.3 (consistency/factuality), top_p=1.0.
+
+resolveBase()
+
+Use injected utility bean → reuse cache → otherwise dynamic build.
+
+Dynamic build defaults: temperature=0.7, top_p=1.0.
+
+3) Factory guarantee & clearer exception
+
+If dynamic creation is required but no factory exists, ensureFactory() throws an actionable IllegalStateException:
+
+Provide @Bean utilityChatModel/moeChatModel or enable DynamicChatModelFactory.
+
+4) Effective model name utility
+
+resolveModelName(ChatModel model):
+
+If a dynamic factory is available, returns factory.effectiveModelName(model) (the exact model name sent to the SDK).
+
+Falls back to unknown or the class name when factory/model is absent.
+
+Configuration & Defaults
+
+No conflicts with existing keys. Dynamic creation is used only when no injected beans are provided.
+
+Example – application.properties
+
+# High/base model names
+router.moe.high=gpt-4o
+router.moe.mini=gpt-4o-mini
+
+# Optional: routing heuristic
+router.retry_on_429=true
+
+
+Temperatures are fixed in code (MOE 0.3 / Base 0.7, top_p=1.0). You can extend via factory options if needed.
+
+Compatibility
+
+Legacy signatures retained:
+
+route(String intent)
+
+route(String, String, String, Integer)
+
+If beans are injected, existing behavior is preserved. Cache/dynamic creation are used only when beans are absent.
+
+Test Guide
+
+Intent escalation: intent=ANALYSIS → MOE.
+
+Risk escalation: riskLevel=HIGH → MOE.
+
+Verbosity escalation: verbosityHint ∈ {deep, ultra} → MOE.
+
+Token-budget escalation: targetMaxTokens=2048 → MOE.
+
+Base path: None of the above → Base.
+
+Effective name: Verify resolveModelName(selectedModel) in logs/metrics.
+
+No factory configured: No injected beans & no cache & no factory → verify guided exception message.
+
+Ops Tips
+
+Enable DEBUG to trace routing rationale:
+
+logging.level.com.example.lms.model.ModelRouter=DEBUG
+
+
+Frequent high-cost requests? Provide a targetMaxTokens hint from the frontend/service layer to intentionally promote to MOE.
+
+Known Issues / Notes
+
+If configured model names don’t match your API account entitlements, dynamic creation will fail. Verify keys/permissions first.
+
+Do not mix LangChain4j versions on the classpath. Resolve version purity before rollout (no 0.2.x ↔ 1.0.x mixing).
+
+Commit Message (example)
+feat(router): multi-signal MOE routing + cache/factory fallback + effective model name
+
+- Add intent/risk/verbosity/token-budget heuristics for MOE escalation
+- Prefer injected beans, then atomic cache, then dynamic factory creation
+- MOE temp=0.3 / Base temp=0.7 (top_p=1.0) for stability vs. creativity balance
+- Debug logs for routing decisions
+- resolveModelName() to reveal the exact SDK model name
+- Helpful factory-missing exception message
+
+PR Checklist
+
+ Decision logs print as expected.
+
+ resolveModelName() reports the actual SDK model name.
+
+ Works correctly with and without injected beans.
+
+ Config keys apply correctly across environments.
