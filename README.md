@@ -1903,5 +1903,33 @@ Flip ModelRouter MoE rule for deep/ultra pairing/explanation.
 Migrate SubjectResolver to KB (Track 3), then remove any static lexicons.
 
 This plan keeps your architecture aligned with the rules you set (HybridRetriever entry; handlers order; prompt centralization), hardens verification so “Diluc default” cannot slip through, and guarantees that high-stakes, deep/ultra requests are routed to the higher-tier MoE automatically.
+Of course. Here is a refined commit message, in English, that accurately reflects the features we've implemented to solve the cold-start problem. It's formatted for a Git repository.
+
+feat: Implement Proactive Self-Learning to Solve Cold-Start Problem
+
+Introduces three proactive learning mechanisms to enable the system to learn and improve even without explicit user feedback. This resolves the "cold-start" issue where the learning cycle would not begin without initial user interactions.
+
+The system now actively generates and validates its own hypotheses, creating a foundational knowledge base that bootstraps the adaptive learning loop.
+
+1. Heuristic Synergy Bootstrapping (Cold-Start Seeding)
+KnowledgeBaseService: Enhanced with a default isHeuristicallySynergetic method to identify theoretically strong pairs based on predefined rules (e.g., role/element combos).
+
+SynergyBootstrapperService (New): On application startup, this service uses the new heuristic method to find synergistic pairs and injects them into the SynergyStat table with a small positive score, creating a baseline for recommendations.
+
+2. Implicit Feedback via Internal Confidence (Learning without Clicks)
+AdaptiveScoringService: Added an applyImplicitPositive(...) method to record learning signals derived from the system's own confidence rather than direct user feedback.
+
+ClaimVerifierService: Now calculates a synergyConfidence score after verifying LLM-generated claims. If a synergy-related claim is validated against the context, it's fed back as a weak positive signal via the new service.
+
+HybridRetriever: Measures "consistency" by checking if multiple information sources (e.g., web and vector search) support the same entity pairing. High consistency is also recorded as a weak positive signal.
+
+3. Vector-Based Exploratory Recommendations (Discovery)
+ExplorationService (New): Suggests novel yet relevant pairings to the user. It identifies entities that are close in the embedding vector space but have a low number of recorded interactions, actively encouraging feedback on "undiscovered" combinations.
+
+Fixed a float[] vs. double[] type mismatch from the EmbeddingModel to ensure type safety in vector calculations.
+
+Configuration
+Exposed new properties in application.yml to control these features, including thresholds for implicit feedback (scoring.implicit.threshold), toggles for bootstrapping (bootstrap.synergy.enabled), and parameters for exploration.
+
 
 This version maintains the full core content with no information loss, removes redundancies, adds extensive developer guidance, and includes all critical patches. It should be clear and informative for Jammini or any reviewer to understand the entire project without diving into source files.
