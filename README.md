@@ -631,7 +631,11 @@ HyperparameterService
 feat: Add the ability to dynamically fetch the reranking synergy weight (rerank.synergy-weight) at runtime.
 
 Greatly improves operational flexibility by allowing real-time adjustments to the influence of the synergy bonus via system properties or environment variables, eliminating the need for redeployment.
-
+EmbeddingModelCrossEncoderReranker now incorporates a dynamic synergy weight bonus and an exponential authority decay multiplier into its final score.
+AuthorityScorer classifies URLs into credibility tiers such as OFFICIAL, TRUSTED, COMMUNITY, and UNVERIFIED.
+An exponential scoring decay is applied based on the URL's credibility tier to penalize less reliable sources.
+HyperparameterService provides a dynamic reranking synergy weight, tunable at runtime via system properties or environment variables.
+A dedicated RerankSourceCredibility enum was created for the reranker to avoid conflicts with the existing SourceCredibility enum.
 RerankSourceCredibility (Enum)
 feat: Create a new, dedicated RerankSourceCredibility enum for the reranker.
 
