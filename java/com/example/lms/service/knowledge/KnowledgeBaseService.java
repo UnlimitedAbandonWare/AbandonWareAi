@@ -109,6 +109,35 @@ public interface KnowledgeBaseService {
         if (s.contains("가격") || s.contains("스펙") || s.matches(".*\\b[a-z]{1,4}\\d+[a-z]*\\b.*")) return "PRODUCT";
         return "GENERAL";
     }
+    /** 편의 헬퍼: 역할/원소 조회 */
+    default java.util.Optional<String> getRole(String domain, String entityName) {
+        return getAttribute(domain, entityName, "ROLE");
+    }
+
+    default java.util.Optional<String> getElement(String domain, String entityName) {
+        return getAttribute(domain, entityName, "ELEMENT");
+    }
+
+    /**
+     * 보수적 휴리스틱 시너지 판단:
+     * - 역할 조합: Healer↔Tank, Buffer↔DPS
+     * - 원소 조합(예시): Pyro↔Hydro, Cryo↔Pyro
+     */
+    default boolean isHeuristicallySynergetic(String domain, String subject, String partner) {
+        String r1 = getRole(domain, subject).orElse("").toLowerCase(java.util.Locale.ROOT);
+        String r2 = getRole(domain, partner).orElse("").toLowerCase(java.util.Locale.ROOT);
+        boolean roleOk =
+                (("healer".equals(r1) && "tank".equals(r2)) || ("tank".equals(r1) && "healer".equals(r2))) ||
+                        (("buffer".equals(r1) && "dps".equals(r2)) || ("dps".equals(r1) && "buffer".equals(r2)));
+
+        String e1 = getElement(domain, subject).orElse("").toLowerCase(java.util.Locale.ROOT);
+        String e2 = getElement(domain, partner).orElse("").toLowerCase(java.util.Locale.ROOT);
+        boolean elementOk =
+                (("pyro".equals(e1) && "hydro".equals(e2)) || ("hydro".equals(e1) && "pyro".equals(e2))) ||
+                        (("cryo".equals(e1) && "pyro".equals(e2)) || ("pyro".equals(e1) && "cryo".equals(e2)));
+
+        return roleOk || elementOk;
+    }
 
     /**
      * ✨ [신규 추가] LLM 에이전트가 검증 및 합성한 지식을 시스템에 통합하는 API입니다.

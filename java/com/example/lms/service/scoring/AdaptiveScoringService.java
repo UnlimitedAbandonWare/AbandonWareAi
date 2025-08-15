@@ -6,12 +6,16 @@ import com.example.lms.repository.SynergyStatRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
-
+import org.springframework.beans.factory.annotation.Value;
 @Service
 @RequiredArgsConstructor
 public class AdaptiveScoringService {
 
     private final SynergyStatRepository repo;
+
+    /** 암묵 피드백을 1로 반영할 최소 가중치(확신/일관성) */
+    @Value("${scoring.implicit.threshold:0.8}")
+    private double implicitThreshold;
 
     /**
      * 특정 조합에 대한 긍정적인 사용자 피드백을 기록합니다.
@@ -56,6 +60,16 @@ public class AdaptiveScoringService {
         double centered = mean - 0.5;
         // 최종 점수를 [-0.05, +0.10] 범위로 조정 및 제한(clamping)
         return Math.max(-0.05, Math.min(0.10, centered * 0.3));
+    }
+
+    /**
+     * 암묵적(implicit) 신호를 바탕으로 긍정 피드백을 조건부 반영한다.
+     * weight ∈ [0,1]가 implicitThreshold 이상이면 + 1을 기록, 아니면 무시.
+     */
+    public void applyImplicitPositive(String domain, String subject, String partner, double weight) {
+        if (weight >= implicitThreshold) {
+            upsert(domain, subject, partner, +1, 0);
+        }
     }
 
     private void upsert(String domain, String subject, String partner, long positiveDelta, long negativeDelta) {

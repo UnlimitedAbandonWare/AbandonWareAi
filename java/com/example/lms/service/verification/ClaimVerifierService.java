@@ -1,5 +1,6 @@
 
-        package com.example.lms.service.verification;
+
+package com.example.lms.service.verification;
 
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
@@ -8,9 +9,10 @@ import com.theokanning.openai.service.OpenAiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-
+import com.example.lms.service.knowledge.KnowledgeBaseService;
+import com.example.lms.service.scoring.AdaptiveScoringService;
 import java.util.*;
-import java.util.regex.Pattern;
+        import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -29,39 +31,48 @@ import java.util.stream.Collectors;
 public class ClaimVerifierService {
 
     private final OpenAiService openAi;
+    private final AdaptiveScoringService scoring;
+    private final KnowledgeBaseService kb;
 
     /** 검증 결과를 담는 레코드. 검증된 답변과 지원되지 않은 주장 목록을 포함합니다. */
     public record VerificationResult(String verifiedAnswer, List<String> unsupportedClaims) {}
 
     private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=\\.|!|\\?|\\n)");
 
-    /**
-     * 초안 답변의 주장들을 검증하고, 지원되지 않는 주장이 포함된 문장을 제거합니다.
-     *
-     * @param context       사실 판단의 근거가 되는 컨텍스트
-     * @param draftAnswer   검증할 LLM의 초안 답변
-     * @param model         사용할 OpenAI 모델
-     * @return 검증이 완료된 답변과 제거된 주장 목록이 담긴 {@link VerificationResult}
-     */
     public VerificationResult verifyClaims(String context, String draftAnswer, String model) {
         if (draftAnswer == null || draftAnswer.isBlank()) {
             return new VerificationResult("정보 없음", List.of());
         }
         try {
-            // 1. LLM을 통해 초안에서 핵심 주장 추출
             List<String> claims = extractClaims(draftAnswer, model);
             if (claims.isEmpty()) {
                 return new VerificationResult(draftAnswer, List.of());
             }
 
-            // 2. 컨텍스트를 기반으로 각 주장의 사실 여부 판정
             List<Boolean> verdicts = judgeClaims(context, claims, model);
 
-            // 3. 'false' 판정된 주장을 포함한 문장을 제거하여 답변 재구성
             List<String> unsupportedClaims = new ArrayList<>();
             String filteredAnswer = rebuildAnswer(draftAnswer, claims, verdicts, unsupportedClaims);
 
             String finalAnswer = filteredAnswer.isBlank() ? "정보를 찾을 수 없습니다." : filteredAnswer;
+
+            // --- 암묵 피드백(시너지 확신도) 반영 ---
+            try {
+                double conf = estimateSynergyConfidence(claims, verdicts);
+                if (conf > 0.0 && kb != null && scoring != null) {
+                    String domain = kb.inferDomain(draftAnswer);
+                    var ents = kb.findMentionedEntities(domain, draftAnswer);
+                    if (ents != null && ents.size() >= 2) {
+                        var it = ents.iterator();
+                        String subject = it.next();
+                        String partner = it.next();
+                        scoring.applyImplicitPositive(domain, subject, partner, conf);
+                        log.debug("[ClaimVerifier] implicit+ (domain={}, subject={}, partner={}, conf={})",
+                                domain, subject, partner, String.format(java.util.Locale.ROOT, "%.2f", conf));
+                    }
+                }
+            } catch (Exception ignore) { /* 안전 무시 */ }
+
             return new VerificationResult(finalAnswer, unsupportedClaims);
         } catch (Exception e) {
             log.error("Claim verification 중 예외 발생. 원본 답변을 안전하게 반환합니다.", e);
@@ -69,10 +80,8 @@ public class ClaimVerifierService {
         }
     }
 
-    /**
-     * LLM을 호출하여 초안 답변에서 핵심 주장 목록을 추출합니다.
-     */
     private List<String> extractClaims(String draft, String model) {
+        // ... (내용 동일) ...
         String prompt = """
           Extract the core factual claims from the ANSWER as a JSON array of strings (max 8).
           Keep each claim concise and self-contained. Output JSON only.
@@ -88,10 +97,8 @@ public class ClaimVerifierService {
         return parseJsonArray(json);
     }
 
-    /**
-     * LLM을 호출하여 각 주장이 컨텍스트에 의해 지원되는지 판정합니다.
-     */
     private List<Boolean> judgeClaims(String context, List<String> claims, String model) {
+        // ... (내용 동일) ...
         String prompt = """
           For each CLAIM[i], answer STRICTLY "true" or "false" if it is directly supported by CONTEXT.
           Treat **pairing/synergy** as true only with explicit synergy cues (e.g., "잘 어울린다", "시너지", "조합", "함께 쓰면 좋다").
@@ -112,9 +119,6 @@ public class ClaimVerifierService {
         return parseJsonBooleans(json, claims.size());
     }
 
-    /**
-     * 판정 결과를 바탕으로, 지원되지 않는 주장이 포함된 '문장'을 제거하여 답변을 재구성합니다.
-     */
     private String rebuildAnswer(String draft, List<String> claims, List<Boolean> verdicts, List<String> unsupportedClaims) {
         Set<String> unsupported = new HashSet<>();
         for (int i = 0; i < claims.size(); i++) {
@@ -131,15 +135,46 @@ public class ClaimVerifierService {
         return Arrays.stream(SENTENCE_SPLIT.split(draft))
                 .map(String::trim)
                 .filter(sentence -> !sentence.isBlank())
-                // 문장에 unsupported 주장이 하나라도 포함되면 해당 문장 필터링
                 .filter(sentence -> unsupported.stream().noneMatch(sentence::contains))
                 .collect(Collectors.joining(" "))
                 .trim();
     }
 
+    // --- Helper Methods Moved Here ---
+    // 아래 메서드들이 rebuildAnswer 메서드 밖으로 이동했습니다.
+
+    private static final String[] SYNERGY_CUES = {"시너지", "조합", "궁합", "함께", "어울", "콤보"};
+
+    private static boolean isSynergyClaim(String s) {
+        if (s == null) return false;
+        String t = s.toLowerCase(java.util.Locale.ROOT);
+        for (String cue : SYNERGY_CUES) {
+            if (t.contains(cue)) return true;
+        }
+        return false;
+    }
+
+    /** 시너지 관련 주장에 한해 true 비율로 확신도 산출(없으면 0.0). */
+    private static double estimateSynergyConfidence(List<String> claims, List<Boolean> verdicts) {
+        if (claims == null || verdicts == null) return 0.0;
+        int total = 0, ok = 0;
+        for (int i = 0; i < Math.min(claims.size(), verdicts.size()); i++) {
+            if (isSynergyClaim(claims.get(i))) {
+                total++;
+                if (Boolean.TRUE.equals(verdicts.get(i))) ok++;
+            }
+        }
+        if (total == 0) return 0.0;
+        double ratio = ok / (double) total;
+        // 소수의 true에 의한 과대평가 방지: 최소 2개 이상일 때만 가중 보너스
+        if (ok >= 2) ratio = Math.min(1.0, ratio + 0.1);
+        return Math.max(0.0, Math.min(1.0, ratio));
+    }
+
     // --- JSON Parsing Helper Methods ---
 
     private List<String> parseJsonArray(String raw) {
+        // ... (내용 동일) ...
         if (raw == null) return Collections.emptyList();
         try {
             String s = raw.trim();
@@ -158,10 +193,11 @@ public class ClaimVerifierService {
     }
 
     private List<Boolean> parseJsonBooleans(String raw, int expectedSize) {
+        // ... (내용 동일) ...
         if (raw == null) return Collections.nCopies(expectedSize, false);
         List<Boolean> out = new ArrayList<>();
         try {
-            String s = raw.replaceAll("[^a-zA-Z,\\[\\]]", "").trim(); // true, false, 쉼표, 대괄호만 남김
+            String s = raw.replaceAll("[^a-zA-Z,\\[\\]]", "").trim();
             if (!s.startsWith("[") || !s.endsWith("]")) return Collections.nCopies(expectedSize, false);
 
             s = s.substring(1, s.length() - 1);
@@ -173,7 +209,6 @@ public class ClaimVerifierService {
         } catch (Exception e) {
             log.warn("JSON array of booleans 파싱 실패: {}", raw, e);
         }
-        // 파싱이 잘못되거나 개수가 부족할 경우 false로 채움
         while (out.size() < expectedSize) {
             out.add(false);
         }

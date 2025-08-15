@@ -31,6 +31,8 @@ import com.example.lms.service.rag.auth.AuthorityScorer;
 
 import com.example.lms.service.config.HyperparameterService;   // ★ NEW
 import com.example.lms.util.MLCalibrationUtil;
+import com.example.lms.service.scoring.AdaptiveScoringService;
+import com.example.lms.service.knowledge.KnowledgeBaseService;
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -58,6 +60,8 @@ public class HybridRetriever implements ContentRetriever {
     private final HyperparameterService hp; // ★ NEW: 동적 가중치 로더
     private final ElementConstraintScorer elementConstraintScorer; // ★ NEW: 원소 제약 재랭커
     private final QueryTransformer queryTransformer;               // ★ NEW: 상태 기반 질의 생성
+    private final AdaptiveScoringService scoring;
+    private final KnowledgeBaseService kb;
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
     private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
@@ -98,6 +102,10 @@ public class HybridRetriever implements ContentRetriever {
     private double fusionTemperature;
     @Value("${retrieval.rank.use-ml-correction:true}")
     private boolean useMlCorrection;  // ★ NEW: ML 보정 온/오프
+
+    /** 검색 일관성 → 암묵 강화 임계치 */
+    @Value("${retrieval.consistency.threshold:0.8}")
+    private double consistencyThreshold;
 
     @Override
     public List<Content> retrieve(Query query) {
@@ -174,8 +182,52 @@ public class HybridRetriever implements ContentRetriever {
             }
         }
 
-        // 최종 정제 후 반환
-        return finalizeResults(new ArrayList<>(mergedContents), dedupeKey, officialDomains, q);
+        // 최종 정제
+        List<Content> out = finalizeResults(new ArrayList<>(mergedContents), dedupeKey, officialDomains, q);
+
+        // ─ 암묵 피드백(검색 일관성) 반영
+        try { maybeRecordImplicitConsistency(q, out, officialDomains); } catch (Exception ignore) {}
+
+        return out;
+    }
+
+
+    private static boolean containsAny(String text, String[] cues) {
+        if (text == null) return false;
+        String t = text.toLowerCase(java.util.Locale.ROOT);
+        for (String c : cues) if (t.contains(c)) return true;
+        return false;
+    }
+
+    private static final String[] SYNERGY_CUES = {"시너지", "조합", "궁합", "함께", "어울", "콤보"};
+
+    private void maybeRecordImplicitConsistency(String queryText, List<Content> contents, List<String> officialDomains) {
+        if (scoring == null || kb == null || contents == null || contents.isEmpty()) return;
+        String domain = kb.inferDomain(queryText);
+        var ents = kb.findMentionedEntities(domain, queryText);
+        if (ents == null || ents.size() < 2) return;
+        var it = ents.iterator();
+        String subject = it.next();
+        String partner = it.next();
+        int total = 0, hit = 0;
+        for (Content c : contents) {
+            String text = java.util.Optional.ofNullable(c.textSegment())
+                    .map(dev.langchain4j.data.segment.TextSegment::text)
+                    .orElse(c.toString());
+            String url  = extractUrl(text);
+            boolean both = text != null
+                    && text.toLowerCase(java.util.Locale.ROOT).contains(subject.toLowerCase(java.util.Locale.ROOT))
+                    && text.toLowerCase(java.util.Locale.ROOT).contains(partner.toLowerCase(java.util.Locale.ROOT));
+            if (both) {
+                total++;
+                double w = containsAny(text, SYNERGY_CUES) ? 1.0 : 0.6; // 시너지 단서 보너스
+                if (isOfficial(url, officialDomains)) w += 0.1; // 공식 도메인 보너스
+                if (w >= 0.9) hit++; // 강한 지지로 카운트
+            }
+        }
+        if (total <= 0) return;
+        double consistency = hit / (double) total;
+        scoring.applyImplicitPositive(domain, subject, partner, consistency);
     }
 
     /**

@@ -406,9 +406,12 @@ public class ChatService {
             return ChatResult.of("정보 없음", "lc:" + chatModel.getClass().getSimpleName(), true);
         }
 
+        // ── 0-A) 세션ID 정규화 & 쿼리 재작성(Disambiguation) ─────────
+        Long sessionIdLong = parseNumericSessionId(req.getSessionId());
+        final String finalQuery = decideFinalQuery(userQuery, sessionIdLong);
         // ── 0-1) Verbosity 감지 & 섹션 스펙 ─────────────────────────
-        VerbosityProfile vp = verbosityDetector.detect(userQuery);
-        String intent = inferIntent(userQuery);
+        VerbosityProfile vp = verbosityDetector.detect(finalQuery);
+        String intent = inferIntent(finalQuery);
         List<String> sections = sectionSpecGenerator.generate(intent, /*domain*/"", vp.hint());
 
         // ── 1) 검색/융합: Self-Ask → HybridRetriever → Cross-Encoder Rerank ─
@@ -420,11 +423,11 @@ public class ChatService {
         List<String> planned = List.of();
         List<dev.langchain4j.rag.content.Content> fused = List.of();
         if (useWeb) {
-            planned = smartQueryPlanner.plan(userQuery, /*assistantDraft*/ null, /*maxBranches*/ 2);
-            if (planned.isEmpty()) planned = List.of(userQuery);
+            planned = smartQueryPlanner.plan(finalQuery, /*assistantDraft*/ null, /*maxBranches*/ 2);
+            if (planned.isEmpty()) planned = List.of(finalQuery);
             fused = hybridRetriever.retrieveAll(planned, hybridTopK);
         }
-        Map<String, Set<String>> rules = qcPreprocessor.getInteractionRules(userQuery);
+        Map<String, Set<String>> rules = qcPreprocessor.getInteractionRules(finalQuery);
 
         int keepN = switch (Objects.toString(vp.hint(), "standard").toLowerCase(Locale.ROOT)) {
             case "brief" -> keepNBrief;
@@ -435,14 +438,14 @@ public class ChatService {
 
         List<dev.langchain4j.rag.content.Content> topDocs =
                 (useWeb && !fused.isEmpty())
-                        ? reranker.rerank(userQuery, fused, keepN, rules)
+                        ? reranker.rerank(finalQuery, fused, keepN, rules)
                         : List.of();
 
         // 1‑b) (옵션) RAG(Vector) 조회
         List<dev.langchain4j.rag.content.Content> vectorDocs =
                 useRag
                         ? ragSvc.asContentRetriever(pineconeIndexName)
-                        .retrieve(dev.langchain4j.rag.query.Query.from(userQuery))
+                        .retrieve(dev.langchain4j.rag.query.Query.from(finalQuery))
                         : List.of();
 
         // 1-c) 메모리 컨텍스트(항상 시도) — 전담 핸들러 사용
@@ -450,7 +453,7 @@ public class ChatService {
 
         // ── 2) 명시적 맥락 생성(Verbosity-aware) ────────────────────────
         // 세션 ID(Long) 파싱: 최근 assistant 답변 & 히스토리 조회에 사용
-        Long sessionIdLong = parseNumericSessionId(req.getSessionId());
+
         String lastAnswer = (sessionIdLong == null)
                 ? null
                 : chatHistoryService.getLastAssistantMessage(sessionIdLong).orElse(null);
@@ -500,14 +503,14 @@ public class ChatService {
             msgs.add(dev.langchain4j.data.message.SystemMessage.from(outputPolicy));
         }
         // ④ 사용자 질문
-        msgs.add(dev.langchain4j.data.message.UserMessage.from(userQuery));
+        msgs.add(dev.langchain4j.data.message.UserMessage.from(finalQuery));
 
         // ── 5) 단일 호출 → 초안 ─────────────────────────────────────
         String draft = model.chat(msgs).aiMessage().text();
 
-        // 5‑b) (옵션) 컨텍스트+메모리 기반 검증
         String verified = shouldVerify(unifiedCtx, req)
-                ? verifier.verify(userQuery, /*context*/ unifiedCtx, /*memory*/ memoryCtx, draft, "gpt-4o")
+                ? verifier.verify(finalQuery, /*context*/ unifiedCtx, /*memory*/ memoryCtx, draft, "gpt-4o",
+                isFollowUpQuery(finalQuery, lastAnswer))
                 : draft;
 
         // ── 6) 길이 검증 → 조건부 1회 확장 ───────────────────────────
@@ -633,10 +636,10 @@ public class ChatService {
                     .filter(StringUtils::hasText)
                     .collect(Collectors.joining("\n"));
             String memCtx = Optional.ofNullable(memoryHandler.loadForSession(req.getSessionId())).orElse("");
+            boolean followUp = isFollowUpQuery(correctedMsg, /*lastAnswer*/ memCtx);
             String verified = shouldVerify(joinedContext, req)
-                    ? verifier.verify(correctedMsg, joinedContext, memCtx, draft, "gpt-4o")
+                    ? verifier.verify(correctedMsg, joinedContext, memCtx, draft, "gpt-4o", followUp)
                     : draft;
-
             /* ─── ② (선택) 폴리싱 ─── */
             /* ─── ② 경고‑배너 & (선택) 폴리싱 ─── */
             boolean insufficientContext = !StringUtils.hasText(joinedContext);
@@ -1102,6 +1105,19 @@ public class ChatService {
     private void reinforceAssistantAnswer(String sessionKey, String query, String answer) {
         // 기본값: 컨텍스트 점수 0.5, 전략 정보는 아직 없으므로 null
         reinforceAssistantAnswer(sessionKey, query, answer, 0.5, null);
+    }
+
+    /** 후속 질문(팔로업) 감지: 마지막 답변 존재 + 패턴 기반 */
+    private static boolean isFollowUpQuery(String q, String lastAnswer) {
+        if (q == null || q.isBlank()) return false;
+        if (lastAnswer != null && !lastAnswer.isBlank()) return true;
+        String s = q.toLowerCase(java.util.Locale.ROOT).trim();
+        return s.matches("^(더|조금|좀)\\s*자세히.*")
+                || s.matches(".*자세히\\s*말해줘.*")
+                || s.matches(".*예시(도|를)\\s*들(어|어서)?\\s*줘.*")
+                || s.matches("^왜\\s+그렇(게|지).*")
+                || s.matches(".*근거(는|가)\\s*뭐(야|지).*")
+                || s.matches("^(tell me more|more details|give me an example|why is that).*");
     }
 
 
