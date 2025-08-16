@@ -796,7 +796,43 @@ feat(router): multi-signal MOE routing + cache/factory fallback + effective mode
 - MOE temp=0.3 / Base temp=0.7 (top_p=1.0) for stability vs. creativity balance
 - Debug logs for routing decisions
 - resolveModelName() to reveal the exact SDK model name
-- Helpful factory-missing exception message
+- Helpful factor네, 맞습니다. 이전에는 각 클래스가 스스로 빈(Bean)으로 등록하려다 보니 이름 충돌이 났지만, RerankerConfig라는 중앙 관제탑을 만들어주니 문제가 해결된 것입니다.
+
+지금까지의 소스 코드 변경 사항을 Git 커밋 메시지나 릴리스 노트에 사용하기 좋도록 영어로 정리해 드릴게요.
+
+Summary of New Features & Changes
+This update introduces a major new feature: a local, ONNX-based cross-encoder reranker. It also includes a significant refactoring of how reranker components are managed to improve modularity and flexibility.
+
+Detailed Changes
+1. Added Local ONNX Reranking Backend
+This allows the system to perform high-performance, on-device document reranking, reducing reliance on external APIs and improving response latency.
+
+OnnxRuntimeService.java: A new service has been added to manage the lifecycle of an ONNX model. It handles loading the model file and running inference sessions.
+
+OnnxCrossEncoderReranker.java: A new implementation of the CrossEncoderReranker interface that uses the OnnxRuntimeService to score and reorder documents based on their relevance to the query.
+
+New Dependency: Added the com.microsoft.onnxruntime:onnxruntime library to build.gradle to enable ONNX model execution within the JVM.
+
+2. Centralized Reranker Configuration
+To resolve bean name conflicts and support dynamic switching between different reranker backends, the bean creation logic has been centralized.
+
+RerankerConfig.java: A new @Configuration class was created. This class is now the single source of truth for creating the active Reranker bean.
+
+Conditional Bean Creation: The RerankerConfig uses @Bean methods combined with @ConditionalOnProperty. This allows the application to select the reranker implementation at startup based on a configuration property.
+
+Decoupled Implementations: Removed @Component, @Primary, and @ConditionalOnProperty annotations from the individual reranker classes (EmbeddingModelCrossEncoderReranker, OnnxCrossEncoderReranker). They are now plain classes managed exclusively by RerankerConfig.
+
+3. New Configuration Properties
+The following properties were added to application.yml to control the new functionality:
+
+abandonware.reranker.backend: Switches the active reranker. Set to embedding-model (default) or onnx-runtime.
+
+abandonware.reranker.onnx.model-path: Specifies the path to the .onnx model file (e.g., classpath:/models/reranker.onnx).
+
+abandonware.reranker.onnx.execution-provider: Defines the execution environment (e.g., cpu, cuda).
+
+4. Code Cleanup
+A redundant, simpler version of the EmbeddingCrossEncoderReranker class was removed to eliminate duplicate code and confusion.y-missing exception message
 
 PR Checklist
 
