@@ -797,44 +797,134 @@ feat(router): multi-signal MOE routing + cache/factory fallback + effective mode
 - Debug logs for routing decisions
 - resolveModelName() to reveal the exact SDK model name
 - Helpful factor네, 맞습니다. 이전에는 각 클래스가 스스로 빈(Bean)으로 등록하려다 보니 이름 충돌이 났지만, RerankerConfig라는 중앙 관제탑을 만들어주니 문제가 해결된 것입니다.
+Change Summary
 
-지금까지의 소스 코드 변경 사항을 Git 커밋 메시지나 릴리스 노트에 사용하기 좋도록 영어로 정리해 드릴게요.
+Add build setup (Gradle): New build.gradle at the project root targeting Java 17 and Spring Boot 3.4.0, with LangChain4j 1.0.1 BOM. Declares core dependencies (Boot, Lucene, Reactor, Retrofit, Lombok, etc.). Adds ONNX Runtime via com.microsoft.onnxruntime:onnxruntime:1.18.0 to enable local ONNX inference.
 
-Summary of New Features & Changes
-This update introduces a major new feature: a local, ONNX-based cross-encoder reranker. It also includes a significant refactoring of how reranker components are managed to improve modularity and flexibility.
+Introduce ONNX-based reranker: New package com.example.lms.service.onnx with:
 
-Detailed Changes
-1. Added Local ONNX Reranking Backend
-This allows the system to perform high-performance, on-device document reranking, reducing reliance on external APIs and improving response latency.
+OnnxCrossEncoderReranker — implements both the internal CrossEncoderReranker contract and LangChain4j’s Reranker<Document> to provide local ONNX cross-encoder re-ranking. Bean activates only when abandonware.reranker.backend=onnx-runtime, and it takes precedence over the embedding reranker.
 
-OnnxRuntimeService.java: A new service has been added to manage the lifecycle of an ONNX model. It handles loading the model file and running inference sessions.
+OnnxRuntimeService — loads the ONNX model, initializes a session with the selected execution provider (cpu, cuda, or tensorrt), and exposes a predict API returning a query–document score matrix. If the model is missing, it falls back to Jaccard similarity.
 
-OnnxCrossEncoderReranker.java: A new implementation of the CrossEncoderReranker interface that uses the OnnxRuntimeService to score and reorder documents based on their relevance to the query.
+Adjust embedding reranker conditions: EmbeddingModelCrossEncoderReranker now activates only when abandonware.reranker.backend=embedding-model or the property is absent (default behavior remains embedding-based).
 
-New Dependency: Added the com.microsoft.onnxruntime:onnxruntime library to build.gradle to enable ONNX model execution within the JVM.
+Add configuration: Example application.yml added to define the abandonware.reranker namespace with backend, onnx.model-path, and onnx.execution-provider settings.
 
-2. Centralized Reranker Configuration
-To resolve bean name conflicts and support dynamic switching between different reranker backends, the bean creation logic has been centralized.
+Restructure sources: Project code is moved under src_onnx/src; the old src directory is removed. The service/domain layout stays the same; resources and tests live under the new structure.
 
-RerankerConfig.java: A new @Configuration class was created. This class is now the single source of truth for creating the active Reranker bean.
+Commit Message (Conventional)
+feat(reranker): add ONNX runtime backend and configurable reranker selection
 
-Conditional Bean Creation: The RerankerConfig uses @Bean methods combined with @ConditionalOnProperty. This allows the application to select the reranker implementation at startup based on a configuration property.
+Add root Gradle build with Spring Boot 3.4.0 and LangChain4j 1.0.1 BOM.
+Include ONNX Runtime (com.microsoft.onnxruntime:onnxruntime:1.18.0) to enable local ONNX inference.
 
-Decoupled Implementations: Removed @Component, @Primary, and @ConditionalOnProperty annotations from the individual reranker classes (EmbeddingModelCrossEncoderReranker, OnnxCrossEncoderReranker). They are now plain classes managed exclusively by RerankerConfig.
+Introduce OnnxCrossEncoderReranker and OnnxRuntimeService to support ONNX-based cross-encoder reranking.
+Register the ONNX reranker when `abandonware.reranker.backend=onnx-runtime`; otherwise fall back to the embedding model.
 
-3. New Configuration Properties
-The following properties were added to application.yml to control the new functionality:
+Update EmbeddingModelCrossEncoderReranker activation to follow the new `abandonware.reranker.backend` property and default to the embedding model when unset.
 
-abandonware.reranker.backend: Switches the active reranker. Set to embedding-model (default) or onnx-runtime.
+Add example `application.yml` for `abandonware.reranker` (backend, onnx.model-path, onnx.execution-provider).
 
-abandonware.reranker.onnx.model-path: Specifies the path to the .onnx model file (e.g., classpath:/models/reranker.onnx).
+Move sources under `src_onnx/src` and remove legacy `src` directory.
 
-abandonware.reranker.onnx.execution-provider: Defines the execution environment (e.g., cpu, cuda).
+PR Description
+Overview
 
-4. Code Cleanup
-A redundant, simpler version of the EmbeddingCrossEncoderReranker class was removed to eliminate duplicate code and confusion.y-missing exception message
+This PR introduces a local ONNX cross-encoder reranker that can be toggled at runtime, alongside cleanup of the build/config to standardize on Spring Boot 3.4 and LangChain4j 1.0.1. With ONNX Runtime in place, we can run cross-encoder models locally (CPU/CUDA/TensorRT) and switch between embedding-based and ONNX-based reranking via configuration.
 
-PR Checklist
+What’s Changed
+
+Build: New root build.gradle with Java 17 toolchain, Spring Boot plugin, LangChain4j 1.0.1 BOM, and onnxruntime:1.18.0.
+
+ONNX Reranker:
+
+OnnxCrossEncoderReranker implements internal and LangChain4j reranker interfaces for seamless use in both the RAG pipeline and LangChain APIs.
+
+OnnxRuntimeService loads the ONNX model and exposes predict for query–candidate scoring; falls back to Jaccard if no model is provided.
+
+Config Toggle: abandonware.reranker.backend selects the implementation:
+
+embedding-model (default)
+
+onnx-runtime (activates ONNX reranker)
+
+Conditional Beans: Embedding reranker only activates when backend is embedding-model or unset; ONNX reranker activates only when backend is onnx-runtime.
+
+Structure: Sources are moved to src_onnx/src; old src removed.
+
+Configuration
+
+Example application.yml:
+
+abandonware:
+  reranker:
+    # embedding-model (default) | onnx-runtime
+    backend: embedding-model
+
+    onnx:
+      # Absolute or classpath file path to the ONNX model
+      model-path: /opt/models/cross-encoder.onnx
+      # cpu | cuda | tensorrt
+      execution-provider: cpu
+
+
+Gradle snippet (root build.gradle):
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+
+dependencies {
+    implementation platform("dev.langchain4j:langchain4j-bom:1.0.1")
+    implementation "dev.langchain4j:langchain4j"
+    implementation "org.springframework.boot:spring-boot-starter"
+    implementation "com.microsoft.onnxruntime:onnxruntime:1.18.0"
+
+    compileOnly "org.projectlombok:lombok:1.18.32"
+    annotationProcessor "org.projectlombok:lombok:1.18.32"
+    testCompileOnly "org.projectlombok:lombok:1.18.32"
+    testAnnotationProcessor "org.projectlombok:lombok:1.18.32"
+}
+
+Default Behavior & Fallbacks
+
+If abandonware.reranker.backend is unset, the embedding reranker remains the default.
+
+If ONNX mode is selected but the model is missing/unreadable, the system boots and falls back to Jaccard similarity to avoid hard failure.
+
+Migration Notes
+
+Source layout has changed to src_onnx/src. Ensure your Gradle source sets (and IDE) are aligned if you rely on non-standard paths.
+
+No API changes are required for callers; the reranker selection is configuration-only.
+
+How to Enable ONNX Reranking
+
+Place the desired ONNX cross-encoder model at a known path.
+
+Set:
+
+abandonware.reranker.backend=onnx-runtime
+abandonware.reranker.onnx.model-path=/opt/models/cross-encoder.onnx
+abandonware.reranker.onnx.execution-provider=cuda   # or cpu/tensorrt
+
+
+Start the app and verify logs for ONNX session initialization.
+
+Testing
+
+Unit tests validate bean activation per backend setting and the Jaccard fallback path.
+
+Manual smoke test:
+
+With default config: confirm embedding reranking is used.
+
+Switch to ONNX: confirm ONNX reranking scores and ordering differ as expected.
+
+Risks
+
+Running ONNX on CUDA/TensorRT requires compatible drivers/runtimes; misconfiguration will trigger the fallback path.
+
+The non-standard source directory requires IDE/Gradle alignment.
 
  Decision logs print as expected.
 
