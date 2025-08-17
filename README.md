@@ -933,3 +933,147 @@ The non-standard source directory requires IDE/Gradle alignment.
  Works correctly with and without injected beans.
 
  Config keys apply correctly across environments.
+feat(learning/gemini): introduce Gemini learning stubs, DTOs, REST endpoints + config/build updates
+
+Why
+
+Prepare a non-breaking learning pipeline (curation → batch → optional tuning) that compiles without external SDKs and can be wired later.
+
+Keep reinforcement working even if Gemini/Vertex isn’t available.
+
+What changed
+
+DTOs
+
+TuningJobRequest (record): dataset URI, model, suffix, epochs; null-guards.
+
+TuningJobStatus (record): jobId, state, message; null-guards.
+
+New module (stubs) under learning/gemini
+
+GeminiClient: thin wrapper; returns placeholders (no external calls yet).
+
+GeminiCurationService: invokes client; applies KnowledgeDelta to KB + vector store; best-effort logging.
+
+GeminiBatchService: placeholder methods for dataset build/run.
+
+GeminiTuningService: placeholder methods for Vertex tuning start/status.
+
+GeminiCurationPromptBuilder: scaffold for structured curation prompts.
+
+LearningWriteInterceptor: post-verification hook; attempts curation, always reinforces memory as fallback.
+
+LearningController: REST endpoints for ingest/batch/tune/status.
+
+Configuration
+
+application.yml: gemini.api-key now prefers GOOGLE_API_KEY (falls back to GEMINI_API_KEY); curator/batch model names and timeouts preserved.
+
+Build
+
+build.gradle: add com.google.genai:google-genai:1.12.0 (SDK present but not invoked yet).
+
+Resilience/behavior
+
+All Gemini paths are best-effort; errors are logged and do not bubble; memory reinforcement still runs.
+
+EmbeddingStoreManager.index() called for curated memories when present.
+
+REST API (added)
+
+POST /api/learning/gemini/ingest → applies curation; returns counts {triples,rules,memories}.
+
+POST /api/learning/gemini/batch/build?sinceHours={int} → returns {datasetUri} (stub).
+
+POST /api/learning/gemini/batch/run?datasetUri={uri}&jobName={name} → returns {jobId} (stub).
+
+POST /api/learning/gemini/tune (body: TuningJobRequest) → returns {jobId} (stub).
+
+GET /api/learning/gemini/jobs/{id} → returns TuningJobStatus (stub).
+
+Ops/Config notes
+
+gemini.backend: developer (default) or vertex.
+
+gemini.api-key: ${GOOGLE_API_KEY:${GEMINI_API_KEY:}}
+
+gemini.project-id, gemini.location, gemini.curator-model, gemini.batch-model, gemini.timeouts.connect-ms/read-ms.
+
+Compatibility
+
+No changes to existing chat/RAG routing; learning features are additive and inactive unless called.
+
+Version purity unchanged (LangChain4j 1.0.1 only).
+알겠습니다, (AbandonWare)님. 제공된 지시사항을 바탕으로 Git 커밋 메시지나 패치노트로 사용하기 좋은 영문 요약본을 작성해 드립니다.
+
+Patch Notes / Commit Message
+feat: Implement Self-Learning RAG, UX Enhancements, and Cancel Feature
+
+This major update introduces a fully operational self-learning pipeline powered by the Gemini API, alongside significant UI/UX improvements and critical bug fixes. The system is now capable of real-time knowledge acquisition, offers greater transparency into its operations, and provides users with more control.
+
+✨ New Features
+Self-Learning RAG Pipeline (feat(learning))
+
+Activated Gemini Learning: Replaced all stub implementations in GeminiClient with live Google Gemini API calls, enabling the AI to learn from conversations and user feedback.
+
+Structured Knowledge Extraction: Implemented a robust GeminiCurationPromptBuilder to generate structured prompts with JSON schemas, allowing for reliable knowledge extraction.
+
+Knowledge Base Integration: The KnowledgeBaseService now correctly processes and saves (upsert) new knowledge deltas (triples, rules, aliases) into the database.
+
+End-to-End Evidence Pipeline: The FactVerifierService and LearningWriteInterceptor now pass complete LearningEvent objects, including evidence and claims, ensuring the learning process is triggered with valid data.
+
+AI Thought Process UI (feat(ui))
+
+A new "thought process" panel has been added to the UI (chat-ui.html).
+
+The backend now streams 'thought' events via SSE, providing users with real-time visibility into the AI's reasoning steps (e.g., "Analyzing query," "Searching web," "Generating draft").
+
+Response Generation Cancellation (feat(ux))
+
+Users can now stop a long-running response generation by clicking a "Stop Generation" button.
+
+This feature is implemented with a new /api/chat/cancel endpoint that terminates the corresponding server-side streaming task, saving resources and improving user experience.
+
+🚀 Improvements
+Enhanced RAG Transparency (feat(rag))
+
+The UI now displays all search queries executed by the RAG system, including those generated through query expansion, providing full transparency into the retrieval process.
+
+Dependency Management (build)
+
+Added the com.google.genai:google-genai:1.12.0 dependency to build.gradle to support the new Gemini learning pipeline.
+
+🐛 Bug Fixes
+Duplicate UI Elements in New Sessions (fix(ui))
+
+Resolved an issue in chat.js where duplicate "like/dislike" buttons and model names would appear on the first message of a new chat session. The logic now correctly updates the initial loading message bubble instead of creating a new one.
+
+♻️ Refactoring
+Configuration File Migration (refactor(config))
+
+Migrated all application settings from application.yml to application.properties for consistency.
+
+A corresponding @ConfigurationProperties class has been implemented to ensure type-safe loading of all Gemini-related configurations.
+Patch Notes: Autonomous Learning & Knowledge Integrity Engine
+This patch graduates the AI from a reactive learner to a proactive, autonomous agent. The system can now independently identify and fill gaps in its knowledge, verify its own database for consistency, and manage these tasks within cost constraints by intelligently utilizing the Gemini API's free tier.
+
+✨ New Features
+Proactive Knowledge Acquisition (feat(agent))
+
+Knowledge Gap Detection: The SmartFallbackService now logs the context of failed queries as "KnowledgeGap" events, turning failures into actionable learning opportunities.
+
+Autonomous Exploration Service: A new scheduled agent, AutonomousExplorationService, has been introduced. It periodically analyzes knowledge gaps, formulates internal research queries, and uses the existing RAG pipeline to find answers autonomously.
+
+Unsupervised Learning Loop: The exploration service now directly feeds its findings into the GeminiCurationService, allowing the AI to expand its knowledge base without direct user interaction.
+
+Knowledge Base Integrity & Self-Refinement (feat(knowledge))
+
+Automated Consistency Verification: A new KnowledgeConsistencyVerifier agent periodically audits the knowledge base. It bundles related facts and rules, queries the Gemini API to identify logical contradictions (e.g., an entity being both a PREFERRED_PARTNER and an AVOID_WITH another), and flags inconsistencies for review.
+
+Knowledge Decay & Confidence Scoring: DomainKnowledge entities now track lastAccessedAt and a confidenceScore. A new scheduled process implements a decay mechanism, reducing the confidence of old, unused, or consistently downvoted knowledge to ensure the AI prioritizes fresh and relevant information.
+
+Cost-Effective Learning (feat(agent-infra))
+
+Gemini API Free Tier Throttling: A new FreeTierApiThrottleService has been implemented to manage and control all autonomous API calls.
+
+Intelligent Rate Limiting: This service ensures that background learning and verification tasks operate strictly within the Gemini API's free tier limits (e.g., <60 requests/minute, <1000/day), enabling continuous, cost-free performance improvement. Both AutonomousExplorationService and KnowledgeConsistencyVerifier now depend on this throttle before making API calls.
