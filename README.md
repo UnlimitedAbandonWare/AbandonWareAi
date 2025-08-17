@@ -1357,3 +1357,58 @@ StrategySelectorService (Dynamic Strategy Selector):
 Implements a Multi-armed Bandit algorithm to dynamically select the optimal retrieval strategy.
 
 Based on the query's intent (from CognitiveState), it chooses the most effective path (e.g., web-first, vector-DB-first, self-ask decomposition), optimizing for both performance and answer quality.
+Of course. Here are the patch notes in English, formatted for Git.
+
+Refactor: Generalize RAG Pipeline for Domain-Agnostic Processing and Dynamic Vector Search
+Date: 2025-08-17
+
+Version: v1.2.0
+
+Author: System Architect
+
+✨ Features
+Implemented Dynamic 'EDUCATION' Domain Detection and Vector Search
+
+Added a feature to automatically switch to the 'EDUCATION' domain when keywords such as 'academy' or 'government subsidy' are detected in the user's conversation context.
+
+When the 'EDUCATION' domain is identified, the system now bypasses traditional keyword search and instead generates a query vector using an embedding model. This enables a vector similarity search, providing semantically richer and more accurate results.
+
+Applied Dynamic Reranking Based on Vector Similarity
+
+Improved the ranking logic to calculate the Cosine Similarity between the user's query vector and the retrieved documents. This ensures that the most relevant information is prioritized and passed to the LLM.
+
+♻️ Refactor
+Improved Query Preprocessor Logic
+
+Removed the hardcoded dependency between GuardrailQueryPreprocessor and the game-specific GameDomainDetector.
+
+The CognitiveStateExtractor now first determines the domain, allowing the preprocessor to dynamically apply the appropriate rules.
+
+Generalized Authority Scorer System
+
+Eliminated hardcoded site weights (e.g., namu.wiki) in the AuthorityScorer.
+
+Domain-specific credibility weights can now be configured dynamically via application.yml. For the 'EDUCATION' domain, a higher weight is assigned to government (GOV) and educational (EDU) sources.
+
+Generalized Rule-Based Scorer
+
+Removed the fixed game-character relationship rules from the RelationshipRuleScorer.
+
+The scorer now incorporates vector similarity scores for ranking in the 'EDUCATION' domain and is structured to dynamically fetch rules from the KnowledgeBaseService for other domains.
+
+Conditional Activation of Domain-Specific Sanitizer
+
+Modified the FactVerifierService to activate the GenshinRecommendationSanitizer only when the 'GAME' domain is active, isolating its logic and preventing it from affecting other domains.
+
+🐛 Fixes
+Resolved General-Purpose Query Contamination Issue
+
+Fixed a critical bug where general queries (e.g., "Daejeon government subsidy academy") were misinterpreted as game-related terms, leading to query distortion and filtering. All queries are now processed through the appropriate domain-specific pipeline.
+
+Resolved Ranking Bias Issue
+
+Corrected the ranking bias that unfairly down-weighted official sources like hrd.go.kr by removing the preferential weighting for specific game community sites.
+
+Resolved Post-processing Contamination Issue
+
+Blocked the game-specific recommendation logic from being applied to non-game-related answers, preventing contamination of the final output.
