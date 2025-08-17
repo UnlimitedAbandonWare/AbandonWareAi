@@ -1471,4 +1471,146 @@ Why
 Reduce token footprint and improve retrieval signal by seeding the current query with a concise, prior-answer context.
 
 Prepare the backend to accept user-approved learning snippets without coupling it to any specific model backend.
+Patch Notes / Commit Message
 
+feat(rag, router, prompt, tools): integrate Gemini free-tier under GPT Pro agent (Files • Structured Output • Function Calling • Embedding • Live/opt)
+
+Summary
+Wire Gemini’s free capabilities beneath the default GPT Pro generator, without changing user-visible model. Key moves: (1) block header overrides, (2) insert Gemini delegates at Analyze/Web/Vector stages, (3) add responseSchema path in PromptBuilder, (4) escalate MOE routing when risk/verbosity/length demand it.
+
+Added
+
+RequestHeaderModelOverrideFilter (com.example.lms.web.filter)
+
+Blocks non-whitelisted x-model-override headers.
+
+Config: router.allow-header-override=false (default), router.header-override-allowlist=....
+
+StructuredOutputSpec (com.example.lms.prompt.dto)
+
+DTO to enforce structured output: schemaJson, enumValues, strict, exampleJson.
+
+GeminiAnalyzeDelegate (com.example.lms.service.gemini)
+
+Low-cost (Gemini 2.x Flash) schema-driven extraction for query type / candidates / evidence fields.
+
+Short timeout (≤4s). Fails soft (returns empty).
+
+FunctionToolBus (com.example.lms.tools)
+
+Provider-agnostic tool registry + executor for function calling.
+
+Built-ins:
+
+web.search(query, topK) → EnhancedSearchService
+
+vector.search(query, topK) → VectorDbGateway
+
+files.get(fileId) → GeminiFilesService
+
+GeminiFunctionAdapter (com.example.lms.tools.gemini)
+
+Bridges model tool_calls to the shared FunctionToolBus (Gemini/OpenAI compatible).
+
+GeminiFilesService (com.example.lms.service.gemini)
+
+Files API wrapper (upload/reuse large docs).
+
+upload, delete, inlineText(maxChars), splitToChunks(policy).
+
+GeminiEmbeddingClient (com.example.lms.service.gemini)
+
+Embedding backend/adapter (LangChain4j compatible).
+
+(Optional PoC) GeminiLiveGateway (com.example.lms.service.gemini.live)
+
+Live API (WS/voice) gateway for future real-time sessions.
+
+Changed
+
+ModelRouter (com.example.lms.model)
+
+MOE escalation: intent∈{ANALYSIS,COMPARISON,RECOMMENDATION} or risk=HIGH or verbosity∈{deep,ultra} or tokenOut≥1536 ⇒ route to MOE.
+
+Respects router.allow-header-override=false (override ignored).
+
+Debug log: ModelRouter decision intent={}, risk={}, verbosity={}, maxTokens={}, useMoe={}.
+
+PromptBuilder (com.example.lms.prompt)
+
+Accepts responseSchema from PromptContext; emits schema-focused system hints; tightens temperature to ~0.0–0.2 for extraction.
+
+Preserves “no ad-hoc string concat” policy.
+
+AnalyzeHandler (com.example.lms.service.rag)
+
+When gemini.structured-output.enabled=true, calls GeminiAnalyzeDelegate; on failure, falls back to legacy hygiene/morphology.
+
+WebHandler (com.example.lms.service.rag.web)
+
+Keeps existing Naver search path.
+
+Adds parallel function-calling path via FunctionToolBus; failures are ignored (partial results preserved).
+
+VectorDbHandler (com.example.lms.service.rag.vector)
+
+Embedding backend switch: embedding.backend∈{openai,gemini} (default: gemini).
+
+Reuses long context via Files API fileId to cut tokens/latency.
+
+HybridRetriever
+
+Stronger partial-result semantics & diagnostics.
+
+SearchContext flags: usedGeminiStructuredOutput, usedFunctionTools, fileIdsInContext.
+
+LangChainChatService (or ChatService)
+
+Ensures all prompts go through PromptBuilder.build(ctx).
+
+Injects FunctionToolBus ToolSpecs into supported ChatModels.
+
+Configuration (application.properties)
+router.allow-header-override=false
+gemini.structured-output.enabled=true
+embedding.backend=gemini
+
+gemini.api-key=${GOOGLE_API_KEY:${GEMINI_API_KEY:}}
+gemini.curator-model=gemini-2.5-flash
+gemini.embedding.model=embedding-001
+gemini.timeouts.connect-ms=2000
+gemini.timeouts.read-ms=8000
+
+Behavior Notes
+
+Generation stays on GPT Pro (gpt-5-chat-latest); Gemini handles assist roles:
+
+Analyze: schema extraction (bias reduction on A vs B).
+
+Web: function calls → ToolBus (search/vector/files).
+
+Vector: embeddings + long-doc reuse via Files API.
+
+All Gemini paths fail soft; the chain never crashes—partial evidence returns.
+
+Test Plan
+
+Override blocking: with allow=false, verify x-model-override cannot change routing.
+
+Comparative queries: AnalyzeHandler yields {candidateA,candidateB,evidence[]} via schema; no “locked to one side” outputs.
+
+Function calling: tool_calls route through ToolBus; on tool errors, pipeline continues.
+
+Long-doc RAG: upload once, reuse fileId; confirm token/latency drop.
+
+Embedding switch: embedding.backend=gemini quality/limits; graceful degrade on quota.
+
+Version purity: detect any dev.langchain4j:0.2.x and STOP with conflict report.
+
+Security/Ops
+
+Header override is opt-in via allowlist.
+
+No breaking changes to public APIs; defaults preserve current behavior.
+
+All new services log at INFO/DEBUG with PII-safe payloads.
