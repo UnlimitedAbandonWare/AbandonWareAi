@@ -1409,6 +1409,34 @@ Resolved Ranking Bias Issue
 
 Corrected the ranking bias that unfairly down-weighted official sources like hrd.go.kr by removing the preferential weighting for specific game community sites.
 
+Feat(rag-pipeline): Implement Conditional Vector Search Pipeline
+Date: 2025-08-17
+
+Version: v1.3.0
+
+Author: System Architect
+
+This patch implements the required architectural changes to enable a dynamic, conditional RAG pipeline. The system can now switch between keyword-based and vector-based search strategies based on the query context.
+
+✨ Key Changes
+Introduced Execution Mode Flag in CognitiveState
+
+Added an ExecutionMode enum (KEYWORD_SEARCH, VECTOR_SEARCH) to the CognitiveState object.
+
+The CognitiveStateExtractor has been updated to set the mode to VECTOR_SEARCH when it detects education-related keywords like 'academy' or 'government subsidy'.
+
+Updated GuardrailQueryPreprocessor for Conditional Logic
+
+The preprocessor now checks the ExecutionMode. If set to VECTOR_SEARCH, it bypasses all existing keyword protection and transformation logic, returning the original, unmodified query text to be used for embedding.
+
+Enhanced HybridRetriever for Dynamic Strategy Execution
+
+The HybridRetriever is now aware of the ExecutionMode.
+
+When in VECTOR_SEARCH mode, it exclusively queries the vector database, skipping the standard web/keyword search.
+
+Results from the vector search are now sorted based on cosine similarity before being returned to the next stage of the pipeline.
+
 Resolved Post-processing Contamination Issue
 
 Blocked the game-specific recommendation logic from being applied to non-game-related answers, preventing contamination of the final output.
