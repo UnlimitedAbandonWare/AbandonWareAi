@@ -13,8 +13,6 @@ import dev.langchain4j.model.output.Response;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -32,9 +30,6 @@ import java.util.stream.Collectors;
  * - 동적 시너지 가중치(HyperparameterService)
  */
 @Slf4j
-@Component("embeddingCrossEncoderReranker")
-@ConditionalOnProperty(prefix = "rerank", name = "legacy-embedding-enabled", havingValue = "true", matchIfMissing = false)
-@Primary
 @RequiredArgsConstructor
 public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker {
 
@@ -85,6 +80,9 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
             record ScoredContent(Content content, double score) {}
 
             final double synergyWeight = clamp01to2(hyperparameters.getRerankSynergyWeight());
+            if (log.isDebugEnabled()) {
+                log.debug("[Rerank] synergyWeight(runtime)={}", synergyWeight);
+            }
             final List<ScoredContent> scored = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
                 Content c = snapshot.get(i);
@@ -102,7 +100,13 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
                 // 🆕 출처 신뢰도 감쇠 적용
                 String url = safeUrl(c, seg);
                 RerankSourceCredibility cred = authorityScorer.getSourceCredibility(url);
-                double authorityDecayMultiplier = authorityScorer.decayFor(cred); // OFFICIAL=1.0 … UNVERIFIED=0.25
+                double authorityDecayMultiplier = authorityScorer.decayFor(cred);
+                if (log.isTraceEnabled()) {
+                    log.trace("[Rerank] url={} cred={} decay={}", url, cred, authorityDecayMultiplier);
+                }
+                if (log.isTraceEnabled()) {
+                    log.trace("[Rerank] url={} cred={} decay={}", url, cred, authorityDecayMultiplier);
+                }
 
                 double score = (
                         sim

@@ -216,7 +216,8 @@ public class ChatService {
     // ▼ Memory evidence I/O
     private final com.example.lms.service.rag.handler.MemoryHandler memoryHandler;
     private final com.example.lms.service.rag.handler.MemoryWriteInterceptor memoryWriteInterceptor;
-
+    // 신규: 학습 기록 인터셉터
+    private final com.example.lms.learning.gemini.LearningWriteInterceptor learningWriteInterceptor;
 
     @Value("${rag.hybrid.top-k:50}") private int hybridTopK;
     @Value("${rag.rerank.top-n:10}") private int rerankTopN;
@@ -521,6 +522,12 @@ public class ChatService {
 
         // ── 7) 후처리/강화/리턴 ──────────────────────────────────────
         // (항상 저장) – 인터셉터  +기존 강화 로직 병행 허용
+        try {
+            // 먼저 학습용 인터셉터에 전달하여 구조화된 지식 학습을 수행합니다.
+            learningWriteInterceptor.ingest(sessionKey, userQuery, out, /*score*/ 0.5);
+        } catch (Throwable ignore) {
+            // swallow errors to avoid breaking the chat flow
+        }
         try { memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5); } catch (Throwable ignore) {}
         reinforce(sessionKey, userQuery, out);
         // ✅ 실제 모델명으로 보고 (실패 시 안전 폴백)

@@ -161,4 +161,16 @@ public interface KnowledgeBaseService {
         // 기본 구현: 실제 DB 저장 로직이 없으면 'SKIPPED'를 반환하여 안전하게 통과시킵니다.
         return IntegrationStatus.SKIPPED;
     }
+    /**
+     * [신규 추가] 구조화된 지식 델타를 전역 지식베이스에 통합합니다.
+     *
+     * Gemini 기반의 구조화 출력(트리플, 규칙 등)을 데이터베이스에 반영하는 표준 엔트리포인트입니다.
+     * 기본 구현은 아무 작업도 수행하지 않고 SKIPPED 상태를 반환합니다.
+     *
+     * @param delta 구조화된 지식 델타
+     * @return 통합 처리 결과
+     */
+    default IntegrationStatus apply(com.example.lms.dto.learning.KnowledgeDelta delta) {
+        return IntegrationStatus.SKIPPED;
+    }
 }

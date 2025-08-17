@@ -21,6 +21,13 @@ public class ModelRouter {
             "PAIRING", "RECOMMENDATION", "EXPLANATION", "TUTORIAL", "ANALYSIS"
     );
 
+    /**
+     * 의도에 따라 학습 용도로 사용되는 태스크 집합입니다. application.yml의
+     * router.moe.learning-intents 키에서 주입됩니다. 기본값은 빈 집합으로,
+     * 구성에서 제공되는 값은 대문자로 변환하여 저장됩니다.
+     */
+    private final Set<String> learningIntents;
+
     /** 선택적으로 주입될 수 있는 동적 팩토리 */
     @Nullable private final DynamicChatModelFactory factory;
 
@@ -41,13 +48,22 @@ public class ModelRouter {
             @Nullable @Qualifier("utilityChatModel") ChatModel utility,
             @Nullable @Qualifier("moeChatModel") ChatModel moe,
             @Value("${openai.model.moe:gpt-4o}") String moeModelName,
-            @Value("${langchain4j.openai.chat-model.model-name:gpt-4o-mini}") String baseModelName
+            @Value("${langchain4j.openai.chat-model.model-name:gpt-4o-mini}") String baseModelName,
+            @Value("${router.moe.learning-intents:}") String learningIntentsStr
     ) {
         this.factory = factory;
         this.utility = utility;
         this.moe = moe;
         this.moeModelName = moeModelName;
         this.baseModelName = baseModelName;
+        // 파라미터를 쉼표 또는 공백으로 분할하여 대문자로 변환
+        java.util.Set<String> tmp = new java.util.HashSet<>();
+        if (learningIntentsStr != null && !learningIntentsStr.isBlank()) {
+            for (String s : learningIntentsStr.split("[,\\s+]")) {
+                if (!s.isBlank()) tmp.add(s.trim().toUpperCase());
+            }
+        }
+        this.learningIntents = java.util.Collections.unmodifiableSet(tmp);
     }
 
     /** 의도 기반 모델 라우팅(기존 호환) */
@@ -67,6 +83,8 @@ public class ModelRouter {
                            @Nullable Integer targetMaxTokens) {
 
         boolean highTierIntent = intent != null && HIGH_TIER_INTENTS.contains(intent.toUpperCase());
+        // 학습 의도 감지: application.yml에서 정의된 learning-intents에 포함되면 상위 모델 사용
+        boolean learningIntent  = intent != null && learningIntents.contains(intent.toUpperCase());
         boolean highRisk       = "HIGH".equalsIgnoreCase(riskLevel);
         boolean highVerbosity  = verbosityHint != null
                 && ("deep".equalsIgnoreCase(verbosityHint) || "ultra".equalsIgnoreCase(verbosityHint));
@@ -74,7 +92,7 @@ public class ModelRouter {
         // 토큰 예산이 큰 경우 상위 모델 선호 (휴리스틱)
         boolean bigBudget = targetMaxTokens != null && targetMaxTokens >= 1536;
 
-        boolean useMoe = highTierIntent || highRisk || highVerbosity || bigBudget;
+        boolean useMoe = highTierIntent || highRisk || highVerbosity || bigBudget || learningIntent;
 
         if (log.isDebugEnabled()) {
             log.debug("ModelRouter decision intent={}, risk={}, verbosity={}, maxTokens={}, useMoe={}",

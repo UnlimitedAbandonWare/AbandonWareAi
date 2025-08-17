@@ -1,0 +1,14 @@
+abandonware:
+  reranker:
+    # Select the backend for document reranking. Supported values are
+    #   - embedding-model : use the existing embedding based cross‑encoder
+    #   - onnx-runtime    : use the local ONNX runtime via OnnxRuntimeService
+    # If unspecified this defaults to 'embedding-model'.
+    backend: onnx-runtime
+    onnx:
+      # Location of the ONNX cross‑encoder model. The value may be prefaced
+      # with "classpath:" to indicate the model is packaged within the application.
+      # This example assumes the model lives in src/main/resources/models.
+      model-path: "classpath:/models/your-cross-encoder.onnx"
+      # Execution provider for ONNX runtime. Choose from 'cpu', 'cuda' or 'tensorrt'.
+      execution-provider: cpu

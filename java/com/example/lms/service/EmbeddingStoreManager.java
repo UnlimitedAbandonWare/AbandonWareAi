@@ -50,4 +50,27 @@ public class EmbeddingStoreManager {
         embeddingStore.addAll(embeddingModel.embedAll(segments).content());
         log.info("✅  {}개의 문장을 Embedding Store에 성공적으로 적재했습니다.", segments.size());
     }
+
+    /**
+     * 신규 학습으로 생성된 메모리 스니펫을 벡터 DB에 인덱싱합니다.
+     * 빈 목록이나 null 입력은 무시됩니다.
+     *
+     * @param memories 구조화된 메모리 스니펫 목록
+     */
+    public void index(java.util.List<com.example.lms.dto.learning.MemorySnippet> memories) {
+        if (memories == null || memories.isEmpty()) return;
+        try {
+            // 추출된 텍스트가 비어있지 않은 경우만 처리
+            java.util.List<dev.langchain4j.data.segment.TextSegment> segments = memories.stream()
+                    .map(com.example.lms.dto.learning.MemorySnippet::text)
+                    .filter(s -> s != null && !s.isBlank())
+                    .map(dev.langchain4j.data.segment.TextSegment::from)
+                    .toList();
+            if (!segments.isEmpty()) {
+                embeddingStore.addAll(embeddingModel.embedAll(segments).content());
+            }
+        } catch (Exception e) {
+            log.debug("Failed to index memory snippets: {}", e.toString());
+        }
+    }
 }
