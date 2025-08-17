@@ -1216,3 +1216,50 @@ This feature introduces a robust, cost-effective pre-processing gate to handle l
     - The SSE event handler is updated to recognize the `NEEDS_CONFIRMATION` event.
     - Upon receiving this event, the UI dynamically renders the summary message along with **[Proceed]** and **[Cancel]** buttons.
     - If the user clicks **[Proceed]**, the client re-submits the *summarized text* as a new message, which is now short enough to be processed safely and efficiently by the standard RAG pipeline.
+feat(agent): Implement dynamic personas, interactive RAG controls, and multimodal capabilities
+
+This feature introduces a major evolution of the AI agent, enhancing its intelligence, user experience, and functional scope. The system can now dynamically adapt its personality, offer users granular control over the RAG pipeline, and process visual information through multimodal inputs.
+
+---
+
+✨ **Mission 1: Intelligence Enhancement - Dynamic Persona & Dialogue Strategy**
+
+-   **Configuration-driven Personas (`application.yml`):**
+    -   Added a new `abandonware.persona` namespace to define multiple AI personas (e.g., `tutor`, `analyzer`, `brainstormer`) and their corresponding system prompt instructions externally.
+
+-   **Cognitive State Expansion (`CognitiveState.java`, `CognitiveStateExtractor.java`):**
+    -   The `CognitiveState` record is now enhanced with a `persona` field.
+    -   `CognitiveStateExtractor` has been upgraded to determine the most appropriate persona based on the user's query complexity and intent, which is then recorded in the cognitive state.
+
+-   **Dynamic Prompt Generation (`PromptBuilder.java`):**
+    -   The system now moves away from a static system prompt. `PromptBuilder` dynamically constructs the system prompt at runtime by loading the selected persona's instructions from the configuration, based on the context provided by `CognitiveState`.
+
+---
+
+✨ **Mission 2: UX Improvement - Interactive RAG Control Panel**
+
+-   **RAG Control UI (`chat-ui.html`, `chat.js`):**
+    -   Introduced an "Advanced Search Options" panel in the chat interface.
+    -   This panel includes new UI components (e.g., checkboxes) that allow users to control RAG parameters in real-time, such as search scope (`Web`, `Documents`) and source credibility (`Official Sources Only`).
+
+-   **Extended DTO (`ChatRequestDto.java`):**
+    -   New fields (e.g., `boolean officialSourcesOnly`, `List<String> searchScopes`) have been added to the `ChatRequestDto` to transport the user's RAG preferences to the backend.
+
+-   **Dynamic Retrieval Logic (`HybridRetriever.java`):**
+    -   The `HybridRetriever` now accepts the new RAG control options from the DTO.
+    -   It dynamically adjusts the behavior of its handlers, such as filtering out sources below a certain credibility tier in `WebSearchHandler` by leveraging `AuthorityScorer` when the `officialSourcesOnly` flag is active.
+
+---
+
+✨ **Mission 3: Capability Enhancement - Multimodal RAG (Image Analysis)**
+
+-   **Image Upload UI (`chat-ui.html`, `chat.js`):**
+    -   The frontend now supports image uploads via paste or file selection. Uploaded images are Base64-encoded and sent along with the text message.
+
+-   **Multimodal API & DTO (`ChatRequestDto.java`, `ChatApiController.java`):**
+    -   `ChatRequestDto` is updated with a new `imageBase64` field to handle the image data.
+    -   The existing `/stream` API endpoint in `ChatApiController` is now capable of processing requests containing both text and image data.
+
+-   **Multimodal Backend Logic (`GeminiClient.java`, `LangChainChatService.java`):**
+    -   `GeminiClient` now includes a new method to handle multimodal requests, specifically designed to call image-capable models like `gemini-1.5-pro`.
+    -   `LangChainChatService` has been extended to detect image data in requests and include both text and image content in the context when calling the new multimodal method in `GeminiClient`.
