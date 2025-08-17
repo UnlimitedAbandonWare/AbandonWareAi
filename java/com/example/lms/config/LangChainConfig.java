@@ -1,5 +1,12 @@
 package com.example.lms.config;
+import lombok.extern.slf4j.Slf4j;
+import lombok.extern.slf4j.Slf4j;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Lazy;
+
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore; // fallback용
 import com.example.lms.memory.PersistentChatMemory;
 import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.ChatSessionRepository;
@@ -20,17 +27,23 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.pinecone.PineconeEmbeddingStore;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.ko.KoreanAnalyzer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import com.example.lms.service.rag.extract.PageContentScraper;
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;
 import java.time.Duration;
-
+@Slf4j
 @Configuration
+@EnableConfigurationProperties(PineconeProps.class)
 public class LangChainConfig {
 
     private final ChatMessageRepository msgRepo;
@@ -42,23 +55,34 @@ public class LangChainConfig {
     }
 
     /* ───── OpenAI / Pinecone 공통 ───── */
-    @Value("${openai.api.key}")       private String openAiKey;
-    @Value("${openai.chat.model:gpt-3.5-turbo}") private String chatModelName;
-    @Value("${openai.chat.temperature:0.7}")     private double chatTemperature;
-    @Value("${openai.timeout-seconds:60}")       private long openAiTimeoutSec;
+    @Value("${openai.api.key}")
+    private String openAiKey;
+    @Value("${openai.chat.model:gpt-3.5-turbo}")
+    private String chatModelName;
+    @Value("${openai.chat.temperature:0.7}")
+    private double chatTemperature;
+    @Value("${openai.timeout-seconds:60}")
+    private long openAiTimeoutSec;
 
-    @Value("${pinecone.api.key}")     private String pcKey;
-    @Value("${pinecone.environment}") private String pcEnv;
-    @Value("${pinecone.project.id}")  private String pcProjectId;
-    @Value("${pinecone.index.name}")  private String pcIndex;
+    @Value("${pinecone.api.key}")
+    private String pcKey;
+    @Value("${pinecone.environment}")
+    private String pcEnv;
+    @Value("${pinecone.project.id}")
+    private String pcProjectId;
+    @Value("${pinecone.index.name}")
+    private String pcIndex;
 
     @Value("${pinecone.embedding-model:text-embedding-3-small}")
     private String embeddingModelName;
 
     /* ───── Self-Ask 검색 튜닝 ───── */
-    @Value("${search.selfask.max-depth:2}")      private int selfAskMaxDepth;
-    @Value("${search.selfask.web-top-k:5}")      private int selfAskWebTopK;
-    @Value("${search.selfask.overall-top-k:10}") private int selfAskOverallTopK;
+    @Value("${search.selfask.max-depth:2}")
+    private int selfAskMaxDepth;
+    @Value("${search.selfask.web-top-k:5}")
+    private int selfAskWebTopK;
+    @Value("${search.selfask.overall-top-k:10}")
+    private int selfAskOverallTopK;
 
     @Bean("persistentChatMemoryProvider")
     public ChatMemoryProvider persistentChatMemoryProvider() {
@@ -75,7 +99,10 @@ public class LangChainConfig {
                 .timeout(Duration.ofSeconds(openAiTimeoutSec))
                 .build();
     }
-    /** 추천/조합(RECOMMENDATION) 전용 상위 모델(저온) */
+
+    /**
+     * 추천/조합(RECOMMENDATION) 전용 상위 모델(저온)
+     */
     @Bean("moeChatModel")
     public ChatModel moeChatModel(
             @Value("${openai.chat.model.moe:gpt-4o}") String moeModel,
@@ -104,18 +131,31 @@ public class LangChainConfig {
         return new QueryTransformer(llm);
     }
 
-    /* ① 기본 네임스페이스 */
-    @SuppressWarnings("removal") // Pinecone SDK 교체 전까지 임시 억제
     @Bean
-    @Primary
-    public EmbeddingStore<TextSegment> embeddingStore() {
-        return PineconeEmbeddingStore.builder()
-                .apiKey(pcKey)
-                .environment(pcEnv)
-                .projectId(pcProjectId)
-                .index(pcIndex)
-                .build();
+    @ConditionalOnProperty(name = "vector.store", havingValue = "pinecone", matchIfMissing = true) // 기본 pinecone
+    @Lazy  // 초기 연결을 최대한 늦춤
+    public EmbeddingStore<TextSegment> pineconeEmbeddingStore(PineconeProps p) {
+        try {
+            return PineconeEmbeddingStore.builder()
+                    .apiKey(p.getApiKey())
+                    .environment(p.getEnvironment())
+                    .projectId(p.getProjectId())
+                    .index(p.getIndex())
+                    .nameSpace(p.getNamespace())
+                    .build();
+        } catch (Throwable t) {
+            log.warn("Pinecone init failed; falling back to InMemoryEmbeddingStore", t);
+            return new InMemoryEmbeddingStore<>();
+        }
     }
+
+    @Bean
+    @ConditionalOnMissingBean(EmbeddingStore.class)
+    public EmbeddingStore<TextSegment> inMemoryEmbeddingStore() {
+        return new InMemoryEmbeddingStore<>();
+    }
+
+
 
     /* ═════════ 2. 공통 유틸 ═════════ */
     @Bean

@@ -32,6 +32,11 @@ public class PromptBuilder {
             ### HISTORY
             %s
             """;
+    // [NEW] Uploaded file context has the highest authority
+    private static final String FILE_PREFIX = """
+            ### UPLOADED FILE CONTEXT
+            %s
+            """;
     // [NEW] 직전 답변 명시 섹션
     private static final String PREV_PREFIX = """
             ### PREVIOUS_ANSWER
@@ -43,10 +48,18 @@ public class PromptBuilder {
             %s
             """;
 
+    // Inject Spring Environment to look up persona instructions
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.core.env.Environment env;
+
     /** 컨텍스트 본문(자료 영역) */
     public String build(PromptContext ctx) {
         StringBuilder sb = new StringBuilder();
         if (ctx != null) {
+            // Inject uploaded file context first when present
+            if (ctx.fileContext() != null && !ctx.fileContext().isBlank()) {
+                sb.append(FILE_PREFIX.formatted(ctx.fileContext()));
+            }
 
             // 🆕 치유 모드일 때는 초안(DRAFT)을 명시적으로 주입
             if ("CORRECTIVE_REGENERATION".equalsIgnoreCase(Objects.toString(ctx.systemInstruction(), ""))
@@ -77,7 +90,44 @@ public class PromptBuilder {
     public String buildInstructions(PromptContext ctx) {
         StringBuilder sys = new StringBuilder();
         sys.append("### INSTRUCTIONS\n");
-        sys.append("- Earlier sections have higher authority: VECTOR RAG > HISTORY > WEB SEARCH.\n");
+        // Insert persona instructions when available.  Personas are defined via
+        // abandonware.persona.* keys in configuration.  If the CognitiveState
+        // contains a persona value, we look up the corresponding instruction
+        // and prepend it to the instruction section so that it guides the
+        // assistant's style and tone for this turn.
+        if (ctx != null && ctx.cognitiveState() != null && ctx.cognitiveState().persona() != null) {
+            try {
+                String personaKey = "abandonware.persona." + ctx.cognitiveState().persona().toLowerCase(java.util.Locale.ROOT);
+                String personaInstr = env.getProperty(personaKey);
+                // Defensive measure: prevent excessively long persona instructions from blowing up the
+                // token budget.  Some persona definitions may include very long descriptions or
+                // examples.  We cap the instructions at a reasonable length.  If a longer
+                // instruction is defined, truncate it to PERSONA_MAX_CHARS characters.  This avoids
+                // overflowing the token budget and ensures downstream services like ContextOrchestrator
+                // can still operate within configured limits.  The limit value can be adjusted via
+                // the abandonware.persona.max-chars property; when unspecified we default to 1200.
+                int personaMaxChars = 1200;
+                try {
+                    String cfg = env.getProperty("abandonware.persona.max-chars");
+                    if (cfg != null && !cfg.isBlank()) {
+                        personaMaxChars = Integer.parseInt(cfg.trim());
+                    }
+                } catch (Exception ignore) {
+                    // use default
+                }
+                if (personaInstr != null && !personaInstr.isBlank()) {
+                    String trimmed = personaInstr.trim();
+                    if (trimmed.length() > personaMaxChars) {
+                        trimmed = trimmed.substring(0, personaMaxChars);
+                    }
+                    sys.append(trimmed).append('\n');
+                }
+            } catch (Exception ignore) {
+                // ignore if property not found or environment is unavailable
+            }
+        }
+        // Update the authority order to include uploaded file context at the top
+        sys.append("- Earlier sections have higher authority: UPLOADED FILE CONTEXT > VECTOR RAG > HISTORY > WEB SEARCH.\n");
         sys.append("- Ground every claim in the provided sections; if evidence is insufficient, reply \"정보 없음\".\n");
         sys.append("- Cite specific snippets or sources inline when possible.\n");
         // [MERGED] 엄격한 컨텍스트 한정 규칙 추가
