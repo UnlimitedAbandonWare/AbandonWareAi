@@ -1004,3 +1004,53 @@ Compatibility
 No changes to existing chat/RAG routing; learning features are additive and inactive unless called.
 
 Version purity unchanged (LangChain4j 1.0.1 only).
+알겠습니다, (AbandonWare)님. 제공된 지시사항을 바탕으로 Git 커밋 메시지나 패치노트로 사용하기 좋은 영문 요약본을 작성해 드립니다.
+
+Patch Notes / Commit Message
+feat: Implement Self-Learning RAG, UX Enhancements, and Cancel Feature
+
+This major update introduces a fully operational self-learning pipeline powered by the Gemini API, alongside significant UI/UX improvements and critical bug fixes. The system is now capable of real-time knowledge acquisition, offers greater transparency into its operations, and provides users with more control.
+
+✨ New Features
+Self-Learning RAG Pipeline (feat(learning))
+
+Activated Gemini Learning: Replaced all stub implementations in GeminiClient with live Google Gemini API calls, enabling the AI to learn from conversations and user feedback.
+
+Structured Knowledge Extraction: Implemented a robust GeminiCurationPromptBuilder to generate structured prompts with JSON schemas, allowing for reliable knowledge extraction.
+
+Knowledge Base Integration: The KnowledgeBaseService now correctly processes and saves (upsert) new knowledge deltas (triples, rules, aliases) into the database.
+
+End-to-End Evidence Pipeline: The FactVerifierService and LearningWriteInterceptor now pass complete LearningEvent objects, including evidence and claims, ensuring the learning process is triggered with valid data.
+
+AI Thought Process UI (feat(ui))
+
+A new "thought process" panel has been added to the UI (chat-ui.html).
+
+The backend now streams 'thought' events via SSE, providing users with real-time visibility into the AI's reasoning steps (e.g., "Analyzing query," "Searching web," "Generating draft").
+
+Response Generation Cancellation (feat(ux))
+
+Users can now stop a long-running response generation by clicking a "Stop Generation" button.
+
+This feature is implemented with a new /api/chat/cancel endpoint that terminates the corresponding server-side streaming task, saving resources and improving user experience.
+
+🚀 Improvements
+Enhanced RAG Transparency (feat(rag))
+
+The UI now displays all search queries executed by the RAG system, including those generated through query expansion, providing full transparency into the retrieval process.
+
+Dependency Management (build)
+
+Added the com.google.genai:google-genai:1.12.0 dependency to build.gradle to support the new Gemini learning pipeline.
+
+🐛 Bug Fixes
+Duplicate UI Elements in New Sessions (fix(ui))
+
+Resolved an issue in chat.js where duplicate "like/dislike" buttons and model names would appear on the first message of a new chat session. The logic now correctly updates the initial loading message bubble instead of creating a new one.
+
+♻️ Refactoring
+Configuration File Migration (refactor(config))
+
+Migrated all application settings from application.yml to application.properties for consistency.
+
+A corresponding @ConfigurationProperties class has been implemented to ensure type-safe loading of all Gemini-related configurations.
