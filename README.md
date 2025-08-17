@@ -1613,4 +1613,41 @@ Header override is opt-in via allowlist.
 
 No breaking changes to public APIs; defaults preserve current behavior.
 
-All new services log at INFO/DEBUG with PII-safe payloads.
+All new services log at INFO/DEBUG with PII-safe payloads.Commit Message / Patch Notes
+
+feat(rag, router, prompt, gemini): header-override guard, structured output plumbing, Gemini stubs, embedding backend toggle
+
+Summary
+Prepared updated codebase as src10.zip. This patch hardens request safety, adds structured-output wiring, and introduces Gemini integration stubs so the GPT Pro agent can later leverage Gemini (Files/Embedding/Analyze) with minimal code churn.
+
+Changes
+
+Safety Guard
+
+Add RequestHeaderModelOverrideFilter to whitelist-gate X-Model-Override; ignored by default.
+
+Config: router.allow-header-override=false (default), router.header-override-allowlist=...
+
+Structured Output Support
+
+Add StructuredOutputSpec DTO.
+
+Extend PromptContext with responseSchema.
+
+Update PromptBuilder to detect schema and steer models toward JSON-shaped responses (no ad-hoc string concat).
+
+Gemini Delegation (Stubs for future integration)
+
+Add GeminiAnalyzeDelegate, GeminiEmbeddingClient, GeminiFilesService as extensible scaffolds for upcoming real API wiring.
+
+Embedding Backend Switch
+
+Enable embedding.backend=gemini to activate GeminiEmbeddingClient.
+
+Current stub returns a zero vector as a safe default (no functional change until real model is wired).
+
+Config Keys
+
+router.allow-header-override=false
+router.header-override-allowlist=
+embedding.backend=gemini
