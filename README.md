@@ -673,3 +673,263 @@ Creates a new enum class with values: OFFICIAL, TRUSTED, COMMUNITY, UNVERIFIED.
 feat: Create a new, dedicated RerankSourceCredibility enum for the reranker.
 
 A new type was defined to avoid potential conflicts with the existing SourceCredibility enum and to clearly segregate policies specific to the reranking stage.
+✨ Patch Notes — ModelRouter Routing Enhancements
+Summary
+
+MOE escalation rules: Route to the higher-tier (MOE) model using a composite of intent, risk, verbosity, and token-budget signals.
+
+Stability & performance: Resolution order now prefers injected beans → atomic cache (AtomicReference) → dynamic factory.
+
+Operational visibility: Added debug logs for routing decisions and a utility to report the effective SDK model name actually used.
+
+Changes
+1) Heuristic routing, upgraded
+
+Intent escalation: If intent ∈ HIGH_TIER_INTENTS (PAIRING, RECOMMENDATION, EXPLANATION, TUTORIAL, ANALYSIS) → MOE.
+
+Risk escalation: If riskLevel == "HIGH" → MOE.
+
+Verbosity escalation: If verbosityHint ∈ {"deep","ultra"} → MOE.
+
+Token-budget escalation: If targetMaxTokens >= 1536 → MOE (large-answer heuristic).
+
+public ChatModel route(@Nullable String intent,
+                       @Nullable String riskLevel,
+                       @Nullable String verbosityHint,
+                       @Nullable Integer targetMaxTokens)
+
+
+Decision log (DEBUG):
+
+ModelRouter decision intent={}, risk={}, verbosity={}, maxTokens={}, useMoe={}
+
+2) Model resolution path & temperature policy
+
+resolveMoe()
+
+Use injected moe bean if present → reuse cache → otherwise build via DynamicChatModelFactory.
+
+Dynamic build defaults: temperature=0.3 (consistency/factuality), top_p=1.0.
+
+resolveBase()
+
+Use injected utility bean → reuse cache → otherwise dynamic build.
+
+Dynamic build defaults: temperature=0.7, top_p=1.0.
+
+3) Factory guarantee & clearer exception
+
+If dynamic creation is required but no factory exists, ensureFactory() throws an actionable IllegalStateException:
+
+Provide @Bean utilityChatModel/moeChatModel or enable DynamicChatModelFactory.
+
+4) Effective model name utility
+
+resolveModelName(ChatModel model):
+
+If a dynamic factory is available, returns factory.effectiveModelName(model) (the exact model name sent to the SDK).
+
+Falls back to unknown or the class name when factory/model is absent.
+
+Configuration & Defaults
+
+No conflicts with existing keys. Dynamic creation is used only when no injected beans are provided.
+
+Example – application.properties
+
+# High/base model names
+router.moe.high=gpt-4o
+router.moe.mini=gpt-4o-mini
+
+# Optional: routing heuristic
+router.retry_on_429=true
+
+
+Temperatures are fixed in code (MOE 0.3 / Base 0.7, top_p=1.0). You can extend via factory options if needed.
+
+Compatibility
+
+Legacy signatures retained:
+
+route(String intent)
+
+route(String, String, String, Integer)
+
+If beans are injected, existing behavior is preserved. Cache/dynamic creation are used only when beans are absent.
+
+Test Guide
+
+Intent escalation: intent=ANALYSIS → MOE.
+
+Risk escalation: riskLevel=HIGH → MOE.
+
+Verbosity escalation: verbosityHint ∈ {deep, ultra} → MOE.
+
+Token-budget escalation: targetMaxTokens=2048 → MOE.
+
+Base path: None of the above → Base.
+
+Effective name: Verify resolveModelName(selectedModel) in logs/metrics.
+
+No factory configured: No injected beans & no cache & no factory → verify guided exception message.
+
+Ops Tips
+
+Enable DEBUG to trace routing rationale:
+
+logging.level.com.example.lms.model.ModelRouter=DEBUG
+
+
+Frequent high-cost requests? Provide a targetMaxTokens hint from the frontend/service layer to intentionally promote to MOE.
+
+Known Issues / Notes
+
+If configured model names don’t match your API account entitlements, dynamic creation will fail. Verify keys/permissions first.
+
+Do not mix LangChain4j versions on the classpath. Resolve version purity before rollout (no 0.2.x ↔ 1.0.x mixing).
+
+Commit Message (example)
+feat(router): multi-signal MOE routing + cache/factory fallback + effective model name
+
+- Add intent/risk/verbosity/token-budget heuristics for MOE escalation
+- Prefer injected beans, then atomic cache, then dynamic factory creation
+- MOE temp=0.3 / Base temp=0.7 (top_p=1.0) for stability vs. creativity balance
+- Debug logs for routing decisions
+- resolveModelName() to reveal the exact SDK model name
+- Helpful factor네, 맞습니다. 이전에는 각 클래스가 스스로 빈(Bean)으로 등록하려다 보니 이름 충돌이 났지만, RerankerConfig라는 중앙 관제탑을 만들어주니 문제가 해결된 것입니다.
+Change Summary
+
+Add build setup (Gradle): New build.gradle at the project root targeting Java 17 and Spring Boot 3.4.0, with LangChain4j 1.0.1 BOM. Declares core dependencies (Boot, Lucene, Reactor, Retrofit, Lombok, etc.). Adds ONNX Runtime via com.microsoft.onnxruntime:onnxruntime:1.18.0 to enable local ONNX inference.
+
+Introduce ONNX-based reranker: New package com.example.lms.service.onnx with:
+
+OnnxCrossEncoderReranker — implements both the internal CrossEncoderReranker contract and LangChain4j’s Reranker<Document> to provide local ONNX cross-encoder re-ranking. Bean activates only when abandonware.reranker.backend=onnx-runtime, and it takes precedence over the embedding reranker.
+
+OnnxRuntimeService — loads the ONNX model, initializes a session with the selected execution provider (cpu, cuda, or tensorrt), and exposes a predict API returning a query–document score matrix. If the model is missing, it falls back to Jaccard similarity.
+
+Adjust embedding reranker conditions: EmbeddingModelCrossEncoderReranker now activates only when abandonware.reranker.backend=embedding-model or the property is absent (default behavior remains embedding-based).
+
+Add configuration: Example application.yml added to define the abandonware.reranker namespace with backend, onnx.model-path, and onnx.execution-provider settings.
+
+Restructure sources: Project code is moved under src_onnx/src; the old src directory is removed. The service/domain layout stays the same; resources and tests live under the new structure.
+
+Commit Message (Conventional)
+feat(reranker): add ONNX runtime backend and configurable reranker selection
+
+Add root Gradle build with Spring Boot 3.4.0 and LangChain4j 1.0.1 BOM.
+Include ONNX Runtime (com.microsoft.onnxruntime:onnxruntime:1.18.0) to enable local ONNX inference.
+
+Introduce OnnxCrossEncoderReranker and OnnxRuntimeService to support ONNX-based cross-encoder reranking.
+Register the ONNX reranker when `abandonware.reranker.backend=onnx-runtime`; otherwise fall back to the embedding model.
+
+Update EmbeddingModelCrossEncoderReranker activation to follow the new `abandonware.reranker.backend` property and default to the embedding model when unset.
+
+Add example `application.yml` for `abandonware.reranker` (backend, onnx.model-path, onnx.execution-provider).
+
+Move sources under `src_onnx/src` and remove legacy `src` directory.
+
+PR Description
+Overview
+
+This PR introduces a local ONNX cross-encoder reranker that can be toggled at runtime, alongside cleanup of the build/config to standardize on Spring Boot 3.4 and LangChain4j 1.0.1. With ONNX Runtime in place, we can run cross-encoder models locally (CPU/CUDA/TensorRT) and switch between embedding-based and ONNX-based reranking via configuration.
+
+What’s Changed
+
+Build: New root build.gradle with Java 17 toolchain, Spring Boot plugin, LangChain4j 1.0.1 BOM, and onnxruntime:1.18.0.
+
+ONNX Reranker:
+
+OnnxCrossEncoderReranker implements internal and LangChain4j reranker interfaces for seamless use in both the RAG pipeline and LangChain APIs.
+
+OnnxRuntimeService loads the ONNX model and exposes predict for query–candidate scoring; falls back to Jaccard if no model is provided.
+
+Config Toggle: abandonware.reranker.backend selects the implementation:
+
+embedding-model (default)
+
+onnx-runtime (activates ONNX reranker)
+
+Conditional Beans: Embedding reranker only activates when backend is embedding-model or unset; ONNX reranker activates only when backend is onnx-runtime.
+
+Structure: Sources are moved to src_onnx/src; old src removed.
+
+Configuration
+
+Example application.yml:
+
+abandonware:
+  reranker:
+    # embedding-model (default) | onnx-runtime
+    backend: embedding-model
+
+    onnx:
+      # Absolute or classpath file path to the ONNX model
+      model-path: /opt/models/cross-encoder.onnx
+      # cpu | cuda | tensorrt
+      execution-provider: cpu
+
+
+Gradle snippet (root build.gradle):
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+
+dependencies {
+    implementation platform("dev.langchain4j:langchain4j-bom:1.0.1")
+    implementation "dev.langchain4j:langchain4j"
+    implementation "org.springframework.boot:spring-boot-starter"
+    implementation "com.microsoft.onnxruntime:onnxruntime:1.18.0"
+
+    compileOnly "org.projectlombok:lombok:1.18.32"
+    annotationProcessor "org.projectlombok:lombok:1.18.32"
+    testCompileOnly "org.projectlombok:lombok:1.18.32"
+    testAnnotationProcessor "org.projectlombok:lombok:1.18.32"
+}
+
+Default Behavior & Fallbacks
+
+If abandonware.reranker.backend is unset, the embedding reranker remains the default.
+
+If ONNX mode is selected but the model is missing/unreadable, the system boots and falls back to Jaccard similarity to avoid hard failure.
+
+Migration Notes
+
+Source layout has changed to src_onnx/src. Ensure your Gradle source sets (and IDE) are aligned if you rely on non-standard paths.
+
+No API changes are required for callers; the reranker selection is configuration-only.
+
+How to Enable ONNX Reranking
+
+Place the desired ONNX cross-encoder model at a known path.
+
+Set:
+
+abandonware.reranker.backend=onnx-runtime
+abandonware.reranker.onnx.model-path=/opt/models/cross-encoder.onnx
+abandonware.reranker.onnx.execution-provider=cuda   # or cpu/tensorrt
+
+
+Start the app and verify logs for ONNX session initialization.
+
+Testing
+
+Unit tests validate bean activation per backend setting and the Jaccard fallback path.
+
+Manual smoke test:
+
+With default config: confirm embedding reranking is used.
+
+Switch to ONNX: confirm ONNX reranking scores and ordering differ as expected.
+
+Risks
+
+Running ONNX on CUDA/TensorRT requires compatible drivers/runtimes; misconfiguration will trigger the fallback path.
+
+The non-standard source directory requires IDE/Gradle alignment.
+
+ Decision logs print as expected.
+
+ resolveModelName() reports the actual SDK model name.
+
+ Works correctly with and without injected beans.
+
+ Config keys apply correctly across environments.
