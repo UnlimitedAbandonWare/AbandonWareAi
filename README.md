@@ -1263,3 +1263,46 @@ This feature introduces a major evolution of the AI agent, enhancing its intelli
 -   **Multimodal Backend Logic (`GeminiClient.java`, `LangChainChatService.java`):**
     -   `GeminiClient` now includes a new method to handle multimodal requests, specifically designed to call image-capable models like `gemini-1.5-pro`.
     -   `LangChainChatService` has been extended to detect image data in requests and include both text and image content in the context when calling the new multimodal method in `GeminiClient`.
+
+feat(RAG): Implement Dynamic Comparative Analysis Pipeline
+
+This patch introduces a major enhancement to the RAG pipeline, enabling the system to autonomously understand and process comparative questions (e.g., "Which is better, A or B?") without any hardcoded logic for specific entities.
+
+The system now dynamically identifies multiple entities within a user's query, formulates a multi-faceted retrieval plan, and generates a structured, comparative analysis.
+
+Key Changes:
+Pre-processing & Intent Recognition:
+
+CognitiveState:
+
+Added COMPARATIVE_ANALYSIS to the Intent enum.
+
+Introduced comparisonEntities list to store dynamically identified subjects for comparison.
+
+SubjectResolver:
+
+Enhanced to resolve multiple known entities from the user's query against the DomainKnowledge database, moving beyond single-subject identification.
+
+CognitiveStateExtractor:
+
+Now identifies a COMPARATIVE_ANALYSIS intent when two or more entities are detected alongside comparison-related keywords (e.g., "vs", "compare", "better than").
+
+Dynamic Retrieval Orchestration:
+
+ChatService:
+
+Acts as the central orchestrator for the new comparative analysis flow.
+
+When the COMPARATIVE_ANALYSIS intent is detected, it dynamically generates a list of search queries by combining the identified entities with a set of standard evaluation criteria (e.g., "performance," "story," "synergy").
+
+Orchestrates the retrieval of this information via the HybridRetriever.
+
+Dynamic & Structured Prompt Engineering:
+
+PromptBuilder:
+
+Updated to handle the COMPARATIVE_ANALYSIS intent.
+
+It now dynamically constructs a prompt template, instructing the LLM to perform a structured analysis based on the provided criteria and entities.
+
+Contextual data is organized by entity (e.g., ### [Entity A] Information, ### [Entity B] Information) to ensure the LLM can clearly distinguish and compare the retrieved information.
