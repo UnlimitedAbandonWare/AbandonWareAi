@@ -1178,7 +1178,34 @@ This feature introduces a robust, cost-effective pre-processing gate to handle l
     - The `distill()` method uses a targeted prompt to summarize the text into core questions or key points, returning the result asynchronously.
 
 ---
+feat(rag): Implement Intelligent Distillation Gate for Large Inputs
 
+This feature introduces a robust, cost-effective pre-processing gate to handle large, unstructured user inputs. To prevent excessive costs and potential token-limit errors in the complex RAG pipeline, this gate intelligently distills long messages into a concise summary and prompts the user for confirmation before engaging the full RAG chain.
+
+✨ **Mission 1: Large Input Detection and Distillation Pipeline**
+
+* **Configurable Input Gateway (`ChatApiController.java`):**
+    * Implemented a defensive check at the beginning of the `streamChat` method.
+    * Added new configuration properties in `application.yml` (`abandonware.input.distillation.enabled`, `abandonware.input.distillation.threshold`) to enable/disable the feature and control the character length threshold that triggers it.
+    * If an input exceeds the threshold, it is now routed to the new `InputDistillationService` instead of the main chat service.
+
+* **Cost-Effective Distillation Service (`InputDistillationService.java`):**
+    * Created a new, single-responsibility `@Service` dedicated to summarizing long inputs.
+    * This service explicitly uses a fast, low-cost LLM (e.g., `gemini-1.5-flash`), configured via `application.yml`, bypassing the main `ModelRouter` to ensure strict cost control.
+    * The `distill()` method uses a targeted prompt to summarize the text into core questions or key points, returning the result asynchronously as a `Mono<String>`.
+
+---
+
+✨ **Mission 2: Asynchronous User Confirmation UX/UI Flow**
+
+* **Confirmation-Needed Event (`ChatStreamEvent.java`, `ChatApiController.java`):**
+    * Added a new `NEEDS_CONFIRMATION` event type to the `EventType` enum.
+    * The `ChatApiController` now streams the distilled summary back to the client using this new event type via Server-Sent Events (SSE), creating an intermediate confirmation step.
+
+* **Client-Side Confirmation Logic (`chat.js`):**
+    * The SSE event handler is updated to recognize the `NEEDS_CONFIRMATION` event.
+    * Upon receiving this event, the UI dynamically renders the summary message along with **[Proceed]** and **[Cancel]** buttons.
+    * If the user clicks **[Proceed]**, the client re-submits the *summarized text* as a new message, which is now short enough to be processed safely and efficiently by the standard RAG pipeline.
 ✨ Mission 2: Asynchronous User Confirmation UX/UI Flow
 
 - **Confirmation-Needed Event (`ChatStreamEvent.java`, `ChatApiController.java`):**
