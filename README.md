@@ -1940,3 +1940,116 @@ feat(memory,rag,ui,sse): post-answer “Understanding” module (TL;DR, key poin
 – Interceptor after verification, before reinforcement; distilled memory + embeddings
 – UNDERSTANDING SSE; ChatRequestDto.understandingEnabled + frontend toggle/localStorage
 – Reuse existing logging/retry/timeout/safety policies; full off-switch via config
+Patch Notes — Retrieval Chain Hardening & Query Morphing
+
+Summary
+
+Reworked the retrieval chain to be modular, fault-tolerant, and context-aware.
+
+Added session-memory hydration and post-retrieval “evidence repair.”
+
+Gated Self-Ask/Analyze steps via a complexity gate to reduce unnecessary calls.
+
+Enriched Analyze retriever with Korean morphology/spacing variants for better recall.
+
+Moved ad-hoc lambda chain to an explicit, testable bean.
+
+Changes by file
+
+1) DefaultRetrievalHandlerChain.java
+
+New pipeline order: Memory → Self-Ask (gated) → Analyze (gated) → Web → Vector → Repair.
+
+Session memory hydration:
+
+Reads sessionId from Query.metadata (via LangChainRAGService.META_SID) and injects recent history as Content.
+
+Null/parse errors are safely ignored; chain proceeds with partial results.
+
+Complexity-aware gating:
+
+QueryComplexityGate.needsSelfAsk(...) and needsAnalyze(...) decide whether to run Self-Ask/Analyze.
+
+Web always attempted before Vector:
+
+Web retrieval runs unconditionally; Vector only if still below topK.
+
+Evidence repair stage:
+
+Falls back to EvidenceRepairHandler when prior stages underfill topK.
+
+Early exits on topK:
+
+Each stage returns early once accumulator.size() >= topK.
+
+Metadata compatibility helper:
+
+Reflective toMap(...) supports asMap() or map() shapes for query metadata.
+
+Robustness:
+
+All stages are exception-tolerant; failures don’t crash the chain.
+
+2) RetrieverChainConfig.java
+
+Explicit, @Primary chain bean:
+
+Replaced the inline lambda with a constructed DefaultRetrievalHandlerChain for clarity and testability.
+
+New beans & wiring:
+
+EvidenceRepairHandler registered and injected.
+
+QueryComplexityGate, MemoryHandler, and existing retrievers are composed into the chain.
+
+Configurable repair hints:
+
+Wires domain and preferred-domains into EvidenceRepairHandler via properties.
+
+3) AnalyzeWebSearchRetriever.java
+
+Morphological query variants:
+
+Generates Korean spacing variants by splitting continuous Hangul blocks (e.g., “국비학원” → “국비 학원”, “국 비 학원”).
+
+Normalizes hyphens (to space and removal).
+
+Adds semantic variants like “국비지원 학원” when cues are present.
+
+Search hygiene:
+
+Dedupes variants and caps via QueryHygieneFilter.sanitize(..., max=4, minSim=0.80).
+
+Safety & logging:
+
+Variant generation wrapped to never hard-fail; parallel search retains prior error-tolerant behavior.
+
+Configuration
+
+Existing: rag.search.top-k (respected for early exit).
+
+New (optional):
+
+retrieval.repair.domain
+
+retrieval.repair.preferred-domains
+
+No migration required if new properties are absent; repair stage still runs with safe defaults.
+
+Rationale
+
+Precision & cost: Gate Self-Ask/Analyze to complex/ambiguous inputs only.
+
+Coverage: Always try Web before Vector; repair stage patches thin evidence sets.
+
+Context use: Session memory is leveraged when available without risking chain stability.
+
+Recall in Korean: Morph variants materially improve web hit rates on tightly concatenated Hangul queries.
+
+Impact
+
+Behavioral: More consistent topK fulfillment with fewer unnecessary LLM hops.
+
+Operational: Clear bean graph; easier unit/integration testing of each stage.
+
+Risk: Low—changes are additive and guarded; all stages degrade gracefully on exceptions.
