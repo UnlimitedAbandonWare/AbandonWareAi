@@ -933,3 +933,74 @@ The non-standard source directory requires IDE/Gradle alignment.
  Works correctly with and without injected beans.
 
  Config keys apply correctly across environments.
+feat(learning/gemini): introduce Gemini learning stubs, DTOs, REST endpoints + config/build updates
+
+Why
+
+Prepare a non-breaking learning pipeline (curation → batch → optional tuning) that compiles without external SDKs and can be wired later.
+
+Keep reinforcement working even if Gemini/Vertex isn’t available.
+
+What changed
+
+DTOs
+
+TuningJobRequest (record): dataset URI, model, suffix, epochs; null-guards.
+
+TuningJobStatus (record): jobId, state, message; null-guards.
+
+New module (stubs) under learning/gemini
+
+GeminiClient: thin wrapper; returns placeholders (no external calls yet).
+
+GeminiCurationService: invokes client; applies KnowledgeDelta to KB + vector store; best-effort logging.
+
+GeminiBatchService: placeholder methods for dataset build/run.
+
+GeminiTuningService: placeholder methods for Vertex tuning start/status.
+
+GeminiCurationPromptBuilder: scaffold for structured curation prompts.
+
+LearningWriteInterceptor: post-verification hook; attempts curation, always reinforces memory as fallback.
+
+LearningController: REST endpoints for ingest/batch/tune/status.
+
+Configuration
+
+application.yml: gemini.api-key now prefers GOOGLE_API_KEY (falls back to GEMINI_API_KEY); curator/batch model names and timeouts preserved.
+
+Build
+
+build.gradle: add com.google.genai:google-genai:1.12.0 (SDK present but not invoked yet).
+
+Resilience/behavior
+
+All Gemini paths are best-effort; errors are logged and do not bubble; memory reinforcement still runs.
+
+EmbeddingStoreManager.index() called for curated memories when present.
+
+REST API (added)
+
+POST /api/learning/gemini/ingest → applies curation; returns counts {triples,rules,memories}.
+
+POST /api/learning/gemini/batch/build?sinceHours={int} → returns {datasetUri} (stub).
+
+POST /api/learning/gemini/batch/run?datasetUri={uri}&jobName={name} → returns {jobId} (stub).
+
+POST /api/learning/gemini/tune (body: TuningJobRequest) → returns {jobId} (stub).
+
+GET /api/learning/gemini/jobs/{id} → returns TuningJobStatus (stub).
+
+Ops/Config notes
+
+gemini.backend: developer (default) or vertex.
+
+gemini.api-key: ${GOOGLE_API_KEY:${GEMINI_API_KEY:}}
+
+gemini.project-id, gemini.location, gemini.curator-model, gemini.batch-model, gemini.timeouts.connect-ms/read-ms.
+
+Compatibility
+
+No changes to existing chat/RAG routing; learning features are additive and inactive unless called.
+
+Version purity unchanged (LangChain4j 1.0.1 only).
