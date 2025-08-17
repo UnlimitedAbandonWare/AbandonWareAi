@@ -1098,3 +1098,36 @@ Key enhancements include:
 - **Cost-Effective Autonomous Operation**:
     - A new `FreeTierApiThrottleService` centrally manages all autonomous API calls.
     - This service enforces rate limits (e.g., <60 requests/minute) to ensure all background learning and verification tasks operate within the Gemini API's free tier, enabling continuous self-improvement at zero cost.
+물론입니다. (AbandonWare)님. 제공된 내용을 Git 커밋 메시지나 패치 노트에 바로 사용할 수 있도록 깔끔한 영문으로 정리해 드렸습니다.
+
+Commit Message / Patch Notes
+feat(rag, agent): Implement autonomous, file-based self-learning RAG pipeline
+
+This feature introduces an end-to-end, self-learning RAG pipeline that enables the system to ingest user-uploaded files, learn from interactions, and autonomously expand its knowledge base.
+
+✨ Mission 1: File-based RAG Foundation
+
+- **Frontend**: Implemented a file attachment UI in `chat-ui.html` and the corresponding file submission logic using `FormData` in `chat.js`.
+- **Backend**: Added a new multipart endpoint (`/api/chat/stream-with-file`) in `ChatApiController.java` to handle simultaneous message and file uploads, utilizing `LocalFileStorageService` for storage.
+- **Content Ingestion**: Integrated Apache Tika for text extraction from various file formats. `PromptBuilder.java` is updated to inject file content as a high-priority `### UPLOADED FILE CONTEXT` section, ensuring the LLM grounds its response in the provided document.
+- **Build**: Added `org.apache.tika` dependencies to `build.gradle.kts`.
+
+---
+
+✨ Mission 2: Intelligent RAG & Reinforcement Learning
+
+- **Multi-Vector RAG**: `VectorStoreService.java` now generates both summary vectors and chunk vectors from ingested files, enabling more nuanced, interactive retrieval.
+- **Interactive Retrieval**: Enhanced `SelfAskHandler.java` to decompose complex, multi-hop questions into sub-queries, search for evidence within the file for each, and synthesize a comprehensive answer.
+- **Generate-Verify-Reinforce Loop**:
+    - Introduced `ClaimVerifierService.java` to cross-verify every claim in the draft answer against the file's content, preventing hallucinations.
+    - Implemented `NamedEntityValidator.java` to ensure all proper nouns in the answer originate from the source document.
+    - `AdaptiveScoringService.java` now processes user feedback (👍/👎) via `FeedbackController.java` to dynamically adjust the relevance scores (`SynergyStat`) of document chunks, creating a reinforcement learning loop.
+
+---
+
+✨ Mission 3: Knowledge Assimilation & Autonomous Growth
+
+- **Structured Knowledge Extraction**: `GeminiCurationService.java` has been upgraded to extract structured knowledge (`KnowledgeDelta` like triples, rules, aliases) from verified conversations and file content. This structured data is then persisted via `KnowledgeBaseService.java`.
+- **Autonomous Learning Loop**:
+    - `SmartFallbackService.java` is now configured to log failed queries as "Knowledge Gaps."
+    - A new scheduled agent, `AutonomousExplorationService.java`, has been created. It proactively analyzes these knowledge gaps, formulates internal research questions, and uses the existing RAG pipeline to find and verify answers.
