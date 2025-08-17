@@ -1651,3 +1651,14 @@ feat(memory,rag): post-answer “Understanding” module (TL;DR, key points, act
 - Emit UNDERSTANDING SSE event; render memory-friendly string & index embeddings
 - ChatRequestDto: add understandingEnabled; frontend toggle with localStorage
 - Reuse GeminiClient logging/retry/timeout/safety guards
+작업을 완료했습니다. 수정된 소스 코드를 새로운 src18.zip 파일로 압축하여 제공해 드립니다. 주요 변경 사항은 다음과 같습니다.
+
+GeminiClient 개선: 쿼리스트링 대신 x-goog-api-key 헤더를 사용하며, HTTP 오류 및 예외를 상세히 로그하도록 수정했습니다. 응답 파싱을 위해 firstTextSafe, parseDelta 등 헬퍼 메서드를 추가하고, 실제 지식 큐레이션 로직을 구현했습니다.
+
+ChatRequestDto 확장: learningEnabled 필드를 추가하여 클라이언트가 학습 파이프라인 동작 여부를 제어할 수 있도록 했습니다.
+
+ChatService 수정: 요청에서 learningEnabled가 참일 때만 LearningWriteInterceptor를 호출하도록 조건을 추가했습니다.
+
+프론트엔드 업데이트: HTML에 Gemini 학습 토글을 추가하고, chat.js에서 상태를 localStorage에 저장/복원하도록 구현했습니다. 또한 전송 payload에 learningEnabled 값을 포함시켰습니다.
+
+아래 파일을 다운로드하여 변경 사항을 확인해 주세요.
