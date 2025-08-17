@@ -1306,3 +1306,54 @@ Updated to handle the COMPARATIVE_ANALYSIS intent.
 It now dynamically constructs a prompt template, instructing the LLM to perform a structured analysis based on the provided criteria and entities.
 
 Contextual data is organized by entity (e.g., ### [Entity A] Information, ### [Entity B] Information) to ensure the LLM can clearly distinguish and compare the retrieved information.
+Commit Message / Patch Notes
+feat(agent): Evolve into an Autonomous, Self-Learning AI Agent
+
+This feature graduates the RAG pipeline from a simple information retriever to an intelligent agent capable of self-learning, contextual understanding, and dynamic optimization. The system now autonomously identifies user intent, verifies facts, learns from its failures, and adapts its strategy to provide more accurate and reliable answers.
+
+🚀 Phase 1: Foundation Fortification - Intent & Trust
+This phase establishes an "Intelligence Gate" to understand user intent beyond keywords and to prioritize trustworthy information.
+
+CognitiveStateExtractor (Intent Analyzer):
+
+Now identifies COMPARATIVE_ANALYSIS intent from user queries (e.g., "Which is better, A or B?").
+
+Extracts multiple entities into a comparisonEntities list within the CognitiveState, enabling structured comparative analysis instead of simple lookups.
+
+EmbeddingModelCrossEncoderReranker (Intelligent Reranker):
+
+Introduces a multi-dimensional scoring model: Final Score = (Similarity * Authority Weight) + Synergy Bonus.
+
+AuthorityScorer: Implemented to score retrieved documents based on source credibility (e.g., official wikis, major news outlets, personal blogs) and apply a corresponding weight.
+
+AdaptiveScoringService: Activated to process user feedback (👍/👎), build SynergyStat, and apply a "Synergy Bonus" to reward information pairings that users find helpful, personalizing the ranking over time.
+
+🧠 Phase 2: Intelligence & Reliability Engine - Dual-Verification Gate
+This phase implements a "Dual-Verification Gate" to prevent hallucinations and ensure the factual accuracy of all generated answers.
+
+EvidenceGate (Pre-Generation Verification):
+
+Before calling the LLM, this gate automatically assesses whether the retrieved context is sufficient to generate a high-quality answer.
+
+If evidence is insufficient, it triggers the EvidenceRepairHandler to perform a secondary, refined search, minimizing low-quality responses and LLM hallucinations.
+
+ClaimVerifierService (Post-Generation Verification):
+
+After the LLM generates a draft, this service deconstructs the answer into individual claims.
+
+Each claim is then cross-verified against the source evidence. Unsupported claims are automatically removed or flagged as "unverified," drastically improving the final answer's reliability.
+
+🤖 Phase 3: Autonomous Learning & Adaptation
+This final phase transforms the system into a fully autonomous agent that learns from its mistakes and optimizes its own problem-solving strategies without manual intervention.
+
+AutonomousExplorationService (Self-Learning Agent):
+
+When the SmartFallbackService fails to find an answer, the query is now logged as a "Knowledge Gap."
+
+This service runs periodically as a scheduled agent, analyzing these gaps, formulating its own research questions, and using the existing RAG pipeline to find answers, effectively creating a self-learning loop that expands the knowledge base.
+
+StrategySelectorService (Dynamic Strategy Selector):
+
+Implements a Multi-armed Bandit algorithm to dynamically select the optimal retrieval strategy.
+
+Based on the query's intent (from CognitiveState), it chooses the most effective path (e.g., web-first, vector-DB-first, self-ask decomposition), optimizing for both performance and answer quality.
