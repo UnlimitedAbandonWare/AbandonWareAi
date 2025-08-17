@@ -1643,11 +1643,11 @@ Add GeminiAnalyzeDelegate, GeminiEmbeddingClient, GeminiFilesService as extensib
 Embedding Backend Switch
 
 Enable embedding.backend=gemini to activate GeminiEmbeddingClient.
+feat(memory,rag): post-answer “Understanding” module (TL;DR, key points, actions) + SSE + memory/index
 
-Current stub returns a zero vector as a safe default (no functional change until real model is wired).
-
-Config Keys
-
-router.allow-header-override=false
-router.header-override-allowlist=
-embedding.backend=gemini
+- Add AnswerUnderstanding DTO (+ glossary/entities/citations/confidence)
+- Implement AnswerUnderstandingService with strict JSON schema + safe fallback
+- Wire UnderstandAndMemorizeInterceptor after verification, before reinforcement
+- Emit UNDERSTANDING SSE event; render memory-friendly string & index embeddings
+- ChatRequestDto: add understandingEnabled; frontend toggle with localStorage
+- Reuse GeminiClient logging/retry/timeout/safety guards
