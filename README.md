@@ -1472,12 +1472,3 @@ Reduce token footprint and improve retrieval signal by seeding the current query
 
 Prepare the backend to accept user-approved learning snippets without coupling it to any specific model backend.
 
-Notes
-
-No changes to ONNX/voice/Router/tuning paths (out of scope).
-
-See the attached archive in this PR for the updated sources and config. 
-
-Testing
-
-Verified build & run; exercised augmentation ON/OFF and ensured comparative defaults are read from config.
