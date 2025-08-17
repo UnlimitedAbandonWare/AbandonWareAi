@@ -1440,3 +1440,44 @@ Results from the vector search are now sorted based on cosine similarity before 
 Resolved Post-processing Contamination Issue
 
 Blocked the game-specific recommendation logic from being applied to non-game-related answers, preventing contamination of the final output.
+feat(rag): add prior-answer distillation, client-echo learning DTO, and config keys for augment/comparative
+
+Summary
+
+Introduce a lightweight distillation step for prior answers used in augmentation.
+
+Add a DTO for client-echo learning batches.
+
+Wire up configuration flags/limits for augmentation and comparative analysis in application.yml.
+
+Key Changes
+
+InputDistillationService: new service to condense the previous assistant answer before prompt injection during augmentation (fallback truncation when the distillation gate is enabled).
+
+LearningItemDto: carries { q, a, evidence[], ts } for the opt-in client-echo learning mode.
+
+Config (application.yml):
+
+abandonware.input.distillation.enabled (bool)
+
+abandonware.augment.max-prior-chars (int)
+
+abandonware.comparative.default-criteria (list)
+
+abandonware.learning.enabled / related switches
+
+Why
+
+Reduce token footprint and improve retrieval signal by seeding the current query with a concise, prior-answer context.
+
+Prepare the backend to accept user-approved learning snippets without coupling it to any specific model backend.
+
+Notes
+
+No changes to ONNX/voice/Router/tuning paths (out of scope).
+
+See the attached archive in this PR for the updated sources and config. 
+
+Testing
+
+Verified build & run; exercised augmentation ON/OFF and ensured comparative defaults are read from config.
