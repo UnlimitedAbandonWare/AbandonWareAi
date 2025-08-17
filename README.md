@@ -1054,3 +1054,26 @@ Configuration File Migration (refactor(config))
 Migrated all application settings from application.yml to application.properties for consistency.
 
 A corresponding @ConfigurationProperties class has been implemented to ensure type-safe loading of all Gemini-related configurations.
+Patch Notes: Autonomous Learning & Knowledge Integrity Engine
+This patch graduates the AI from a reactive learner to a proactive, autonomous agent. The system can now independently identify and fill gaps in its knowledge, verify its own database for consistency, and manage these tasks within cost constraints by intelligently utilizing the Gemini API's free tier.
+
+✨ New Features
+Proactive Knowledge Acquisition (feat(agent))
+
+Knowledge Gap Detection: The SmartFallbackService now logs the context of failed queries as "KnowledgeGap" events, turning failures into actionable learning opportunities.
+
+Autonomous Exploration Service: A new scheduled agent, AutonomousExplorationService, has been introduced. It periodically analyzes knowledge gaps, formulates internal research queries, and uses the existing RAG pipeline to find answers autonomously.
+
+Unsupervised Learning Loop: The exploration service now directly feeds its findings into the GeminiCurationService, allowing the AI to expand its knowledge base without direct user interaction.
+
+Knowledge Base Integrity & Self-Refinement (feat(knowledge))
+
+Automated Consistency Verification: A new KnowledgeConsistencyVerifier agent periodically audits the knowledge base. It bundles related facts and rules, queries the Gemini API to identify logical contradictions (e.g., an entity being both a PREFERRED_PARTNER and an AVOID_WITH another), and flags inconsistencies for review.
+
+Knowledge Decay & Confidence Scoring: DomainKnowledge entities now track lastAccessedAt and a confidenceScore. A new scheduled process implements a decay mechanism, reducing the confidence of old, unused, or consistently downvoted knowledge to ensure the AI prioritizes fresh and relevant information.
+
+Cost-Effective Learning (feat(agent-infra))
+
+Gemini API Free Tier Throttling: A new FreeTierApiThrottleService has been implemented to manage and control all autonomous API calls.
+
+Intelligent Rate Limiting: This service ensures that background learning and verification tasks operate strictly within the Gemini API's free tier limits (e.g., <60 requests/minute, <1000/day), enabling continuous, cost-free performance improvement. Both AutonomousExplorationService and KnowledgeConsistencyVerifier now depend on this throttle before making API calls.
