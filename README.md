@@ -1131,3 +1131,33 @@ This feature introduces an end-to-end, self-learning RAG pipeline that enables t
 - **Autonomous Learning Loop**:
     - `SmartFallbackService.java` is now configured to log failed queries as "Knowledge Gaps."
     - A new scheduled agent, `AutonomousExplorationService.java`, has been created. It proactively analyzes these knowledge gaps, formulates internal research questions, and uses the existing RAG pipeline to find and verify answers.
+
+Of course. Here are the patch notes formatted for a Git commit message, based on your request.
+
+Commit Message / Patch Notes
+feat(ui, rag): Integrate intelligent speech-to-text interface
+
+This feature introduces a speech recognition capability to the user interface, allowing users to input queries via voice. The implementation focuses on maximizing code reuse by integrating seamlessly with the existing RAG pipeline and minimizing backend changes.
+
+✨ Mission 1: Frontend - Voice Recognition UI and Client Logic
+
+- **UI/UX (`chat-ui.html`):**
+    - Added a new microphone icon button to the chat input bar for initiating voice input.
+    - Implemented CSS styles to provide visual feedback to the user during the recording state (e.g., color change, animation).
+
+- **Client-Side Logic (`chat.js`):**
+    - Implemented browser-based speech recognition using the **Web Speech API** (`SpeechRecognition` object).
+    - The recognized speech is automatically populated into the `messageInput` field, allowing users to review and edit the transcribed text before sending.
+    - **Crucially, this reuses the existing `sendMessage` function**, sending the transcribed text through the established chat API endpoint with no new backend routes required.
+
+---
+
+✨ Mission 2: Backend - Voice Input Context Awareness
+
+- **Contextual Metadata (`ChatRequestDto.java`, `chat.js`):**
+    - The client now sends an `inputType: "voice"` field in the request payload when a query is generated via speech recognition.
+    - The `ChatRequestDto` has been updated to include the `inputType` field.
+
+- **Intelligent Ingestion (`CognitiveStateExtractor.java`):**
+    - The `CognitiveStateExtractor` service now detects the `"voice"` input type and records it in the `CognitiveState` object.
+    - This provides crucial context to the RAG pipeline, laying the groundwork for fut
