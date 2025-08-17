@@ -1,3 +1,186 @@
+# Canonical Lines for "AbandonWare Hybrid RAG AI Chatbot Service"
+# Version: v1 (generated 2025-08-18)
+# Rules: deduped, lossless, one fact per line
+
+## LINES
+# [STAGE] | Component | Capability/Rule | Rationale/Constraint(optional) | NOTES(optional)
+QUERY | QueryComplexityGate | Classifies user queries as simple or complex using heuristics or LLM models | Guides whether to decompose queries via SelfAskHandler
+QUERY | QueryCorrectionService | Performs rule‑based spelling, spacing and punctuation corrections | Ensures clean input before LLM correction
+QUERY | LLMQueryCorrectionService | Uses an LLM to refine corrected queries while preserving proper nouns and domain terms | Consults domain dictionary to avoid altering names
+QUERY | QueryDisambiguationService | Resolves ambiguous tokens via domain dictionary and LLM rephrasing | Sets a confidence score for high or low confidence
+QUERY | QueryAugmentationService | Adds synonyms or related keywords when enabled | Disabled by default to avoid noise; limited by SmartQueryPlanner
+QUERY | SmartQueryPlanner | Restricts the number of expanded queries to prevent combinatorial explosion | Coordinates with EvidenceRepairHandler
+QUERY | NonGameEntityHeuristics | Distinguishes generic terms from domain‑specific entities during preprocessing | Avoids misclassifying game‑neutral words
+QUERY | DefaultDomainTermDictionary | Stores protected terms per domain to survive correction and disambiguation | InMemoryDomainTermDictionary used for testing
+QUERY | LLMNamedEntityExtractor | Invokes an LLM to extract entities when regex heuristics fail | Implements NamedEntityExtractor interface
+QUERY | ParsedQuery | Holds structured components (tokens, synonyms, variants) after corrections and analysis | Used downstream for retrieval
+QUERY | MatrixTransformer | Generates additional query variants when required based on domain and intent | Supports robust search
+QUERY | QueryHygieneFilter | Removes banned words or domain prefixes during disambiguation | Ensures safe queries
+QUERY | VerbosityDetector | Analyses query and conversation context to suggest a verbosity level (brief/standard/deep/ultra) | Influences context budgets
+QUERY | SectionSpecGenerator | Determines which prompt sections to include based on verbosity and query intent | Produces section map for PromptBuilder
+QUERY | VerbosityProfile | Encapsulates verbosity hints to inform context budgets and minimum answer lengths | Used throughout pipeline
+QUERY | CompositeQueryContextPreprocessor | Combines guardrails, hygiene filters and preprocessing steps | Orchestrates correction and disambiguation
+QUERY | CognitiveStateExtractor | Derives user intent, subject and domain hints using heuristics or LLMs | Stores results in CognitiveState for routing
+QUERY | CognitiveState | Holds analysis results including intent, subject, domain and verbosity | Guides routing and retrieval strategies
+QUERY | GuardrailQueryPreprocessor | Injects protected terms and dynamic interaction rules from the knowledge base into the prompt context | Ensures domain policies are respected
+QUERY | DefaultQueryContextPreprocessor | Orchestrates correction, disambiguation and domain detection according to configuration | Prepares prompt context before retrieval
+QUERY | QueryComplexityClassifier | Detects multi‑hop or complex questions via heuristics or LLMs | ModelBasedQueryComplexityClassifier queries a model; thresholds configurable
+QUERY | QueryContextPreprocessor | Defines a contract for preparing prompt context prior to retrieval | Allows custom preprocessing implementations
+QUERY | QueryTransformer | Abstracts the process of generating alternative queries for retrieval | Implementations choose transformation based on domain and intent
+QUERY | DefaultQueryTransformer | Selects transformation strategy according to domain and intent | Generates robust query variants
+QUERY | QueryCorrectionService | Returns both the corrected text and metadata about applied fixes | Supports auditing of corrections
+QUERY | QueryDisambiguationService | May call QueryHygieneFilter to remove domain prefixes or banned words | Ensures safe and focused queries
+QUERY | VerbosityDetector | Uses conversation context to infer if the user expects a brief or detailed response | Influences document count and model choice
+RETRIEVAL | HybridRetriever | Orchestrates memory, self‑ask, analyze, web, vector and evidence repair handlers | Maximizes recall and precision
+RETRIEVAL | MemoryHandler | Retrieves recent session snippets and verified translation memory snippets as evidence | Uses MemoryAsEvidenceAdapter to format snippets
+RETRIEVAL | SelfAskHandler | Decomposes complex queries into sub‑questions using an LLM and aggregates evidence | Enabled when QueryComplexityGate signals complexity
+RETRIEVAL | AnalyzeHandler | Generates search tokens through morphological analysis for languages like Korean | Improves recall for non‑English queries
+RETRIEVAL | WebSearchHandler | Performs real‑time web searches with domain filters and rate limiting | Integrates AuthorityScorer to rank results by credibility
+RETRIEVAL | VectorDbHandler | Queries a vector store using similarity search to retrieve static domain knowledge | Acts as fallback when web retrieval fails
+RETRIEVAL | EvidenceRepairHandler | Triggers an additional search cycle when evidence is insufficient | Only one repair cycle to prevent infinite loops
+RETRIEVAL | DefaultRetrievalHandlerChain | Defines handler order: memory, self‑ask, analyze, web, vector, repair | Configurable via RetrieverChainConfig
+RETRIEVAL | RetrievalHandler | Interface that decouples handlers; each handler catches exceptions and returns partial results | Enables independent unit testing
+RETRIEVAL | RetrievalMode | Supports RETRIEVAL_ON (web and vector), RAG_ONLY (vector) and RETRIEVAL_OFF (memory only) modes | Configurable per session
+RETRIEVAL | SearchContext | Contains retrieved documents, warnings, timing and evidence quality flags | Passed to ranking and context builder
+RETRIEVAL | ReciprocalRankFuser | Merges lists from web, vector, memory and self‑ask using reciprocal rank fusion (RRF constant k) | Softmax fusion optional
+RETRIEVAL | LightWeightRanker | Performs quick lexical ranking to reduce candidate list before deeper scoring | Used prior to cross‑encoder reranking
+RETRIEVAL | SelfAskWebSearchRetriever | Performs web searches for each sub‑query and merges snippets | Supports sub‑question decomposition
+RETRIEVAL | AnalyzeWebSearchRetriever | Consumes tokens from AnalyzeHandler and applies morphological filters for targeted search | Enhances recall
+RETRIEVAL | EmbeddingClient | Generates embeddings for queries and documents using OpenAI or local models | VectorDbHandler uses these embeddings
+RETRIEVAL | EmbeddingStoreManager | Manages vector indexes and embeddings within the vector store | Supports nearest neighbour search
+RETRIEVAL | TavilyWebSearchRetriever | Placeholder for alternative web search service integration | Enables future domain‑specific search
+RETRIEVAL | SearchContext | Warnings may include insufficient evidence, rate limit hits or API errors | Allows downstream handling
+RETRIEVAL | Search results | Deduplicated by URL or content similarity before ranking | Avoids redundant evidence
+RETRIEVAL | Handlers | Respect session isolation by including session metadata in cache keys | Prevents cross‑session data leakage
+RETRIEVAL | Retrieval caches | Store results per query and session ID with expiration to reduce API calls | Configurable via CacheConfig
+RETRIEVAL | EvidenceRepairHandler | Uses SmartQueryPlanner to expand or reformulate the query for a second attempt | Increases recall without runaway searches
+RERANK | AuthorityScorer | Weights documents based on domain credibility tiers (OFFICIAL, TRUSTED, COMMUNITY, UNVERIFIED) using exponential decay | Configurable domain weights
+RERANK | RelationshipRuleScorer | Adjusts scores based on dynamic rules from the knowledge base (preferred partners, discouraged pairs, etc.) | Supports custom rule types
+RERANK | DefaultLightWeightRanker | Provides an initial lexical ranking based on token overlap and heuristics | Coarse filter before deeper scoring
+RERANK | CrossEncoderReranker | Uses a BERT‑like model to compute semantic similarity between query and document | Only top candidates proceed due to cost
+RERANK | EmbeddingModelCrossEncoderReranker | Integrates cross‑encoder scores with rule scores and synergy bonuses | Applies dynamic synergy weight and authority decay multiplier
+RERANK | Synergy bonuses | Reflect user feedback; positive and negative reactions adjust ranking | AdaptiveScoringService computes bonuses
+RERANK | AdaptiveScoringService | Calculates synergy bonuses using positive/negative feedback counts and smoothing constant k | Domain‑specific
+RERANK | Reranker settings | Configurable via application.yml, including top‑n candidates and weight factors | Supports A/B testing
+RERANK | NoopCrossEncoderReranker | Disables cross‑encoder scoring when not required | Acts as pass‑through reranker
+RERANK | ReciprocalRankFuser | Assigns scores based on reciprocal of rank positions across lists; k smooths lower ranks | Documents high in any list get a boost
+RERANK | Softmax fusion | Converts scores to probabilities using temperature; optional alternative to RRF | Sharpens focus on top documents
+RERANK | CrossScore formula | Final score = crossScore + ruleBoost + synergyBonus; may be normalized or clamped | Prevents domination by a single factor
+CONTEXT | ContextOrchestrator | Builds unified context from ranked documents, memory and history within token budgets | Removes duplicates and prioritizes authoritative sources
+CONTEXT | PromptBuilder | Constructs system, user and context prompts with standardized template | Injects dynamic rules, protected terms and instructions
+CONTEXT | PromptContext | Holds user query, subject, domain, protected terms and section specification | Used to build prompts
+CONTEXT | Section ordering | Guides the LLM through context sections: previous answer, vector RAG, history, web, memory | Defined by prompt builder
+CONTEXT | Context assembly | Prioritizes authoritative sources and demotes low‑credibility documents | Ensures maximal information density
+PROMPT | System prompts | Include instructions about allowed behaviours (discourage hallucinations, cite sources) | Guide the model’s conduct
+PROMPT | User prompts | Include sanitized query and indicate intent (recommendation, explanation, analysis) | Provide context for model routing
+PROMPT | Context prompts | Include selected evidence sections such as previous answer, vector RAG, history, web and memory | Structured within token limit
+PROMPT | PromptBuilder | Avoids ad‑hoc string concatenation; centralizes prompt construction; ensures proper escaping | Maintains maintainability and safety
+PROMPT | Verbosity hints | Influence the number of documents selected and minimum answer length | Align with verbosity profiles (brief, standard, deep, ultra)
+PROMPT | Audience hints | Allow tailoring answers to novice or expert users | Optional hint used in prompts
+PROMPT | Citation style | Determines whether citations appear inline or as footnotes | Configurable via PromptContext
+PROMPT | PromptContext.sectionSpec | Indicates which context sections should appear for given verbosity level | Generated by SectionSpecGenerator
+PROMPT | Dynamic interaction rules | Injected into prompts to inform the model about preferred or discouraged combinations | Derived from knowledge base rules
+GENERATION | ModelRouter | Selects the appropriate language model based on intent, risk, verbosity and token budget | Routes high‑stakes queries to high‑tier models
+GENERATION | MOE escalation | Routes to high‑tier model when intent in high‑stakes list, risk is high, verbosity is deep/ultra or token budget exceeds threshold | Supports high‑stakes tasks
+GENERATION | ChatModel | Abstracts underlying LLM provider and exposes unified API for sending prompts | Enables switching providers
+GENERATION | DynamicChatModelFactory | Creates ChatModel instances with appropriate parameters when no injected bean exists | Supports dynamic model creation
+GENERATION | Model resolution | Prefers injected beans, then cached models, then dynamic factory creation | Ensures fallback path
+GENERATION | Temperature policy | Uses lower temperature (e.g., 0.3) for high‑tier models and higher temperature (e.g., 0.7) for base models | Balances stability and creativity
+GENERATION | AnswerExpanderService | Ensures deep and ultra verbosity answers meet minimum word counts by expanding concise answers | Triggered by LengthVerifierService
+GENERATION | LengthVerifierService | Checks whether the generated answer satisfies length requirements before expansion | Works with AnswerExpanderService
+GENERATION | ModelRouter logging | Logs routing decisions including intent, risk, verbosity and token budget | Provides transparency for debugging
+VERIFY | FactVerifierService | Computes coverage and contradiction metrics by comparing draft answer to retrieved context | Rejects answers with low coverage or high contradiction
+VERIFY | EvidenceGate | Checks whether sufficient evidence exists before LLM generation; triggers EvidenceRepairHandler if insufficient | Skips generation when evidence lacking
+VERIFY | NamedEntityValidator | Ensures named entities in draft answer appear in context or memory; unknown names cause fallback response '정보 없음' | Prevents hallucinated names
+VERIFY | ClaimVerifierService | Extracts individual claims and verifies each against context using LLM or fact‑checking API | Removes unsupported claims; unsupported answers become '정보 없음'
+VERIFY | Claim classification | Classifies claims as supported, contradicted or lacking information | Guides modification or removal
+VERIFY | Evidence sufficiency metrics | Include number of subject mentions, authority scores and variety of sources | Domain‑specific thresholds
+VERIFY | AnswerSanitizers | Enforce domain policies by removing disallowed recommendations, profanity or unsafe content | Implemented as chain of responsibility
+VERIFY | GenshinRecommendationSanitizer | Filters invalid character pairings in Genshin domain | Activated only when game domain active
+VERIFY | SmartFallbackService | Suggests refined queries when system cannot answer due to insufficient evidence | Encourages user to refine question
+VERIFY | FallbackHeuristics | Generate alternative queries by adding details or narrowing scope; encapsulated in FallbackResult | Helps users improve retrieval
+VERIFY | Verification logging | Logs claim verdicts and evidence metrics for audit and debugging | Enhances transparency
+VERIFY | External fact checkers | ClaimVerifierService may call services like FactCheck.org or Wikidata to validate claims | Extensible via configuration
+SANITIZE | AnswerSanitizers | May insert warning messages for sensitive topics; enforce profanity filtering and policy compliance | Domain‑specific sanitizers follow general ones
+SANITIZE | Sanitizer chain order | General sanitizers run before domain‑specific ones to ensure proper layering | Order matters for correct modifications
+REINFORCE | MemoryReinforcementService | Computes energy scores for memory snippets using similarity, Q‑value, success ratio, confidence and recency | Weighted sum with configurable weights
+REINFORCE | Energy calculation | Uses Boltzmann energy with temperature control; recency decays via exponential decay; min and max content length filters | Parameters from HyperparameterService
+REINFORCE | ReinforcementQueue | Manages reinforcement tasks asynchronously to avoid blocking chat loop | Updates energy scores and stores results
+REINFORCE | TranslationMemoryRepository | Stores snippets of previous answers and context for reuse | MemoryWriteInterceptor writes verified answers into translation memory
+REINFORCE | AdaptiveScoringService | Computes synergy bonuses based on user feedback; bonus = (positive − negative)/(positive + negative + k) × scaling factor | Domain‑specific and smoothed
+REINFORCE | FeedbackController | Captures thumbs‑up and thumbs‑down from users and updates SynergyStat records | Drives adaptive scoring
+REINFORCE | SynergyStatRepository | Persists synergy statistics (domain, subject, partner, positive and negative counts) | Enables long‑term personalization
+REINFORCE | StrategySelectorService | Implements multi‑armed bandit algorithm to select retrieval strategies (web‑first, vector‑first, hybrid, self‑ask) | Softmax policy with temperature
+REINFORCE | StrategyPerformance | Records success, failure counts and average rewards per strategy | Used for bandit selection
+REINFORCE | Bandit annealing | Anneals exploration temperature over time based on number of interactions | Balances exploration and exploitation
+REINFORCE | DynamicHyperparameterTuner | Adjusts weights such as synergy weight, authority weight and exploration temperature based on aggregated metrics | Periodic updates ensure adaptation
+REINFORCE | BanditSelector | Selects memory entries according to energy and temperature | Ensures exploration of both new and old entries
+META | HyperparameterService | Provides dynamic retrieval and reranking parameters such as synergy weight at runtime; fetches from system properties or environment variables | Enables A/B testing without redeploy
+META | StrategySelectorService logging | Logs strategy choices and rewards for analysis | Supports debugging meta‑learning behaviour
+META | RewardHyperparameterTuner | Tunes reward weights for multi‑metric reward function using grid search or gradient‑free optimization | Improves meta‑learning
+META | Synergy bonuses | Domain‑specific; feedback in one domain does not affect another | Prevents cross‑domain contamination
+META | DynamicHyperparameterTuner | May increase exploration when performance drops unexpectedly and decrease when converging | Ensures balanced learning
+KB | KnowledgeBaseService | Abstracts access to domain entities, attributes and interaction rules stored in relational tables | Decouples domain knowledge from code
+KB | DomainKnowledgeRepository | Stores entities with domain, type and name; EntityAttributeRepository stores key‑value attributes | CRUD operations via JPA
+KB | SubjectResolver | Identifies the subject of a query by matching entity names; chooses longest or most relevant match; uses fuzzy matching when needed | Informs retrieval and prompt building
+KB | Interaction rules | Stored as relationships between entities: CONTAINS, IS_PART_OF, PREFERRED_PARTNER, DISCOURAGED_PAIR, AVOID_WITH | Administrators can define new rules via database
+KB | RelationshipRuleScorer | Evaluates documents against interaction rules and adjusts ranking scores accordingly | Uses weights from HyperparameterService
+KB | Knowledge base caching | Stores frequently accessed entity names, attributes and rules to reduce database queries | Improves performance
+KB | Knowledge base updates | Do not require redeploying system; new entities and rules can be inserted via scripts or admin tools | Facilitates domain expansion
+KB | Dynamic rules | Inform both prompt generation and ranking to respect domain policies | Supports preferred and avoided combinations
+SESSION | Session isolation | Ensures each user's conversation history, caches and reinforcement data remain separate | Session ID (META_SID) keys caches and retrieval results
+SESSION | Caffeine caching | Accelerates retrieval and memory access without leaking data between sessions; caches expire after configurable times | Configured via CacheConfig and application.yml
+SESSION | SSE streaming | Streams intermediate progress (retrieval progress, context construction, draft answer, verification outcomes) to clients via Server‑Sent Events | Improves transparency and user trust
+SESSION | PersistentChatMemory | Stores conversation history beyond session to enable long‑term memory | Provides memory to MemoryHandler
+SESSION | Synergy caches | Store computed bonuses for subject–partner pairs within a session; update persistent statistics after feedback | Maintains personalization per session
+SESSION | SessionConfig | Defines how session metadata is propagated; session caches cleared after expiration | Enforces privacy and resource management
+CONFIG | application.yml | Specifies minimum word counts and token budgets per verbosity level; max documents per context; reranker keep‑top‑n; model names; domain weights | Enables tuning without code changes
+CONFIG | Retrieval mode | retrieval.mode chooses between RETRIEVAL_ON, RAG_ONLY and RETRIEVAL_OFF | Controls search behaviour via configuration
+CONFIG | Hyperparameter settings | synergy weight, authority weight, smoothing constant k and other scoring constants configured externally | Allows real‑time adjustments
+CONFIG | Cache specifications | Define maximum sizes and expiration times for caches like retrieval, memory, synergy and knowledge base | Managed via application.yml and CacheConfig
+CONFIG | Environment variables | OPENAI_API_KEY, PINECONE_API_KEY, NAVER_API_CLIENT_ID and other credentials stored as environment variables | Secure handling of secrets
+CONFIG | Session expiration | session.expire-after defines how long sessions remain active before caches are cleared | Balances resource use and privacy
+CONFIG | LangChain4j version purity | Enforces consistent module versions (e.g., 1.0.1) to avoid runtime incompatibilities | Aborts startup on conflicts
+CONFIG | Model routing keys | router.moe.high, router.moe.mini specify high‑tier and base model names; router.allow-header-override flag controls header overrides | Configures model routing logic
+CONFIG | Knowledge curation | agent.knowledge-curation.enabled toggles autonomous knowledge curation agent on or off | Controls learning features
+CONFIG | Input distillation | abandonware.input.distillation.enabled and threshold control pre‑processing of long inputs | Uses low‑cost LLM to summarize long messages
+CONFIG | Reranker backend | abandonware.reranker.backend selects between embedding-model and onnx-runtime; onnx.model-path and onnx.execution-provider configure ONNX settings | Supports local ONNX reranking
+CONFIG | Learning pipeline | gemini.backend and related keys configure Gemini integration; learning.enabled toggles learning features | Supports Gemini-based knowledge extraction and tuning
+CONFIG | Understanding module | abandonware.understanding.enabled and model/timeout keys control post‑answer understanding and summarization | Emits UNDERSTANDING SSE event when enabled
+UI | chat-ui.html | Provides chat interface with text input, voice recognition, file upload, advanced search options and toggles | Sends requests via chat.js
+UI | chat.js | Handles SSE events, loading states, voice transcription, file attachments and RAG control options; persists user settings in localStorage | Sends ChatRequestDto with user preferences
+UI | SSE event handling | Recognizes event types such as retrieval progress, NEEDS_CONFIRMATION, UNDERSTANDING; renders summaries and confirmation buttons | Enables interactive flows
+UI | Persona selection | Allows users to choose personas (tutor, analyzer, brainstormer); cognitive state extractor determines persona from intent | Dynamic prompts loaded from configuration
+UI | RAG control panel | Provides checkboxes for search scopes (web, documents) and source credibility filters; passes options in ChatRequestDto | Allows real‑time RAG configuration by user
+UI | Multimodal inputs | Supports image uploads via Base64 encoding; includes imageBase64 in ChatRequestDto; backend integrates Gemini image models | Enables multimodal queries
+CHANGE | EmbeddingModelCrossEncoderReranker | Adds dynamic synergy weight bonus and authority decay multiplier to final score | NOTES: synergy weight fetched at runtime from HyperparameterService
+CHANGE | AuthorityScorer | Implements centralized credibility analyzer and exponential decay constants; adds getSourceCredibility() and decayFor() methods | NOTES: old weightFor() marked @Deprecated
+CHANGE | HyperparameterService | Adds getRerankSynergyWeight() method to fetch dynamic synergy weight from system properties or environment variables | NOTES: supports hotfixes without redeployment
+CHANGE | ModelRouter | Adds heuristics for MOE escalation based on intent, risk, verbosity and token budget; logs routing decisions; supports header override allowlist | NOTES: defaults to base model otherwise
+CHANGE | OnnxCrossEncoderReranker | Introduces ONNX-based cross‑encoder reranker activated via abandonware.reranker.backend=onnx-runtime; falls back to embedding model if model missing | NOTES: local ONNX inference via onnxruntime
+CHANGE | RequestHeaderModelOverrideFilter | Blocks non‑whitelisted X‑Model‑Override headers to prevent misuse; allowlist configurable | NOTES: router.allow-header-override defaults false
+CHANGE | InputDistillationService | Summarizes long user inputs using a low‑cost LLM and asks user confirmation before full RAG; configured via abandonware.input.distillation.enabled and threshold | NOTES: improves cost control
+CHANGE | Persona and RAG controls | Adds persona selection and advanced search options in UI; extends ChatRequestDto and HybridRetriever to respect officialSourcesOnly and searchScopes flags | NOTES: dynamic persona prompts loaded from configuration
+CHANGE | Multimodal support | Adds imageBase64 in ChatRequestDto; GeminiClient handles multimodal requests; backend processes both text and image content | NOTES: uses gemini-1.5-pro model for images
+CHANGE | Comparative analysis | CognitiveStateExtractor detects COMPARATIVE_ANALYSIS intent when multiple entities and comparison keywords; ChatService orchestrates dynamic retrieval and structured prompts | NOTES: criteria generated dynamically
+CHANGE | Autonomous exploration | SmartFallbackService logs failed queries as knowledge gaps; AutonomousExplorationService analyses gaps, formulates research queries and learns autonomously | NOTES: free-tier API throttling enforced
+CHANGE | Knowledge consistency verifier | Adds agent to audit knowledge base for contradictions using LLM; flags inconsistent rules and decays confidence of stale knowledge | NOTES: runs periodically with throttle
+CHANGE | Learning enhancements | GeminiCurationService extracts structured knowledge; LearningWriteInterceptor writes new knowledge into KB and vector store after verification; LearningController exposes REST endpoints for ingest, batch and tuning | NOTES: learning features optional and gated by learningEnabled flag
+CHANGE | Understanding module | Adds AnswerUnderstandingService to convert final answers into TL;DR and key points; SSE UNDERSTANDING events; memory indexing of distilled summaries | NOTES: controlled by understandingEnabled flag
+CHANGE | InputDistillationService | Adds pre‑processing gate for long inputs; uses low‑cost model to distill queries and asks for user confirmation via NEEDS_CONFIRMATION SSE event | NOTES: reduces token usage and prevents runaway costs
+CHANGE | Dynamic vector search | Enables automatic switch to VECTOR_SEARCH execution mode when education‑related keywords detected; bypasses keyword search and performs vector similarity retrieval | NOTES: improves semantic matching in new domains
+
+## Validation
+- [x] Meaning‑duplications merged
+- [x] No information loss (IDs/keys preserved)
+- [x] One fact per line; optional NOTES only
+- [x] Stage tags applied consistently
+- [x] Git‑diff friendly formatting
+
+## RAW
+Due to the size of the RAW document, please refer to the original input for the complete text. It contains all details summarized above, covering query processing, retrieval, ranking, context assembly, prompt building, generation, verification, reinforcement, knowledge base operations, session management, configuration, UI enhancements and numerous patch notes describing incremental changes and new features across multiple versions.
+
+
 The AbandonWare Hybrid RAG AI Chatbot Service is a domain‑agnostic agent built on a retrieval–generation–verification–reinforcement pipeline.
 The system began as a specialized Genshin Impact assistant and evolved into a general retrieval‑augmented generation agent.
 Retrieval‑augmented generation combines neural language models with external knowledge sources to ground answers in evidence.
