@@ -1662,3 +1662,98 @@ ChatService 수정: 요청에서 learningEnabled가 참일 때만 LearningWriteI
 프론트엔드 업데이트: HTML에 Gemini 학습 토글을 추가하고, chat.js에서 상태를 localStorage에 저장/복원하도록 구현했습니다. 또한 전송 payload에 learningEnabled 값을 포함시켰습니다.
 
 아래 파일을 다운로드하여 변경 사항을 확인해 주세요.
+Introduced a post-answer Understanding module that converts the final answer into a structured JSON summary (TL;DR, keyPoints, actionItems, decisions, risks, followUps, glossary, entities, citations, confidence).
+
+Wired the module into the chat pipeline after verification/sanitization and before reinforcement. Execution is gated by ChatRequestDto.understandingEnabled and presence of a final answer.
+
+Emitted UNDERSTANDING SSE events to the UI and stored a distilled memory (TL;DR/KeyPoints/ActionItems) plus optional embedding indexing.
+
+Enforced strict JSON schema (draft-07) with safe parsing and a robust fallback summarizer when LLM JSON is incomplete.
+
+Reused existing Gemini client (logging, timeout, retry, circuit-breaker, safety guards). Model=gemini-2.5-pro, timeout=12s.
+
+Added a frontend toggle with localStorage persistence; SSE handler renders Understanding cards.
+
+Added configuration keys and full “off switch” that prevents interceptor entry and disables runtime behavior without touching the rest of the pipeline.
+
+Kept existing RAG/Web/Verifier/Reinforcement behavior intact; no debugging payload leaks; PII length-only logging.
+
+Pipeline placement & trigger
+
+Placement: FactVerifierService → AnswerSanitizers → Understand & Memorize (new) → Reinforcement
+
+Trigger: ChatRequestDto.understandingEnabled == true AND final answer string exists
+
+New/modified files
+
+DTO: com/example/lms/dto/answer/AnswerUnderstanding.java
+Fields: tldr, keyPoints[], actionItems[], decisions[], risks[], followUps[], glossary(term, definition)[], entities(name, type)[], citations(url, title)[], confidence(double)
+
+Prompt builder: com/example/lms/service/understanding/AnswerUnderstandingPromptBuilder.java
+Builds “STRICT JSON only. No prose.” prompts; escapes question/answer via PromptEscaper
+
+Service: com/example/lms/service/understanding/AnswerUnderstandingService.java
+Uses GeminiClient.postJson(model, prompt, timeout); validates against JSON Schema; tolerant mapping with warnings; fallback summarizer (first sentence TL;DR + 3–6 bullets)
+
+Pipeline interceptor: com/example/lms/service/chat/interceptor/UnderstandAndMemorizeInterceptor.java
+Runs from ChatWriteInterceptor.afterVerified(); saves distilled memory (TranslationMemoryRepository.saveSnippet), indexes embeddings (EmbeddingStoreManager.index), and emits UNDERSTANDING via ChatStreamEmitter
+
+DTO & SSE extension: com/example/lms/web/dto/ChatRequestDto.java (+ boolean understandingEnabled)
+ChatStreamEvent.EventType += UNDERSTANDING; ChatStreamEmitter.emitUnderstanding(sessionId, AnswerUnderstanding) serializes to JSON and streams
+
+Frontend
+HTML: toggle control to show/save Understanding
+JS: localStorage key aw.understanding.enabled; include understandingEnabled in request payload; handle UNDERSTANDING SSE to render TL;DR/KeyPoints/ActionItems
+
+Configuration (application.properties)
+abandonware.understanding.enabled=true
+abandonware.understanding.model=gemini-2.5-pro
+abandonware.understanding.timeout-ms=12000
+
+Safety & reliability
+
+NPE/Safety guards reused from firstTextSafe(); finishReason=SAFETY → warn and fallback
+
+Logging: prompt/response log length only (PII masked)
+
+Retry: 429/5xx → exponential backoff with jitter (2 attempts)
+
+Fully deactivatable: …enabled=false bypasses the interceptor and suppresses SSE
+
+Acceptance criteria (AC)
+
+With toggle ON: UNDERSTANDING SSE arrives after final answer; TL;DR present; keyPoints length ~3–7
+
+Memory write and embedding index each invoked exactly once (observable in logs)
+
+Incomplete LLM JSON still yields a fallback summary; no exceptions propagate
+
+With toggle OFF: module is not entered and no UNDERSTANDING SSE is sent
+
+finishReason=SAFETY → warning log + fallback behavior
+
+Build passes with unchanged existing tests
+
+Deliverables in 10.zip
+
+Updated source tree
+
+README_understanding.md (overview, toggle usage, config keys, event format, limitations)
+
+CHANGELOG.md (summary, file list, migration notes)
+
+samples/understanding.json (example SSE payload)
+
+Optional test skeletons (1–2)
+
+Breaking changes
+
+None. All additions are opt-in and respect the global enable/disable switch.
+
+Suggested commit message (copy/paste)
+feat(memory,rag,ui,sse): post-answer “Understanding” module (TL;DR, key points, actions) with SSE + memory/index
+– Add AnswerUnderstanding DTO (incl. glossary/entities/citations/confidence)
+– Strict JSON schema + safe fallback in UnderstandingService (Gemini 2.5 Pro, 12s)
+– Interceptor after verification, before reinforcement; distilled memory + embeddings
+– UNDERSTANDING SSE; ChatRequestDto.understandingEnabled + frontend toggle/localStorage
+– Reuse existing logging/retry/timeout/safety policies; full off-switch via config
