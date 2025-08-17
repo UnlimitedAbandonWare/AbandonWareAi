@@ -22,6 +22,17 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
     @Override
     public Optional<String> getAttribute(String domain, String entityName, String key) {
         return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
+                .map(dk -> {
+                    // 갱신: 지식이 조회되었으므로 lastAccessedAt을 업데이트합니다.
+                    try {
+                        dk.setLastAccessedAt(java.time.Instant.now());
+                        // 변경 사항을 즉시 반영하도록 저장합니다. 트랜잭션 컨텍스트가 없으면 단순 업데이트로 동작합니다.
+                        repo.save(dk);
+                    } catch (Exception ignore) {
+                        // 저장 실패 시 로그만 남기고 무시합니다.
+                    }
+                    return dk;
+                })
                 .flatMap(dk -> dk.getAttributes().stream()
                         .filter(a -> key.equalsIgnoreCase(a.getAttributeKey()))
                         .map(a -> Optional.ofNullable(a.getAttributeValue()))
@@ -73,6 +84,13 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
     public Map<String, Set<String>> getAllRelationships(String domain, String entityName) {
         return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
                 .map(dk -> {
+                    // 갱신: 지식이 조회되었으므로 lastAccessedAt을 업데이트합니다.
+                    try {
+                        dk.setLastAccessedAt(java.time.Instant.now());
+                        repo.save(dk);
+                    } catch (Exception ignore) {
+                        // ignore persistence issues
+                    }
                     Map<String, Set<String>> map = new LinkedHashMap<>();
                     dk.getAttributes().stream()
                             .filter(a -> a.getAttributeKey() != null
@@ -82,7 +100,6 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
                                 Set<String> vals = csvSet(a.getAttributeValue());
                                 if (!vals.isEmpty()) map.put(key, vals);
                             });
-                    // 수정된 라인: 삼항 연산자 없이 바로 unmodifiableMap을 반환하여 타입 추론 오류 해결
                     return Collections.unmodifiableMap(map);
                 })
                 .orElseGet(Collections::emptyMap);
@@ -106,6 +123,32 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
     public IntegrationStatus integrateVerifiedKnowledge(String domain, String entityName, String structuredDataJson, List<String> sources, double confidenceScore) {
         log.info("[KB][INTEGRATE] domain={}, entity={}, conf={}, sources={} (persist=SKIPPED)",
                 domain, entityName, String.format("%.2f", confidenceScore), (sources == null ? 0 : sources.size()));
+        return IntegrationStatus.SKIPPED;
+    }
+
+    /**
+     * Apply a structured knowledge delta to the knowledge base.  This
+     * implementation currently performs no actual upsert into the database;
+     * instead it logs the incoming delta and returns {@link IntegrationStatus#SKIPPED}.
+     * Future iterations should parse triples, rules and aliases contained in
+     * the delta and persist them into the {@link DomainKnowledge} and related
+     * tables via {@link DomainKnowledgeRepository}.
+     *
+     * @param delta the structured knowledge delta produced by Gemini curation
+     * @return {@code SKIPPED} indicating no changes were applied
+     */
+    @Override
+    public IntegrationStatus apply(com.example.lms.dto.learning.KnowledgeDelta delta) {
+        if (delta == null) {
+            return IntegrationStatus.SKIPPED;
+        }
+        try {
+            log.info("[KB][APPLY] received KnowledgeDelta: triples={}, rules={}, aliases={}, memories={}, terms={}",
+                    delta.triples().size(), delta.rules().size(), delta.aliases().size(), delta.memories().size(), delta.protectedTerms().size());
+        } catch (Exception ignore) {
+            // ignore logging errors
+        }
+        // No persistence implemented yet; return SKIPPED to indicate no-op
         return IntegrationStatus.SKIPPED;
     }
 }

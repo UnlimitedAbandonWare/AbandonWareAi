@@ -2,7 +2,7 @@ package com.example.lms.dto;
 
 /**
  * SSE 이벤트 페이로드.
- * type: "status" | "trace" | "token" | "final" | "error"
+ * type: "status" | "trace" | "token" | "final" | "error" | "thought"
  * data: 상태/토큰 문자열
  * html: trace 전용 HTML 조각
  */
@@ -28,5 +28,15 @@ public record ChatStreamEvent(
         }
         public static ChatStreamEvent error(String msg) {
                 return new ChatStreamEvent("error", msg, null, null, null, null);
+        }
+
+        /**
+         * Create a new SSE event indicating an intermediate thought from the AI agent.
+         *
+         * @param msg the message to display in the thought process panel
+         * @return a ChatStreamEvent with type "thought" and the given data
+         */
+        public static ChatStreamEvent thought(String msg) {
+                return new ChatStreamEvent("thought", msg, null, null, null, null);
         }
 }

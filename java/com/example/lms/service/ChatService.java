@@ -1,5 +1,10 @@
 package com.example.lms.service;
 import com.example.lms.prompt.PromptContext;
+// 상단 import 블록에 추가
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CancellationException;
+
 import com.example.lms.prompt.PromptBuilder;
 import com.example.lms.model.ModelRouter;
 import com.example.lms.service.rag.ContextOrchestrator;
@@ -218,6 +223,8 @@ public class ChatService {
     private final com.example.lms.service.rag.handler.MemoryWriteInterceptor memoryWriteInterceptor;
     // 신규: 학습 기록 인터셉터
     private final com.example.lms.learning.gemini.LearningWriteInterceptor learningWriteInterceptor;
+    /** In‑flight cancel flags per session (best‑effort) */
+    private final ConcurrentHashMap<Long, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
 
     @Value("${rag.hybrid.top-k:50}") private int hybridTopK;
     @Value("${rag.rerank.top-n:10}") private int rerankTopN;
@@ -409,6 +416,7 @@ public class ChatService {
 
         // ── 0-A) 세션ID 정규화 & 쿼리 재작성(Disambiguation) ─────────
         Long sessionIdLong = parseNumericSessionId(req.getSessionId());
+        throwIfCancelled(sessionIdLong);  // ★ 추가
         final String finalQuery = decideFinalQuery(userQuery, sessionIdLong);
         // ── 0-1) Verbosity 감지 & 섹션 스펙 ─────────────────────────
         VerbosityProfile vp = verbosityDetector.detect(finalQuery);
@@ -417,6 +425,7 @@ public class ChatService {
 
         // ── 1) 검색/융합: Self-Ask → HybridRetriever → Cross-Encoder Rerank ─
         // 0‑2) Retrieval 플래그
+
         boolean useWeb = req.isUseWebSearch();
         boolean useRag = req.isUseRag();
 
@@ -428,6 +437,8 @@ public class ChatService {
             if (planned.isEmpty()) planned = List.of(finalQuery);
             fused = hybridRetriever.retrieveAll(planned, hybridTopK);
         }
+        // planned / fused 생성한 다음쯤
+        throwIfCancelled(sessionIdLong);  // ★ 추가
         Map<String, Set<String>> rules = qcPreprocessor.getInteractionRules(finalQuery);
 
         int keepN = switch (Objects.toString(vp.hint(), "standard").toLowerCase(Locale.ROOT)) {
@@ -507,6 +518,8 @@ public class ChatService {
         msgs.add(dev.langchain4j.data.message.UserMessage.from(finalQuery));
 
         // ── 5) 단일 호출 → 초안 ─────────────────────────────────────
+        // 모델 라우팅을 마친 뒤, 실제 chat() 호출 바로 직전
+        throwIfCancelled(sessionIdLong);  // ★ 추가
         String draft = model.chat(msgs).aiMessage().text();
 
         String verified = shouldVerify(unifiedCtx, req)
@@ -543,6 +556,8 @@ public class ChatService {
         if (useRag && !vectorDocs.isEmpty()) evidence.add("RAG");
         if (memoryCtx != null && !memoryCtx.isBlank()) evidence.add("MEMORY");
         boolean ragUsed = evidence.contains("WEB") || evidence.contains("RAG");
+        clearCancel(sessionIdLong);       // ★ 추가
+
         return ChatResult.of(out, modelUsed, ragUsed, java.util.Collections.unmodifiableSet(evidence));
     } // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 
@@ -1126,6 +1141,26 @@ public class ChatService {
                 || s.matches(".*근거(는|가)\\s*뭐(야|지).*")
                 || s.matches("^(tell me more|more details|give me an example|why is that).*");
     }
+    /** Called by /api/chat/cancel */
+    public void cancelSession(Long sessionId) {
+        if (sessionId == null) return;
+        cancelFlags.computeIfAbsent(sessionId, id -> new AtomicBoolean(false)).set(true);
+    }
 
+    private boolean isCancelled(Long sessionId) {
+        AtomicBoolean f = (sessionId == null) ? null : cancelFlags.get(sessionId);
+        return f != null && f.get();
+    }
+
+    private void clearCancel(Long sessionId) {
+        if (sessionId != null) cancelFlags.remove(sessionId);
+    }
+
+    private void throwIfCancelled(Long sessionId) {
+        if (isCancelled(sessionId)) {
+            clearCancel(sessionId);
+            throw new CancellationException("cancelled by client");
+        }
+    }
 
 }

@@ -21,6 +21,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.RequestParam;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -60,6 +61,26 @@ public class ChatApiController {
     private final SettingsService settingsService;
     private final TranslationService translationService;
     private final NaverSearchService searchService;
+
+    /**
+     * Cancel the currently running chat streaming for the given session.  This endpoint can be
+     * invoked by the client when the user clicks a "Stop generation" button to terminate long
+     * running operations.  The current implementation delegates to {@link ChatService#cancelSession(Long)}
+     * which performs best‑effort cancellation of any in‑flight tasks.  This method always returns
+     * HTTP 200 OK regardless of whether there was an active stream to cancel.
+     *
+     * @param sessionId the session identifier to cancel; may be {@code null}
+     * @return 200 OK
+     */
+    @PostMapping("/cancel")
+    public ResponseEntity<Void> cancel(@RequestParam(required = false) Long sessionId) {
+        try {
+            chatService.cancelSession(sessionId);
+        } catch (Exception ignore) {
+            // swallow all exceptions to avoid leaking implementation details
+        }
+        return ResponseEntity.ok().build();
+    }
 
     // ===== sync chat =====
     @PostMapping
@@ -120,9 +141,19 @@ public class ChatApiController {
                     historyService.appendMessage(session.getId(), "user", dto.getMessage());
                 }
 
+                // Emit an initial thought event so the client knows the agent has started processing
+                sink.tryEmitNext(sse(ChatStreamEvent.thought("처리를 시작합니다…")));
+
                 // 3) 상태
+                // Broadcast both status and thought updates so that the UI can display the
+                // same message in the status line and the thought process panel.  Each
+                // call to status() is immediately followed by a corresponding call to
+                // thought() with the same message to satisfy the requirement of
+                // streaming thought events for every step of the agent’s work.
                 sink.tryEmitNext(sse(ChatStreamEvent.status("쿼리 분석 중…")));
+                sink.tryEmitNext(sse(ChatStreamEvent.thought("쿼리 분석 중…")));
                 sink.tryEmitNext(sse(ChatStreamEvent.status("웹/하이브리드 검색 준비…")));
+                sink.tryEmitNext(sse(ChatStreamEvent.thought("웹/하이브리드 검색 준비…")));
 
                 // 4) 웹 검색(추적)
                 NaverSearchService.SearchResult sr = dto.isUseWebSearch()
@@ -137,6 +168,7 @@ public class ChatApiController {
 
                 // 5) 본 호출
                 sink.tryEmitNext(sse(ChatStreamEvent.status("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
+                sink.tryEmitNext(sse(ChatStreamEvent.thought("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
                 ChatRequestDto dtoForCall = ChatRequestDto.builder()
                         .sessionId(session.getId())
                         .message(dto.getMessage())
@@ -151,6 +183,7 @@ public class ChatApiController {
                         .build();
 
                 sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
+                sink.tryEmitNext(sse(ChatStreamEvent.thought("답변 생성 중…")));
                 ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
                 String finalText = result.content();
 
