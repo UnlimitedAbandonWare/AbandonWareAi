@@ -1077,3 +1077,24 @@ Cost-Effective Learning (feat(agent-infra))
 Gemini API Free Tier Throttling: A new FreeTierApiThrottleService has been implemented to manage and control all autonomous API calls.
 
 Intelligent Rate Limiting: This service ensures that background learning and verification tasks operate strictly within the Gemini API's free tier limits (e.g., <60 requests/minute, <1000/day), enabling continuous, cost-free performance improvement. Both AutonomousExplorationService and KnowledgeConsistencyVerifier now depend on this throttle before making API calls.
+
+feat(agent): Implement cost-effective autonomous learning and knowledge integrity engine
+
+This commit graduates the AI from a reactive learner to a proactive, autonomous agent. The system can now independently identify knowledge gaps from failed queries, perform self-guided research to fill them, and periodically verify its own knowledge base for logical consistency.
+
+To ensure sustainable, continuous improvement without incurring costs, a new throttling service has been implemented to intelligently manage all background tasks strictly within the Gemini API's free tier limits.
+
+Key enhancements include:
+
+- **Proactive Knowledge Acquisition**:
+    - `SmartFallbackService` now logs failed queries as "KnowledgeGap" events.
+    - A new scheduled `AutonomousExplorationService` analyzes these gaps, formulates internal research queries, and uses the existing RAG pipeline to find answers.
+    - Findings are seamlessly fed into the `GeminiCurationService` to expand the knowledge base without user interaction.
+
+- **Knowledge Integrity & Self-Refinement**:
+    - A new `KnowledgeConsistencyVerifier` agent periodically audits the knowledge base, using the Gemini API to identify and flag logical contradictions between stored facts and rules.
+    - `DomainKnowledge` entities now feature `lastAccessedAt` and `confidenceScore` fields to enable a new `KnowledgeDecayService`, which reduces the confidence of stale or negatively-rated information over time.
+
+- **Cost-Effective Autonomous Operation**:
+    - A new `FreeTierApiThrottleService` centrally manages all autonomous API calls.
+    - This service enforces rate limits (e.g., <60 requests/minute) to ensure all background learning and verification tasks operate within the Gemini API's free tier, enabling continuous self-improvement at zero cost.
