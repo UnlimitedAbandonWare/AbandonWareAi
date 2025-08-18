@@ -2387,3 +2387,110 @@ MOE escalation is 1× per turn (700–900 tokens budget).
 EvidenceRepair capped at 1 pass; SelfAsk capped at 3 sub-questions.
 
 Verifier per-answer cap: ≤12 claims or ≤600 tokens.
+Summary
+
+Eliminates recurrent JSON parsing failures in AnswerUnderstandingService caused by Gemini (e.g., gemini-1.5-flash) returning structured output that is (a) wrapped in markdown code fences (often with a json tag) and/or (b) contains unescaped control characters inside JSON strings (real LF 0x0A rather than \\n). The service now always accepts or repairs these variants without breaking the chat flow.
+
+Root cause
+
+Current logic trims only the outer fence and then parses either the whole text or wrapper.data via ObjectMapper.readValue(...). If data was a textual JSON blob, asText() de-escapes it, leaving literal control chars (e.g., LF) inside JSON string literals → Jackson throws “Illegal unquoted character”.
+
+Fix (multi-layered defense)
+
+Generate clean JSON (first line of defense)
+
+Force JSON mode in Gemini requests: response_mime_type = "application/json".
+
+Prefer a response schema matching AnswerUnderstanding.
+
+temperature=0.0, topP=1.0.
+
+Add stop sequences to prevent fences; instruct: “No markdown/code fences; output exactly one JSON object. Newlines inside strings must be escaped as \\n.”
+
+Pre-parser sanitizer (resilient to variants)
+
+Strip code fences including language tags (```json … ```).
+
+Quote-aware slice: extract the first balanced {...} while ignoring braces inside string literals.
+
+Wrapper handling:
+
+If node.get("data") is object → treeToValue.
+
+If textual → treat as raw JSON text (no premature asText() unescape); then sanitize.
+
+Parser leniency (config-gated)
+
+Default: strict.
+
+Optional “lax” mode via abandonware.understanding.parser.lax=true to enable:
+
+ALLOW_UNESCAPED_CONTROL_CHARS
+
+ALLOW_SINGLE_QUOTES
+
+ALLOW_TRAILING_COMMA
+
+One-shot self-repair path
+
+On first parse failure, run a local fixer that escapes control chars only inside string literals:
+
+\n \r \t \b \f, all 0x00–0x1F, and U+2028/U+2029.
+
+Optionally drop a final trailing comma and normalize single→double quotes.
+
+Retry parse once; if it still fails, fallback summarizer returns a safe TL;DR (flow never breaks).
+
+Reliability hardening
+
+Gemini call: 429/5xx exponential backoff with jitter (≤ 2 retries) and hard overall deadline 12s.
+
+The new parser path never throws upstream; warnings only.
+
+Observability
+
+New counters: understanding.parse.strict, understanding.parse.repair, understanding.parse.fallback.
+
+PII-safe logs: record lengths/hashes and outcome labels; no raw payloads.
+
+Configuration
+# Strict by default; flip to allow tolerant parsing if needed
+abandonware.understanding.parser.lax=false
+abandonware.understanding.enabled=true
+abandonware.understanding.timeout-ms=12000
+
+Tests
+
+Added/updated unit cases to cover:
+
+Fenced JSON with language tag (```json … ```), trailing whitespace/blank line.
+
+Literal newline inside a JSON string.
+
+Trailing comma; single-quoted strings.
+
+Wrapper with data as object and textual JSON.
+
+Braces/brackets inside strings ("msg":"{ok}").
+
+U+2028/U+2029, \b, \f.
+
+Strict vs. lax switch behavior.
+
+Backward compatibility & rollout
+
+No API changes. Strict mode remains default.
+
+Fallback path preserved; parser never propagates exceptions.
+
+Safe to roll back by toggling abandonware.understanding.parser.lax or disabling the feature.
+
+Acceptance checklist
+
+ Gemini returns pure JSON (no wrapper/fence) under normal conditions.
+
+ All new tests pass; parse metrics visible.
+
+ Logs contain only size/hash, not raw JSON.
+
+ End-to-end flow produces Understanding cards even for previously failing samples.
