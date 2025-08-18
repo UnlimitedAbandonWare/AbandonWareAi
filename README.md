@@ -2494,3 +2494,149 @@ Acceptance checklist
  Logs contain only size/hash, not raw JSON.
 
  End-to-end flow produces Understanding cards even for previously failing samples.
+rompt discipline: All LLM prompts are built via PromptBuilder.build(PromptContext); ad-hoc string concatenation in Chat layer is blocked.
+
+Chain of Responsibility preserved: HybridRetriever → (SelfAsk → Analyze → Web → Vector → Repair) never throws across the boundary; partial results and warnings are returned.
+
+Session isolation: All caches/memory/reinforcement stats remain keyed by session ID; no cross-session leakage.
+
+Key Changes
+1) Diagnostics & Ops
+
+DiagnosticsDumpService emits structured run records (JSONL/YAML) under a dedicated logs path for offline analysis:
+
+sessionId, traceId
+
+Model usage: modelName, tokensIn, tokensOut, estimatedCost, apiLatencyMs
+
+RAG performance: per-handler duration, hitCount, authority scores, selectedDocs
+
+Verification & reinforcement: FactVerifier result, user feedback (👍/👎), SynergyStat deltas
+
+Emission occurs asynchronously at pipeline end to avoid user-visible latency.
+
+2) Retrieval Chain Hardening
+
+Early-exit on Top-K fulfillment; duplicate pruning; authority weighting retained.
+
+Repair pass runs at most once when evidence is insufficient.
+
+All handlers guard exceptions and accumulate warnings instead of propagating failures.
+
+3) Prompt & Router Integrity
+
+Prompt centralization: All prompts flow through a single builder with sectioned context (history/vector/web/memory) based on verbosity and budgets.
+
+Router stabilization: Intent/risk/verbosity/token-budget signals consistently drive model selection; bean/qualifier preferences and cache/factory path made deterministic.
+
+4) JSON Parsing Resilience (Understanding/Verification Adjuncts)
+
+Robust pre-parser sanitation for model outputs:
+
+Strip code-fences (e.g., json … ), extract first balanced {…} object.
+
+Escape control characters inside string literals only.
+
+Strict parse → single tolerant retry; then safe fallback (TL;DR + bullets) without pipeline break.
+
+Optional lax parser toggle for environments with inconsistent providers.
+
+5) Verification & Fallback Policy
+
+EvidenceGate prevents generation on thin context; triggers single repair cycle.
+
+Claim/Entity checks maintain “supported or omitted” behavior; unknown entities downgrade to safe response.
+
+6) Observability & Privacy
+
+Prompt/response logging uses length or hash only; no secret values or raw text recorded.
+
+Per-stage timings and hit counts reported via diagnostics; PII-safe by default.
+
+Configuration & Toggles
+
+Version Purity: enforced at build; emits VERSION_PURITY: OK | CONFLICT.
+
+JSON Parse Lax Mode: abandonware.understanding.parser.lax = false (default), set true to enable tolerant parse path.
+
+Repair Pass: capped to 1; remains configurable where applicable.
+
+Diagnostics Dumps: enabled by default to local logs path; file format and retention policy configurable.
+
+Backward Compatibility
+
+Public APIs/DTOs preserved.
+
+All new behaviors are opt-out capable via config toggles.
+
+Domain-specific logic (e.g., game recommendations) remains isolated and only activates with explicit domain routing.
+
+Testing & Validation (Artifacts)
+
+Baseline capture: compile/test results, startup warnings, and smoke logs recorded pre-change.
+
+Regression set: verifies prompt routing, chain partial-result contract, entity/claim gating, and JSON parse edge cases (code-fence, control chars, wrapper objects).
+
+Before/After metrics gathered for build time, average latency, error rate, and Top-K hit rate.
+
+Reporting Keys (Console/Report Format)
+VERSION_PURITY: OK | CONFLICT
+CONFLICTS: [group:artifact:version, ...]     # present only on conflict
+
+BASELINE:
+  compileErrors: <int>
+  testFailures:  <int>
+  startupWarnings: [ ... ]
+
+ACTIONS:
+  fixes:    [ "<summary>", ... ]
+  refactors:[ "<summary>", ... ]
+  guards:   [ "<rule summary>", ... ]
+
+RESULTS_BEFORE_AFTER:
+  buildTimeMs:   <A> -> <B>
+  avgLatencyMs:  <A> -> <B>
+  errorRate%:    <A> -> <B>
+  topKHitRate%:  <A> -> <B>
+
+RISKS / ROLLBACK:
+  [ "<id> -> rollback instruction" ]
+
+NEXT_STEPS:
+  - "<item 1>"
+  - "<item 2>"
+  - "<item 3>"
+
+Risks & Rollback
+
+Risk: Over-strict version purity may block builds with legacy modules.
+Rollback: Disable purity gate temporarily or align dependencies to a single line.
+
+Risk: Lax JSON parser can mask provider issues.
+Rollback: Keep parser.lax=false (default) in production; enable only for triage.
+
+Success Criteria
+
+Build clean: 0 compile/test failures.
+
+Contract adherence: Prompt centralized; chain returns partial results under failure; session isolation intact.
+
+No regressions: Public API compatibility maintained.
+
+User-visible win: At least one of latency↓, failure-rate↓, or Top-K hit-rate↑ shows a measurable improvement.
+
+Deliverables (Repo Artifacts)
+
+VERSION_PURITY.txt — version check outcome and (if any) conflicting coordinates.
+
+CHANGELOG.md — summary of features/stability/performance changes.
+
+DIFF_SUMMARY.md — rationale-level change notes without file paths or code snippets.
+
+TEST_REPORT.md — before/after metrics (build/test/smoke/latency/errors/Top-K).
+
+Notes
+
+No new external providers introduced; uses only existing dependencies.
+
+All additions default to safe/off when unsure (toggled features documented above).
