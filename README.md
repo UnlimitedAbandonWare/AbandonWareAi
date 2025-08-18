@@ -2180,3 +2180,52 @@ Known Risks
 If downstream log processors depend on unmasked prompt text, they must be updated to operate on masked fields.
 
 AOP timing adds small overhead; verified negligible under normal load.
+Search Quality Stabilization via Gemini-Assisted Query Hygiene
+Summary
+
+Turning Gemini ON immediately improves search because LLM-based Query Hygiene/Rewrite kicks in, producing cleaner queries for the web retriever. With Gemini OFF, only rule/regex preprocessing runs, so ambiguous or mixed-language queries degrade retrieval quality.
+
+What Works When Gemini Is ON
+
+LLM Query Hygiene/Rewrite enabled:
+The Understanding/Analyze stage summarizes & normalizes the user question (entity extraction, tail/polite noise removal, format unification) and hands a cleaner query to WebHandler. Evidence observed: successful Gemini calls with 200 OK, returning JSON summaries (often wrapped in code fences).
+
+Web search harvests better results immediately:
+With the cleaned query, Naver Web API returns consecutive 200 OK responses and decodes normally. The prior “dumb search” symptom was query-quality, not the engine.
+
+Post-pipeline attempts run (memory/verification):
+Responses are forwarded to Understanding → MemoryReinforcement, but JSON parsing can fail when code fences/newlines aren’t stripped (code-fence/newline escaping issue). The pipeline itself is intact.
+
+Why It Felt “Dumb” With Gemini OFF
+
+Without LLM-based hygiene, only rule/regex preprocessing executes. Ambiguity (synonyms/aliases, Korean↔English mixing) passes through to the web search and yields weaker results. With Gemini ON, query quality jumps—hence the perceived “auto-correction” effect.
+
+Minimal, Immediate Hardening (effective even with Gemini OFF)
+
+Strip code fences/newlines before JSON parse
+Parse path: text = stripCodeFence(raw).trim() → ObjectMapper.readTree(text) to eliminate current parse failures.
+
+Non-LLM hygiene upgrades in AnalyzeHandler
+Add synonym/alias lexicon (e.g., 자바↔JVM/스프링, KR/EN variants), lowercase/whitespace normalization, stopword cleanup.
+
+Multi-query + RRF in WebHandler
+Generate 3–5 augmented queries via augment(original), query Naver in parallel, fuse with Reciprocal Rank Fusion, pass top-N only.
+
+Fail-open on Understanding parse errors
+If JSON parse fails, forward raw text to EvidenceGate and continue (prevents “dumb mode” regressions when hygiene is unavailable).
+
+Risk & Compatibility
+
+Toggle-safe: No behavior change when features are OFF; Gemini ON path simply activates the hygiene/repair steps.
+
+Backward-compatible: Doesn’t break existing RAG/verify/reinforcement flows.
+
+Perf: Slightly higher web calls with multi-query; bounded by configurable N.
+
+Verification Checklist
+
+Unit: stripCodeFence() and newline-sanitization tests (code-fence, ```json, mixed newlines).
+
+Integration: Gemini ON/OFF runs produce identical answers on simple queries; complex queries improve recall with ON and remain stable with OFF.
+
+Observability: log Gemini toggle state, augmented-query count, RRF winners; alert on JSON parse fallbacks.
