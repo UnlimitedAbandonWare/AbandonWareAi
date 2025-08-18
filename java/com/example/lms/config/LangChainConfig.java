@@ -132,6 +132,7 @@ public class LangChainConfig {
     }
 
     @Bean
+    @SuppressWarnings({"removal"})
     @ConditionalOnProperty(name = "vector.store", havingValue = "pinecone", matchIfMissing = true) // 기본 pinecone
     @Lazy  // 초기 연결을 최대한 늦춤
     public EmbeddingStore<TextSegment> pineconeEmbeddingStore(PineconeProps p) {

@@ -113,7 +113,19 @@ public class CognitiveStateExtractor {
             persona = null;
         }
 
-        return new CognitiveState(abs, tmp, evid, cb, voice, persona);
+        // Determine execution mode: switch to vector search when education keywords are present
+        CognitiveState.ExecutionMode execMode = CognitiveState.ExecutionMode.KEYWORD_SEARCH;
+        try {
+            String lower = query == null ? "" : query.toLowerCase(java.util.Locale.ROOT);
+            // 교육/학원 관련 키워드 감지: '학원' (academy) 또는 '국비' (government subsidy)
+            if (lower.contains("학원") || lower.contains("국비")) {
+                execMode = CognitiveState.ExecutionMode.VECTOR_SEARCH;
+            }
+        } catch (Exception ignore) {
+            execMode = CognitiveState.ExecutionMode.KEYWORD_SEARCH;
+        }
+
+        return new CognitiveState(abs, tmp, evid, cb, voice, persona, execMode);
     }
 
     private static boolean containsAny(String s, String needle) {

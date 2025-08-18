@@ -2,6 +2,7 @@
 package com.example.lms.service.rag.pre;
 
 import com.example.lms.service.rag.detector.GameDomainDetector;
+import com.example.lms.service.rag.pre.CognitiveState;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.service.subject.SubjectResolver;
 import org.springframework.context.annotation.Primary;
@@ -50,6 +51,20 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
     public String enrich(String original) {
         if (!StringUtils.hasText(original)) return "";
         String s = original.trim();
+
+        // 🔁 조건부 파이프라인: 교육 키워드 감지 시 벡터 검색 모드로 전환
+        // CognitiveStateExtractor를 통해 ExecutionMode를 조회한다.  벡터 검색 모드에서는
+        // 추가적인 전처리를 수행하지 않고 원문을 그대로 반환하여 쿼리 임베딩을 위한
+        // 텍스트가 손상되지 않도록 한다.
+        try {
+            var cs = cognitiveStateExtractor.extract(original);
+            if (cs != null && cs.executionMode() == CognitiveState.ExecutionMode.VECTOR_SEARCH) {
+                // 원문에서 제어문자 제거 및 앞뒤 공백만 정리한다.
+                return original.replaceAll("\\p{Cntrl}+", " ").trim();
+            }
+        } catch (Exception ignore) {
+            // 실패 시 기존 로직을 계속 진행
+        }
 
         s = s.replaceAll("^\\[(?:mode|debug)=[^\\]]+\\]\\s*", "")
                 .replaceAll("\\p{Cntrl}+", " ")

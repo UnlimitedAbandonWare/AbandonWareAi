@@ -223,6 +223,8 @@ public class ChatService {
     private final com.example.lms.service.rag.handler.MemoryWriteInterceptor memoryWriteInterceptor;
     // 신규: 학습 기록 인터셉터
     private final com.example.lms.learning.gemini.LearningWriteInterceptor learningWriteInterceptor;
+    // 신규: 이해 요약 및 기억 모듈 인터셉터
+    private final com.example.lms.service.chat.interceptor.UnderstandAndMemorizeInterceptor understandAndMemorizeInterceptor;
     /** In‑flight cancel flags per session (best‑effort) */
     private final ConcurrentHashMap<Long, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
 
@@ -534,14 +536,26 @@ public class ChatService {
         }
 
         // ── 7) 후처리/강화/리턴 ──────────────────────────────────────
-        // (항상 저장) – 인터셉터  +기존 강화 로직 병행 허용
+        // (항상 저장) – 인터셉터  + 기존 강화 로직 병행 허용
         try {
             // 먼저 학습용 인터셉터에 전달하여 구조화된 지식 학습을 수행합니다.
             learningWriteInterceptor.ingest(sessionKey, userQuery, out, /*score*/ 0.5);
         } catch (Throwable ignore) {
             // swallow errors to avoid breaking the chat flow
         }
-        try { memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5); } catch (Throwable ignore) {}
+        try {
+            memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5);
+        } catch (Throwable ignore) {}
+        // 이해 요약 및 기억 인터셉터: 검증/확장된 최종 답변을 구조화 요약하여 저장하고 SSE로 전송
+        try {
+            understandAndMemorizeInterceptor.afterVerified(
+                    sessionKey,
+                    userQuery,
+                    out,
+                    req.isUnderstandingEnabled());
+        } catch (Throwable ignore) {
+            // swallow errors to avoid breaking the chat flow
+        }
         reinforce(sessionKey, userQuery, out);
         // ✅ 실제 모델명으로 보고 (실패 시 안전 폴백)
         String modelUsed;
@@ -689,7 +703,19 @@ public class ChatService {
             String out = ruleEngine.apply(finalText, "ko", RulePhase.POST);
             //  폴백 여부에 따라 태깅하여 강화
             String srcTag = (fb != null && fb.isFallback()) ? "SMART_FALLBACK" : "ASSISTANT";
-            try { memorySvc.reinforceWithSnippet(sessionKey, correctedMsg, out, srcTag, /*score*/ 0.5); } catch (Throwable ignore) {}
+            // 이해 요약 및 기억 인터셉터를 먼저 실행하여 요약을 저장하고 SSE로 전송한다.
+            try {
+                understandAndMemorizeInterceptor.afterVerified(
+                        sessionKey,
+                        correctedMsg,
+                        out,
+                        req.isUnderstandingEnabled());
+            } catch (Throwable ignore) {
+                // swallow errors to avoid breaking the chat flow
+            }
+            try {
+                memorySvc.reinforceWithSnippet(sessionKey, correctedMsg, out, srcTag, /*score*/ 0.5);
+            } catch (Throwable ignore) {}
             return ChatResult.of(out, modelId, req.isUseRag());
 
         } catch (Exception ex) {

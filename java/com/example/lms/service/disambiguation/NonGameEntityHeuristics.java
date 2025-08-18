@@ -4,7 +4,10 @@ import java.util.Set;
 
 public final class NonGameEntityHeuristics {
     private static final Set<String> NON_GAME_PROPER_NOUNS = Set.of(
-            "에스코피에", "에스코피", "escoffier", "auguste escoffier"
+            "에스코피에", "에스코피", "escoffier", "auguste escoffier",
+            // 교육/일반 도메인 키워드: 학원/국비/국비지원을 포함하여, 게임 도메인과 함께 등장할 경우
+            // 비도메인 쿼리로 취급하게 한다.
+            "학원", "국비", "국비지원", "교육", "훈련"
     );
 
     private NonGameEntityHeuristics() {}

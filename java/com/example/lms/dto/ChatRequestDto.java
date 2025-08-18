@@ -44,6 +44,15 @@ public class ChatRequestDto {
         @Builder.Default private boolean autoTranslate = false;
         @Builder.Default private boolean polish        = false;
 
+        /**
+         * When true the chat pipeline will generate a structured summary of the
+         * assistant's final answer (TL;DR, key points and action items) using
+         * Gemini.  The summary will be saved to long‑term memory and emitted
+         * to the front‑end via SSE.  Defaults to false.
+         */
+        @Builder.Default
+        private boolean understandingEnabled = false;
+
         /*
          * Indicates the origin of the user's input.  When the
          * client submits a request generated via the Web Speech API,

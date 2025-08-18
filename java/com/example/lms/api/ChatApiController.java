@@ -4,6 +4,7 @@ import com.example.lms.domain.ChatSession;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.dto.ChatResponseDto;
 import com.example.lms.dto.ChatStreamEvent;
+import com.example.lms.service.chat.ChatStreamEmitter;
 import com.example.lms.service.AdaptiveTranslationService;
 import com.example.lms.service.ChatHistoryService;
 import com.example.lms.service.ChatService;
@@ -61,6 +62,15 @@ public class ChatApiController {
     private final SettingsService settingsService;
     private final TranslationService translationService;
     private final NaverSearchService searchService;
+
+    /**
+     * Emitter used to push additional events such as understanding summaries
+     * to the client over SSE.  The controller registers and unregisters a
+     * sink per session to receive asynchronous events from downstream
+     * services.  This bean is optional so that the application can run
+     * without the understanding feature enabled.
+     */
+    private final ChatStreamEmitter chatStreamEmitter;
 
     /**
      * Cancel the currently running chat streaming for the given session.  This endpoint can be
@@ -126,6 +136,8 @@ public class ChatApiController {
         String username = (principal != null) ? principal.getUsername() : "anonymousUser";
         Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink = Sinks.many().unicast().onBackpressureBuffer();
 
+        // Holder for the computed session key so that it can be referenced in finally
+        final String[] currentSessionKeyHolder = new String[1];
         Mono.fromRunnable(() -> {
             try {
                 // 1) 설정 병합
@@ -136,6 +148,23 @@ public class ChatApiController {
                         ? historyService.startNewSession(dto.getMessage(), username)
                         .orElseThrow(() -> new IllegalStateException("세션 생성 실패"))
                         : historyService.getSessionWithMessages(req.getSessionId());
+
+                // 2-a) 세션 키 계산 및 SSE sink 등록
+                String sessionKey;
+                if (session != null && session.getId() != null) {
+                    String s = String.valueOf(session.getId());
+                    sessionKey = s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-" + s : s);
+                } else {
+                    sessionKey = java.util.UUID.randomUUID().toString();
+                }
+                // store for later cleanup
+                currentSessionKeyHolder[0] = sessionKey;
+                try {
+                    chatStreamEmitter.registerSink(sessionKey, sink);
+                } catch (Throwable t) {
+                    // registration is best-effort; proceed even if it fails
+                    log.debug("Failed to register SSE sink: {}", t.toString());
+                }
 
                 if (req.getSessionId() != null) {
                     historyService.appendMessage(session.getId(), "user", dto.getMessage());
@@ -180,6 +209,7 @@ public class ChatApiController {
                         .presencePenalty(dto.getPresencePenalty())
                         .useRag(dto.isUseRag())
                         .useWebSearch(dto.isUseWebSearch())
+                        .understandingEnabled(dto.isUnderstandingEnabled())
                         .build();
 
                 sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
@@ -209,6 +239,15 @@ public class ChatApiController {
                 log.error("chatStream() 처리 오류", ex);
                 sink.tryEmitNext(sse(ChatStreamEvent.error("오류: " + ex.getMessage())));
             } finally {
+                // 완료시 SSE sink 등록 해제 및 스트림 완료
+                try {
+                    String sKey = currentSessionKeyHolder[0];
+                    if (sKey != null) {
+                        chatStreamEmitter.unregisterSink(sKey);
+                    }
+                } catch (Throwable t) {
+                    log.debug("Failed to unregister SSE sink: {}", t.toString());
+                }
                 sink.tryEmitComplete();
             }
                 })
@@ -267,6 +306,7 @@ public class ChatApiController {
                 .presencePenalty(dto.getPresencePenalty())
                 .useRag(dto.isUseRag())
                 .useWebSearch(dto.isUseWebSearch())
+                .understandingEnabled(dto.isUnderstandingEnabled())
                 .build();
 
         ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
@@ -329,6 +369,7 @@ public class ChatApiController {
                 .presencePenalty(presencePenalty)
                 .useRag(ui.isUseRag())
                 .useWebSearch(ui.isUseWebSearch())
+                .understandingEnabled(ui.isUnderstandingEnabled())
                 .build();
     }
 

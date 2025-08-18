@@ -32,7 +32,7 @@ public class ModelRouter {
     @Nullable private final DynamicChatModelFactory factory;
 
     /** 선택적으로 주입될 수 있는 사전 구성 모델(있으면 최우선 사용) */
-    @Nullable private final ChatModel utility; // 기본
+    @Nullable private final ChatModel utility; // 기본 (@Primary 여도 Qualifier로 명시 주입)
     @Nullable private final ChatModel moe;     // 상위
 
     /** 동적 생성 시 사용할 모델명(프로퍼티로 설정, 기본값 포함) */
@@ -43,6 +43,10 @@ public class ModelRouter {
     private final AtomicReference<ChatModel> cachedMoe  = new AtomicReference<>();
     private final AtomicReference<ChatModel> cachedBase = new AtomicReference<>();
 
+    /**
+     * NOTE: @Qualifier로 명시 주입하여 @Primary utilityChatModel이
+     * 암묵적으로 꽂히는 문제를 차단합니다.
+     */
     public ModelRouter(
             @Nullable DynamicChatModelFactory factory,
             @Nullable @Qualifier("utilityChatModel") ChatModel utility,
@@ -104,7 +108,7 @@ public class ModelRouter {
 
     /** 상위(MOE) 모델 해석 */
     private ChatModel resolveMoe() {
-        if (moe != null) return moe;                       // 주입 우선
+        if (moe != null) return moe;                       // 명시 주입 우선
         ChatModel cached = cachedMoe.get();
         if (cached != null) return cached;                 // 캐시 사용
         ensureFactory();                                   // 없으면 동적 생성
@@ -117,7 +121,7 @@ public class ModelRouter {
 
     /** 기본(utility) 모델 해석 */
     private ChatModel resolveBase() {
-        if (utility != null) return utility;               // 주입 우선
+        if (utility != null) return utility;               // 명시 주입 우선
         ChatModel cached = cachedBase.get();
         if (cached != null) return cached;                 // 캐시 사용
         ensureFactory();                                   // 없으면 동적 생성
@@ -134,7 +138,6 @@ public class ModelRouter {
                             "Provide @Bean utilityChatModel/moeChatModel or enable DynamicChatModelFactory."
             );
         }
-
     }
 
     /** ✅ 실제 SDK에 내려간 모델명 해석(가능한 한 정확히) */
