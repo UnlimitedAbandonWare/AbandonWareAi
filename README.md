@@ -468,5 +468,87 @@ Resolves Compilation Errors: The addition of the Role enum resolves all cannot f
 No Unnecessary Stubs Created: Analysis confirmed that other classes referenced in the error log (e.g., GeminiClient, NamedEntityValidator, KgHandler) were already present in the codebase. The root cause of the build failure was isolated to the missing Role enum, which this patch specifically corrects.
 
 With this change, the project now compiles successfully, allowing for further development and deployment.
+Patch Notes: RAG Pipeline Hardening & Amplification
+This major update implements a comprehensive, three-phase amplification strategy to significantly enhance the precision, robustness, and cost-efficiency of the RAG pipeline. The core of this patch is the introduction of an advanced Entity Disambiguation pre-handler and the deep integration of its output throughout the retrieval, reranking, and generation stages.
+
+Hard Gates (Non-Negotiable Constraints)
+LangChain4j Version Purity: The build will fail if any dev.langchain4j:* dependency other than version 1.0.1 is detected.
+
+Centralized Prompt Management: All LLM prompts must be generated exclusively via PromptBuilder.build(PromptContext). Direct string concatenation within services like ChatService is strictly prohibited.
+
+Fault-Tolerant Chain: Individual handler failures within the retrieval chain must not propagate exceptions. Instead, they will be merged as partial results, ensuring the chain always completes.
+
+Phase 1: Query Understanding Amplification 🧠
+This phase focuses on robustly resolving ambiguity at the very beginning of the pipeline.
+
+A1: Hybrid Candidate Generation & Context-Aware Fusion
+
+New Components: CandidateGenerator (for lexical, fuzzy, and semantic matches), RankFusionService (using RRF), and ContextBooster.
+
+Integration: A new EntityDisambiguationHandler is inserted as the first step after the MemoryHandler. It follows an internal pipeline: generate candidates → fuse with RRF (k≈60) → apply contextual boosts/penalties → pass to a DisambiguationDecisionPolicy.
+
+Uncertainty Handling: If the confidence margin between the top two candidates is below a configurable threshold (τ), a one-time "Self-Ask Clarify" action is triggered via SSE to ask the user for input.
+
+A2: Dense-to-Cross-Encoder Reranking
+
+New Component: A DisambiguationReranker utilizing a cross-encoder model.
+
+Integration: The final score for a disambiguation candidate is a normalized blend of the RRF score and the cross-encoder's semantic similarity score (final = α·RRF + (1−α)·s_ce).
+
+Fallback: If the cross-encoder fails or times out, the system gracefully falls back to using the RRF score alone.
+
+A3: Uncertainty Gate (Ask/Abstain Policy)
+
+Logic: The system calculates an uncertainty score based on the entropy of candidate probabilities and the confidence margin. If this score exceeds a threshold (θ), it first attempts to clarify with the user once. If uncertainty remains high, it will abstain from answering and return a "Could not resolve" message.
+
+Observability: The DecisionGate exposes the reasoning and metrics (scores, margin) via SSE trace events.
+
+Phase 2: Intelligent Retrieval & Reranking Amplification 📈
+This phase leverages the resolved entities and intents from Phase 1 to dramatically improve search precision.
+
+B1: CognitiveState-Aware SmartQueryPlanner
+
+Enhancement: The SmartQueryPlanner is now driven by the CognitiveState produced in Phase 1. It uses templated strategies based on user intent.
+
+Example: For a COMPARATIVE_ANALYSIS intent, it will automatically generate distinct queries for each entity (Query for A, Query for B) and a comparative query (Query for A vs. B synergy), which are then processed by the HybridRetriever.
+
+B2: Multi-Channel Fusion & Final Rerank
+
+Integration: Before the final reranking step, the RankFusionService now uses RRF to merge the ranked lists from all retrieval channels (Web, Vector, Memory).
+
+Final Pass: Only the top-K candidates from this fused list are sent to the CrossEncoderReranker for the final, computationally expensive scoring.
+
+B3: Authority & Freshness Weighting
+
+Heuristics: The fused score is now modulated by a weighted combination of source authority and content freshness: score' = score_fused × (a·w_authority + (1−a)·w_fresh).
+
+Configuration: Authority tiers and decay rates are fully configurable per domain.
+
+Phase 3: Dynamic Generation & Autonomous Learning Amplification 🤖
+This phase optimizes model selection and enables the system to learn from its failures.
+
+C1: Cost-Aware Mixture of Experts (MoE) Routing
+
+Logic: The ModelRouter now implements a cost-aware escalation policy. The high-tier model is selected only if query complexity, uncertainty, or business impact exceeds configured thresholds. Otherwise, the base model is used.
+
+Implementation: High-tier and base-tier models are explicitly injected using Spring's @Qualifier to avoid ambiguity with @Primary.
+
+C2: Instantaneous Learning Trigger on Failure
+
+Event-Driven Learning: When the SmartFallbackService determines an answer cannot be provided (NO_ANSWER or LOW_EVIDENCE), it now fires an asynchronous event to the AutonomousExplorationService.
+
+Throttling: This immediate learning trigger is rate-limited by the FreeTierApiThrottleService to manage costs, with the actual knowledge ingestion handled by the existing curation scheduler.
+
+C3: Evidence-Weighted Decoding
+
+Enhancement: The generation process now maintains a mapping between generated sentences and the evidence snippets that support them. Sentences without strong evidence are flagged as "speculative" or suppressed, ensuring answers are grounded in retrieved facts.
+
+Observability & Diagnostics
+New SSE Events: Added DISAMBIGUATION, RRF, RERANK, and MOE_ROUTE events, each including a reason field and relevant metrics.
+
+New Metrics: Tracking disambiguation outcomes (auto/user/abort) and key scores (top1, top2, margin, confidence).
+
+Configuration
+New configuration keys have been added under abandonware.disambiguation.*, abandonware.vector.entity.*, and router.moe.* with sane defaults to control all new features. All features are toggleable via *.enabled flags for safe rollback.
 
 BUILD | VersionPurityGate (CI) | Hard-fail on mixed dev.langchain4j lines; report only conflicting coordinates | Deterministic builds | BOM remains pinned to 1.0.1
