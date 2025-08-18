@@ -552,3 +552,249 @@ Configuration
 New configuration keys have been added under abandonware.disambiguation.*, abandonware.vector.entity.*, and router.moe.* with sane defaults to control all new features. All features are toggleable via *.enabled flags for safe rollback.
 이 패치에는 엔티티 식별 모듈(CandidateSetBuilder, DisambiguationScorer, DisambiguationDecisionPolicy, EntityDisambiguationHandler)이 새로 추가되었고, 검색 체인을 수정해 엔티티 식별을 선행하도록 구성했습니다. 또한 application.yml에 관련 설정을 추가하고 변경사항을 정리한 CHANGELOG, DIFF_SUMMARY, TEST_REPORT 문서를 작성했습니다.
 BUILD | VersionPurityGate (CI) | Hard-fail on mixed dev.langchain4j lines; report only conflicting coordinates | Deterministic builds | BOM remains pinned to 1.0.1
+Changelog — src53 → src53core Upgrade
+
+Date: 2025-08-19 (KST)
+Scope: GPT-based Web Search plugin (Light/Deep/Auto), adaptive retrieval chain, UI controls, CI version-purity gate, docs/tests
+
+TL;DR
+
+Introduces GPT Web Search with three modes: LIGHT, DEEP, AUTO (hybrid gating).
+
+Adds AdaptiveWebSearchHandler before legacy Web/Vector stages + WEB_ADAPTIVE RRF channel.
+
+Enforces LangChain4j=1.0.1 purity (CI fails on mixed 0.2.x).
+
+Centralizes prompts via PromptBuilder.build(PromptContext) (string concat in ChatService is forbidden).
+
+Extends DTO/Controller/UI to expose search controls (mode, providers, official-only).
+
+Ships tests, CI scripts, sample configs, and docs.
+
+Packaging target for external delivery: src53core.zip.
+
+Highlights
+New
+
+GPT Web Search plugin (module: gptsearch/*)
+
+Providers: BING, TAVILY, GOOGLECSE, SERPAPI, MOCK (fallback if keys absent).
+
+SearchMode: AUTO, OFF, FORCE_LIGHT, FORCE_DEEP.
+
+Decision gate: SearchDecisionService combines rules + LLM tool-signal to decide shouldSearch, depth (LIGHT/DEEP), providers, topK, reason.
+
+Evidence injection: PromptBuilder adds ### WEB EVIDENCE with {title|host|snippet|source}, authority & freshness-weighted; token-pressure reduces to one snippet/doc.
+
+Caching & resilience: Caffeine session cache; HTTP client with timeout, 429/5xx exponential backoff (≤3), per-minute/daily quotas.
+
+AdaptiveWebSearchHandler (precedes legacy Web/Vector)
+
+Runs providers in parallel → RRF (pre) → lightweight ranker → optional Cross-Encoder rerank.
+
+Writes results to SearchContext as channel=WEB_ADAPTIVE.
+
+Fail-soft: exceptions are converted to partial warnings; chain continues.
+
+RRF fusion update
+
+Adds WEB_ADAPTIVE channel into existing fusion with authority × freshness multipliers (coeffs in yml).
+
+Prompting policy
+
+All prompts must be built via PromptBuilder.build(PromptContext); no string concatenation in ChatService.
+
+Model routing (MoE)
+
+Use @Qualifier("high") / @Qualifier("mini"); disallow @Primary.
+
+One-shot escalation rule: if complexity=HIGH OR uncertainty≥0.70 OR intent ∈ {FACT_CHECK, HIGH_RISK, COMPARATIVE}, escalate once to high.
+
+DTO / Controller / SSE
+
+ChatRequestDto adds:
+
+SearchMode searchMode (default AUTO)
+
+boolean officialSourcesOnly
+
+List<String> webProviders
+
+Integer webTopK
+
+ChatApiController interprets searchMode independently of retrieval on/off.
+
+SSE events extended:
+SEARCH_DECISION(reason, mode, providers),
+SEARCH_PROGRESS(stage),
+SEARCH_RESULT(count, fusedTopK),
+MOE_ROUTE(reason).
+
+UI (HTML/JS)
+
+Adds controls: Search Mode (AUTO/OFF/LIGHT/DEEP), Official sources only, Provider multiselect.
+
+Renders search decision/results in a neutral card (separate from answer bubbles) to prevent badge/button duplication.
+
+Persists user choices in localStorage; fixes initial session duplicate controls.
+
+Security & policy
+
+Optional server proxy for external URLs; blocked domains/keywords configurable.
+
+Logs: PII stored as length/hash only; URLs log host only; queries hashed.
+
+CI: LangChain4j version purity
+
+Enforces dev.langchain4j:* == 1.0.1 across build (including gradle.lockfile and version catalog).
+
+If any 0.2.x artifact is detected, CI fails and prints conflict coordinates only.
+
+Docs & tests
+
+docs/CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptsearch-ops.md
+
+tests/unit, it, smoke including decision/cache/escalation checks.
+
+ci/VersionPurityCheck scripts + logs.
+
+Chain & Behavior Changes
+
+Chain order (backwards-compatible):
+
+memory → self-ask (gated) → analyse (gated) → adaptive-web (NEW) → web → vector → repair
+
+
+If adaptive-web succeeds, the legacy web stage may be skipped; reason logged to diagnostics.
+
+RRF formula
+
+score' = RRF × authority × freshness (coefficients configurable).
+
+Configuration (samples)
+# GPT Search
+abandonware.gptsearch.enabled: true
+abandonware.gptsearch.mode.default: AUTO        # AUTO|OFF|FORCE_LIGHT|FORCE_DEEP
+abandonware.gptsearch.topK: 6
+abandonware.gptsearch.providers: [BING, TAVILY]
+abandonware.gptsearch.rrf.k: 60
+abandonware.gptsearch.authority-weights:
+  OFFICIAL: 1.0
+  TRUSTED: 0.85
+  COMMUNITY: 0.5
+  UNVERIFIED: 0.2
+abandonware.gptsearch.freshness.halfLifeDays: 14
+abandonware.gptsearch.official-only: false
+
+# Provider keys (via env/secret)
+provider.bing.apiKey: ${BING_API_KEY:}
+provider.tavily.apiKey: ${TAVILY_API_KEY:}
+provider.googlecse.cx: ${GOOGLE_CSE_CX:}
+provider.googlecse.apiKey: ${GOOGLE_CSE_KEY:}
+
+# MoE routing
+router.moe.high: <high-model-name>
+router.moe.mini: <mini-model-name>
+router.allow-header-override: false
+
+# Build guard
+build.guard.langchain4j.strictVersion: "1.0.1"
+
+Packaging Layout (deliverable: src53core.zip)
+core/
+  query/, prompt/, router/, verify/, diagnostics/
+  retrieval/chain/, retrieval/handler/, rerank/
+gptsearch/
+  web/          # adapters/services/handler/cache
+  client/       # shared HTTP client, keys/quotas/retries
+  decision/     # SearchDecision gate (rules+LLM)
+  dto/          # request/response, provider/mode/filters
+integration/
+  handlers/     # AdaptiveWebSearchHandler, RankFusion wiring
+  controller/   # ChatApiController + SSE events
+  web/          # chat-ui.html, chat.js
+config/
+  application.yml.sample
+  application-ultra.properties
+tests/
+  unit/, it/, smoke/
+docs/
+  CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptsearch-ops.md
+ci/
+  VersionPurityCheck/
+
+Acceptance Criteria
+
+Version Purity: any 0.2.x LangChain4j detection → CI fails with conflict coordinates.
+
+AUTO (lightweight): simple queries trigger SEARCH_DECISION mode=LIGHT, ≤1 web call, quality parity.
+
+DEEP (reinforced): comparative/fact-check queries show Self-Ask decomposition, pass Claim/FactVerifier, one MoE escalation.
+
+Hybrid switching: within one session, simple→hard queries log LIGHT→DEEP switch.
+
+RRF: WEB_ADAPTIVE contributes to fused Top-K.
+
+UI: toggles & provider pickers populate DTO; SSE cards render without duplicate badges/buttons.
+
+Fail-soft: provider failures logged as partial warnings; chain continues; diagnostics aggregates.
+
+Breaking/Strict Policies
+
+Prompt centralization: any prompt built outside PromptBuilder.build(PromptContext) is non-compliant.
+
+Qualifier-only MoE injection: @Primary is prohibited for model beans.
+
+Exception handling: retrieval handlers must not propagate; return partials + warnings.
+
+Migration Checklist (minimal changes)
+
+Register AdaptiveWebSearchHandler and insert before legacy Web handler.
+
+Add WEB_ADAPTIVE to ReciprocalRankFuser.
+
+Extend PromptBuilder with ### WEB EVIDENCE.
+
+Implement SearchDecisionService (rules + LLM tool signal).
+
+Wire WebSearchProvider implementations & priorities.
+
+Extend ChatRequestDto & controller mapping.
+
+Update chat-ui.html / chat.js (toggles, SSE cards, no bubble-class for traces).
+
+Centralize authority/freshness weights in yml.
+
+Enable CI VersionPurityCheck.
+
+Notes & Guardrails
+
+When quotas hit ≥80%, force LIGHT and disable Cross-Encoder rerank.
+
+officialSourcesOnly=true lifts authority floor to ≥0.8.
+
+Reuse SearchContext across immediate follow-ups to avoid duplicate calls.
+
+Korean morphology normalization in AnalyzeHandler is reused for search query hygiene.
+
+Known Limitations
+
+MOCK provider is for tests only (no crawling).
+
+Cross-Encoder rerank is disabled under heavy token pressure or quota throttling.
+
+How to Verify Locally
+
+Set provider keys (or rely on MOCK).
+
+Start app, toggle AUTO/LIGHT/DEEP in UI; watch SSE: SEARCH_DECISION/RESULT/MOE_ROUTE.
+
+Run tests/smoke to validate decision gating, caching, escalation.
+
+Trigger CI to confirm LangChain4j=1.0.1 purity.
+
+Deliverable
+
+src53core.zip — full code, tests, docs, sample configs, and CI logs as described above.
+
+This upgrade keeps the legacy HybridRetriever order intact, while adding an adaptive web layer, strict prompt/model policies, and observable, fail-soft behavior suitable for production.
