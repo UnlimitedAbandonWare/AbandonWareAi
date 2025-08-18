@@ -296,3 +296,56 @@ Change Log & Enhancements — add
 
 CHANGE | Generalized Entity Disambiguation (pre-chain) | Adds pre-handler, scorer, prompt section, SSE clarify, and diagnostics; supports ambiguous unknowns like “DW Akademie”, “Hanwha Veda/Beda”, etc. | Safer routing and fewer false resolutions | Config-gated, backwards compatible
 BUILD | LangChain4j version purity | Hard gate in CI; report only conflicting coordinates on failure | Deterministic builds | Blocks startup on conflict
+Core Pipeline — ADD
+
+QUERY | TranslitNormalizer | Cross-lingual normalization of ambiguous names (ko↔en romanization, spacing/hyphen/diacritic variants, typo tolerance via Levenshtein/token overlap) | Boosts recall for mixed-language & noisy inputs | Emits normalized variants for candidate generation
+QUERY | DisambiguationDecisionPolicy | Auto-resolve if Top-1 ≥ threshold and (Top-1 − Top-2) ≥ margin; otherwise trigger a single clarify step | Prevents premature guesses; formalizes “ask once” rule | Defaults: threshold=0.62, margin=0.08 (configurable)
+QUERY | DisambiguationResult | Container for {resolvedEntity?, candidates[], scores, decidedBy, confidence} | Standardizes outputs for downstream handlers | Logged to diagnostics when enabled
+
+Retrieval — ADD
+
+RETRIEVAL | EntityDisambiguationHandler | Pre-handler before SelfAsk/Analyze; builds candidates (lexical + vector + optional web-seed) and returns DisambiguationResult | Decouples ambiguity resolution; keeps chain fault-tolerant | Chain: Memory → Disambiguation → SelfAsk → Analyze → Web → Vector → Repair
+RETRIEVAL | CandidateSetBuilder | Sources candidates from aliases/regex/TranslitNormalizer, vector top-K (namespace="entity"), and OFFICIAL/TRUSTED web-seed | Balances precision/recall while capping cost | Web-seed optional; failures ignored (chain continues)
+RETRIEVAL | RetrievalHandlerPostProcessor | Wraps all RetrievalHandler beans so EntityDisambiguationHandler always runs first | No edits to existing chain; pass-through on errors | Spring BeanPostProcessor
+
+Reranking — ADD
+
+RERANK | DisambiguationScorer | Final score = α·cosine + β·authority + γ·locale + δ·domain + ε·tokenOverlap + ζ·priorSynergy | Combines semantic fit with meta priors | Defaults: α=0.55, β=0.20, γ=0.10, δ=0.10, ε=0.05, ζ=0–0.05
+
+Context & Prompt — ADD
+
+PROMPT | Entity Disambiguation section | Inject “### ENTITY DISAMBIGUATION” via PromptBuilder only; no ad-hoc string concat | Keeps templates testable and safe | Limit top-3 candidates; ≤240 chars per blurb; trim on token pressure
+
+Generation — ADD
+
+GENERATION | Low-confidence MOE escalation | Escalate once to high-tier model when confidence < 0.70 or intent ∈ {FACT_CHECK, HIGH_RISK} | Stabilizes high-stakes answers | Logged with reason; single-turn escalation only
+
+Verification & Sanitization — ADD
+
+VERIFY | Gate on resolution | If resolvedEntity missing or contradicts context, block generation via EvidenceGate and return safe fallback with SmartFallback suggestions | Avoids hallucinated entities | NamedEntityValidator passes only after resolution
+
+Session & Diagnostics — ADD
+
+SESSION | Disambiguation metrics | Counters: disambig.auto, disambig.user, disambig.abort, alias.upsert.count | Operability & QA | Exported via diagnostics endpoint
+SESSION | Retrieval span tags | Record {top1, top2, margin, decidedBy, candidateCount, confidence} in disambiguation span | Observability for tuning | Add namespace, embedding_model_id, dim, topK as tags
+
+Configuration & Environment — ADD
+
+CONFIG | Disambiguation keys | abandonware.disambiguation.enabled, threshold, margin, topK, authority-weight, locale-weight, domain-weight, prior-synergy-weight, web-seed-enabled | Runtime tuning without redeploy | Defaults match CHANGELOG 1.3.0
+CONFIG | Entity vector namespace | abandonware.vector.entity.embedding-model-id, dim, create-if-missing=true, strict-dimension=true | Prevents embedding shape drift | Keep entity vectors separate from document vectors
+
+Knowledge Base — ADD
+
+KB | DomainEntity / EntityAlias / EntityFeature | Canonical entities, aliases and features stored as JPA entities | Decouples domain knowledge from code | Repositories: DomainEntityRepository, EntityAliasRepository, EntityFeatureRepository
+
+User Interface & Frontend — ADD
+
+UI | SSE: DISAMBIGUATION | One modal per turn {query, candidates[{id,name,kind,blurb,country,snippets[]}], timeoutSec}; POST selection to resolver | Human-in-the-loop on low margins | Default timeout 12s; on timeout abort and propose SmartFallback
+
+Change Log & Enhancements — ADD
+
+CHANGE | Generalized Entity Disambiguation (pre-chain) | Adds pre-handler, scorer, prompt section, SSE clarify, and diagnostics; supports ambiguous unknowns (e.g., “DW Akademie”, “Hanwha Veda/Beda”) | Safer routing and fewer false resolutions | Config-gated; backward compatible
+
+Build — ADD
+
+BUILD | VersionPurityGate (CI) | Hard-fail on mixed dev.langchain4j lines; report only conflicting coordinates | Deterministic builds | BOM remains pinned to 1.0.1
