@@ -2229,3 +2229,161 @@ Unit: stripCodeFence() and newline-sanitization tests (code-fence, ```json, mixe
 Integration: Gemini ON/OFF runs produce identical answers on simple queries; complex queries improve recall with ON and remain stable with OFF.
 
 Observability: log Gemini toggle state, augmented-query count, RRF winners; alert on JSON parse fallbacks.
+Patch Notes — GPT Pro Agent w/ Gemini Free-Tier MOE Routing (src24 → src24-fixed)
+TL;DR
+
+GPT Pro remains the primary generator; Gemini sub-models are routed only within free-tier limits for hygiene, retrieval, light analysis, and verification.
+
+Added global quota counters + automatic degrade/escalate rules, evidence gate, and strict PII-safe logging.
+
+Retrieval hardened (self-ask, analyze, repair), rerankers upgraded (local ONNX first), and verification now enforces claim/entity checks.
+
+New distillation gate, UNDERSTANDING (TL;DR & key points), personas & RAG controls, multimodal image path, and comparative analysis.
+
+Security: header-override block; version-purity guard.
+
+Added
+
+Model routing (MOE)
+
+Heuristics: escalate once to Gemini 2.5 Pro when (risk=high ∨ verbosity ∈ {deep, ultra} ∨ tokenOut ≥ 1,536 ∨ entity validator warns); otherwise keep GPT Pro as generator.
+
+Global quota counters (model×{RPM,RPD,TPM}, provider-summed) with softLimit=80% → staged degrade.
+
+EvidenceGate
+
+Blocks generation when context is insufficient; triggers EvidenceRepairHandler (one pass); final hard fallback RAG_ONLY + “정보 없음”.
+
+Verification stack
+
+FactVerifierService / ClaimVerifierService (JSON, per-claim limits), NamedEntityValidator (entity must exist in context/memory), AnswerSanitizers.
+
+Retrieval chain hardening
+
+Ordered handlers: Memory → SelfAsk (gated) → Analyze (gated) → Web → Vector → Repair; partial-failure tolerant; RRF fusion.
+
+Rerank
+
+AuthorityScorer (OFFICIAL/TRUSTED/COMMUNITY/UNVERIFIED tiers with exponential decay).
+
+EmbeddingModelCrossEncoderReranker with dynamic synergy weight (from HyperparameterService) and authority decay multiplier.
+
+ONNX Cross-Encoder Reranker (local, config-switchable) + runtime service (CPU/CUDA/TensorRT) with safe Jaccard fallback.
+
+InputDistillationService (large-input summarization gate; 2.5 Flash-Lite).
+
+AnswerUnderstandingService (+ SSE UNDERSTANDING event): TL;DR, key points, action items; memory indexing optional.
+
+Personas & RAG controls (frontend toggles; official-sources-only; scopes).
+
+Multimodal path (imageBase64 → Gemini multimodal for analysis assist).
+
+Comparative analysis (intent detection; criteria-driven prompt/context).
+
+Diagnostics & safety
+
+PII-safe DEBUG logs: {sid, model, stage, estTokensIn/Out, RPM/RPD/TPM, degradeReason|escalateReason}.
+
+RequestHeaderModelOverrideFilter (blocks non-allowlisted overrides).
+
+VersionPurityCheck (fail-fast on mixed LangChain4j lines).
+
+Retrieval diagnostics spans (per-stage timing/hits/warnings) + masked prompt debug.
+
+Changed
+
+Model map (config-driven):
+
+2.5 Flash-Lite → ${GEMINI_FLASH_LITE_MODEL}
+
+2.5 Flash → ${GEMINI_FLASH_MODEL}
+
+2.5 Pro → ${GEMINI_PRO_MODEL}
+
+2.0 Flash (large-context) → ${GEMINI_LARGE_CONTEXT_MODEL}
+
+Embeddings → ${EMBEDDING_BACKEND}
+
+GPT Pro (primary) → ${GPT_PRO_MODEL}
+
+Service→Model routing (key examples):
+
+QueryCorrection/NER/Understanding/Distill → 2.5 Flash-Lite
+
+SelfAsk → 2.5 Flash; EvidenceRepair (1x) → 2.0 Flash
+
+Analyze (morph/LLM-assist) → 2.5 Flash-Lite
+
+Rerank (LLM only if needed, top 10) → 2.5 Flash-Lite
+
+Verify (base) → 2.5 Flash; re-verify (high-risk/discordant) → 2.5 Pro
+
+UI
+
+Advanced search panel, UNDERSTANDING cards (SSE), file/image upload support, voice input, help popover; message cancel.
+
+Fixed
+
+Header override misuse (blocked by default).
+
+Korean morphology/spacing variants in Analyze improve recall.
+
+Ranking bias via credibility normalization; duplicate UI buttons on first turn.
+
+JSON code-fence parsing in structured outputs (fail-open).
+
+Config & Env (high-level)
+
+Routing & safety: router.allow-header-override, allowlist; verbosity/tokenOut thresholds.
+
+Quota: global RPM/RPD/TPM counters; softLimit=80% → Pro→Flash→Flash-Lite degrade; 2.0 Flash for 200k+ context.
+
+Embedding backend: embedding.backend ∈ {openai, gemini}.
+
+Reranker: abandonware.reranker.backend ∈ {embedding-model, onnx-runtime}; onnx.model-path, onnx.execution-provider.
+
+Distillation/Understanding toggles and timeouts.
+
+KB/Authority weights, cache sizes/expiry, session settings.
+
+All secrets via env (e.g., GOOGLE_API_KEY, OPENAI_API_KEY).
+
+One-Line Routing Table
+
+[2.5 Flash-Lite → hygiene/NER/understanding/distill], [2.5 Flash → self-ask + verify(base)], [2.5 Pro → conditional verify/rewrite (1x)], [2.0 Flash → large-context repair/summarize], [Embeddings → query/doc vectors (batch=32, cache/dupe-aware)], [GPT Pro → final answer generator]
+
+Files (representative)
+
+Routing/Models: ModelRouter*, DynamicChatModelFactory*, RequestHeaderModelOverrideFilter
+
+Retrieval: DefaultRetrievalHandlerChain, SelfAskHandler, AnalyzeHandler, EvidenceRepairHandler, HybridRetriever
+
+Rerank: AuthorityScorer, EmbeddingModelCrossEncoderReranker, OnnxCrossEncoderReranker, OnnxRuntimeService, RerankSourceCredibility
+
+Verify/Sanitize: FactVerifierService, ClaimVerifierService, NamedEntityValidator, AnswerSanitizers*
+
+Gates/Distill/Understand: EvidenceGate, InputDistillationService, AnswerUnderstandingService
+
+UX/API: chat-ui.html, chat.js, ChatApiController, SSE event additions
+
+Diagnostics/Safety: RetrievalDiagnosticsCollector, RetrievalDiagAspect, PromptMasker, PromptDebugLogger, VersionPurityCheck
+
+Gemini assists: GeminiClient, GeminiAnalyzeDelegate, GeminiEmbeddingClient, GeminiFilesService
+
+Migration Notes
+
+Provide env model names (see Model map) and API keys.
+
+Pick reranker backend (embedding-model default; onnx-runtime optional).
+
+Review new toggles (distillation, understanding, personas, official-sources-only).
+
+Validate cache sizes and session expiry for your traffic profile.
+
+Known Limits
+
+MOE escalation is 1× per turn (700–900 tokens budget).
+
+EvidenceRepair capped at 1 pass; SelfAsk capped at 3 sub-questions.
+
+Verifier per-answer cap: ≤12 claims or ≤600 tokens.
