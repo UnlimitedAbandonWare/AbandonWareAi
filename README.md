@@ -250,3 +250,49 @@ TERM | Gemini | Google Gemini API providing LLM and embedding models; used for q
 TERM | MOE | Mixture of Experts; dynamic model routing scheme that selects among multiple models based on intent, risk, verbosity and token budget
 TERM | SSE | Server‑Sent Events; one‑way streaming protocol over HTTP used to deliver intermediate progress and structured data to clients
 TERM | Knowledge Delta | Structured set of extracted knowledge (triples, rules, aliases) produced by curation services and integrated into the knowledge base
+
+Core Pipeline — add
+
+QUERY | TranslitNormalizer | Cross-lingual normalization of ambiguous names (ko↔en romanization, spacing/hyphen/diacritic variants, typo tolerance via token overlap/Levenshtein) | Increases recall for mixed-language & noisy inputs | Produces normalized variants for downstream candidate generation
+QUERY | DisambiguationDecisionPolicy | Auto-resolve if Top-1 ≥ threshold and (Top-1 − Top-2) ≥ margin; otherwise trigger a single clarify step | Prevents premature guesses; formalizes “ask once” rule | Defaults: threshold=0.62, margin=0.08 (configurable)
+
+Retrieval — add
+
+RETRIEVAL | EntityDisambiguationHandler | Pre-handler before SelfAsk/Analyze; builds candidates (lexical + vector + optional web-seed) and returns DisambiguationResult {resolvedEntity?, candidates[], scores, decidedBy, confidence} | Decouples ambiguity resolution from retrieval; keeps chain fault-tolerant | Chain order: Memory → Disambiguation → SelfAsk → Analyze → Web → Vector → Repair
+RETRIEVAL | CandidateSetBuilder | Lexical from aliases/regex/TranslitNormalizer; Vector from namespace="entity" top-K; Web-seed from OFFICIAL/TRUSTED domains (rate-limited) | Balances precision/recall while capping cost | Web-seed is optional; failures are ignored (chain continues)
+
+Reranking — add
+
+RERANK | DisambiguationScorer | Final score = α·cosine + β·authority + γ·locale + δ·domain + ε·tokenOverlap + ζ·priorSynergy | Combines semantic fit with meta priors | Defaults: α=0.55, β=0.20, γ=0.10, δ=0.10, ε=0.05, ζ=0–0.05
+
+Context & Prompt — add
+
+PROMPT | Entity Disambiguation section | Inject ### ENTITY DISAMBIGUATION via PromptBuilder only; no ad-hoc string concat | Keeps templates testable and safe | Limit to top-3 candidates, ≤240 chars per blurb; trim on token pressure
+
+Generation — add
+
+GENERATION | Low-confidence MOE escalation | Escalate once to high-tier model when confidence < 0.7 or intent ∈ {FACT_CHECK, HIGH_RISK} | Stabilizes high-stakes answers | Logged with reason; single-turn escalation only
+
+Verification & Sanitization — add
+
+VERIFY | Gate on resolution | If resolvedEntity missing or contradicts context, block generation via EvidenceGate and return safe fallback with SmartFallback suggestions | Avoids hallucinated entities | NamedEntityValidator only passes once entity is resolved
+
+Session & Diagnostics — add
+
+SESSION | Disambiguation metrics | Counters: disambig.auto, disambig.user, disambig.abort, alias.upsert.count | Operability & QA | N/A
+SESSION | Retrieval span | Span disambiguation records {top1, top2, margin, decidedBy, candidateCount, confidence} | Observability for tuning | Add namespace, embedding_model_id, dim, topK as tags
+
+Configuration & Environment — add
+
+CONFIG | Disambiguation keys | abandonware.disambiguation.enabled=true; threshold; margin; top-k; authority-weight; locale-weight; domain-weight; prior-synergy-weight; web-seed-enabled | Runtime tuning without redeploy | Matches defaults in CHANGELOG 1.3.0
+CONFIG | Entity vector namespace | abandonware.vector.entity.embedding-model-id; dim; create-if-missing=true; strict-dimension=true | Prevents embedding shape drift | Keep entity vectors separate from document vectors
+CONFIG | Version purity gate | Enforce a single dev.langchain4j major/minor line (e.g., 1.0.1) across build files; STOP on mixed 0.2.x vs 1.0.x | Avoids runtime conflicts | Scan build.gradle* / settings.gradle / gradle.lockfile / versions.toml
+
+User Interface & Frontend — add
+
+UI | SSE: DISAMBIGUATION | One modal per turn with {query, candidates[{id,name,kind,blurb,country,snippets[]}], timeoutSec}; POST selection to resolver | Human-in-the-loop on low margins | Default timeout 12s; on timeout, safely abort and propose SmartFallback
+
+Change Log & Enhancements — add
+
+CHANGE | Generalized Entity Disambiguation (pre-chain) | Adds pre-handler, scorer, prompt section, SSE clarify, and diagnostics; supports ambiguous unknowns like “DW Akademie”, “Hanwha Veda/Beda”, etc. | Safer routing and fewer false resolutions | Config-gated, backwards compatible
+BUILD | LangChain4j version purity | Hard gate in CI; report only conflicting coordinates on failure | Deterministic builds | Blocks startup on conflict
