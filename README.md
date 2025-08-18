@@ -450,6 +450,23 @@ Created stub implementations for missing classes, including GeminiClient, NamedE
 
 Relocated GenshinElementLexicon to its correct package and replaced other misplaced classes with wrappers where appropriate.
 
-Corrected invalid comments and removed a duplicate package declaration in the AdminInitializer file.
+Corrected invalid comments and removed a duplicate package declaration in the AdminInitializer file.네, 알겠습니다. Git 레포지토리 패치 노트에 바로 사용할 수 있도록, 제공해주신 내용을 명확하고 전문적인 영문으로 작성해 드리겠습니다.
+
+Fix: Resolve Compilation Failures by Adding Missing Role Enum
+This patch addresses a critical build failure (cannot find symbol, package does not exist) caused by a missing Role definition.
+
+Changes
+Added com.example.lms.domain.Role Enum:
+
+A new enum, Role, has been introduced in the com.example.lms.domain package.
+
+It defines four essential user roles required by the application: ADMIN, USER, PROFESSOR, and STUDENT.
+
+Impact
+Resolves Compilation Errors: The addition of the Role enum resolves all cannot find symbol errors that were occurring in files referencing user roles, most notably within AdminInitializer and Spring Security configurations.
+
+No Unnecessary Stubs Created: Analysis confirmed that other classes referenced in the error log (e.g., GeminiClient, NamedEntityValidator, KgHandler) were already present in the codebase. The root cause of the build failure was isolated to the missing Role enum, which this patch specifically corrects.
+
+With this change, the project now compiles successfully, allowing for further development and deployment.
 
 BUILD | VersionPurityGate (CI) | Hard-fail on mixed dev.langchain4j lines; report only conflicting coordinates | Deterministic builds | BOM remains pinned to 1.0.1
