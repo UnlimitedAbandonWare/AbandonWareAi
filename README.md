@@ -2053,3 +2053,130 @@ Behavioral: More consistent topK fulfillment with fewer unnecessary LLM hops.
 Operational: Clear bean graph; easier unit/integration testing of each stage.
 
 Risk: Low—changes are additive and guarded; all stages degrade gracefully on exceptions.
+Added
+
+VersionPurityCheck.java
+
+Verifies at runtime that only a single dev.langchain4j major/minor line is present.
+
+Detects 0.2.x vs 1.0.x mixes; logs conflicting artifacts and prevents startup.
+
+StageSpan.java
+
+Lightweight span model for timing and hit-count metrics per retrieval stage.
+
+RetrievalDiagnosticsCollector.java
+
+Aggregates stage spans, warning notes, and hit statistics.
+
+RetrievalDiagAspect.java
+
+AOP wrapper that measures handler execution (start/stop, duration, hits) and forwards to the collector.
+
+TraceFilter.java / ReactorMdcLifter.java
+
+Writes sid and traceId to MDC.
+
+Bridges Reactor Context ↔ MDC to preserve correlation IDs across async boundaries.
+
+PromptMasker.java / PromptDebugLogger.java
+
+Masks secrets and PII in prompts/completions.
+
+Centralized, opt-in debug logging for prompt I/O.
+
+Changed
+
+PartialFailure.java / SearchContext.java
+
+Support accumulating partial errors as warnings (non-fatal).
+
+Exposes getWarnings() for downstream reporting/telemetry.
+
+DefaultRetrievalHandlerChain.java
+
+Emits stage spans via RetrievalDiagnosticsCollector.
+
+Records per-handler timings and hit counts; non-fatal exceptions converted to warnings.
+
+RetrieverChainConfig.java
+
+Wires RetrievalDiagnosticsCollector as a Bean and injects into the handler chain.
+
+PromptBuilder.java
+
+Forwards the final built prompt to PromptDebugLogger (after masking).
+
+Observability & Diagnostics
+
+Per-stage metrics: duration (ms), hitCount, warnings.
+
+Correlated logs via sid/traceId across servlet → Reactor pipelines.
+
+Safe prompt logging (masked) to aid reproduction without leaking sensitive data.
+
+Behavior & Reliability
+
+Mixed LangChain4j classpaths fail fast with explicit conflict listings.
+
+Retrieval chain is resilient to handler failures; processing continues with accumulated warnings.
+
+No change to business logic when diagnostics are disabled; overhead kept minimal.
+
+Migration / Config Notes
+
+Ensure only one LangChain4j line on the classpath (prefer 1.0.1 BOM/core/starter/OpenAI).
+
+If you rely on prompt logs, enable the debug logger for the prompt package; sensitive fields are automatically masked.
+
+No schema or API changes required for callers.
+
+Verification Checklist
+
+Start the app with a pure LangChain4j dependency set → startup succeeds.
+
+Start the app with an injected 0.2.x artifact → startup aborts with conflict list.
+
+Issue a query that triggers the retrieval chain → logs show per-stage timings & hit counts.
+
+Induce a handler error → request succeeds; warning recorded in diagnostics; no crash.
+
+Enable prompt debug → logs show masked prompts/responses (no secrets in output).
+
+Trace a reactive call path → sid/traceId remain consistent across async boundaries.
+
+Files Touched
+
+VersionPurityCheck.java
+
+PartialFailure.java
+
+SearchContext.java
+
+StageSpan.java
+
+RetrievalDiagnosticsCollector.java
+
+RetrievalDiagAspect.java
+
+DefaultRetrievalHandlerChain.java
+
+RetrieverChainConfig.java
+
+TraceFilter.java
+
+ReactorMdcLifter.java
+
+PromptMasker.java
+
+PromptDebugLogger.java
+
+PromptBuilder.java
+
+plus necessary imports and DI wiring in related configuration classes
+
+Known Risks
+
+If downstream log processors depend on unmasked prompt text, they must be updated to operate on masked fields.
+
+AOP timing adds small overhead; verified negligible under normal load.
