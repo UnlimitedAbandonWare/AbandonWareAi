@@ -866,7 +866,19 @@ Image gallery: #imagePane (thumbnails → original).
 Accessibility: all buttons type="button", labels for, aria-live="polite".
 
 chat.js:
+0.1 단일 버전으로 고정하고 실행 시 버전 순도를 검사합니다.
 
+RetrieverChainConfig의 @Primary 어노테이션을 제거하여 명시적 주입을 강제했습니다.
+
+VectorDbHandler는 실패 시 체인을 중단하지 않고 경고를 기록한 뒤 항상 다음 핸들러로 진행하도록 변경했습니다.
+
+EvidenceGate에 coverageScore 메서드를 추가하고, 기존 hasSufficientCoverage 메서드들이 이를 활용하도록 리팩터링했습니다.
+
+EntityDisambiguationHandler는 confidence threshold를 설정 값에 따라 판단하여 충분히 높은 확신이 있을 때만 질의를 재작성합니다.
+
+OpenAiChatModel을 사용하는 mini/high 모델 빈을 제공하는 ModelConfig를 추가하고, ModelRouter에 복합 RouteSignal을 도입해 복잡도, 불확실성, 토큰 수 등을 기반으로 모델을 선택하도록 확장했습니다.
+
+테스트와 문서 파일을 추가하여 설정 키 유지 및 향후 LLM 호출 예산 테스트를 위한 기반을 마련했습니다.
 Request serialization: fileSearch, imageTask{mode,prompt,size,maskBase64?}; toBase64(file) util; chunk upload support.
 
 SSE routing: trace/filesearch.trace → #tracePane; image.* → #imagePane; MOE_ROUTE badge; verification icons.
