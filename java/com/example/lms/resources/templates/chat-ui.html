@@ -223,6 +223,18 @@
         padding-left: 1.1rem;
     }
 
+    /* Trace pane and cards */
+    #tracePane {
+        overflow-y: auto;
+        max-height: 200px;
+    }
+    .trace-card {
+        border: 1px solid var(--border-color);
+        border-radius: .5rem;
+        background: #fff;
+        padding: .5rem 1rem;
+    }
+
     /* 사이드바 토글러 (모바일) */
     .sidebar-toggler {
         display: none;
@@ -367,6 +379,7 @@
     </div>
     <section id="chatWindow" aria-live="polite">
       <div id="chatMessages" class="d-flex flex-column h-100"></div>
+      <div id="tracePane" class="d-flex flex-column mt-3"></div>
     </section>
 
     <div class="mt-auto">

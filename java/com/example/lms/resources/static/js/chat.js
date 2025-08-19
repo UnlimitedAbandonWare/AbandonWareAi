@@ -35,6 +35,7 @@ import { apiCall } from "./fetch-wrapper.js";
     // 채팅 관련
     chatWindow: $("chatWindow"),
     chatMessages: $("chatMessages"),
+    tracePane: $("tracePane"),
     messageInput: $("messageInput"),
     sendBtn: $("sendBtn"),
      // ✨ DOM 객체에 새 버튼 추가 (관리 용이)
@@ -84,6 +85,7 @@ import { apiCall } from "./fetch-wrapper.js";
 
   // 원본 버튼 HTML 저장
   let sendBtnHtml, saveModelBtnHtml, saveSettingsBtnHtml, adminStatusInitialHtml;
+  let disambiguationShown = false; // gate disambiguation modal per turn
 
   /* --------------------------------------------------
    * Speech Recognition (Voice Input)
@@ -164,30 +166,21 @@ import { apiCall } from "./fetch-wrapper.js";
 function renderMessage({ role, content, model }) {
     if (!dom.chatMessages) return;
 
+    const hasTrace = typeof content === "string" && content.includes('class="search-trace"');
+    if (role.toUpperCase() === "SYSTEM" && hasTrace) {
+      renderTrace(content);
+      dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+      return;
+    }
+
     const wrap = document.createElement("div");
     wrap.className = `msg-container msg-${role.toLowerCase()}-container`;
 
     if (role.toUpperCase() === "SYSTEM") {
-      const hasTrace = typeof content === "string" && content.includes('class="search-trace"');
-      if (hasTrace) {
-        // 검색과정 패널은 assistant 버블처럼 렌더
-        const label = document.createElement("small");
-        label.className = "text-muted d-block mb-1 ms-3";
-        label.innerHTML = `<i class="bi bi-search-heart me-1"></i>검색 과정`;
-        wrap.appendChild(label);
-
-        const bubble = document.createElement("div");
-        bubble.className = "msg msg-assistant";
-        const raw = String(content ?? "");
-        bubble.innerHTML = raw; // HTML 그대로
-        wrap.appendChild(bubble);
-        dom.chatMessages.appendChild(wrap);
-      } else {
-        const systemMsg = document.createElement("div");
-        systemMsg.className = "text-center text-muted small my-2";
-        systemMsg.innerHTML = content;
-        dom.chatMessages.appendChild(systemMsg);
-      }
+      const systemMsg = document.createElement("div");
+      systemMsg.className = "text-center text-muted small my-2";
+      systemMsg.innerHTML = content;
+      dom.chatMessages.appendChild(systemMsg);
     } else {
       if (role.toUpperCase() === "ASSISTANT" && model) {
         const label = document.createElement("small");
@@ -202,6 +195,76 @@ function renderMessage({ role, content, model }) {
       bubble.innerHTML = isHtml ? raw : raw.replace(/\n/g, "<br>");
       wrap.appendChild(bubble);
       dom.chatMessages.appendChild(wrap);
+    }
+    dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+  }
+
+  function renderTrace(html) {
+    if (!dom.tracePane) return;
+    const card = document.createElement("div");
+    card.className = "trace-card mb-2";
+    card.innerHTML = html;
+    dom.tracePane.appendChild(card);
+  }
+
+  function parseSse(chunk) {
+    const lines = chunk.split("\n");
+    let event = null;
+    let data = "";
+    for (const line of lines) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data += line.slice(5).trim();
+    }
+    if (!event) return null;
+    let payload = {};
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      payload = { data };
+    }
+    payload.event = event;
+    return payload;
+  }
+
+  function showDisambiguationModal(data) {
+    // Placeholder for actual modal rendering
+    console.log("[DISAMBIGUATION]", data);
+  }
+
+  function handleStreamEvent(evt, ctx) {
+    switch (evt.event) {
+      case "token":
+        ctx.text += evt.data || "";
+        ctx.bubble.innerHTML += evt.data || "";
+        break;
+      case "final":
+        if (evt.modelUsed && ctx.bubble) {
+          const label = document.createElement("small");
+          label.className = "text-muted d-block mb-1 ms-3";
+          label.innerHTML = `<i class=\"bi bi-robot me-1\"></i>model: <strong>${evt.modelUsed}</strong>`;
+          ctx.bubble.parentElement.prepend(label);
+        }
+        if (dom.useHistory?.checked) {
+          state.chatHistory.push({ role: "ASSISTANT", content: ctx.text });
+        }
+        state.currentSessionId = evt.sessionId;
+        fetchSessions();
+        break;
+      case "trace":
+      case "filesearch.trace":
+        if (evt.html) renderTrace(evt.html);
+        break;
+      case "DISAMBIGUATION":
+        if (!disambiguationShown) {
+          disambiguationShown = true;
+          showDisambiguationModal(evt.data);
+        }
+        break;
+      case "error":
+        renderMessage({ role: "SYSTEM", content: evt.data });
+        break;
+      default:
+        break;
     }
     dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
   }
@@ -452,86 +515,53 @@ function collectSettings() {
     setLoading(dom.sendBtn, true, sendBtnHtml);
     dom.messageInput.disabled = true;
 
-    // ▼▼▼ [수정] 이 부분을 수정하세요 ▼▼▼
-    let loaderId = null; // loaderId를 if문 밖에서 선언
-if (dom.useRag?.checked) { // 웹 검색이 켜져 있을 때만 실행
-        loaderId = `loader-${Date.now()}`;
-        renderMessage({
-            role: "ASSISTANT",
-            content: `<div id="${loaderId}">
-                        <div class="spinner-border spinner-border-sm me-2" role="status">
-                          <span class="visually-hidden">Loading...</span>
-                        </div>
-                        검색중입니다…
-                      </div>`
-        });
-    }
-    // ▲▲▲ [수정 끝] ▲▲▲
-
-    // ▲▲▲ [1. 로딩 메시지 추가 끝] ▲▲▲
-
-
     try {
-// chat.js  (sendMessage 안)
 const payload = {
   message: text,
   sessionId: state.currentSessionId,
   useRag: dom.useRag?.checked,
   useAdaptive: dom.useAdaptiveTranslator?.checked,
   autoTranslate: dom.autoTranslate?.checked,
- model: window.initialData.currentModel,   // ★ 추가
- polish: dom.usePolish?.checked,     // ← 추가
+  model: window.initialData.currentModel,
+  polish: dom.usePolish?.checked,
   history: dom.useHistory?.checked ? state.chatHistory.slice(0, -1) : [],
   ...collectSettings(),
-    maxMemoryTokens: dom.sliders.maxMemoryTokens.el.value, // 💡 추가
-    maxRagTokens:    dom.sliders.maxRagTokens.el.value,    // 💡 추가
-        /* (NEW) 웹 검색 개수 */
-        webTopK:         dom.sliders.searchTopK.el.value,
-        // Include the origin of the input ('voice' or 'text') so the backend
-        // can distinguish voice queries from typed ones.
-        inputType: currentInputType,
+  maxMemoryTokens: dom.sliders.maxMemoryTokens.el.value,
+  maxRagTokens: dom.sliders.maxRagTokens.el.value,
+  webTopK: dom.sliders.searchTopK.el.value,
+  inputType: currentInputType,
 };
 
-      const res = await apiCall("/api/chat", {
+      // Prepare assistant bubble for streaming tokens
+      const wrap = document.createElement("div");
+      wrap.className = "msg-container msg-assistant-container";
+      const bubble = document.createElement("div");
+      bubble.className = "msg msg-assistant";
+      wrap.appendChild(bubble);
+      dom.chatMessages.appendChild(wrap);
+      dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+
+      disambiguationShown = false; // reset gate per turn
+
+      const ctx = { bubble, text: "" };
+      const res = await fetch("/api/chat/stream", {
         method: "POST",
-        body: payload,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
-
-    const loader = document.getElementById(loaderId);
- const answer = res.content;
-        const model = res.modelUsed;
-
-        if (loader) {
-          // 로더가 있다면, 로더가 포함된 채팅 버블(.msg)을 찾아 내용을 교체합니다.
-          const messageBubble = loader.closest('.msg');
-          if (messageBubble) {
-                    const raw = String(answer ?? "");
-                    const isHtml = /<[^+>]>/.test(raw);
-                    messageBubble.innerHTML = isHtml ? raw : raw.replace(/\n/g, "<br>");
-
-              // 모델 정보가 있다면 버블 위에 추가합니다.
-              if(model) {
-                  const modelLabel = document.createElement("small");
-                  modelLabel.className = "text-muted d-block mb-1 ms-3";
-                  modelLabel.innerHTML = `<i class="bi bi-robot me-1"></i>model: <strong>${model}</strong>`;
-                  messageBubble.parentElement.prepend(modelLabel);
-              }
-          }
-        } else {
-          // 만약 로더를 찾지 못하는 예외 상황에는 그냥 새 메시지를 추가합니다. (Fallback)
-          renderMessage({ role: "ASSISTANT", content: answer, model: model });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop();
+        for (const part of parts) {
+          const evt = parseSse(part);
+          if (evt) handleStreamEvent(evt, ctx);
         }
-
-        // 채팅 히스토리에 실제 답변을 저장합니다.
-        if (dom.useHistory?.checked) {
-          state.chatHistory.push({ role: "ASSISTANT", content: answer });
-        }
-        // ▲▲▲ [2. 로딩 메시지 교체 끝] ▲▲▲
-
-      // 세션 ID 최초 생성·체크
-      if (!state.currentSessionId && res.sessionId) {
-        state.currentSessionId = res.sessionId;
-        await fetchSessions();
       }
     } catch (e) {
       renderMessage({ role: "SYSTEM", content: `[오류] ${e.message}` });
@@ -540,7 +570,6 @@ const payload = {
       setLoading(dom.sendBtn, false, sendBtnHtml);
       dom.messageInput.disabled = false;
       dom.messageInput.focus();
-      // Reset input type to text for the next message
       currentInputType = 'text';
     }
   }
