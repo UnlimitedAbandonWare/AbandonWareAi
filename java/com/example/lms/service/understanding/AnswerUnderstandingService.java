@@ -3,6 +3,9 @@ package com.example.lms.service.understanding;
 import com.example.lms.client.GeminiClient;
 import com.example.lms.dto.answer.AnswerUnderstanding;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,6 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Service that transforms an assistant's final answer into a structured
@@ -30,7 +35,11 @@ public class AnswerUnderstandingService {
 
     private final GeminiClient geminiClient;
     private final AnswerUnderstandingPromptBuilder promptBuilder;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 관용 파서: LLM 산출물의 제어문자(개행 등) 허용 */
+    private final ObjectMapper objectMapper = JsonMapper.builder()
+            .enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS)
+            .build();
+
 
     @Value("${abandonware.understanding.enabled:true}")
     private boolean understandingEnabled;
@@ -72,25 +81,25 @@ public class AnswerUnderstandingService {
             String json;
             String trimmed = response.trim();
             if (trimmed.startsWith("{") && trimmed.contains("\"data\"")) {
-                // parse wrapper
+                // parse wrapper (data는 JSON 문자열로 들어옴)
                 var node = objectMapper.readTree(trimmed);
-                if (node.has("data")) {
-                    json = node.get("data").asText();
-                } else {
-                    json = trimmed;
-                }
+                json = node.has("data") ? node.get("data").asText() : trimmed;
             } else {
                 json = trimmed;
             }
-            // Remove markdown fences if present
-            json = json.strip();
-            if (json.startsWith("```")) {
-                json = json.substring(3);
+
+            // 1차: JSON 후보 문자열 정규화(코드펜스/잡음/제로폭/선후행 텍스트 제거)
+            json = sanitizeForJsonParsing(json);
+
+            AnswerUnderstanding u;
+            try {
+                // 2차: 관용 파서로 바로 시도
+                u = objectMapper.readValue(json, AnswerUnderstanding.class);
+            } catch (JsonProcessingException pe) {
+                // 3차: 문자열 내부의 생개행을 \n으로 치환 후 재시도
+                String repaired = escapeBareNewlinesInsideStrings(json);
+                u = objectMapper.readValue(repaired, AnswerUnderstanding.class);
             }
-            if (json.endsWith("```")) {
-                json = json.substring(0, json.length() - 3);
-            }
-            AnswerUnderstanding u = objectMapper.readValue(json, AnswerUnderstanding.class);
             // Guard confidence to [0,1]
             double conf = u.confidence();
             if (Double.isNaN(conf) || conf < 0 || conf > 1) {
@@ -144,7 +153,8 @@ public class AnswerUnderstandingService {
         for (String line : lines) {
             String lt = line.strip();
             if (lt.startsWith("-") || lt.startsWith("*") || lt.startsWith("•")) {
-                keyPoints.add(lt.replaceFirst("^[-*•]\s*", "").strip());
+                // Java 문자열에서는 공백 클래스는 \\s 로 이스케이프해야 함
+                keyPoints.add(lt.replaceFirst("^[-*•]\\s*", "").strip());
             }
         }
         if (keyPoints.isEmpty()) {
@@ -182,5 +192,80 @@ public class AnswerUnderstandingService {
         if (idx < 0 || (text.indexOf('?') >= 0 && text.indexOf('?') < idx)) idx = text.indexOf('?');
         // Korean full stop '다.' could be used but we treat generic punctuation
         return idx;
+    }
+
+
+    /*───────────────────────── Sanitize helpers ─────────────────────────*/
+    private static final Pattern FENCED_BLOCK =
+            Pattern.compile("(?s)\\s*```\\s*(?:jsonc?|json5)?\\s*\\n?(.*?)\\s*```\\s*");
+
+    /** 마크다운 펜스/잡음 제거, 첫 JSON 덩어리만 남김 */
+    private static String sanitizeForJsonParsing(String s) {
+        if (s == null) return "";
+        String v = s.strip();
+        // BOM/제로폭/불가시 문자 제거
+        v = v.replace("\uFEFF", "")
+                .replace("\u200B", "")
+                .replace("\u200C", "")
+                .replace("\u200D", "")
+                .replace("\u00A0", " ");
+        v = v.replace("\r\n", "\n");
+
+        Matcher m = FENCED_BLOCK.matcher(v);
+        if (m.find()) {
+            v = m.group(1);
+        } else {
+            // 남아있을 수 있는 역백틱 라인 제거
+            v = v.replaceAll("(?s)^```\\s*(?:jsonc?|json5|json)?\\s*\\n?", "")
+                    .replaceAll("(?s)\\n?```\\s*$", "");
+        }
+
+        // 선행/후행의 비JSON 텍스트 제거: 첫 { 또는 [ 부터 마지막 } 또는 ] 까지만 보존
+        int startObj = v.indexOf('{');
+        int startArr = v.indexOf('[');
+        int start = (startObj >= 0 && startArr >= 0) ? Math.min(startObj, startArr)
+                : Math.max(startObj, startArr);
+        int endObj = v.lastIndexOf('}');
+        int endArr = v.lastIndexOf(']');
+        int end = Math.max(endObj, endArr);
+        if (start >= 0 && end >= start) {
+            v = v.substring(start, end + 1);
+        }
+        return v.strip();
+    }
+
+    /** JSON 문자열 리터럴 내부의 생개행(\r, \n)을 \\n 으로 치환 */
+    private static String escapeBareNewlinesInsideStrings(String s) {
+        StringBuilder out = new StringBuilder(s.length() + 32);
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (escaped) {
+                out.append(c);
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                out.append(c);
+                escaped = true;
+                continue;
+            }
+            if (c == '\"') {
+                out.append(c);
+                inString = !inString;
+                continue;
+            }
+            if (inString && (c == '\n' || c == '\r')) {
+                out.append('\\').append('n');
+                // CRLF 처리: \r 다음 \n 하나 건너뛴다
+                if (c == '\r' && i + 1 < s.length() && s.charAt(i + 1) == '\n') {
+                    i++;
+                }
+                continue;
+            }
+            out.append(c);
+        }
+        return out.toString();
     }
 }

@@ -12,7 +12,8 @@ import org.springframework.stereotype.Component;
 public class AnswerUnderstandingPromptBuilder {
 
     private static final String HEADER =
-            "You are an assistant that converts final answers into structured summaries.";
+            "You are an assistant that converts final answers into structured summaries. "
+                    +  "Return a SINGLE JSON object only.";
 
     private static final String SCHEMA = """
         {
@@ -52,7 +53,11 @@ public class AnswerUnderstandingPromptBuilder {
 
                 You will receive a Question and an Answer.
                 Convert the Answer into a JSON object that follows the provided JSON Schema.
-                Strictly output JSON only - no comments or prose.
+                      Strictly output JSON only — no comments, no prose.
+                      Do NOT wrap the JSON in markdown code fences.
+                      Do NOT insert raw line breaks inside any string value; use \\\\n instead.
+                      Do NOT add trailing commas.
+                
 
                 ### JSON Schema
                 %s

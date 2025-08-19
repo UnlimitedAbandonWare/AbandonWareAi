@@ -16,8 +16,9 @@ import java.util.stream.Collectors;
 @Component
 public class PromptBuilder {
 
+    // Renamed per GPT Web Search plugin: gather snippets under 'WEB EVIDENCE'
     private static final String WEB_PREFIX = """
-            ### LIVE WEB RESULTS
+            ### WEB EVIDENCE
             %s
             """;
     private static final String RAG_PREFIX = """

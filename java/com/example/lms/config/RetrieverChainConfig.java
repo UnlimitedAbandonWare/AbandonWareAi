@@ -14,6 +14,7 @@ import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.service.rag.handler.EvidenceRepairHandler;
 import com.example.lms.service.rag.handler.MemoryHandler;
 import com.example.lms.service.rag.handler.DefaultRetrievalHandlerChain;
+import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
 import com.example.lms.service.rag.QueryComplexityGate;
 import com.example.lms.service.subject.SubjectResolver;
 @Configuration
@@ -25,6 +26,7 @@ public class RetrieverChainConfig {
             MemoryHandler memoryHandler,
             SelfAskWebSearchRetriever selfAsk,
             AnalyzeWebSearchRetriever analyze,
+            AdaptiveWebSearchHandler adaptiveWeb,
             WebSearchRetriever web,
             LangChainRAGService rag,
             EvidenceRepairHandler evidenceRepairHandler,
@@ -33,6 +35,7 @@ public class RetrieverChainConfig {
                 memoryHandler,
                 selfAsk,
                 analyze,
+                adaptiveWeb,
                 web,
                 rag,
                 evidenceRepairHandler,

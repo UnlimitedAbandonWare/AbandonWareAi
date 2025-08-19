@@ -68,6 +68,34 @@ public class ChatRequestDto {
         @Builder.Default private Integer maxMemoryTokens = 7_500;
         @Builder.Default private Integer maxRagTokens    = 5_000;
 
+        /*
+         * ────────── ⑤ 검색 모드 ──────────
+         *
+         * Controls how the backend performs web search.  When set to AUTO (default)
+         * the system will decide dynamically whether to execute a web query based on
+         * the question complexity and the assistant’s own analysis.  OFF disables
+         * live web search entirely.  FORCE_LIGHT performs a single lightweight
+         * search with a short snippet limit, while FORCE_DEEP runs a full multi‑step
+         * search with self‑ask decomposition and verification.  This field is
+         * independent of the existing retrieval.mode setting and gives the user
+         * explicit control over the search plugin.  See {@link
+         * com.example.lms.gptsearch.dto.SearchMode} for mode definitions.
+         */
+        @JsonProperty("searchMode")
+        @Builder.Default
+        private com.example.lms.gptsearch.dto.SearchMode searchMode = com.example.lms.gptsearch.dto.SearchMode.AUTO;
+
+        /**
+         * Optional list of preferred web search providers.  When null or empty the
+         * system will choose from its configured provider list (e.g. Bing,
+         * Tavily, GoogleCSE).  Clients can specify multiple provider IDs such as
+         * ["BING", "TAVILY"] to query multiple backends in parallel.  This
+         * attribute is ignored when searchMode is OFF.
+         */
+        @JsonProperty("webProviders")
+        @Builder.Default
+        private java.util.List<String> webProviders = null;
+
         /* ────────── ⑤ 검색 개수(top‑k) ────────── */
         /** 프런트 슬라이더로 넘어오는 웹 스니펫 개수(네이버 display와 동기) */
         @JsonProperty("webTopK")

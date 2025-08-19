@@ -5,6 +5,7 @@ import com.example.lms.service.rag.LangChainRAGService;
 import com.example.lms.service.rag.SelfAskWebSearchRetriever;
 import com.example.lms.service.rag.WebSearchRetriever;
 import com.example.lms.service.rag.QueryComplexityGate;
+import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
@@ -24,6 +25,8 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
     private final com.example.lms.service.rag.handler.MemoryHandler memoryHandler;
     private final SelfAskWebSearchRetriever selfAsk;
     private final AnalyzeWebSearchRetriever analyze;
+    // 新規: 어댑티브 웹 검색 핸들러 (웹 이전 단계에서 검색 필요 여부를 판단)
+    private final AdaptiveWebSearchHandler adaptiveWeb;
     private final WebSearchRetriever web;
     private final LangChainRAGService rag;
     private final com.example.lms.service.rag.handler.EvidenceRepairHandler repair;
@@ -83,14 +86,24 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
             add(accumulator, analyze.retrieve(query));
             if (accumulator.size() >= topK) return;
         }
-        // 4. Web
+        // 4. Adaptive Web Search (new stage before normal web)
+        try {
+            if (adaptiveWeb != null) {
+                adaptiveWeb.handle(query, accumulator);
+                // If adaptive search fills the required slots, skip normal web
+                if (accumulator.size() >= topK) return;
+            }
+        } catch (Exception ignore) {
+            // Swallow exceptions to maintain chain robustness
+        }
+        // 5. Fallback Web Search
         add(accumulator, web.retrieve(query));
         if (accumulator.size() >= topK) return;
-        // 5. Vector
+        // 6. Vector
         ContentRetriever vector = rag.asContentRetriever(pineconeIndexName);
         add(accumulator, vector.retrieve(query));
         if (accumulator.size() >= topK) return;
-        // 6. Repair
+        // 7. Repair
         try {
             if (repair != null) {
                 add(accumulator, repair.retrieve(query));
