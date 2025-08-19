@@ -4,7 +4,6 @@ import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.search.QueryHygieneFilter;
 import com.example.lms.util.SoftmaxUtil;
-import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -12,10 +11,10 @@ import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import lombok.RequiredArgsConstructor;
 // imports
 import com.example.lms.service.rag.rerank.LightWeightRanker;
 import com.example.lms.service.rag.rerank.ElementConstraintScorer;  //  신규 재랭커
@@ -33,6 +32,7 @@ import com.example.lms.service.config.HyperparameterService;   // ★ NEW
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.scoring.AdaptiveScoringService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
+import com.example.lms.learning.NeuralPathFormationService;
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -62,6 +62,8 @@ public class HybridRetriever implements ContentRetriever {
     private final QueryTransformer queryTransformer;               // ★ NEW: 상태 기반 질의 생성
     private final AdaptiveScoringService scoring;
     private final KnowledgeBaseService kb;
+    // Path formation service used to reinforce high-consistency entity pairs.
+    private final NeuralPathFormationService pathFormation;
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
     private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
@@ -269,6 +271,14 @@ public class HybridRetriever implements ContentRetriever {
         if (total <= 0) return;
         double consistency = hit / (double) total;
         scoring.applyImplicitPositive(domain, subject, partner, consistency);
+        // If the consistency score is high enough, attempt to persist the path for future alignment.
+        try {
+            if (pathFormation != null) {
+                pathFormation.maybeFormPath(subject + "->" + partner, consistency);
+            }
+        } catch (Throwable ignore) {
+            // path reinforcement failures should not break retrieval
+        }
     }
 
     /**

@@ -6,14 +6,15 @@ import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.lang.Nullable;
+import org.springframework.context.annotation.Profile;      // ⬅ 추가
 import org.springframework.stereotype.Component;
 
+import org.springframework.lang.Nullable;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
-@Component
+@Component("modelRouterLegacy") // 이름은 유지해도 되고, @Primary 없어도 타입 주입으로 해결됨
 public class ModelRouter {
 
     /** 상위 모델로 라우팅할 의도 집합(확장) */
@@ -49,8 +50,8 @@ public class ModelRouter {
      */
     public ModelRouter(
             @Nullable DynamicChatModelFactory factory,
-            @Nullable @Qualifier("utilityChatModel") ChatModel utility,
-            @Nullable @Qualifier("moeChatModel") ChatModel moe,
+            @Nullable @Qualifier("mini") ChatModel utility,   // ← ModelConfig와 매칭
+            @Nullable @Qualifier("high") ChatModel moe,       // ← ModelConfig와 매칭
             @Value("${openai.model.moe:gpt-4o}") String moeModelName,
             @Value("${langchain4j.openai.chat-model.model-name:gpt-4o-mini}") String baseModelName,
             @Value("${router.moe.learning-intents:}") String learningIntentsStr
