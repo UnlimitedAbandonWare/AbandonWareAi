@@ -14,9 +14,11 @@ import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.service.rag.handler.EvidenceRepairHandler;
 import com.example.lms.service.rag.handler.MemoryHandler;
 import com.example.lms.service.rag.handler.DefaultRetrievalHandlerChain;
-import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
 import com.example.lms.service.rag.QueryComplexityGate;
 import com.example.lms.service.subject.SubjectResolver;
+import com.example.lms.service.rag.handler.EntityDisambiguationHandler;
+import com.example.lms.service.rag.handler.KnowledgeGraphHandler;
+import com.example.lms.strategy.StrategySelectorService;
 @Configuration
 public class RetrieverChainConfig {
 
@@ -24,22 +26,26 @@ public class RetrieverChainConfig {
     @Primary
     public RetrievalHandler retrievalHandler(
             MemoryHandler memoryHandler,
+            EntityDisambiguationHandler disambiguationHandler,
             SelfAskWebSearchRetriever selfAsk,
             AnalyzeWebSearchRetriever analyze,
-            AdaptiveWebSearchHandler adaptiveWeb,
             WebSearchRetriever web,
             LangChainRAGService rag,
+            KnowledgeGraphHandler kgHandler,
             EvidenceRepairHandler evidenceRepairHandler,
-            QueryComplexityGate gate) {
+            QueryComplexityGate gate,
+            StrategySelectorService strategySelector) {
         return new DefaultRetrievalHandlerChain(
                 memoryHandler,
+                disambiguationHandler,
                 selfAsk,
                 analyze,
-                adaptiveWeb,
                 web,
                 rag,
+                kgHandler,
                 evidenceRepairHandler,
-                gate
+                gate,
+                strategySelector
         );
     }
 
