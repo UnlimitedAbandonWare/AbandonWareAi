@@ -69,6 +69,13 @@ RERANK | ReciprocalRankFuser | Assigns scores based on reciprocal of rank positi
 RERANK | Softmax fusion | Converts scores to probabilities using temperature; optional alternative to RRF | Sharpens focus on top documents
 RERANK | CrossScore formula | Final score = crossScore + ruleBoost + synergyBonus; may be normalized or clamped | Prevents domination by a single factor
 
+## Path‑Conformity Scoring
+
+PATH | PathAlignedScorer | Compares user traversal to canonical trajectories mined from historical logs | Aligned paths gain up to a ~9× probability boost
+PATH | NeuralPathFormationService | When conformity falls below threshold yet data coverage is sufficient, forms lightweight neural nets and persists new paths | Lightweight models refine canonical paths over time
+PATH | Configuration | Controlled via `scoring.path-alignment.enabled`, `path.formation.threshold` and other keys in `application.yml` | Tune the multiplier and reinforcement threshold
+PATH | Example workflow | A historic journey `A→B→C` is stored; a new session `A→B` matches the canonical path and receives a boost; divergence to `X` triggers neural‑net formation using accumulated `A→B→X` traces | Data collection refines path scores continuously
+
 ## Context & Prompt
 CONTEXT | ContextOrchestrator | Builds unified context from ranked documents, memory and history within token budgets | Removes duplicates and prioritizes authoritative sources
 CONTEXT | PromptBuilder | Constructs system, user and context prompts with standardized template | Injects dynamic rules, protected terms and instructions

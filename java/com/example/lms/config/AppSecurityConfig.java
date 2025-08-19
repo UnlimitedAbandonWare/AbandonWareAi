@@ -1,4 +1,4 @@
-package com.example.lms.config;
+    package com.example.lms.config;
 
 import com.example.lms.domain.Administrator;
 import com.example.lms.repository.AdministratorRepository;

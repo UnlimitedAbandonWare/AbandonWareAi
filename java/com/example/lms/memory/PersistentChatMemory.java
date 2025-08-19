@@ -14,6 +14,7 @@ import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.ChatSessionRepository;
 
 import java.util.List;
+import java.util.Arrays;
 
 @RequiredArgsConstructor
 public class PersistentChatMemory implements ChatMemory {
@@ -21,6 +22,13 @@ public class PersistentChatMemory implements ChatMemory {
     private final String sessionId;
     private final ChatMessageRepository msgRepo;
     private final ChatSessionRepository sesRepo;
+
+    /**
+     * Special role value used to persist user navigation paths separately from
+     * conversational messages. The stored content encodes a traversal path
+     * using the '>' character as a separator.
+     */
+    private static final String PATH_ROLE = "path";
 
     /* 현재까지의 메시지 가져오기 */
     @Override
@@ -63,6 +71,39 @@ public class PersistentChatMemory implements ChatMemory {
             text = m.toString();
         }
         msgRepo.save(new com.example.lms.domain.ChatMessage(session, role, text));
+    }
+
+    /**
+     * Persist a traversal path for later alignment scoring. The path segments
+     * will be joined using the '>' character and stored with a dedicated role.
+     *
+     * @param path the ordered list of nodes representing the navigation path
+     */
+    @Transactional
+    public void addPath(List<String> path) {
+        if (path == null || path.isEmpty()) {
+            return;
+        }
+        ChatSession session = sesRepo.getReferenceById(Long.valueOf(sessionId));
+        String content = String.join(">", path);
+        msgRepo.save(new com.example.lms.domain.ChatMessage(session, PATH_ROLE, content));
+    }
+
+    /**
+     * Retrieve a flattened list of all stored traversal steps for this session.
+     * The returned list concatenates all previously stored path segments in
+     * insertion order. If no paths have been recorded an empty list is
+     * returned.
+     *
+     * @return list of past path segments
+     */
+    @Transactional
+    public List<String> pathHistory() {
+        return msgRepo.findBySessionIdOrderByCreatedAtAsc(Long.valueOf(sessionId))
+                .stream()
+                .filter(m -> PATH_ROLE.equals(m.getRole()))
+                .flatMap(m -> Arrays.stream(m.getContent().split(">")))
+                .toList();
     }
     // unwrap() 삭제 – singleText()/text()로 충분
     /* 메모리 클리어 */

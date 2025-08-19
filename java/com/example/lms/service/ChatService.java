@@ -348,7 +348,8 @@ public class ChatService {
     // ① 1-인자 래퍼 ─ 컨트롤러가 호출
     @Cacheable(
             value = "chatResponses",
-            key = "#req.message + ':' + #req.useRag + ':' + #req.useWebSearch"
+            // 캐시 키는 세션과 모델별로 격리: 동일 메시지라도 세션·모델이 다르면 별도 저장
+            key = "#req.sessionId + ':' + #req.model + ':' + #req.message + ':' + #req.useRag + ':' + #req.useWebSearch"
     )
     public ChatResult continueChat(ChatRequestDto req) {
         Function<String, List<String>> defaultProvider =

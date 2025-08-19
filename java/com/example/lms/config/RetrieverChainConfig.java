@@ -13,9 +13,12 @@ import org.springframework.context.annotation.Primary; // ★ 추가
 import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.service.rag.handler.EvidenceRepairHandler;
 import com.example.lms.service.rag.handler.MemoryHandler;
-import com.example.lms.service.rag.handler.DefaultRetrievalHandlerChain;
+import com.example.lms.service.rag.handler.DynamicRetrievalHandlerChain;
 import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
 import com.example.lms.service.rag.QueryComplexityGate;
+import com.example.lms.service.rag.handler.KnowledgeGraphHandler;
+import com.example.lms.strategy.RetrievalOrderService;
+import com.example.lms.telemetry.SseEventPublisher;
 import com.example.lms.service.subject.SubjectResolver;
 @Configuration
 public class RetrieverChainConfig {
@@ -30,8 +33,12 @@ public class RetrieverChainConfig {
             WebSearchRetriever web,
             LangChainRAGService rag,
             EvidenceRepairHandler evidenceRepairHandler,
-            QueryComplexityGate gate) {
-        return new DefaultRetrievalHandlerChain(
+            QueryComplexityGate gate,
+            KnowledgeGraphHandler kg,
+            RetrievalOrderService orderService,
+            SseEventPublisher sse) {
+        // Build a dynamic retrieval chain that decides the order of Web, Vector and KG sources
+        return new DynamicRetrievalHandlerChain(
                 memoryHandler,
                 selfAsk,
                 analyze,
@@ -39,7 +46,10 @@ public class RetrieverChainConfig {
                 web,
                 rag,
                 evidenceRepairHandler,
-                gate
+                gate,
+                kg,
+                orderService,
+                sse
         );
     }
 

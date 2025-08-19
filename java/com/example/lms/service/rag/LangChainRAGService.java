@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 @RequiredArgsConstructor
 public class LangChainRAGService {
+
     /** Unified metadata key – 모든 서비스가 동일 키 사용 */
     public static final String META_SID = "sid";   // ← ChatService & NaverSearchService 와 통일
     /** sid 필터: null 또는 "*"는 공용으로 간주하여 통과 */
@@ -72,12 +73,8 @@ public class LangChainRAGService {
         }
     }
 
-    @Qualifier("utilityChatModel")
-    private final ChatModel                   chatModel; // 기본
-    private final com.example.lms.model.ModelRouter modelRouter; // ★ NEW
 
-    @Qualifier("moeChatModel")
-    private final ChatModel                   moeChatModel;
+    private final com.example.lms.model.ModelRouter modelRouter; // 라우팅은 이걸로만
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final MemoryReinforcementService  memorySvc;
