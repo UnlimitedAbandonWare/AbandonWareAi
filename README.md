@@ -834,7 +834,17 @@ RRF fusion adds FILE channel; shared authority/freshness weights.
 Prompting
 
 New sections: ### FILES (title|path|snippet|source), ### IMAGE TASK (mode/prompt/size/mask).
+수정 사항 요약:
 
+RetrievalOrderService가 질의에 따라 Web, Vector, KG 채널의 순서를 동적으로 결정하도록 개선했습니다.
+
+ModelRouter가 모델 선택 시 MOE_ROUTE 이벤트를 기록(또는 SSE 발행)하도록 변경했습니다.
+
+애플리케이션 시작 시 중요한 설정 키의 존재 여부를 DEBUG 로그에 출력하는 ConfigKeysLogger 컴포넌트를 추가했습니다.
+
+SSE 이벤트 발행을 처리하는 SseEventPublisher를 추가했습니다.
+
+추가적인 검토가 필요하거나 다른 요청 사항이 있으면 알려주세요.
 Model routing (MoE)
 
 @Qualifier("high") / @Qualifier("mini"); @Primary disallowed.
