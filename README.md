@@ -798,3 +798,192 @@ Deliverable
 src53core.zip — full code, tests, docs, sample configs, and CI logs as described above.
 
 This upgrade keeps the legacy HybridRetriever order intact, while adding an adaptive web layer, strict prompt/model policies, and observable, fail-soft behavior suitable for production.
+Changelog — src50 → src50core (UI-inclusive)
+
+Date: 2025-08-19 (KST)
+Scope: GPT API File Search + Images end-to-end, Hybrid RAG integration, PromptBuilder/MoE policies, chat-ui.html & chat.js migration, CI version-purity gate.
+
+TL;DR
+
+Adds GPT API File Search and Images (generate/edit/variation) with full backend + UI wiring.
+
+Keeps legacy HybridRetriever order; inserts FileSearchHandler and adds FILE channel to RRF.
+
+Enforces LangChain4j=1.0.1 version purity (CI fails on 0.2.x contamination).
+
+Centralizes prompts via PromptBuilder.build(PromptContext); no string concatenation in ChatService.
+
+Expands SSE events and UI controls (toggles, image panel, trace & gallery panes).
+
+MoE one-shot escalation removes “lower-model lock-in” under risk/uncertainty/multimodal intents.
+
+Added
+
+GPT API modules (gptapi/*)
+
+File Search: GptFileSearchClient/Service (indexing, async chunk upload, MIME→text extraction ready), FileSearchHandler (fail-soft), FileSearchFusionPolicy.
+
+Images: GptImageClient + ImageGenerationService (generate/edit/variation, base64/URL intake, safe-mode checks).
+
+Chain updates
+
+Entry: HybridRetriever retains order; FileSearchHandler inserted before Web; failures return partial results.
+
+RRF fusion adds FILE channel; shared authority/freshness weights.
+
+Prompting
+
+New sections: ### FILES (title|path|snippet|source), ### IMAGE TASK (mode/prompt/size/mask).
+
+Model routing (MoE)
+
+@Qualifier("high") / @Qualifier("mini"); @Primary disallowed.
+
+Escalate once when complexity=HIGH OR uncertainty≥0.70 OR intent ∈ {FACT_CHECK, HIGH_RISK, MULTIMODAL_IMAGE}; SSE MOE_ROUTE emits reason.
+
+Controller/DTO/SSE
+
+ChatRequestDto: boolean fileSearch, ImageTask imageTask{mode,prompt,size,maskBase64?}.
+
+ChatApiController: toggles FILE channel; triggers image flow; CSRF via CookieCsrfTokenRepository.withHttpOnlyFalse().
+
+SSE events: trace, filesearch.trace, verification, DISAMBIGUATION, RRF, RERANK, MOE_ROUTE, image.started, image.done, optional image.progress.
+
+Frontend (UI)
+
+chat-ui.html:
+
+Controls: “Use File Search” (#optFileSearch).
+
+Image panel (collapsible): #imgMode, #imgPrompt, #imgMaskFile, #imgSize.
+
+Upload: #fileUpload[multiple].
+
+Neutral trace container: #tracePane (not an assistant bubble).
+
+Image gallery: #imagePane (thumbnails → original).
+
+Accessibility: all buttons type="button", labels for, aria-live="polite".
+
+chat.js:
+
+Request serialization: fileSearch, imageTask{mode,prompt,size,maskBase64?}; toBase64(file) util; chunk upload support.
+
+SSE routing: trace/filesearch.trace → #tracePane; image.* → #imagePane; MOE_ROUTE badge; verification icons.
+
+Duplicate-UI fix: reuse initial loader bubble; prevent duplicate recommendation/model badges.
+
+State persistence: localStorage for fileSearch, imgMode, imgSize.
+
+Security: client-side keyword guard; inject X-CSRF-TOKEN on all fetches.
+
+Changed
+
+Fail-soft chain policy: handler exceptions become partial warnings; chain continues.
+
+Authority/Freshness weights shared across Web & File channels (YAML).
+
+Diagnostics: session-scoped keys; PII logged as length/hash only; URLs log host only.
+
+Security & Resilience
+
+All GPT API clients: timeout + 429/5xx exponential backoff (≤3); RPM/RPD quotas.
+
+File paths/metadata are session-scoped; external URLs optionally proxied.
+
+Image tasks enforce safety categories (blocked on client & server).
+
+Configuration (samples)
+# GPT API (common)
+gptapi.base-url: <redacted>
+gptapi.api-key: ${GPT_API_KEY}
+gptapi.timeout-ms: 30000
+gptapi.retry.max: 3
+gptapi.quota.rpm: 60
+gptapi.quota.rpd: 1000
+
+# File Search
+abandonware.gptapi.filesearch.enabled: true
+abandonware.gptapi.filesearch.topK: 6
+abandonware.gptapi.filesearch.rrf.k: 60
+abandonware.gptapi.filesearch.authority-weights:
+  OFFICIAL: 1.0
+  PRIVATE: 0.8
+  COMMUNITY: 0.45
+  UNVERIFIED: 0.2
+
+# Images
+abandonware.gptapi.images.enabled: true
+abandonware.gptapi.images.default-size: 1024
+
+# Global RAG/Rerank
+abandonware.rerank.rrf.k: 60
+abandonware.disambiguation.enabled: true
+abandonware.verifier.enabled: true
+
+# MoE
+router.moe.high: <high-model-name>
+router.moe.mini: <mini-model-name>
+router.allow-header-override: false
+
+# Build guard
+build.guard.langchain4j.strictVersion: "1.0.1"
+
+Packaging (deliverable: src50core.zip)
+core/
+  query/, prompt/, router/, verify/, diagnostics/
+  retrieval/chain/, retrieval/handler/, rerank/
+gptapi/
+  filesearch/, images/, client/
+integration/
+  handlers/, dto/, web/        # Controller + SSE
+frontend/
+  chat-ui.html, js/chat.js
+config/
+  application.yml.sample, application-ultra.properties
+tests/
+  unit/, it/, smoke/ (+ comparison metrics)
+docs/
+  CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptapi-ops.md
+ci/
+  VersionPurityCheck/ (conflict coordinates only on failure)
+
+Acceptance Criteria
+
+Version purity: any LangChain4j 0.2.x detection → CI fail with conflict coordinates only.
+
+FileSearch fusion: FILE channel contributes additional snippets; visible in RRF logs/metrics.
+
+Images: one successful imageTask end-to-end; SSE image.started→image.done(url); gallery renders.
+
+UI toggles: #optFileSearch, imgMode, imgSize reflect in payload and persist via localStorage.
+
+MoE: escalation on uncertainty/high-risk/multimodal; SSE MOE_ROUTE shows reason.
+
+Fail-soft: forced exceptions in FileSearch/Images still yield a safe response; diagnostics aggregates partials.
+
+No duplicates: first-message recommendation/model badges render once (snapshot/manual check).
+
+Migration Checklist (minimal touch)
+
+Register FileSearchHandler (pre-Web) and enable FILE in ReciprocalRankFuser.
+
+Extend PromptBuilder with ### FILES & ### IMAGE TASK.
+
+Implement GptFileSearchClient/Service and GptImageClient/ImageGenerationService.
+
+Update DTO/Controller for fileSearch & imageTask; wire SSE events.
+
+Migrate chat-ui.html (control panel, trace/image panes) & chat.js (serialization/SSE/dup-guard/localStorage).
+
+Share authority/freshness coefficients in YAML across Web & File channels.
+
+Verify CSRF token propagation.
+
+Run CI VersionPurityCheck.
+
+Notes (Bias mitigation)
+
+Maintains SynergyStat decay in RRF to avoid recency over-dominance.
+
+Removes “lower-model bias”: on uncertainty/comparative/fact-check/multimodal image tasks, force single escalation to the high-tier model.
