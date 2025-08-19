@@ -2,6 +2,7 @@
 # Condensed Canonical Technical Specification for AbandonWare Hybrid RAG AI Chatbot Service (Lossless Compression)
 # Version: v1.2 (generated 2025‑08‑18)
 # Notes: This file condenses the 2 300+ line specification into approximately 500 lines while preserving all unique technical facts.  Each line follows the format `[STAGE] | Component | Capability/Rule | Rationale/Constraint (optional) | NOTES (optional)`.  Duplicate statements were merged and verbose prose was rephrased into concise, unambiguous facts.
+<a href="https://github.com/anuraghazra/github-readme-stats"><img height="180" align="center" src="https://github-readme-stats.vercel.app/api?username=UnlimitedAbandonWare" /></a>
 
 ## Core Pipeline
 QUERY | QueryComplexityGate | Classifies queries as simple or complex using heuristics or LLM models | Signals whether to decompose queries via SelfAskHandler
