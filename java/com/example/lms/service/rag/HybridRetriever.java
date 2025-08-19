@@ -33,6 +33,7 @@ import com.example.lms.service.config.HyperparameterService;   // ★ NEW
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.scoring.AdaptiveScoringService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
+import com.example.lms.learning.NeuralPathFormationService;
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -62,6 +63,7 @@ public class HybridRetriever implements ContentRetriever {
     private final QueryTransformer queryTransformer;               // ★ NEW: 상태 기반 질의 생성
     private final AdaptiveScoringService scoring;
     private final KnowledgeBaseService kb;
+    private final NeuralPathFormationService pathFormation;
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
     private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
@@ -269,6 +271,8 @@ public class HybridRetriever implements ContentRetriever {
         if (total <= 0) return;
         double consistency = hit / (double) total;
         scoring.applyImplicitPositive(domain, subject, partner, consistency);
+        // Trigger neural path formation when the path-conformity score is high.
+        pathFormation.maybeFormPath(subject + "->" + partner, consistency);
     }
 
     /**
