@@ -2,6 +2,7 @@ package com.example.lms.scoring;
 
 import lombok.Builder;
 import lombok.Value;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -16,21 +17,39 @@ import java.util.regex.Pattern;
  * 점수는 0~1 사이로 반환.
  */
 @Component
+@RequiredArgsConstructor
 public class ContextualScorer {
+
+    private final PathAlignedScorer pathAlignedScorer;
 
     @Value @Builder
     public static class ScoreReport {
         double factuality;
         double quality;
         double novelty;
-        public double overall() { return Math.max(0, Math.min(1, 0.5*factuality + 0.35*quality + 0.15*novelty)); }
+        double pathMultiplier;
+        public double overall() {
+            double base = 0.5*factuality + 0.35*quality + 0.15*novelty;
+            return Math.max(0, Math.min(1, base * pathMultiplier));
+        }
     }
 
     public ScoreReport score(String question, String unifiedContext, String answer) {
+        return score(question, unifiedContext, answer, List.of(), List.of());
+    }
+
+    public ScoreReport score(String question, String unifiedContext, String answer,
+                             List<String> pastPath, List<String> predictedPath) {
         double factuality = groundingScore(unifiedContext, answer, 2);
         double quality    = qualityScore(answer);
         double novelty    = noveltyScore(question, answer);
-        return ScoreReport.builder().factuality(factuality).quality(quality).novelty(novelty).build();
+        double pathMult   = pathAlignedScorer.score(pastPath, predictedPath);
+        return ScoreReport.builder()
+                .factuality(factuality)
+                .quality(quality)
+                .novelty(novelty)
+                .pathMultiplier(pathMult)
+                .build();
     }
 
     /* --- 내부 휴리스틱 --- */

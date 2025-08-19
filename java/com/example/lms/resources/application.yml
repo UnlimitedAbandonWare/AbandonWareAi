@@ -12,3 +12,8 @@ abandonware:
       model-path: "classpath:/models/your-cross-encoder.onnx"
       # Execution provider for ONNX runtime. Choose from 'cpu', 'cuda' or 'tensorrt'.
       execution-provider: cpu
+
+scoring:
+  path-alignment:
+    enabled: true
+

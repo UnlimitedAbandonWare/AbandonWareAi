@@ -163,6 +163,7 @@ CONFIG | Input distillation | abandonware.input.distillation.enabled and thresho
 CONFIG | Reranker backend | abandonware.reranker.backend selects between embedding-model and onnx-runtime; onnx.model-path and onnx.execution-provider configure ONNX settings | Supports local ONNX reranking
 CONFIG | Learning pipeline | gemini.backend and related keys configure Gemini integration; learning.enabled toggles learning features | Supports Gemini‑based knowledge extraction and tuning
 CONFIG | Understanding module | abandonware.understanding.enabled and model/timeout keys control post‑answer understanding and summarization | Emits UNDERSTANDING SSE event when enabled
+CONFIG | Path alignment | scoring.path-alignment.enabled toggles PathAlignedScorer multiplier (0.5–9×) applied to contextual score | Adjusts scoring based on historical path conformity
 
 ## User Interface & Frontend
 UI | chat-ui.html | Provides chat interface with text input, voice recognition, file upload, advanced search options and toggles | Sends requests via chat.js and displays results via SSE events
@@ -198,6 +199,7 @@ CHANGE | Structured Knowledge Extraction | Implements robust GeminiCurationPromp
 CHANGE | Knowledge Base Integration | LearningWriteInterceptor writes KnowledgeDelta objects into DomainKnowledgeRepository and VectorDb after verification | Ensures that only verified knowledge is assimilated
 CHANGE | Evidence Pipeline | FactVerifierService and LearningWriteInterceptor pass complete LearningEvent objects including evidence and claims to the learning subsystem | Ensures learning triggers only with validated data
 CHANGE | Thought Process UI | Adds new "thought process" panel to chat interface; backend streams 'thought' events via SSE showing reasoning steps like analysis, search and generation | Enhances user trust and transparency
+CHANGE | PathAlignedScorer | Introduces path-conformity multiplier combining past and predicted decision paths; aligned paths boost scores, misaligned paths apply penalties
 CHANGE | Response Generation Cancellation | Users can stop long‑running response generation via a "Stop Generation" button in the UI; backend exposes /api/chat/cancel endpoint to terminate server‑side streaming tasks | Saves resources and improves user experience
 CHANGE | Learning Stubs & DTOs | Adds TuningJobRequest and TuningJobStatus DTOs, GeminiCurationService, GeminiBatchService and GeminiTuningService stubs; LearningController exposes REST endpoints for ingest, batch and tuning jobs | Optional via learningEnabled configuration
 CHANGE | Input Distillation Confirmation Flow | InputDistillationService returns a summary of large inputs and triggers a NEEDS_CONFIRMATION SSE event; chat.js renders summary with [Proceed] and [Cancel] buttons; user must confirm before full RAG processing | Reduces cost by avoiding unnecessary retrieval on verbose messages
