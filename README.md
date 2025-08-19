@@ -345,7 +345,456 @@ UI | SSE: DISAMBIGUATION | One modal per turn {query, candidates[{id,name,kind,b
 Change Log & Enhancements — ADD
 
 CHANGE | Generalized Entity Disambiguation (pre-chain) | Adds pre-handler, scorer, prompt section, SSE clarify, and diagnostics; supports ambiguous unknowns (e.g., “DW Akademie”, “Hanwha Veda/Beda”) | Safer routing and fewer false resolutions | Config-gated; backward compatible
+ixes 🐛
+Resolved Application Startup Failure: Fixed a critical error preventing the application from starting. The SecurityFilterChain bean conflict, caused by duplicate definitions in AppSecurityConfig.java and CustomSecurityConfig.java, was resolved by consolidating all security configurations into AppSecurityConfig.java and removing the redundant CustomSecurityConfig.java file.
 
-Build — ADD
+Addressed 14 Compilation Errors: Resolved all cannot find symbol and package does not exist errors. The root cause was identified as missing class files and incorrect package references. The fix was implemented by creating stub classes and interfaces for the missing components to satisfy the compiler and correct invalid import statements across the project. This included generating stubs for:
 
+com.example.lms.client.GeminiClient
+
+com.example.lms.genshin.GenshinElementLexicon
+
+com.example.lms.service.search.SearchDisambiguation
+
+com.example.lms.service.verification.NamedEntityValidator
+
+com.example.lms.service.help.ContextHelpService
+
+Features ✨
+This release implements the four core MVP functionalities:
+
+Read-Only Knowledge Graph (KG) Handler:
+
+A new KGHandler has been integrated into the HybridRetriever chain.
+
+This handler performs read-only lookups of entities and relationships from the GraphStore.
+
+In case of failure, it returns an empty result with a warning, ensuring the retrieval chain remains stable and does not halt execution. Data creation and inference are out of scope for this MVP.
+
+Sequential Strategy Bandit:
+
+The StrategySelectorService is now implemented to dynamically determine the execution order of retriever handlers.
+
+For the MVP, this service uses a simple, rule-based selectPlan method. It adjusts the handler sequence (e.g., [WEB, VECTOR, KG]) based on simple query features like length.
+
+Complex reinforcement learning, parallel execution, and hyperparameter tuning are deferred to future releases.
+
+Basic Generative UI (UI-DSL):
+
+The GenerativeUiService has been implemented to render LLM-generated JSON into safe HTML.
+
+This initial version supports two UI-DSL types: table and card.
+
+The service correctly parses these JSON structures from the LLM and streams the resulting HTML to the client via Server-Sent Events (SSE).
+
+Next Steps & Future Enhancements 🚀
+Building on this stable MVP, the following features are proposed to evolve the system towards an intelligent, self-learning agent:
+
+Query Understanding Agent: Entity Disambiguation 🕵️
+
+To address ambiguous user queries (e.g., "Vader" instead of "Veda"), an Entity Disambiguation Handler will be added to the start of the retrieval pipeline.
+
+How it will work:
+
+Candidate Generation: The system will use aliases, the entity DB, and vector similarity to generate a list of potential candidates (e.g., "Veda," "Vader," "Veda Bread").
+
+Scoring & Resolution: Candidates will be scored based on contextual relevance. If a top candidate emerges with high confidence, it will be automatically selected. Otherwise, the user will be prompted with a clarifying question (e.g., "Which 'Vader' are you looking for?").
+
+Expected Impact: Drastically improves search accuracy and enhances user experience by intelligently interpreting ambiguous inputs.
+
+Autonomous Knowledge Graph Growth & Inference 🧠
+
+The Knowledge Graph will be upgraded from a read-only component to a dynamic, self-growing knowledge base.
+
+Key Features:
+
+Automated Knowledge Extraction: An AutonomousKGConstructor will automatically extract knowledge triples (subject, relation, object) from new documents.
+
+Cross-Validation & Confidence: New knowledge will be promoted to "verified fact" only after being corroborated by multiple trusted sources, increasing its confidence score.
+
+Relational Inference: The system will infer new relationships (e.g., if A is part of B, and B is part of C, then A is part of C).
+
+Knowledge Decay: Confidence scores for outdated or conflicting information will decay over time, ensuring the KG remains current.
+
+Expected Impact: Creates a perpetually learning system that can provide deeper, more insightful answers through inference.
+
+Intelligent Strategy Bandit 📈
+
+The rule-based StrategySelectorService will be evolved into a true reinforcement learning agent that optimizes the RAG pipeline.
+
+Key Features:
+
+Reward System: User feedback (likes/dislikes), fact-checking results, and response times will be used to calculate a reward score.
+
+Parallel Execution & Fusion: The bandit will learn to execute handlers (Web, Vector, KG) in parallel and intelligently fuse the results using techniques like Reciprocal Rank Fusion (RRF) for faster, richer context.
+
+Automated Hyperparameter Tuning: A DynamicHyperparameterTuner will automatically adjust parameters like top-k and min_score based on performance.
+
+Expected Impact: Enables the system to autonomously discover the most efficient retrieval strategy for any given query type, continuously improving performance over time.
+Build — ADDPatch Notes: MVP Implementation and Critical Fixes
+This update implements the core MVP requirements, including dynamic retrieval strategies, knowledge graph integration, and a generative UI service. It also resolves critical startup errors and cleans up the codebase by addressing missing classes and incorrect package structures.
+
+Features & Enhancements
+Unified Security Configuration: To resolve the duplicate SecurityFilterChain bean error, the bean definition in CustomSecurityConfig has been disabled. All security settings have been consolidated into AppSecurityConfig for a single, unified configuration.
+
+Read-Only Knowledge Graph (KG) Handler: Implemented KgHandler to enable knowledge graph lookups within the HybridRetriever chain. The handler is designed to be resilient, catching exceptions to prevent chain interruptions while maintaining session isolation. It has been registered in RetrieverChainConfig to execute as part of the retrieval process.
+
+Generative UI Service: Added GenerativeUiService and its implementation, DefaultGenerativeUiService. This service transforms JSON-based UI definitions generated by the LLM into safe HTML, supporting table and card components.
+
+Dynamic Strategy Selection (Bandit): The existing StrategySelectorService has been enhanced with logic to dynamically determine the execution order of the WEB, VECTOR, and KG handlers. The selection is based on query characteristics such as length and domain-specific attributes.
+
+Fixes & Refactoring
+Missing Class & Package Cleanup:
+
+Created stub implementations for missing classes, including GeminiClient, NamedEntityValidator, and ContextHelpService, to resolve compilation errors.
+
+Relocated GenshinElementLexicon to its correct package and replaced other misplaced classes with wrappers where appropriate.
+
+Corrected invalid comments and removed a duplicate package declaration in the AdminInitializer file.네, 알겠습니다. Git 레포지토리 패치 노트에 바로 사용할 수 있도록, 제공해주신 내용을 명확하고 전문적인 영문으로 작성해 드리겠습니다.
+
+Fix: Resolve Compilation Failures by Adding Missing Role Enum
+This patch addresses a critical build failure (cannot find symbol, package does not exist) caused by a missing Role definition.
+
+Changes
+Added com.example.lms.domain.Role Enum:
+
+A new enum, Role, has been introduced in the com.example.lms.domain package.
+
+It defines four essential user roles required by the application: ADMIN, USER, PROFESSOR, and STUDENT.
+
+Impact
+Resolves Compilation Errors: The addition of the Role enum resolves all cannot find symbol errors that were occurring in files referencing user roles, most notably within AdminInitializer and Spring Security configurations.
+
+No Unnecessary Stubs Created: Analysis confirmed that other classes referenced in the error log (e.g., GeminiClient, NamedEntityValidator, KgHandler) were already present in the codebase. The root cause of the build failure was isolated to the missing Role enum, which this patch specifically corrects.
+
+With this change, the project now compiles successfully, allowing for further development and deployment.
+Patch Notes: RAG Pipeline Hardening & Amplification
+This major update implements a comprehensive, three-phase amplification strategy to significantly enhance the precision, robustness, and cost-efficiency of the RAG pipeline. The core of this patch is the introduction of an advanced Entity Disambiguation pre-handler and the deep integration of its output throughout the retrieval, reranking, and generation stages.
+
+Hard Gates (Non-Negotiable Constraints)
+LangChain4j Version Purity: The build will fail if any dev.langchain4j:* dependency other than version 1.0.1 is detected.
+
+Centralized Prompt Management: All LLM prompts must be generated exclusively via PromptBuilder.build(PromptContext). Direct string concatenation within services like ChatService is strictly prohibited.
+
+Fault-Tolerant Chain: Individual handler failures within the retrieval chain must not propagate exceptions. Instead, they will be merged as partial results, ensuring the chain always completes.
+
+Phase 1: Query Understanding Amplification 🧠
+This phase focuses on robustly resolving ambiguity at the very beginning of the pipeline.
+
+A1: Hybrid Candidate Generation & Context-Aware Fusion
+
+New Components: CandidateGenerator (for lexical, fuzzy, and semantic matches), RankFusionService (using RRF), and ContextBooster.
+
+Integration: A new EntityDisambiguationHandler is inserted as the first step after the MemoryHandler. It follows an internal pipeline: generate candidates → fuse with RRF (k≈60) → apply contextual boosts/penalties → pass to a DisambiguationDecisionPolicy.
+
+Uncertainty Handling: If the confidence margin between the top two candidates is below a configurable threshold (τ), a one-time "Self-Ask Clarify" action is triggered via SSE to ask the user for input.
+
+A2: Dense-to-Cross-Encoder Reranking
+
+New Component: A DisambiguationReranker utilizing a cross-encoder model.
+
+Integration: The final score for a disambiguation candidate is a normalized blend of the RRF score and the cross-encoder's semantic similarity score (final = α·RRF + (1−α)·s_ce).
+
+Fallback: If the cross-encoder fails or times out, the system gracefully falls back to using the RRF score alone.
+
+A3: Uncertainty Gate (Ask/Abstain Policy)
+
+Logic: The system calculates an uncertainty score based on the entropy of candidate probabilities and the confidence margin. If this score exceeds a threshold (θ), it first attempts to clarify with the user once. If uncertainty remains high, it will abstain from answering and return a "Could not resolve" message.
+
+Observability: The DecisionGate exposes the reasoning and metrics (scores, margin) via SSE trace events.
+
+Phase 2: Intelligent Retrieval & Reranking Amplification 📈
+This phase leverages the resolved entities and intents from Phase 1 to dramatically improve search precision.
+
+B1: CognitiveState-Aware SmartQueryPlanner
+
+Enhancement: The SmartQueryPlanner is now driven by the CognitiveState produced in Phase 1. It uses templated strategies based on user intent.
+
+Example: For a COMPARATIVE_ANALYSIS intent, it will automatically generate distinct queries for each entity (Query for A, Query for B) and a comparative query (Query for A vs. B synergy), which are then processed by the HybridRetriever.
+
+B2: Multi-Channel Fusion & Final Rerank
+
+Integration: Before the final reranking step, the RankFusionService now uses RRF to merge the ranked lists from all retrieval channels (Web, Vector, Memory).
+
+Final Pass: Only the top-K candidates from this fused list are sent to the CrossEncoderReranker for the final, computationally expensive scoring.
+
+B3: Authority & Freshness Weighting
+
+Heuristics: The fused score is now modulated by a weighted combination of source authority and content freshness: score' = score_fused × (a·w_authority + (1−a)·w_fresh).
+
+Configuration: Authority tiers and decay rates are fully configurable per domain.
+
+Phase 3: Dynamic Generation & Autonomous Learning Amplification 🤖
+This phase optimizes model selection and enables the system to learn from its failures.
+
+C1: Cost-Aware Mixture of Experts (MoE) Routing
+
+Logic: The ModelRouter now implements a cost-aware escalation policy. The high-tier model is selected only if query complexity, uncertainty, or business impact exceeds configured thresholds. Otherwise, the base model is used.
+
+Implementation: High-tier and base-tier models are explicitly injected using Spring's @Qualifier to avoid ambiguity with @Primary.
+
+C2: Instantaneous Learning Trigger on Failure
+
+Event-Driven Learning: When the SmartFallbackService determines an answer cannot be provided (NO_ANSWER or LOW_EVIDENCE), it now fires an asynchronous event to the AutonomousExplorationService.
+
+Throttling: This immediate learning trigger is rate-limited by the FreeTierApiThrottleService to manage costs, with the actual knowledge ingestion handled by the existing curation scheduler.
+
+C3: Evidence-Weighted Decoding
+
+Enhancement: The generation process now maintains a mapping between generated sentences and the evidence snippets that support them. Sentences without strong evidence are flagged as "speculative" or suppressed, ensuring answers are grounded in retrieved facts.
+
+Observability & Diagnostics
+New SSE Events: Added DISAMBIGUATION, RRF, RERANK, and MOE_ROUTE events, each including a reason field and relevant metrics.
+
+New Metrics: Tracking disambiguation outcomes (auto/user/abort) and key scores (top1, top2, margin, confidence).
+
+Configuration
+New configuration keys have been added under abandonware.disambiguation.*, abandonware.vector.entity.*, and router.moe.* with sane defaults to control all new features. All features are toggleable via *.enabled flags for safe rollback.
+이 패치에는 엔티티 식별 모듈(CandidateSetBuilder, DisambiguationScorer, DisambiguationDecisionPolicy, EntityDisambiguationHandler)이 새로 추가되었고, 검색 체인을 수정해 엔티티 식별을 선행하도록 구성했습니다. 또한 application.yml에 관련 설정을 추가하고 변경사항을 정리한 CHANGELOG, DIFF_SUMMARY, TEST_REPORT 문서를 작성했습니다.
 BUILD | VersionPurityGate (CI) | Hard-fail on mixed dev.langchain4j lines; report only conflicting coordinates | Deterministic builds | BOM remains pinned to 1.0.1
+Changelog — src53 → src53core Upgrade
+
+Date: 2025-08-19 (KST)
+Scope: GPT-based Web Search plugin (Light/Deep/Auto), adaptive retrieval chain, UI controls, CI version-purity gate, docs/tests
+
+TL;DR
+
+Introduces GPT Web Search with three modes: LIGHT, DEEP, AUTO (hybrid gating).
+
+Adds AdaptiveWebSearchHandler before legacy Web/Vector stages + WEB_ADAPTIVE RRF channel.
+
+Enforces LangChain4j=1.0.1 purity (CI fails on mixed 0.2.x).
+
+Centralizes prompts via PromptBuilder.build(PromptContext) (string concat in ChatService is forbidden).
+
+Extends DTO/Controller/UI to expose search controls (mode, providers, official-only).
+
+Ships tests, CI scripts, sample configs, and docs.
+
+Packaging target for external delivery: src53core.zip.
+
+Highlights
+New
+
+GPT Web Search plugin (module: gptsearch/*)
+
+Providers: BING, TAVILY, GOOGLECSE, SERPAPI, MOCK (fallback if keys absent).
+
+SearchMode: AUTO, OFF, FORCE_LIGHT, FORCE_DEEP.
+
+Decision gate: SearchDecisionService combines rules + LLM tool-signal to decide shouldSearch, depth (LIGHT/DEEP), providers, topK, reason.
+
+Evidence injection: PromptBuilder adds ### WEB EVIDENCE with {title|host|snippet|source}, authority & freshness-weighted; token-pressure reduces to one snippet/doc.
+
+Caching & resilience: Caffeine session cache; HTTP client with timeout, 429/5xx exponential backoff (≤3), per-minute/daily quotas.
+
+AdaptiveWebSearchHandler (precedes legacy Web/Vector)
+
+Runs providers in parallel → RRF (pre) → lightweight ranker → optional Cross-Encoder rerank.
+
+Writes results to SearchContext as channel=WEB_ADAPTIVE.
+
+Fail-soft: exceptions are converted to partial warnings; chain continues.
+
+RRF fusion update
+
+Adds WEB_ADAPTIVE channel into existing fusion with authority × freshness multipliers (coeffs in yml).
+
+Prompting policy
+
+All prompts must be built via PromptBuilder.build(PromptContext); no string concatenation in ChatService.
+
+Model routing (MoE)
+
+Use @Qualifier("high") / @Qualifier("mini"); disallow @Primary.
+
+One-shot escalation rule: if complexity=HIGH OR uncertainty≥0.70 OR intent ∈ {FACT_CHECK, HIGH_RISK, COMPARATIVE}, escalate once to high.
+
+DTO / Controller / SSE
+
+ChatRequestDto adds:
+
+SearchMode searchMode (default AUTO)
+
+boolean officialSourcesOnly
+
+List<String> webProviders
+
+Integer webTopK
+
+ChatApiController interprets searchMode independently of retrieval on/off.
+
+SSE events extended:
+SEARCH_DECISION(reason, mode, providers),
+SEARCH_PROGRESS(stage),
+SEARCH_RESULT(count, fusedTopK),
+MOE_ROUTE(reason).
+
+UI (HTML/JS)
+
+Adds controls: Search Mode (AUTO/OFF/LIGHT/DEEP), Official sources only, Provider multiselect.
+
+Renders search decision/results in a neutral card (separate from answer bubbles) to prevent badge/button duplication.
+
+Persists user choices in localStorage; fixes initial session duplicate controls.
+
+Security & policy
+
+Optional server proxy for external URLs; blocked domains/keywords configurable.
+
+Logs: PII stored as length/hash only; URLs log host only; queries hashed.
+
+CI: LangChain4j version purity
+
+Enforces dev.langchain4j:* == 1.0.1 across build (including gradle.lockfile and version catalog).
+
+If any 0.2.x artifact is detected, CI fails and prints conflict coordinates only.
+
+Docs & tests
+
+docs/CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptsearch-ops.md
+
+tests/unit, it, smoke including decision/cache/escalation checks.
+
+ci/VersionPurityCheck scripts + logs.
+
+Chain & Behavior Changes
+
+Chain order (backwards-compatible):
+
+memory → self-ask (gated) → analyse (gated) → adaptive-web (NEW) → web → vector → repair
+
+
+If adaptive-web succeeds, the legacy web stage may be skipped; reason logged to diagnostics.
+
+RRF formula
+
+score' = RRF × authority × freshness (coefficients configurable).
+
+Configuration (samples)
+# GPT Search
+abandonware.gptsearch.enabled: true
+abandonware.gptsearch.mode.default: AUTO        # AUTO|OFF|FORCE_LIGHT|FORCE_DEEP
+abandonware.gptsearch.topK: 6
+abandonware.gptsearch.providers: [BING, TAVILY]
+abandonware.gptsearch.rrf.k: 60
+abandonware.gptsearch.authority-weights:
+  OFFICIAL: 1.0
+  TRUSTED: 0.85
+  COMMUNITY: 0.5
+  UNVERIFIED: 0.2
+abandonware.gptsearch.freshness.halfLifeDays: 14
+abandonware.gptsearch.official-only: false
+
+# Provider keys (via env/secret)
+provider.bing.apiKey: ${BING_API_KEY:}
+provider.tavily.apiKey: ${TAVILY_API_KEY:}
+provider.googlecse.cx: ${GOOGLE_CSE_CX:}
+provider.googlecse.apiKey: ${GOOGLE_CSE_KEY:}
+
+# MoE routing
+router.moe.high: <high-model-name>
+router.moe.mini: <mini-model-name>
+router.allow-header-override: false
+
+# Build guard
+build.guard.langchain4j.strictVersion: "1.0.1"
+
+Packaging Layout (deliverable: src53core.zip)
+core/
+  query/, prompt/, router/, verify/, diagnostics/
+  retrieval/chain/, retrieval/handler/, rerank/
+gptsearch/
+  web/          # adapters/services/handler/cache
+  client/       # shared HTTP client, keys/quotas/retries
+  decision/     # SearchDecision gate (rules+LLM)
+  dto/          # request/response, provider/mode/filters
+integration/
+  handlers/     # AdaptiveWebSearchHandler, RankFusion wiring
+  controller/   # ChatApiController + SSE events
+  web/          # chat-ui.html, chat.js
+config/
+  application.yml.sample
+  application-ultra.properties
+tests/
+  unit/, it/, smoke/
+docs/
+  CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptsearch-ops.md
+ci/
+  VersionPurityCheck/
+
+Acceptance Criteria
+
+Version Purity: any 0.2.x LangChain4j detection → CI fails with conflict coordinates.
+
+AUTO (lightweight): simple queries trigger SEARCH_DECISION mode=LIGHT, ≤1 web call, quality parity.
+
+DEEP (reinforced): comparative/fact-check queries show Self-Ask decomposition, pass Claim/FactVerifier, one MoE escalation.
+
+Hybrid switching: within one session, simple→hard queries log LIGHT→DEEP switch.
+
+RRF: WEB_ADAPTIVE contributes to fused Top-K.
+
+UI: toggles & provider pickers populate DTO; SSE cards render without duplicate badges/buttons.
+
+Fail-soft: provider failures logged as partial warnings; chain continues; diagnostics aggregates.
+
+Breaking/Strict Policies
+
+Prompt centralization: any prompt built outside PromptBuilder.build(PromptContext) is non-compliant.
+
+Qualifier-only MoE injection: @Primary is prohibited for model beans.
+
+Exception handling: retrieval handlers must not propagate; return partials + warnings.
+
+Migration Checklist (minimal changes)
+
+Register AdaptiveWebSearchHandler and insert before legacy Web handler.
+
+Add WEB_ADAPTIVE to ReciprocalRankFuser.
+
+Extend PromptBuilder with ### WEB EVIDENCE.
+
+Implement SearchDecisionService (rules + LLM tool signal).
+
+Wire WebSearchProvider implementations & priorities.
+
+Extend ChatRequestDto & controller mapping.
+
+Update chat-ui.html / chat.js (toggles, SSE cards, no bubble-class for traces).
+
+Centralize authority/freshness weights in yml.
+
+Enable CI VersionPurityCheck.
+
+Notes & Guardrails
+
+When quotas hit ≥80%, force LIGHT and disable Cross-Encoder rerank.
+
+officialSourcesOnly=true lifts authority floor to ≥0.8.
+
+Reuse SearchContext across immediate follow-ups to avoid duplicate calls.
+
+Korean morphology normalization in AnalyzeHandler is reused for search query hygiene.
+
+Known Limitations
+
+MOCK provider is for tests only (no crawling).
+
+Cross-Encoder rerank is disabled under heavy token pressure or quota throttling.
+
+How to Verify Locally
+
+Set provider keys (or rely on MOCK).
+
+Start app, toggle AUTO/LIGHT/DEEP in UI; watch SSE: SEARCH_DECISION/RESULT/MOE_ROUTE.
+
+Run tests/smoke to validate decision gating, caching, escalation.
+
+Trigger CI to confirm LangChain4j=1.0.1 purity.
+
+Deliverable
+
+src53core.zip — full code, tests, docs, sample configs, and CI logs as described above.
+
+This upgrade keeps the legacy HybridRetriever order intact, while adding an adaptive web layer, strict prompt/model policies, and observable, fail-soft behavior suitable for production.
