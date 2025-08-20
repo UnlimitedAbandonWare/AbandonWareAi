@@ -1,6 +1,6 @@
 package com.example.lms.service.rag.handler;
 
-import com.example.lms.service.ChatSessionService;
+import com.example.lms.service.ChatHistoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,7 +16,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class MemoryHandler {
 
-    private final ChatSessionService historyService;
+    private final ChatHistoryService historyService;
 
     @Value("${memory.read.max-turns:8}")
     private int maxTurns;

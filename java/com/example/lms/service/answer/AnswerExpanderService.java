@@ -5,7 +5,6 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import org.springframework.stereotype.Service;
-import java.util.Locale;
 
 @Service
 public class AnswerExpanderService {
@@ -26,16 +25,6 @@ public class AnswerExpanderService {
     }
 
     public String expandWithLc(String draft, VerbosityProfile vp, ChatModel model) {
-        // Short circuit expansion when the draft is empty or conveys that there is no information.
-        // Without this guard the answer expander may incorrectly expand an "정보 없음" response
-        // into a verbose essay starting with phrases like "주어진 한국어 초안을 확장합니다.".
-        if (draft == null) {
-            return "";
-        }
-        String nd = draft.strip().toLowerCase(Locale.ROOT);
-        if (nd.isBlank() || nd.contains("정보 없음") || nd.contains("insufficient")) {
-            return draft;
-        }
         try {
             var msgs = java.util.List.of(
                     SystemMessage.from("Expand with structure and rich details; do not invent facts."),

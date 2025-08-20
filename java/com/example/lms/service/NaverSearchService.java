@@ -93,12 +93,7 @@ public class NaverSearchService {
 
     // 🔑 Naver API 키 CSV(생성자에서 주입) & 키 회전용 변수들
     private final String naverKeysCsv;          // keys 1:a1b2c3,2:d4e5f6 …
-    /**
-     * Parsed list of Naver API keys.  Each entry contains an id and secret.
-     * Renamed from ApiKey to NaverApiKey to avoid colliding with the JPA entity
-     * of the same simple name.
-     */
-    private List<NaverApiKey> naverKeys = List.of(); // 초기값은 빈 리스트
+    private List<ApiKey> naverKeys = List.of(); // 초기값은 빈 리스트
     private final AtomicLong keyCursor = new AtomicLong(); // 라운드-로빈 인덱스
 
     /**
@@ -194,12 +189,7 @@ public class NaverSearchService {
     private volatile boolean enableDomainFilter;
 
     /* ---------- 2. ApiKey 헬퍼 타입 ---------- */
-    /**
-     * Simple value object representing a client identifier and secret
-     * used to authenticate with the Naver API.  Renamed from ApiKey to
-     * NaverApiKey to avoid colliding with the JPA entity {@link com.example.lms.entity.ApiKey}.
-     */
-    private record NaverApiKey(String id, String secret) { }
+    private record ApiKey(String id, String secret) { }
 
     // 기본 허용 목록에 서브도메인 포함 도메인 추가(부재 시 0개 스니펫 방지)
     @Value("${naver.filters.domain-allowlist:eulji.ac.kr,eulji.or.kr}")
@@ -451,14 +441,14 @@ public class NaverSearchService {
                     .filter(s -> !s.isEmpty() && s.contains(":"))
                     .map(s -> {
                         String[] p = s.split(":");
-                        return new NaverApiKey(p[0], p[1]);
+                        return new ApiKey(p[0], p[1]);
                     })
                     .toList();
         }
     }
 
     /* ---------- 4. 키 순환 유틸 ---------- */
-    private @Nullable NaverApiKey nextKey() {
+    private @Nullable ApiKey nextKey() {
         if (naverKeys.isEmpty()) return null;
         long idx = keyCursor.getAndUpdate(i -> (i + 1) % naverKeys.size());
         return naverKeys.get((int) idx);
@@ -820,7 +810,7 @@ public class NaverSearchService {
                 .build(false)
                 .toUriString();
 
-        NaverApiKey first = nextKey();
+        ApiKey first = nextKey();
         if (first == null) return Mono.just(List.of());
 
         String keyLabel1 = first.id().length() > 4 ? first.id().substring(first.id().length() - 4) : first.id();
@@ -990,7 +980,7 @@ public class NaverSearchService {
         try {
             REQUEST_SEMAPHORE.acquire();   // 동시에 2개까지만 호출
             String json = null;
-            NaverApiKey key = nextKey();
+            ApiKey key = nextKey();
             if (key == null) return Collections.emptyList();
             String id = key.id();
             String secret = key.secret();

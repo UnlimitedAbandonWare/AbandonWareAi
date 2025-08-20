@@ -1,4 +1,4 @@
-    package com.example.lms.config;
+package com.example.lms.config;
 
 import com.example.lms.domain.Administrator;
 import com.example.lms.repository.AdministratorRepository;
@@ -10,24 +10,20 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.orm.jpa.support.OpenEntityManagerInViewFilter;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
-import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
-import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 /**
  * 애플리케이션의 보안을 총괄하는 설정 클래스.
- * - 이 체인은 'any request' 캐치올 체인으로, 항상 마지막(@Order LOWEST_PRECEDENCE)으로 두어
- *   다른 체인(예: 별도 API 체인)이 securityMatcher로 범위를 명시했을 때 충돌을 피한다.
- * - CSRF 보호 및 HTTPS 강제, Remember-me, Form Login 등을 구성한다.
+ * - 모든 HTTP 요청에 대해 인증 없이 접근을 허용하고
+ *   JPA 세션 유지(OpenEntityManagerInViewFilter)로 지연 로딩 오류를 방지합니다.
  */
 @Configuration
 @RequiredArgsConstructor
@@ -57,48 +53,41 @@ public class AppSecurityConfig {
         registrationBean.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registrationBean;
     }
-
-    /**
-     * 캐치올(SecurityMatcher 미지정) 보안 필터 체인.
-     * - 다른 체인이 존재한다면 그 체인들은 반드시 securityMatcher(...)로 담당 URL을 명시해야 하며,
-     *   본 체인은 항상 마지막에 평가되도록 @Order(LOWEST_PRECEDENCE)로 지정한다.
-     */
     @Bean
-    @Order(Ordered.LOWEST_PRECEDENCE)  // ★ 캐치올은 반드시 마지막
-    public SecurityFilterChain appSecurity(HttpSecurity http) throws Exception {
-        // Thymeleaf 등에서 _csrf 이름으로 접근하도록 핸들러 설정
-        var handler = new CsrfTokenRequestAttributeHandler();
-        handler.setCsrfRequestAttributeName("_csrf");
-
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // securityMatcher() 호출 안 함 → ★ 이 체인이 'any request' 캐치올
-                .csrf(csrf -> csrf
-                        // API는 별도 체인이 없다면 임시로 CSRF 제외 (별도 API 체인을 두는 경우 여기 제거)
-                        .ignoringRequestMatchers(new AntPathRequestMatcher("/api/**"))
-                        .csrfTokenRequestHandler(handler)
-                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
+                .csrf(AbstractHttpConfigurer::disable)
                 .userDetailsService(customUserDetailsService)
                 .authorizeHttpRequests(auth -> auth
-                        // 필요 시 세부 인가 규칙을 상단에 추가하고, 마지막에 anyRequest().permitAll() 유지
-                        .anyRequest().permitAll())
+                        .anyRequest().permitAll()
+                )
                 .formLogin(form -> form
                         .loginPage("/login")
                         .loginProcessingUrl("/login")
                         .defaultSuccessUrl("/", true)
-                        .permitAll())
+                        .permitAll()
+                )
                 .rememberMe(rem -> rem
-                        .key("change-this-remember-me-key") // 실제 운영 키로 교체
+                        .key("...")
                         .tokenValiditySeconds(24 * 60 * 60)
-                        .alwaysRemember(true))
+                        .rememberMeParameter("dummy")
+                        .alwaysRemember(true)
+                )
                 .logout(logout -> logout
                         .logoutUrl("/logout")
                         .logoutSuccessUrl("/login?logout")
-                        .permitAll())
-                .requiresChannel(channel -> channel
-                        .anyRequest().requiresSecure()); // 모든 요청 HTTPS 강제
+                        .permitAll()
+                )
+                .csrf(AbstractHttpConfigurer::disable)
+                .requiresChannel()   // HTTP 요청을 HTTPS로 리다이렉션
+                .anyRequest()
+                .requiresSecure();   // 모든 요청을 HTTPS로 리다이렉션
 
         return http.build();
     }
+
+
+
 
     @Bean
     public ApplicationRunner adminInitializer(PasswordEncoder passwordEncoder) {
@@ -116,4 +105,5 @@ public class AppSecurityConfig {
                         }
                 );
     }
+
 }

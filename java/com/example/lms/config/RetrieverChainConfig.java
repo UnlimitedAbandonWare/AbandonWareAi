@@ -11,57 +11,23 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary; // ★ 추가
 // ❗ 중요: HybridRetriever 내부의 RetrievalHandler를 import 합니다.
 import com.example.lms.service.rag.handler.RetrievalHandler;
-import com.example.lms.service.rag.handler.EvidenceRepairHandler;
-import com.example.lms.service.rag.handler.MemoryHandler;
-import com.example.lms.service.rag.handler.DynamicRetrievalHandlerChain;
-import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
-import com.example.lms.service.rag.QueryComplexityGate;
-import com.example.lms.service.rag.handler.KnowledgeGraphHandler;
-import com.example.lms.strategy.RetrievalOrderService;
-import com.example.lms.telemetry.SseEventPublisher;
-import com.example.lms.service.subject.SubjectResolver;
 @Configuration
 public class RetrieverChainConfig {
 
     @Bean
-    @Primary
+    @Primary // ★ 추가
     public RetrievalHandler retrievalHandler(
-            MemoryHandler memoryHandler,
             SelfAskWebSearchRetriever selfAsk,
             AnalyzeWebSearchRetriever analyze,
-            AdaptiveWebSearchHandler adaptiveWeb,
             WebSearchRetriever web,
             LangChainRAGService rag,
-            EvidenceRepairHandler evidenceRepairHandler,
-            QueryComplexityGate gate,
-            KnowledgeGraphHandler kg,
-            RetrievalOrderService orderService,
-            SseEventPublisher sse) {
-        // Build a dynamic retrieval chain that decides the order of Web, Vector and KG sources
-        return new DynamicRetrievalHandlerChain(
-                memoryHandler,
-                selfAsk,
-                analyze,
-                adaptiveWeb,
-                web,
-                rag,
-                evidenceRepairHandler,
-                gate,
-                kg,
-                orderService,
-                sse
-        );
-    }
+            @Value("${pinecone.index.name}") String indexName) {
 
-    /**
-     * 증거 보수 핸들러 빈 등록: 도메인과 선호 도메인은 설정에서 주입한다.
-     */
-    @Bean
-    public EvidenceRepairHandler evidenceRepairHandler(
-            WebSearchRetriever web,
-            SubjectResolver subjectResolver,
-            @Value("${retrieval.repair.domain:}") String domain,
-            @Value("${retrieval.repair.preferred-domains:}") String preferred) {
-        return new EvidenceRepairHandler(web, subjectResolver, domain, preferred);
+        return (query, out) -> {
+            out.addAll(selfAsk.retrieve(query));
+            if (out.size() < 5) out.addAll(analyze.retrieve(query));
+            if (out.size() < 5) out.addAll(web.retrieve(query));
+            out.addAll(rag.asContentRetriever(indexName).retrieve(query));
+        };
     }
 }

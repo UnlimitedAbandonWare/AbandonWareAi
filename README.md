@@ -1,996 +1,935 @@
-
-# Condensed Canonical Technical Specification for AbandonWare Hybrid RAG AI Chatbot Service (Lossless Compression)
-# Version: v1.2 (generated 2025‑08‑18)
-# Notes: This file condenses the 2 300+ line specification into approximately 500 lines while preserving all unique technical facts.  Each line follows the format `[STAGE] | Component | Capability/Rule | Rationale/Constraint (optional) | NOTES (optional)`.  Duplicate statements were merged and verbose prose was rephrased into concise, unambiguous facts.
-
-## Core Pipeline
-QUERY | QueryComplexityGate | Classifies queries as simple or complex using heuristics or LLM models | Signals whether to decompose queries via SelfAskHandler
-QUERY | QueryCorrectionService | Performs rule‑based spelling, spacing and punctuation corrections | Ensures clean input before LLM‑based correction
-QUERY | LLMQueryCorrectionService | Uses a large language model to refine corrected queries while preserving proper nouns and domain terms | Consults domain dictionary to avoid altering names
-QUERY | QueryDisambiguationService | Resolves ambiguous tokens via domain dictionary and LLM rephrasing | Emits a confidence score indicating high or low confidence
-QUERY | QueryAugmentationService | Adds synonyms or related keywords when enabled | Disabled by default to avoid noise; limited by SmartQueryPlanner
-QUERY | SmartQueryPlanner | Restricts the number of expanded queries to prevent combinatorial explosion | Coordinates with EvidenceRepairHandler to control query expansion
-QUERY | NonGameEntityHeuristics | Distinguishes generic terms from domain‑specific entities during preprocessing | Prevents misclassification of game‑neutral words
-QUERY | DefaultDomainTermDictionary | Stores protected terms per domain to survive correction and disambiguation | InMemoryDomainTermDictionary used for testing
-QUERY | LLMNamedEntityExtractor | Invokes an LLM to extract entities when regex heuristics fail | Implements the NamedEntityExtractor interface
-QUERY | ParsedQuery | Holds structured components (tokens, synonyms, variants) after corrections and analysis | Used downstream for retrieval and ranking
-QUERY | MatrixTransformer | Generates additional query variants when required based on domain and intent | Supports robust search and recall
-QUERY | QueryHygieneFilter | Removes banned words or domain prefixes during disambiguation | Ensures safe and policy‑compliant queries
-QUERY | VerbosityDetector | Analyses query and conversation context to suggest a verbosity level (brief/standard/deep/ultra) | Influences context budgets and model choice
-QUERY | SectionSpecGenerator | Determines which prompt sections to include based on verbosity and query intent | Produces a section map for PromptBuilder
-QUERY | VerbosityProfile | Encapsulates verbosity hints to inform context budgets and minimum answer lengths | Passed through the pipeline
-QUERY | CompositeQueryContextPreprocessor | Combines guardrails, hygiene filters and preprocessing steps | Orchestrates correction and disambiguation according to configuration
-QUERY | CognitiveStateExtractor | Derives user intent, subject and domain hints using heuristics or LLMs | Stores results in CognitiveState for routing
-QUERY | CognitiveState | Holds analysis results including intent, subject, domain and verbosity | Guides routing, model selection and retrieval strategies
-QUERY | GuardrailQueryPreprocessor | Injects protected terms and dynamic interaction rules from the knowledge base into the prompt context | Enforces domain policies and safety
-QUERY | DefaultQueryContextPreprocessor | Orchestrates correction, disambiguation and domain detection according to configuration | Prepares prompt context before retrieval
-QUERY | QueryComplexityClassifier | Detects multi‑hop or complex questions via heuristics or LLMs | ModelBasedQueryComplexityClassifier queries a model; thresholds configurable
-QUERY | QueryContextPreprocessor | Defines a contract for preparing prompt context prior to retrieval | Allows custom preprocessing implementations
-QUERY | QueryTransformer | Abstracts the process of generating alternative queries for retrieval | Implementations choose transformation based on domain and intent
-QUERY | DefaultQueryTransformer | Selects transformation strategy according to domain and intent | Generates robust query variants to maximise recall
-QUERY | QueryCorrectionService | Returns both the corrected text and metadata about applied fixes | Supports auditing of corrections
-QUERY | QueryDisambiguationService | May call QueryHygieneFilter to remove domain prefixes or banned words | Ensures safe and focused queries
-QUERY | VerbosityDetector | Uses conversation context to infer if the user expects a brief or detailed response | Influences document count and model selection
-
-## Retrieval
-RETRIEVAL | HybridRetriever | Orchestrates memory, self‑ask, analyse, web, vector and evidence repair handlers | Maximises recall and precision across retrieval sources
-RETRIEVAL | MemoryHandler | Retrieves recent session snippets and verified translation memory snippets as evidence | Uses MemoryAsEvidenceAdapter to format snippets
-RETRIEVAL | SelfAskHandler | Decomposes complex queries into sub‑questions using an LLM and aggregates evidence | Enabled when QueryComplexityGate signals complexity
-RETRIEVAL | AnalyzeHandler | Generates search tokens through morphological analysis for languages like Korean | Improves recall for non‑English queries
-RETRIEVAL | WebSearchHandler | Performs real‑time web searches with domain filters and rate limiting | Integrates AuthorityScorer to rank results by credibility
-RETRIEVAL | VectorDbHandler | Queries a vector store using similarity search to retrieve static domain knowledge | Acts as fallback when web retrieval fails or is disabled
-RETRIEVAL | EvidenceRepairHandler | Triggers an additional search cycle when evidence is insufficient | Runs at most once to prevent infinite loops
-RETRIEVAL | DefaultRetrievalHandlerChain | Defines handler order: memory → self‑ask → analyse → web → vector → repair | Configurable via RetrieverChainConfig
-RETRIEVAL | RetrievalHandler | Interface that decouples handlers; each handler catches exceptions and returns partial results | Enables independent unit testing and fault isolation
-RETRIEVAL | RetrievalMode | Supports RETRIEVAL_ON (web and vector), RAG_ONLY (vector) and RETRIEVAL_OFF (memory only) | Configurable per session
-RETRIEVAL | SearchContext | Contains retrieved documents, warnings, timing and evidence quality flags | Passed to ranking and context builder
-RETRIEVAL | ReciprocalRankFuser | Merges lists from web, vector, memory and self‑ask using reciprocal rank fusion (RRF constant k) | Softmax fusion optional
-RETRIEVAL | LightWeightRanker | Performs quick lexical ranking to reduce candidate list before deeper scoring | Used prior to cross‑encoder reranking
-RETRIEVAL | SelfAskWebSearchRetriever | Performs web searches for each sub‑query and merges snippets | Supports decomposition of complex questions
-RETRIEVAL | AnalyzeWebSearchRetriever | Consumes tokens from AnalyzeHandler and applies morphological filters for targeted search | Enhances recall for languages with complex morphology
-RETRIEVAL | EmbeddingClient | Generates embeddings for queries and documents using OpenAI or local models | VectorDbHandler uses these embeddings for similarity search
-RETRIEVAL | EmbeddingStoreManager | Manages vector indexes and embeddings within the vector store | Supports nearest neighbour search and index management
-RETRIEVAL | TavilyWebSearchRetriever | Placeholder for alternative web search service integration | Enables future domain‑specific search integration
-RETRIEVAL | Handlers | Respect session isolation by including session metadata in cache keys | Prevent cross‑session data leakage
-RETRIEVAL | Retrieval caches | Store results per query and session ID with expiration to reduce API calls | Configurable via CacheConfig
-RETRIEVAL | EvidenceRepairHandler | Uses SmartQueryPlanner to expand or reformulate the query for a second attempt | Increases recall without runaway searches
-
-## Reranking
-RERANK | AuthorityScorer | Weights documents based on domain credibility tiers (OFFICIAL, TRUSTED, COMMUNITY, UNVERIFIED) using exponential decay | Domain weights configurable via application.yml
-RERANK | RelationshipRuleScorer | Adjusts scores based on dynamic rules from the knowledge base (preferred partners, discouraged pairs, contains, etc.) | Supports custom rule types and weights
-RERANK | DefaultLightWeightRanker | Provides an initial lexical ranking based on token overlap and heuristics | Acts as a coarse filter before deeper scoring
-RERANK | CrossEncoderReranker | Uses a BERT‑like model to compute semantic similarity between query and document | Only top candidates proceed due to computational cost
-RERANK | EmbeddingModelCrossEncoderReranker | Integrates cross‑encoder scores with rule scores and synergy bonuses | Applies dynamic synergy weight and authority decay multiplier
-RERANK | Synergy bonuses | Reflect user feedback; positive and negative reactions adjust ranking | AdaptiveScoringService computes bonuses per domain
-RERANK | AdaptiveScoringService | Calculates synergy bonuses using positive/negative feedback counts and smoothing constant k | Domain‑specific and smoothed
-RERANK | Reranker settings | Configurable via application.yml, including top‑n candidates and weight factors | Supports A/B testing of ranking strategies
-RERANK | NoopCrossEncoderReranker | Disables cross‑encoder scoring when not required | Acts as pass‑through reranker in low‑cost scenarios
-RERANK | ReciprocalRankFuser | Assigns scores based on reciprocal of rank positions across lists; k smooths lower ranks | Documents high in any list receive a boost
-RERANK | Softmax fusion | Converts scores to probabilities using temperature; optional alternative to RRF | Sharpens focus on top documents
-RERANK | CrossScore formula | Final score = crossScore + ruleBoost + synergyBonus; may be normalized or clamped | Prevents domination by a single factor
-
-## Path‑Conformity Scoring
-
-PATH | PathAlignedScorer | Compares user traversal to canonical trajectories mined from historical logs | Aligned paths gain up to a ~9× probability boost
-PATH | NeuralPathFormationService | When conformity falls below threshold yet data coverage is sufficient, forms lightweight neural nets and persists new paths | Lightweight models refine canonical paths over time
-PATH | Configuration | Controlled via `scoring.path-alignment.enabled`, `path.formation.threshold` and other keys in `application.yml` | Tune the multiplier and reinforcement threshold
-PATH | Example workflow | A historic journey `A→B→C` is stored; a new session `A→B` matches the canonical path and receives a boost; divergence to `X` triggers neural‑net formation using accumulated `A→B→X` traces | Data collection refines path scores continuously
-
-## Context & Prompt
-CONTEXT | ContextOrchestrator | Builds unified context from ranked documents, memory and history within token budgets | Removes duplicates and prioritizes authoritative sources
-CONTEXT | PromptBuilder | Constructs system, user and context prompts with standardized template | Injects dynamic rules, protected terms and instructions
-CONTEXT | PromptContext | Holds user query, subject, domain, protected terms and section specification | Used to build prompts
-CONTEXT | Section ordering | Guides the LLM through context sections: previous answer, vector RAG, history, web, memory | Defined by PromptBuilder
-CONTEXT | Context assembly | Prioritizes authoritative sources and demotes low‑credibility documents | Ensures maximal information density
-PROMPT | System prompts | Include instructions about allowed behaviours (discourage hallucinations, cite sources) | Guide the model’s conduct and style
-PROMPT | User prompts | Include sanitized query and indicate intent (recommendation, explanation, analysis, comparative) | Provide context for model routing
-PROMPT | Context prompts | Include selected evidence sections such as previous answer, vector RAG, history, web and memory | Structured within token limit according to verbosity
-PROMPT | PromptBuilder | Avoids ad‑hoc string concatenation; centralizes prompt construction; ensures proper escaping | Improves maintainability and safety
-PROMPT | Verbosity hints | Influence the number of documents selected and minimum answer length | Align with verbosity profiles (brief, standard, deep, ultra)
-PROMPT | Audience hints | Allow tailoring answers to novice or expert users | Optional hint used in prompts
-PROMPT | Citation style | Determines whether citations appear inline or as footnotes | Configurable via PromptContext
-PROMPT | PromptContext.sectionSpec | Indicates which context sections should appear for given verbosity level | Generated by SectionSpecGenerator
-PROMPT | Dynamic interaction rules | Injected into prompts to inform the model about preferred or discouraged combinations | Derived from knowledge base rules
-
-## Generation
-GENERATION | ModelRouter | Selects the appropriate language model based on intent, risk, verbosity and token budget | Routes high‑stakes queries to high‑tier models
-GENERATION | MOE escalation | Routes to high‑tier model when intent in high‑stakes list, risk is high, verbosity is deep/ultra or token budget exceeds threshold | Supports high‑stakes tasks
-GENERATION | ChatModel | Abstracts underlying LLM provider and exposes unified API for sending prompts | Enables switching providers without code changes
-GENERATION | DynamicChatModelFactory | Creates ChatModel instances with appropriate parameters when no injected bean exists | Supports dynamic model creation and caching
-GENERATION | Model resolution | Prefers injected beans, then cached models, then dynamic factory creation | Ensures fallback path when provider unavailable
-GENERATION | Temperature policy | Uses lower temperature (e.g., 0.3) for high‑tier models and higher temperature (e.g., 0.7) for base models | Balances stability and creativity
-GENERATION | AnswerExpanderService | Ensures deep and ultra verbosity answers meet minimum word counts by expanding concise answers | Triggered by LengthVerifierService
-GENERATION | LengthVerifierService | Checks whether the generated answer satisfies length requirements before expansion | Works with AnswerExpanderService
-GENERATION | ModelRouter logging | Logs routing decisions including intent, risk, verbosity and token budget | Provides transparency for debugging and monitoring
-
-## Verification & Sanitization
-VERIFY | FactVerifierService | Computes coverage and contradiction metrics by comparing draft answer to retrieved context | Rejects answers with low coverage or high contradiction
-VERIFY | EvidenceGate | Checks whether sufficient evidence exists before LLM generation; triggers EvidenceRepairHandler if insufficient | Skips generation when evidence is lacking
-VERIFY | NamedEntityValidator | Ensures named entities in draft answer appear in context or memory; unknown names cause fallback response '정보 없음' | Prevents hallucinated names
-VERIFY | ClaimVerifierService | Extracts individual claims and verifies each against context using an LLM or fact‑checking API | Removes unsupported claims; unsupported answers become '정보 없음'
-VERIFY | Claim classification | Classifies claims as supported, contradicted or lacking information | Guides modification or removal of unsupported assertions
-VERIFY | Evidence sufficiency metrics | Include number of subject mentions, authority scores and variety of sources | Domain‑specific thresholds enforced
-VERIFY | AnswerSanitizers | Enforce domain policies by removing disallowed recommendations, profanity or unsafe content | Implemented as chain of responsibility
-VERIFY | GenshinRecommendationSanitizer | Filters invalid character pairings in Genshin domain | Activated only when game domain is active
-VERIFY | SmartFallbackService | Suggests refined queries when system cannot answer due to insufficient evidence | Encourages user to refine question or narrow scope
-VERIFY | FallbackHeuristics | Generate alternative queries by adding details or narrowing scope; encapsulated in FallbackResult | Helps users improve retrieval
-VERIFY | Verification logging | Logs claim verdicts and evidence metrics for audit and debugging | Enhances transparency and traceability
-VERIFY | External fact checkers | ClaimVerifierService may call services like FactCheck.org or Wikidata to validate claims | Extensible via configuration
-SANITIZE | AnswerSanitizers | May insert warning messages for sensitive topics; enforce profanity filtering and policy compliance | Domain‑specific sanitizers follow general ones
-SANITIZE | Sanitizer chain order | General sanitizers run before domain‑specific ones to ensure proper layering | Order matters for correct modifications
-
-## Reinforcement Learning
-REINFORCE | MemoryReinforcementService | Computes energy scores for memory snippets using similarity, Q‑value, success ratio, confidence and recency | Weighted sum with configurable weights
-REINFORCE | Energy calculation | Uses Boltzmann energy with temperature control; recency decays via exponential decay; min and max content length filters | Parameters from HyperparameterService
-REINFORCE | ReinforcementQueue | Manages reinforcement tasks asynchronously to avoid blocking chat loop | Updates energy scores and stores results
-REINFORCE | TranslationMemoryRepository | Stores snippets of previous answers and context for reuse | MemoryWriteInterceptor writes verified answers into translation memory
-REINFORCE | AdaptiveScoringService | Computes synergy bonuses based on user feedback; bonus = (positive − negative)/(positive + negative + k) × scaling factor | Domain‑specific and smoothed
-REINFORCE | FeedbackController | Captures thumbs‑up and thumbs‑down from users and updates SynergyStat records | Drives adaptive scoring and personalization
-REINFORCE | SynergyStatRepository | Persists synergy statistics (domain, subject, partner, positive and negative counts) | Enables long‑term personalization
-REINFORCE | StrategySelectorService | Implements multi‑armed bandit algorithm to select retrieval strategies (web‑first, vector‑first, hybrid, self‑ask) | Softmax policy with temperature
-REINFORCE | StrategyPerformance | Records success, failure counts and average rewards per strategy | Used for bandit selection and reward computation
-REINFORCE | Bandit annealing | Anneals exploration temperature over time based on number of interactions | Balances exploration and exploitation
-REINFORCE | DynamicHyperparameterTuner | Adjusts weights such as synergy weight, authority weight and exploration temperature based on aggregated metrics | Periodic updates ensure adaptation
-REINFORCE | BanditSelector | Selects memory entries according to energy and temperature | Ensures exploration of both new and old entries
-
-## Meta & Knowledge Base
-META | HyperparameterService | Provides dynamic retrieval and reranking parameters such as synergy weight at runtime; fetches from system properties or environment variables | Enables A/B testing without redeploy
-META | StrategySelectorService logging | Logs strategy choices and rewards for analysis | Supports debugging meta‑learning behaviour
-META | RewardHyperparameterTuner | Tunes reward weights for multi‑metric reward function using grid search or gradient‑free optimization | Improves meta‑learning performance
-META | Synergy bonuses | Domain‑specific; feedback in one domain does not affect another | Prevents cross‑domain contamination
-META | DynamicHyperparameterTuner | May increase exploration when performance drops unexpectedly and decrease when converging | Ensures balanced learning across sessions
-KB | KnowledgeBaseService | Abstracts access to domain entities, attributes and interaction rules stored in relational tables | Decouples domain knowledge from code
-KB | DomainKnowledgeRepository | Stores entities with domain, type and name; EntityAttributeRepository stores key‑value attributes | CRUD operations via JPA
-KB | SubjectResolver | Identifies the subject of a query by matching entity names; chooses longest or most relevant match; uses fuzzy matching when needed | Informs retrieval and prompt building
-KB | Interaction rules | Stored as relationships between entities: CONTAINS, IS_PART_OF, PREFERRED_PARTNER, DISCOURAGED_PAIR, AVOID_WITH | Administrators can define new rules via database or admin tools
-KB | RelationshipRuleScorer | Evaluates documents against interaction rules and adjusts ranking scores accordingly | Uses weights from HyperparameterService
-KB | Knowledge base caching | Stores frequently accessed entity names, attributes and rules to reduce database queries | Improves performance and scalability
-KB | Knowledge base updates | Do not require redeploying system; new entities and rules can be inserted via scripts or admin tools | Facilitates domain expansion and agility
-KB | Dynamic rules | Inform both prompt generation and ranking to respect domain policies | Supports preferred and avoided combinations across domains
-
-## Session & Caching
-SESSION | Session isolation | Ensures each user's conversation history, caches and reinforcement data remain separate | Session ID (META_SID) keys caches and retrieval results
-SESSION | Caffeine caching | Accelerates retrieval and memory access without leaking data between sessions; caches expire after configurable times | Configured via CacheConfig and application.yml
-SESSION | SSE streaming | Streams intermediate progress (retrieval progress, context construction, draft answer, verification outcomes) to clients via Server‑Sent Events | Improves transparency and user trust
-SESSION | PersistentChatMemory | Stores conversation history beyond session to enable long‑term memory | Provides memory to MemoryHandler across sessions
-SESSION | Synergy caches | Store computed bonuses for subject–partner pairs within a session; update persistent statistics after feedback | Maintains personalization per session
-SESSION | SessionConfig | Defines how session metadata is propagated; session caches cleared after expiration | Enforces privacy and resource management
-
-## Configuration & Environment
-CONFIG | application.yml | Specifies minimum word counts and token budgets per verbosity level; max documents per context; reranker keep‑top‑n; model names; domain weights | Enables tuning without code changes
-CONFIG | Retrieval mode | retrieval.mode chooses between RETRIEVAL_ON, RAG_ONLY and RETRIEVAL_OFF | Controls search behaviour via configuration
-CONFIG | Hyperparameter settings | synergy weight, authority weight, smoothing constant k and other scoring constants configured externally | Allows real‑time adjustments
-CONFIG | Cache specifications | Define maximum sizes and expiration times for caches like retrieval, memory, synergy and knowledge base | Managed via application.yml and CacheConfig
-CONFIG | Environment variables | OPENAI_API_KEY, PINECONE_API_KEY, NAVER_API_CLIENT_ID and other credentials stored as environment variables | Secure handling of secrets and tokens
-CONFIG | Session expiration | session.expire-after defines how long sessions remain active before caches are cleared | Balances resource use and privacy
-CONFIG | LangChain4j version purity | Enforces consistent module versions (e.g., 1.0.1) to avoid runtime incompatibilities | Aborts startup on conflicts
-CONFIG | Model routing keys | router.moe.high, router.moe.mini specify high‑tier and base model names; router.allow-header-override flag controls header overrides | Configures model routing logic
-CONFIG | Knowledge curation | agent.knowledge-curation.enabled toggles autonomous knowledge curation agent on or off | Controls learning features
-CONFIG | Input distillation | abandonware.input.distillation.enabled and threshold control pre‑processing of long inputs | Uses low‑cost LLM to summarize long messages and asks for user confirmation
-CONFIG | Reranker backend | abandonware.reranker.backend selects between embedding-model and onnx-runtime; onnx.model-path and onnx.execution-provider configure ONNX settings | Supports local ONNX reranking
-CONFIG | Learning pipeline | gemini.backend and related keys configure Gemini integration; learning.enabled toggles learning features | Supports Gemini‑based knowledge extraction and tuning
-CONFIG | Understanding module | abandonware.understanding.enabled and model/timeout keys control post‑answer understanding and summarization | Emits UNDERSTANDING SSE event when enabled
-
-## User Interface & Frontend
-UI | chat-ui.html | Provides chat interface with text input, voice recognition, file upload, advanced search options and toggles | Sends requests via chat.js and displays results via SSE events
-UI | chat.js | Handles SSE events, loading states, voice transcription, file attachments and RAG control options; persists user settings in localStorage | Sends ChatRequestDto with user preferences and toggles
-UI | SSE event handling | Recognises event types such as retrieval progress, NEEDS_CONFIRMATION, UNDERSTANDING and thought events; renders summaries and confirmation buttons | Enables interactive flows and transparency
-UI | Persona selection | Allows users to choose personas (tutor, analyzer, brainstormer); cognitive state extractor determines persona from intent | Dynamic persona prompts loaded from configuration
-UI | RAG control panel | Provides checkboxes for search scopes (web, documents) and source credibility filters; passes options in ChatRequestDto | Allows real‑time RAG configuration by user
-UI | Multimodal inputs | Supports image uploads via Base64 encoding; includes imageBase64 in ChatRequestDto; backend integrates Gemini image models | Enables multimodal queries combining text and images
-UI | Voice input | Adds microphone icon; uses Web Speech API to transcribe speech into text; transcribed text populates message input | ChatRequestDto records inputType 'voice'
-UI | Help button | Adds help button (#sendBtnHelp) triggering popover (#helpPopover); CSS styles defined for help icon and popover | Buttons set type="button" to prevent form submission
-UI | Thought process panel | Displays AI reasoning steps streamed via thought SSE events | Allows users to see how the system analyses queries and retrieves evidence
-UI | Cancel generation | Adds a stop button enabling users to cancel long‑running responses | Backend exposes /api/chat/cancel endpoint to terminate the streaming task
-
-## Change Log & Enhancements
-CHANGE | EmbeddingModelCrossEncoderReranker | Adds dynamic synergy weight bonus and authority decay multiplier to final score; synergy weight fetched at runtime from HyperparameterService | Integrates authority tiers into reranking
-CHANGE | AuthorityScorer | Implements centralized credibility analyzer and exponential decay constants; adds getSourceCredibility() and decayFor() methods | Old weightFor() marked deprecated; URL host parsing enhanced
-CHANGE | HyperparameterService | Adds getRerankSynergyWeight() method to fetch dynamic synergy weight from system properties or environment variables | Supports hotfixes and A/B testing without redeployment
-CHANGE | RerankSourceCredibility | Creates new enum with values OFFICIAL, TRUSTED, COMMUNITY, UNVERIFIED specifically for reranking | Avoids conflicts with existing SourceCredibility enum
-CHANGE | ModelRouter | Adds heuristics for MOE escalation based on intent, risk, verbosity and token budget; logs routing decisions; supports header override allowlist | Defaults to base model otherwise; preferences injected beans, cache, then dynamic factory
-CHANGE | OnnxCrossEncoderReranker | Introduces ONNX‑based cross‑encoder reranker activated via abandonware.reranker.backend=onnx-runtime; falls back to embedding model if ONNX model missing | Supports local ONNX inference via onnxruntime
-CHANGE | RequestHeaderModelOverrideFilter | Blocks non‑whitelisted X‑Model‑Override headers to prevent misuse; allowlist configurable | router.allow-header-override defaults false
-CHANGE | InputDistillationService | Summarises long user inputs using a low‑cost LLM and asks user confirmation via NEEDS_CONFIRMATION SSE event | Configured via abandonware.input.distillation.enabled and threshold; reduces cost and prevents runaway tokens
-CHANGE | Persona and RAG controls | Adds persona selection and advanced search options in UI; extends ChatRequestDto with officialSourcesOnly and searchScopes flags | HybridRetriever respects these flags and dynamic persona prompts loaded from configuration
-CHANGE | Multimodal support | Adds imageBase64 in ChatRequestDto; GeminiClient handles multimodal requests; backend processes both text and image content | Uses gemini‑1.5‑pro model for images and integrates image context into retrieval
-CHANGE | Comparative analysis | CognitiveStateExtractor detects COMPARATIVE_ANALYSIS intent when multiple entities and comparison keywords appear; ChatService orchestrates dynamic retrieval and structured comparative prompts | Criteria generated dynamically for evaluation
-CHANGE | Autonomous exploration | SmartFallbackService logs failed queries as knowledge gaps; AutonomousExplorationService analyses gaps, formulates research queries and learns autonomously | Free‑tier API throttling enforced to control costs
-CHANGE | Knowledge consistency verifier | Adds agent to audit knowledge base for contradictions using LLM; flags inconsistent rules and decays confidence of stale knowledge | Runs periodically with throttle to maintain knowledge integrity
-CHANGE | Learning enhancements | GeminiCurationService extracts structured knowledge; LearningWriteInterceptor writes new knowledge into KB and vector store after verification; LearningController exposes REST endpoints for ingest, batch and tuning | Learning features optional and gated by learningEnabled flag
-CHANGE | Understanding module | Adds AnswerUnderstandingService to convert final answers into TL;DR, key points, action items and other structured summaries; emits UNDERSTANDING SSE events; memory indexing of distilled summaries | Controlled by understandingEnabled flag; uses strict JSON schema with fallback summariser
-CHANGE | Dynamic vector search | Enables automatic switch to VECTOR_SEARCH execution mode when education‑related keywords (e.g., 'academy', 'government subsidy') are detected; bypasses keyword search and performs vector similarity retrieval | Improves semantic matching in new domains
-CHANGE | Self‑Learning RAG Pipeline Activation | Replaces stub GeminiClient implementations with live Google Gemini API calls, enabling the system to learn from conversations and user feedback | Structured knowledge extraction via GeminiCurationPromptBuilder
-CHANGE | Structured Knowledge Extraction | Implements robust GeminiCurationPromptBuilder to generate JSON‑schema‑compliant prompts; extracts triples, rules and aliases from verified conversations and file content | KnowledgeBaseService persists these knowledge deltas
-CHANGE | Knowledge Base Integration | LearningWriteInterceptor writes KnowledgeDelta objects into DomainKnowledgeRepository and VectorDb after verification | Ensures that only verified knowledge is assimilated
-CHANGE | Evidence Pipeline | FactVerifierService and LearningWriteInterceptor pass complete LearningEvent objects including evidence and claims to the learning subsystem | Ensures learning triggers only with validated data
-CHANGE | Thought Process UI | Adds new "thought process" panel to chat interface; backend streams 'thought' events via SSE showing reasoning steps like analysis, search and generation | Enhances user trust and transparency
-CHANGE | Response Generation Cancellation | Users can stop long‑running response generation via a "Stop Generation" button in the UI; backend exposes /api/chat/cancel endpoint to terminate server‑side streaming tasks | Saves resources and improves user experience
-CHANGE | Learning Stubs & DTOs | Adds TuningJobRequest and TuningJobStatus DTOs, GeminiCurationService, GeminiBatchService and GeminiTuningService stubs; LearningController exposes REST endpoints for ingest, batch and tuning jobs | Optional via learningEnabled configuration
-CHANGE | Input Distillation Confirmation Flow | InputDistillationService returns a summary of large inputs and triggers a NEEDS_CONFIRMATION SSE event; chat.js renders summary with [Proceed] and [Cancel] buttons; user must confirm before full RAG processing | Reduces cost by avoiding unnecessary retrieval on verbose messages
-CHANGE | Dynamic Personas | Adds configuration‑driven personas (tutor, analyzer, brainstormer) under abandonware.persona namespace; CognitiveState stores persona selection; PromptBuilder loads persona instructions dynamically | Enables tailored responses based on persona
-CHANGE | RAG Control Panel | Introduces advanced search panel with checkboxes to select search scopes (web, documents) and an officialSourcesOnly toggle; ChatRequestDto carries these preferences; HybridRetriever filters sources accordingly | Allows users to fine‑tune retrieval behaviour
-CHANGE | Multimodal API and DTO | ChatRequestDto includes imageBase64 field for image uploads; ChatApiController accepts multipart requests combining text and image; GeminiClient handles multimodal requests using gemini‑1.5‑pro; LangChainChatService includes image context when calling multimodal method | Enables multimodal RAG queries
-CHANGE | Comparative Retrieval Orchestration | ChatService detects COMPARATIVE_ANALYSIS intent and dynamically generates search queries by combining identified entities with evaluation criteria (performance, story, synergy, etc.); HybridRetriever performs retrieval for each criterion | PromptBuilder constructs structured comparative prompts with separate sections per entity
-CHANGE | Comparative Prompt Engineering | PromptBuilder organizes context into sections like "### [Entity A] Information" and "### [Entity B] Information"; instructs the LLM to analyse criteria individually and summarise differences | Ensures clear, structured comparative answers
-CHANGE | Autonomous Exploration Service | AutonomousExplorationService periodically analyses logged KnowledgeGap events from SmartFallbackService, formulates research queries and uses the RAG pipeline to autonomously discover new knowledge; results feed into GeminiCurationService | Self‑learning loop operates within rate limits enforced by FreeTierApiThrottleService
-CHANGE | Knowledge Integrity & Self‑Refinement | KnowledgeConsistencyVerifier audits the knowledge base by bundling related facts and rules, querying Gemini for contradictions and decaying the confidence of stale or contradictory knowledge; DomainKnowledge entities record lastAccessedAt and confidenceScore; KnowledgeDecayService reduces confidence over time | Ensures knowledge base remains consistent and relevant
-CHANGE | FreeTierApiThrottleService | Implements centralised API rate limiting to stay within the Gemini free tier (e.g., <60 requests/minute, <1 000/day); AutonomousExplorationService and KnowledgeConsistencyVerifier depend on this service to avoid exceeding quotas | Enables continuous learning without cost
-CHANGE | File‑Based RAG Foundation | Chat interface accepts file attachments; ChatRequestDto transmits files in multipart requests; LocalFileStorageService stores files; Apache Tika extracts text; PromptBuilder injects file content into the prompt under "### UPLOADED FILE CONTEXT"; VectorStoreService generates summary and chunk vectors for interactive retrieval | Enables document‑based question answering
-CHANGE | Self‑Ask & File Retrieval | SelfAskHandler decomposes questions to search within uploaded files; SelfAskWebSearchRetriever retrieves evidence per sub‑query; ClaimVerifierService verifies claims against file content; NamedEntityValidator ensures proper nouns appear in file; MemoryReinforcementService updates energy scores based on file interactions | Ensures accurate answers grounded in uploaded documents
-CHANGE | Learning Pipeline Integration | LearningWriteInterceptor writes verified answers into KnowledgeBaseService and vector store; GeminiCurationService extracts structured knowledge; LearningController provides REST endpoints for ingesting knowledge, building datasets and running tuning jobs; ChatRequestDto includes learningEnabled flag; UI exposes a toggle for users to enable or disable learning | Provides opt‑in knowledge assimilation
-CHANGE | Intelligent Distillation Gate | ChatApiController checks input length; if above threshold, routes to InputDistillationService; the service summarises the input with a low‑cost model and returns a summary; a NEEDS_CONFIRMATION SSE event is emitted; if user accepts, summary becomes new input for full RAG; prevents token explosion and reduces costs | Configurable via abandonware.input.distillation.* keys
-CHANGE | Voice Recognition Integration | chat-ui.html adds microphone button; chat.js uses Web Speech API to capture speech and populate messageInput; ChatRequestDto includes inputType field; CognitiveStateExtractor records input type to inform pipeline; voice queries use same retrieval and verification pipeline as text queries | Enables hands‑free interaction
-CHANGE | Conditional Vector Search Execution | Added ExecutionMode enum with values KEYWORD_SEARCH and VECTOR_SEARCH to CognitiveState; CognitiveStateExtractor sets mode to VECTOR_SEARCH when education‑related keywords detected; GuardrailQueryPreprocessor bypasses keyword protection and transformation when vector search is active; HybridRetriever executes only vector retrieval and sorts results by cosine similarity | Improves semantic matching in domain‑agnostic contexts
-CHANGE | Dynamic Reranking Based on Vector Similarity | When vector search is enabled, ranking logic calculates cosine similarity between query embedding and retrieved documents; higher similarity yields higher scores; AuthorityScorer remains in effect with domain‑specific weights; RelationshipRuleScorer integrated with vector similarity scoring | Prioritises semantically relevant documents
-CHANGE | Query Preprocessor Refactor | Removed hard‑coded dependency between GuardrailQueryPreprocessor and game‑specific detectors; CognitiveStateExtractor now determines domain before guardrail processing; Non‑LLM hygiene enhancements include synonym/alias lexicon (e.g., 자바↔JVM/스프링) and lowercasing/whitespace normalization; QueryAugmentationService generates synonyms when enabled | Improves language support and reduces misclassification
-CHANGE | Generalised Authority Scorer | Eliminated hard‑coded site weights; domain‑specific credibility weights loaded from configuration; high weights assigned to government (GOV) and educational (EDU) sources when education domain is active; AuthorityScorer multiplies base score by domain weight; weights adjustable via application.yml | Ensures fair ranking across domains
-CHANGE | Rule‑Based Scorer Generalisation | RelationshipRuleScorer now incorporates vector similarity scores when education domain is detected; rule types and weights fetched dynamically from KnowledgeBaseService; discouraged combinations penalised; preferred combinations boosted | Supports complex interaction rules across domains
-CHANGE | Conditional Activation of Domain‑Specific Sanitizers | FactVerifierService activates GenshinRecommendationSanitizer only when game domain is active; other domains unaffected | Prevents contamination of answers in unrelated domains
-CHANGE | Prior‑Answer Distillation & Client Echo Learning | InputDistillationService condenses previous assistant answer before prompt injection during augmentation; new LearningItemDto carries {q, a, evidence[], ts} for client‑echo learning batches; configuration keys abandonware.augment.max-prior-chars and abandonware.learning.enabled control behaviour | Optimises token usage and enables client‑provided training data
-CHANGE | Gemini Free‑Tier Integration (Files • Structured Output • Function Calling • Embedding) | Added StructuredOutputSpec DTO and responseSchema support in PromptContext; created GeminiAnalyzeDelegate for low‑cost schema‑driven query analysis; FunctionToolBus provides unified tool registry for web.search, vector.search and files.get; GeminiFilesService handles upload, delete and inlineText; GeminiEmbeddingClient supports embedding backend; GeminiFunctionAdapter bridges model tool_calls to FunctionToolBus; configuration properties enable selective Gemini usage; RequestHeaderModelOverrideFilter blocks header overrides by default | Prepares integration of Gemini features under GPT Pro agent
-CHANGE | Gemini Delegation and Embedding Backend Switch | ChatService detects embedding.backend configuration; switches to GeminiEmbeddingClient when embedding.backend=gemini; fallback to OpenAI embedding when unset; OnnxCrossEncoderReranker activated when abandonware.reranker.backend=onnx-runtime; uses com.microsoft.onnxruntime runtime; OnnxRuntimeService loads model with CPU/CUDA/TensorRT execution provider; falls back to Jaccard similarity on missing model; build.gradle declares onnxruntime dependency | Enables local cross‑encoder inference and dynamic embedding backend
-CHANGE | Post‑Answer Understanding Module | Added AnswerUnderstanding DTO with fields tldr, keyPoints[], actionItems[], decisions[], risks[], followUps[], glossary[], entities[], citations[], confidence; implemented AnswerUnderstandingService to call Gemini with strict JSON schema and fallback summariser; UnderstandAndMemorizeInterceptor invokes service after verification and before reinforcement; ChatStreamEmitter emits UNDERSTANDING SSE events; ChatRequestDto includes understandingEnabled flag; front‑end toggle persisted in localStorage; memory indexes distilled summaries into TranslationMemoryRepository and EmbeddingStoreManager | Provides structured TL;DR and key points to users and memory
-CHANGE | Retrieval Chain Hardening & Query Morphing | DefaultRetrievalHandlerChain re‑ordered to memory → self‑ask (gated) → analyse (gated) → web → vector → repair; session memory hydration injects recent history into SearchContext; QueryComplexityGate decides whether to run SelfAsk and Analyze; Web search always attempted before vector search; EvidenceRepairHandler triggers additional search if evidence insufficient; early exit when topK fulfilled; morphological query variants generated for Korean (splitting continuous Hangul blocks and normalising hyphens); semantic variants added (e.g., 국비지원 학원); deduplication and hygiene applied; all handlers catch exceptions and return partial results | Improves recall and robustness
-CHANGE | Version Purity & Diagnostics | Added VersionPurityCheck to verify a single dev.langchain4j major/minor line is present; startup aborts on conflicting versions; introduced StageSpan model to collect timing and hit counts per retrieval stage; RetrievalDiagnosticsCollector aggregates spans, warnings and hits; RetrievalDiagAspect wraps handlers to measure execution time and forward spans; TraceFilter and ReactorMdcLifter propagate sessionId and traceId across asynchronous boundaries; PromptMasker and PromptDebugLogger mask secrets in prompts and completions; DiagnosticsDumpService emits structured run records (sessionId, model usage, retrieval metrics, verification results, reinforcement feedback) at pipeline end; logs PII only as hashes or lengths | Enhances observability, performance analysis and privacy
-CHANGE | Search Quality Stabilization via Gemini Hygiene | When Gemini query hygiene is enabled, LLM summarises and normalizes user questions to remove noise and unify formats; WebSearchHandler receives cleaner queries resulting in higher recall; for Gemini OFF mode, added non‑LLM hygiene improvements: strip code fences and newlines before JSON parse; synonym and alias lexicon for Korean; multi‑query augmentation and Reciprocal Rank Fusion; fail‑open JSON parsing fallback; morphological variants for improved recall | Stabilises search quality even without LLM assistance
-CHANGE | GPT Pro Agent with Gemini Free‑Tier MOE Routing | GPT Pro remains primary generator; Gemini sub‑models used for hygiene, retrieval, analysis and verification within free‑tier limits; added global quota counters (RPM, RPD, TPM) aggregated per model; soft limit at 80% triggers degrade from Gemini Pro to Gemini Flash and Flash‑Lite; MOE routing escalates once per turn when risk high, verbosity deep/ultra, intent high‑stakes or token budget exceeds 1 536; EvidenceGate blocks generation when context insufficient and triggers repair; verification stack includes claim/entity checks and sanitization; retrieval chain hardened; reranker upgraded with dynamic synergy weight and authority decay; InputDistillationService for large inputs; UNDERSTANDING module with SSE; personas and RAG controls; multimodal image path; comparative analysis; diagnostics and safety; configuration keys for models, quotas and toggles | Provides robust, cost‑effective multi‑provider routing with safety guards
-CHANGE | JSON Parsing Resilience for Understanding | AnswerUnderstandingService forces JSON mode in Gemini requests (response_mime_type=application/json); instructs model not to wrap output in code fences and to escape newlines; pre‑parser sanitizer strips fences, extracts first balanced JSON object and escapes control characters; optional lax parser (abandonware.understanding.parser.lax) allows unescaped control chars, single quotes and trailing commas; on parse failure, a one‑shot fixer escapes control characters inside strings and retries; on persistent failure, fallback summariser produces TL;DR; counters track strict parse, repair and fallback occurrences; logs only hashes and outcome labels | Eliminates JSON parsing failures from malformed LLM outputs
-CHANGE | Retrieval Diagnostics & Hardening | StageSpan records duration and hitCount per handler; RetrievalDiagnosticsCollector aggregates spans and warns on partial failures; DefaultRetrievalHandlerChain early exits when enough evidence collected; duplicate pruning included; EvidenceRepairHandler runs at most once; retrieval chain continues after non‑fatal exceptions; prompt centralisation ensures all prompts built via PromptBuilder; ModelRouter heuristics remain deterministic; JSON parser resilience integrated into verification and understanding; EvidenceGate aborts or repairs generation when context weak; Claim and entity checks enforce supported or omitted responses; PII‑safe logging shows only lengths and hashes | Improves robustness, reduces errors and enables detailed telemetry
-CHANGE | Retrieval Query Hygiene & Morphology Enhancements | AnalyzeWebSearchRetriever generates Korean spacing variants by splitting continuous Hangul blocks (e.g., “국비학원” → “국비 학원” and “국 비 학원”); normalises hyphens to spaces or removal; adds semantic variants like “국비지원 학원”; duplicates removed and capped via QueryHygieneFilter; morphological variant generation wrapped to never hard‑fail; synonyms and alias lexicon added for Java/JVM/스프링; stopword cleanup applied; multi‑query generation with Reciprocal Rank Fusion to boost recall; fail‑open on Understanding parse errors to prevent regressions when hygiene unavailable | Enhances search recall and query robustness for Korean and mixed‑language queries
-
-## Bug Fixes & Miscellaneous
-FIX | UI | Resolved duplicate "like/dislike" buttons and model names appearing on first message of new chat session; chat.js now updates initial loading bubble instead of creating a new one | Addresses UI duplication bug
-FIX | Ranking Bias | Corrected ranking bias that unfairly down‑weighted official sources; removed preferential weighting for specific game community sites; ranking now based on authority scores configured via application.yml | Prevents bias towards untrusted sources
-FIX | Query Contamination | Fixed bug where general queries were misinterpreted as game terms; removed hard‑coded dependency in GuardrailQueryPreprocessor and improved domain detection logic | Ensures domain‑agnostic processing
-FIX | JSON Parse Failures | Eliminated recurrent JSON parsing failures in AnswerUnderstandingService caused by code fences and unescaped control characters in Gemini outputs | Ensures understanding module reliability
-FIX | Session UI | Ensured SSE event handler recognises new events and displays appropriate UI components; prevented UI freeze when unknown events received | Improves user experience
-
-## Glossary & Definitions
-TERM | RAG | Retrieval‑augmented generation; combines neural language models with external knowledge sources to ground answers in evidence
-TERM | SelfAsk | Technique where complex questions are decomposed into sub‑questions using an LLM; answers aggregated to answer original question
-TERM | Reciprocal Rank Fusion (RRF) | Ranking method that combines multiple ranked lists by summing reciprocal rank values; smooths contributions using constant k
-TERM | Cross‑Encoder | Model that jointly encodes a query and a document to compute semantic similarity; more accurate than embeddings but computationally expensive
-TERM | Vector Search | Retrieval method using embeddings to find semantically similar documents in a vector store; supports nearest neighbour search
-TERM | ONNX | Open Neural Network Exchange; format for representing neural networks that can be executed locally via onnxruntime
-TERM | Gemini | Google Gemini API providing LLM and embedding models; used for query analysis, embeddings, multimodal processing and knowledge extraction
-TERM | MOE | Mixture of Experts; dynamic model routing scheme that selects among multiple models based on intent, risk, verbosity and token budget
-TERM | SSE | Server‑Sent Events; one‑way streaming protocol over HTTP used to deliver intermediate progress and structured data to clients
-TERM | Knowledge Delta | Structured set of extracted knowledge (triples, rules, aliases) produced by curation services and integrated into the knowledge base
-
-Core Pipeline — add
-
-QUERY | TranslitNormalizer | Cross-lingual normalization of ambiguous names (ko↔en romanization, spacing/hyphen/diacritic variants, typo tolerance via token overlap/Levenshtein) | Increases recall for mixed-language & noisy inputs | Produces normalized variants for downstream candidate generation
-QUERY | DisambiguationDecisionPolicy | Auto-resolve if Top-1 ≥ threshold and (Top-1 − Top-2) ≥ margin; otherwise trigger a single clarify step | Prevents premature guesses; formalizes “ask once” rule | Defaults: threshold=0.62, margin=0.08 (configurable)
-
-Retrieval — add
-
-RETRIEVAL | EntityDisambiguationHandler | Pre-handler before SelfAsk/Analyze; builds candidates (lexical + vector + optional web-seed) and returns DisambiguationResult {resolvedEntity?, candidates[], scores, decidedBy, confidence} | Decouples ambiguity resolution from retrieval; keeps chain fault-tolerant | Chain order: Memory → Disambiguation → SelfAsk → Analyze → Web → Vector → Repair
-RETRIEVAL | CandidateSetBuilder | Lexical from aliases/regex/TranslitNormalizer; Vector from namespace="entity" top-K; Web-seed from OFFICIAL/TRUSTED domains (rate-limited) | Balances precision/recall while capping cost | Web-seed is optional; failures are ignored (chain continues)
-
-Reranking — add
-
-RERANK | DisambiguationScorer | Final score = α·cosine + β·authority + γ·locale + δ·domain + ε·tokenOverlap + ζ·priorSynergy | Combines semantic fit with meta priors | Defaults: α=0.55, β=0.20, γ=0.10, δ=0.10, ε=0.05, ζ=0–0.05
-
-Context & Prompt — add
-
-PROMPT | Entity Disambiguation section | Inject ### ENTITY DISAMBIGUATION via PromptBuilder only; no ad-hoc string concat | Keeps templates testable and safe | Limit to top-3 candidates, ≤240 chars per blurb; trim on token pressure
-
-Generation — add
-
-GENERATION | Low-confidence MOE escalation | Escalate once to high-tier model when confidence < 0.7 or intent ∈ {FACT_CHECK, HIGH_RISK} | Stabilizes high-stakes answers | Logged with reason; single-turn escalation only
-
-Verification & Sanitization — add
-
-VERIFY | Gate on resolution | If resolvedEntity missing or contradicts context, block generation via EvidenceGate and return safe fallback with SmartFallback suggestions | Avoids hallucinated entities | NamedEntityValidator only passes once entity is resolved
-
-Session & Diagnostics — add
-
-SESSION | Disambiguation metrics | Counters: disambig.auto, disambig.user, disambig.abort, alias.upsert.count | Operability & QA | N/A
-SESSION | Retrieval span | Span disambiguation records {top1, top2, margin, decidedBy, candidateCount, confidence} | Observability for tuning | Add namespace, embedding_model_id, dim, topK as tags
-
-Configuration & Environment — add
-
-CONFIG | Disambiguation keys | abandonware.disambiguation.enabled=true; threshold; margin; top-k; authority-weight; locale-weight; domain-weight; prior-synergy-weight; web-seed-enabled | Runtime tuning without redeploy | Matches defaults in CHANGELOG 1.3.0
-CONFIG | Entity vector namespace | abandonware.vector.entity.embedding-model-id; dim; create-if-missing=true; strict-dimension=true | Prevents embedding shape drift | Keep entity vectors separate from document vectors
-CONFIG | Version purity gate | Enforce a single dev.langchain4j major/minor line (e.g., 1.0.1) across build files; STOP on mixed 0.2.x vs 1.0.x | Avoids runtime conflicts | Scan build.gradle* / settings.gradle / gradle.lockfile / versions.toml
-
-User Interface & Frontend — add
-
-UI | SSE: DISAMBIGUATION | One modal per turn with {query, candidates[{id,name,kind,blurb,country,snippets[]}], timeoutSec}; POST selection to resolver | Human-in-the-loop on low margins | Default timeout 12s; on timeout, safely abort and propose SmartFallback
-
-Change Log & Enhancements — add
-
-CHANGE | Generalized Entity Disambiguation (pre-chain) | Adds pre-handler, scorer, prompt section, SSE clarify, and diagnostics; supports ambiguous unknowns like “DW Akademie”, “Hanwha Veda/Beda”, etc. | Safer routing and fewer false resolutions | Config-gated, backwards compatible
-BUILD | LangChain4j version purity | Hard gate in CI; report only conflicting coordinates on failure | Deterministic builds | Blocks startup on conflict
-Core Pipeline — ADD
-
-QUERY | TranslitNormalizer | Cross-lingual normalization of ambiguous names (ko↔en romanization, spacing/hyphen/diacritic variants, typo tolerance via Levenshtein/token overlap) | Boosts recall for mixed-language & noisy inputs | Emits normalized variants for candidate generation
-QUERY | DisambiguationDecisionPolicy | Auto-resolve if Top-1 ≥ threshold and (Top-1 − Top-2) ≥ margin; otherwise trigger a single clarify step | Prevents premature guesses; formalizes “ask once” rule | Defaults: threshold=0.62, margin=0.08 (configurable)
-QUERY | DisambiguationResult | Container for {resolvedEntity?, candidates[], scores, decidedBy, confidence} | Standardizes outputs for downstream handlers | Logged to diagnostics when enabled
-
-Retrieval — ADD
-
-RETRIEVAL | EntityDisambiguationHandler | Pre-handler before SelfAsk/Analyze; builds candidates (lexical + vector + optional web-seed) and returns DisambiguationResult | Decouples ambiguity resolution; keeps chain fault-tolerant | Chain: Memory → Disambiguation → SelfAsk → Analyze → Web → Vector → Repair
-RETRIEVAL | CandidateSetBuilder | Sources candidates from aliases/regex/TranslitNormalizer, vector top-K (namespace="entity"), and OFFICIAL/TRUSTED web-seed | Balances precision/recall while capping cost | Web-seed optional; failures ignored (chain continues)
-RETRIEVAL | RetrievalHandlerPostProcessor | Wraps all RetrievalHandler beans so EntityDisambiguationHandler always runs first | No edits to existing chain; pass-through on errors | Spring BeanPostProcessor
-
-Reranking — ADD
-
-RERANK | DisambiguationScorer | Final score = α·cosine + β·authority + γ·locale + δ·domain + ε·tokenOverlap + ζ·priorSynergy | Combines semantic fit with meta priors | Defaults: α=0.55, β=0.20, γ=0.10, δ=0.10, ε=0.05, ζ=0–0.05
-
-Context & Prompt — ADD
-
-PROMPT | Entity Disambiguation section | Inject “### ENTITY DISAMBIGUATION” via PromptBuilder only; no ad-hoc string concat | Keeps templates testable and safe | Limit top-3 candidates; ≤240 chars per blurb; trim on token pressure
-
-Generation — ADD
-
-GENERATION | Low-confidence MOE escalation | Escalate once to high-tier model when confidence < 0.70 or intent ∈ {FACT_CHECK, HIGH_RISK} | Stabilizes high-stakes answers | Logged with reason; single-turn escalation only
-
-Verification & Sanitization — ADD
-
-VERIFY | Gate on resolution | If resolvedEntity missing or contradicts context, block generation via EvidenceGate and return safe fallback with SmartFallback suggestions | Avoids hallucinated entities | NamedEntityValidator passes only after resolution
-
-Session & Diagnostics — ADD
-
-SESSION | Disambiguation metrics | Counters: disambig.auto, disambig.user, disambig.abort, alias.upsert.count | Operability & QA | Exported via diagnostics endpoint
-SESSION | Retrieval span tags | Record {top1, top2, margin, decidedBy, candidateCount, confidence} in disambiguation span | Observability for tuning | Add namespace, embedding_model_id, dim, topK as tags
-
-Configuration & Environment — ADD
-
-CONFIG | Disambiguation keys | abandonware.disambiguation.enabled, threshold, margin, topK, authority-weight, locale-weight, domain-weight, prior-synergy-weight, web-seed-enabled | Runtime tuning without redeploy | Defaults match CHANGELOG 1.3.0
-CONFIG | Entity vector namespace | abandonware.vector.entity.embedding-model-id, dim, create-if-missing=true, strict-dimension=true | Prevents embedding shape drift | Keep entity vectors separate from document vectors
-
-Knowledge Base — ADD
-
-KB | DomainEntity / EntityAlias / EntityFeature | Canonical entities, aliases and features stored as JPA entities | Decouples domain knowledge from code | Repositories: DomainEntityRepository, EntityAliasRepository, EntityFeatureRepository
-
-User Interface & Frontend — ADD
-
-UI | SSE: DISAMBIGUATION | One modal per turn {query, candidates[{id,name,kind,blurb,country,snippets[]}], timeoutSec}; POST selection to resolver | Human-in-the-loop on low margins | Default timeout 12s; on timeout abort and propose SmartFallback
-
-Change Log & Enhancements — ADD
-
-CHANGE | Generalized Entity Disambiguation (pre-chain) | Adds pre-handler, scorer, prompt section, SSE clarify, and diagnostics; supports ambiguous unknowns (e.g., “DW Akademie”, “Hanwha Veda/Beda”) | Safer routing and fewer false resolutions | Config-gated; backward compatible
-ixes 🐛
-Resolved Application Startup Failure: Fixed a critical error preventing the application from starting. The SecurityFilterChain bean conflict, caused by duplicate definitions in AppSecurityConfig.java and CustomSecurityConfig.java, was resolved by consolidating all security configurations into AppSecurityConfig.java and removing the redundant CustomSecurityConfig.java file.
-
-Addressed 14 Compilation Errors: Resolved all cannot find symbol and package does not exist errors. The root cause was identified as missing class files and incorrect package references. The fix was implemented by creating stub classes and interfaces for the missing components to satisfy the compiler and correct invalid import statements across the project. This included generating stubs for:
-
-com.example.lms.client.GeminiClient
-
-com.example.lms.genshin.GenshinElementLexicon
-
-com.example.lms.service.search.SearchDisambiguation
-
-com.example.lms.service.verification.NamedEntityValidator
-
-com.example.lms.service.help.ContextHelpService
-
-Features ✨
-This release implements the four core MVP functionalities:
-
-Read-Only Knowledge Graph (KG) Handler:
-
-A new KGHandler has been integrated into the HybridRetriever chain.
-
-This handler performs read-only lookups of entities and relationships from the GraphStore.
-
-In case of failure, it returns an empty result with a warning, ensuring the retrieval chain remains stable and does not halt execution. Data creation and inference are out of scope for this MVP.
-
-Sequential Strategy Bandit:
-
-The StrategySelectorService is now implemented to dynamically determine the execution order of retriever handlers.
-
-For the MVP, this service uses a simple, rule-based selectPlan method. It adjusts the handler sequence (e.g., [WEB, VECTOR, KG]) based on simple query features like length.
-
-Complex reinforcement learning, parallel execution, and hyperparameter tuning are deferred to future releases.
-
-Basic Generative UI (UI-DSL):
-
-The GenerativeUiService has been implemented to render LLM-generated JSON into safe HTML.
-
-This initial version supports two UI-DSL types: table and card.
-
-The service correctly parses these JSON structures from the LLM and streams the resulting HTML to the client via Server-Sent Events (SSE).
-
-Next Steps & Future Enhancements 🚀
-Building on this stable MVP, the following features are proposed to evolve the system towards an intelligent, self-learning agent:
-
-Query Understanding Agent: Entity Disambiguation 🕵️
-
-To address ambiguous user queries (e.g., "Vader" instead of "Veda"), an Entity Disambiguation Handler will be added to the start of the retrieval pipeline.
-
-How it will work:
-
-Candidate Generation: The system will use aliases, the entity DB, and vector similarity to generate a list of potential candidates (e.g., "Veda," "Vader," "Veda Bread").
-
-Scoring & Resolution: Candidates will be scored based on contextual relevance. If a top candidate emerges with high confidence, it will be automatically selected. Otherwise, the user will be prompted with a clarifying question (e.g., "Which 'Vader' are you looking for?").
-
-Expected Impact: Drastically improves search accuracy and enhances user experience by intelligently interpreting ambiguous inputs.
-
-Autonomous Knowledge Graph Growth & Inference 🧠
-
-The Knowledge Graph will be upgraded from a read-only component to a dynamic, self-growing knowledge base.
-
-Key Features:
-
-Automated Knowledge Extraction: An AutonomousKGConstructor will automatically extract knowledge triples (subject, relation, object) from new documents.
-
-Cross-Validation & Confidence: New knowledge will be promoted to "verified fact" only after being corroborated by multiple trusted sources, increasing its confidence score.
-
-Relational Inference: The system will infer new relationships (e.g., if A is part of B, and B is part of C, then A is part of C).
-
-Knowledge Decay: Confidence scores for outdated or conflicting information will decay over time, ensuring the KG remains current.
-
-Expected Impact: Creates a perpetually learning system that can provide deeper, more insightful answers through inference.
-
-Intelligent Strategy Bandit 📈
-
-The rule-based StrategySelectorService will be evolved into a true reinforcement learning agent that optimizes the RAG pipeline.
-
-Key Features:
-
-Reward System: User feedback (likes/dislikes), fact-checking results, and response times will be used to calculate a reward score.
-
-Parallel Execution & Fusion: The bandit will learn to execute handlers (Web, Vector, KG) in parallel and intelligently fuse the results using techniques like Reciprocal Rank Fusion (RRF) for faster, richer context.
-
-Automated Hyperparameter Tuning: A DynamicHyperparameterTuner will automatically adjust parameters like top-k and min_score based on performance.
-
-Expected Impact: Enables the system to autonomously discover the most efficient retrieval strategy for any given query type, continuously improving performance over time.
-Build — ADDPatch Notes: MVP Implementation and Critical Fixes
-This update implements the core MVP requirements, including dynamic retrieval strategies, knowledge graph integration, and a generative UI service. It also resolves critical startup errors and cleans up the codebase by addressing missing classes and incorrect package structures.
-
-Features & Enhancements
-Unified Security Configuration: To resolve the duplicate SecurityFilterChain bean error, the bean definition in CustomSecurityConfig has been disabled. All security settings have been consolidated into AppSecurityConfig for a single, unified configuration.
-
-Read-Only Knowledge Graph (KG) Handler: Implemented KgHandler to enable knowledge graph lookups within the HybridRetriever chain. The handler is designed to be resilient, catching exceptions to prevent chain interruptions while maintaining session isolation. It has been registered in RetrieverChainConfig to execute as part of the retrieval process.
-
-Generative UI Service: Added GenerativeUiService and its implementation, DefaultGenerativeUiService. This service transforms JSON-based UI definitions generated by the LLM into safe HTML, supporting table and card components.
-
-Dynamic Strategy Selection (Bandit): The existing StrategySelectorService has been enhanced with logic to dynamically determine the execution order of the WEB, VECTOR, and KG handlers. The selection is based on query characteristics such as length and domain-specific attributes.
-
-Fixes & Refactoring
-Missing Class & Package Cleanup:
-
-Created stub implementations for missing classes, including GeminiClient, NamedEntityValidator, and ContextHelpService, to resolve compilation errors.
-
-Relocated GenshinElementLexicon to its correct package and replaced other misplaced classes with wrappers where appropriate.
-
-Corrected invalid comments and removed a duplicate package declaration in the AdminInitializer file.네, 알겠습니다. Git 레포지토리 패치 노트에 바로 사용할 수 있도록, 제공해주신 내용을 명확하고 전문적인 영문으로 작성해 드리겠습니다.
-
-Fix: Resolve Compilation Failures by Adding Missing Role Enum
-This patch addresses a critical build failure (cannot find symbol, package does not exist) caused by a missing Role definition.
+The AbandonWare Hybrid RAG AI Chatbot Service is a domain‑agnostic agent built on a retrieval–generation–verification–reinforcement pipeline.
+The system began as a specialized Genshin Impact assistant and evolved into a general retrieval‑augmented generation agent.
+Retrieval‑augmented generation combines neural language models with external knowledge sources to ground answers in evidence.
+By retrieving real documents and conditioning responses on them, the system reduces hallucinations compared to pure language models.
+The pipeline follows a search–generate–verify–reinforce loop that separates concerns into modular services.
+User queries are sanitized, disambiguated and augmented before any retrieval occurs.
+Hybrid retrieval draws evidence from both real‑time web sources and a vector database of ingested documents.
+Result fusion combines multiple sources using reciprocal rank fusion and re‑ranks them with a cross‑encoder.
+Context construction assembles retrieved passages, memory and history into a prompt within token limits.
+A modular prompt builder creates structured prompts with system instructions, user queries and context sections.
+A model router selects the appropriate language model and parameters based on intent and verbosity.
+After generation, a multi‑layer verification stage checks coverage, contradictions and claim support.
+Sanitizers enforce domain policies and remove unsupported or unsafe content from the draft answer.
+The reinforcement layer learns from user feedback, updating memory entries and synergy statistics.
+Meta‑learning components tune retrieval strategies and hyperparameters using multi‑armed bandit algorithms.
+Session isolation ensures that each user’s conversation history, caches and reinforcement data remain separate.
+Caching with Caffeine accelerates retrieval and memory access without leaking data between sessions.
+Server‑sent events stream intermediate progress to clients, improving transparency and user trust.
+Dynamic rules and a centralized knowledge base allow the system to adapt to new domains without code changes.
+Adaptive reranking uses user feedback to boost or penalize pairings based on popularity and synergy.
+Verbosity levels (brief, standard, deep, ultra) guide model choice, context size and minimum answer length.
+Retrieval strategies can be combined or disabled through configuration (web search, vector search, or RAG only).
+The architecture enforces version purity for LangChain4j modules to avoid runtime incompatibilities.
+Logging and metrics enable monitoring of retrieval latency, quality scores and feedback distributions.
+The system is configurable via application.yml, enabling tuning of token budgets, cache sizes and model parameters.
+Developers can extend the pipeline by adding new retrieval handlers, scorers, sanitizers or rule types.
+The knowledge base stores domain entities and attributes in relational tables to decouple data from code.
+Dynamic interaction rules inform both prompt generation and reranking to respect domain policies.
+End‑to‑end, the system aims to provide factual, personalized answers while continuously improving through reinforcement.
+Query processing begins with the QueryComplexityGate, which classifies a user query as simple or complex.
+The QueryComplexityGate uses heuristics or machine models to decide if decomposition via SelfAsk is required.
+Simple queries are processed directly, while complex queries are broken down into sub‑questions.
+The QueryCorrectionService performs rule‑based corrections on spelling, spacing and punctuation.
+Korean queries benefit from morphological correction, handling spacing mistakes unique to the language.
+After rule‑based corrections, the LLMQueryCorrectionService uses a large language model to refine the query.
+The LLM service preserves proper nouns and domain terms by consulting the domain dictionary before making changes.
+QueryDisambiguationService resolves ambiguous tokens, using dictionary bypasses to avoid altering known names.
+When tokens are not in the domain dictionary, the LLM rephrases or clarifies ambiguous words.
+The service sets a confidence score to indicate whether a disambiguation is high or low confidence.
+QueryAugmentationService can add synonyms or related keywords but is disabled by default to avoid noise.
+SmartQueryPlanner restricts the number of expanded queries, preventing combinatorial explosion.
+NonGameEntityHeuristics assist in distinguishing generic terms from domain‑specific entities.
+DefaultDomainTermDictionary stores protected terms per domain, ensuring they survive correction and disambiguation.
+InMemoryDomainTermDictionary is used during testing when the external dictionary is unavailable.
+The DomainTermDictionary interface abstracts the storage and retrieval of protected terms.
+LLMNamedEntityExtractor uses an LLM to extract entities when regex patterns fail to identify names.
+NamedEntityExtractor is an interface allowing different NER implementations to plug into the pipeline.
+ParsedQuery objects contain the structured components of a query after corrections and analysis.
+MatrixTransformer in the query transformer package helps generate additional query variants when required.
+DefaultQueryCorrectionService and LLMQueryCorrectionService work together to sanitize user input.
+QueryDisambiguationService may call QueryHygieneFilter to remove domain prefixes or banned words.
+QueryComplexityGate influences the chain of retrieval handlers by enabling the SelfAskHandler when needed.
+VerbosityDetector analyses the query and conversation context to suggest a verbosity level.
+SectionSpecGenerator determines which prompt sections should be included based on verbosity and query intent.
+VerbosityProfile encapsulates the verbosity hints used throughout the pipeline, influencing context budgets.
+SmartQueryPlanner ensures that expanded queries do not exceed configured limits.
+CompositeQueryContextPreprocessor combines multiple preprocessing steps, including guardrails and hygiene filters.
+CognitiveStateExtractor derives user intent, subject and domain hints from the query and session.
+CognitiveState objects hold analysis results to inform downstream services.
+GuardrailQueryPreprocessor injects protected terms and interaction rules into the PromptContext based on the subject.
+DefaultGuardrailQueryPreprocessor replaces hard‑coded lexicons with knowledge base lookups.
+QueryContextPreprocessor defines a contract for preparing prompt context before retrieval.
+The DefaultQueryContextPreprocessor orchestrates correction, disambiguation and domain detection.
+QueryComplexityClassifier may use an LLM to detect multi‑hop questions requiring decomposition.
+ModelBasedQueryComplexityClassifier is an implementation that queries a model to classify complexity.
+QueryComplexityGate stores thresholds in configuration to control the classification sensitivity.
+AnalyzeHandler uses morphological analysis to generate search tokens from the sanitized query.
+AnalyzeWebSearchRetriever consumes tokens from the AnalyzeHandler to perform targeted web searches.
+DefaultQueryTransformer selects the appropriate transformation strategy based on the domain and intent.
+QueryTransformer interface abstracts the process of generating alternative queries for retrieval.
+ParsedQuery objects may include synonyms or morphological variants for robust search.
+DisambiguationResult represents the outcome of the QueryDisambiguationService, including confidence levels.
+NonGameEntityHeuristics differentiates between game and non‑game terms when the dictionary is ambiguous.
+DefaultDomainTermDictionary offers methods to add and retrieve domain terms for correction services.
+LLMQueryCorrectionService may call a translation model or LLM to correct colloquialisms and slang.
+QueryAugmentationService can be toggled via configuration when recall needs to be increased.
+QueryCorrectionService returns both the corrected text and metadata about applied fixes.
+LLMNamedEntityExtractor is invoked when dictionary and regex heuristics fail to detect a named entity.
+DefaultQueryContextPreprocessor orchestrates multiple preprocessing steps with configurable order.
+VerbosityDetector uses conversation context to infer if the user expects a brief or detailed response.
+SectionSpecGenerator produces a map of prompt sections based on the verbosity profile.
+QueryComplexityClassifier influences whether SelfAskHandler is invoked during retrieval.
+SmartQueryPlanner interacts with EvidenceRepairHandler to control query expansion during evidence repair.
+CognitiveStateExtractor may use LLMs or heuristics to detect the domain and subject embedded in the query.
+GuardrailQueryPreprocessor sets the query intent (e.g. recommendation, explanation) used for routing models.
+Domain detection informs the knowledge base service on which domain’s rules and entities to retrieve.
+Session metadata, such as the session ID, is passed along with the query to ensure isolation.
+Stop words and banned terms can be removed at the query hygiene stage to avoid triggering unsafe content.
+The combination of rule‑based and LLM‑based correction minimizes over‑correction and preserves terms.
+Query preprocessing is critical to ensure that retrieval retrieves relevant and safe content for the user’s question.
+Hybrid retrieval orchestrates multiple handlers to collect evidence from various sources.
+MemoryHandler retrieves recent session snippets and verified translation memory snippets to maintain context.
+SelfAskHandler decomposes complex queries into sub‑questions when the QueryComplexityGate signals complexity.
+AnalyzeHandler generates search tokens through morphological analysis for languages like Korean.
+WebSearchHandler performs real‑time web searches using services such as Naver’s API.
+VectorDbHandler queries a vector store, such as Pinecone, to retrieve passages using similarity search.
+EvidenceRepairHandler triggers an additional search cycle when evidence is deemed insufficient.
+Each handler catches its own exceptions and returns partial results to keep the chain resilient.
+DefaultRetrievalHandlerChain defines the order of handlers: memory, self‑ask, analyze, web, vector and repair.
+Handlers are configured via RetrieverChainConfig to allow dynamic ordering and feature toggles.
+MemoryHandler prioritizes snippets with high energy scores derived from reinforcement learning.
+TranslationMemoryRepository stores snippets of previous answers and context for reuse.
+SelfAskHandler uses an LLM to generate sub‑queries that break down multi‑part questions.
+The SelfAskWebSearchRetriever performs web searches for each sub‑query and merges the snippets.
+AnalyzeWebSearchRetriever uses tokenized queries to search and may apply morphological filters.
+EnhancedSearchService abstracts calls to external search APIs such as Naver, Tavily or others.
+WebSearchRetriever integrates rate limiting and domain filtering to respect API constraints.
+TavilyWebSearchRetriever is a placeholder for an alternate search service that can be integrated.
+VectorDbHandler computes embeddings for the query and performs nearest neighbour search in the vector store.
+HybridRetriever coordinates the handlers and combines results into a SearchContext envelope.
+SearchContext contains retrieved documents, warnings, timing information and flags for evidence quality.
+MemoryHandler uses MemoryAsEvidenceAdapter to transform memory snippets into the evidence format.
+PersistentChatMemory persists chat history across sessions and supplies memory to MemoryHandler.
+MemoryWriteInterceptor writes verified answers into the translation memory after completion.
+The SelfAskHandler returns aggregated evidence from all sub‑queries without throwing exceptions.
+AnalyzeHandler feeds the tokens to WebSearchHandler to perform targeted retrieval.
+WebSearchHandler applies AuthorityScorer to rank search results by domain credibility.
+WebSearchHandler uses domain filters and rates sources like official sites, wikis, community blogs and generic blogs.
+VectorDbHandler acts as a fallback when web retrieval fails or when retrieving static domain knowledge.
+EvidenceRepairHandler uses SmartQueryPlanner to expand or reformulate the query for a second attempt.
+Only one repair cycle is triggered to prevent infinite loops in retrieval.
+The chain ensures robustness by returning at least memory snippets even if web search fails.
+Each handler logs its processing time and results for debugging and monitoring.
+Retrieval modes can be configured: RETRIEVAL_ON includes web and vector search; RAG_ONLY uses vector; RETRIEVAL_OFF uses only memory.
+Search handlers respect session isolation by including session metadata in cache keys.
+Hybrid retrieval increases recall by combining live web content and static vector data.
+Search results are deduplicated by URL or content similarity before further processing.
+Handlers can be extended by implementing the RetrievalHandler interface and inserting them into the chain.
+Domain‑specific search services can be integrated by adding new WebSearchRetriever implementations.
+Retrieve operations may include morphological normalization or language translation for non‑English queries.
+Handlers must honour configured timeouts and return partial results to avoid blocking downstream stages.
+SearchContext warnings may include insufficient evidence, rate limit hits, or API errors.
+DefaultLightWeightRanker performs quick lexical ranking to reduce the number of candidates.
+SelfAskHandler may use a cross‑encoder to rank sub‑question answers before combining them.
+Vector embeddings are generated using EmbeddingClient, which may call OpenAI or local models.
+EmbeddingStoreManager manages indexes and embeddings within the vector store.
+Search results are stored temporarily in retrieval caches keyed by query and session ID.
+TavilyWebSearchRetriever and other future handlers extend retrieval sources for new domains.
+Each handler clearly defines its inputs and outputs to enable independent unit testing.
+MemoryHandler ensures that conversation context carries over across user turns for continuity.
+SelfAsk improves multi‑hop reasoning by decomposing complex questions into manageable sub‑queries.
+AnalyzeHandler improves recall for languages like Korean by generating morphological variants.
+WebSearchHandler provides real‑time information that may not exist in the vector store.
+VectorDbHandler ensures that domain knowledge stored offline is available even without internet.
+EvidenceRepairHandler adds resilience to the pipeline by seeking additional evidence when needed.
+HybridRetriever orchestrates these handlers to maximize recall and precision across various query types.
+SearchContext also carries timing data used by StrategySelectorService for strategy reward computation.
+Retrieval results are fused by ReciprocalRankFuser before being reranked by cross‑encoder models.
+Caching retrieval results reduces repeated API calls and speeds up repeated queries within the same session.
+Retrieval caches expire after a configurable time to ensure updated content is fetched in future sessions.
+Handlers log metrics such as number of results, latency and success rates for monitoring.
+During retrieval, banned words or domains are filtered out by GuardrailQueryPreprocessor rules.
+Retrieval strategies are chosen dynamically by StrategySelectorService based on past success.
+SelfAsk and repair modes are selectively enabled depending on query complexity and evidence sufficiency.
+HybridRetriever also supports streaming search results via SSE to inform clients of progress.
+The retrieval layer acts as the foundation of RAG, supplying factual snippets for grounding generated answers.
+Dynamic knowledge curation may further augment the vector store by adding newly verified snippets.
+Future retrieval handlers could query specialized databases like scholarly articles or product catalogs.
+Retrieval performance depends on both hardware (vector store) and network access to external search APIs.
+By combining memory, self‑ask, web and vector retrieval, the system maximizes the chance of finding relevant evidence.
+EvidenceRepairHandler uses controlled query expansion to avoid runaway searches while still improving recall.
+Retrieval handlers are decoupled via interfaces to facilitate testing and replacement.
+The retrieval chain is assembled at startup and can be modified via configuration for A/B testing.
+The retrieval layer interacts closely with ranking and verification stages, passing along context and warnings.
+Clear logging at each stage of retrieval helps diagnose issues such as missing data or API failures.
+Retrieval resilience ensures that partial or empty results still yield a fallback answer rather than an exception.
+After retrieval, the system performs result fusion to merge documents from multiple sources into a unified list.
+ReciprocalRankFusion assigns scores based on the reciprocal of rank positions across lists.
+The RRF constant k smooths the contribution of lower ranked documents and is configurable.
+Documents appearing high in any list receive a significant boost through RRF weighting.
+Softmax fusion converts scores to probabilities using temperature, emphasizing top documents.
+AuthorityScorer weights documents based on domain credibility, promoting trusted sources over unreliable ones.
+Domain weights include official, wiki, community and blog categories, each configured with a numerical weight.
+AuthorityScorer multiplies the base score by the domain weight to adjust ranking.
+RelationshipRuleScorer adjusts scores based on dynamic rules from the knowledge base.
+Rule types include preferred partners, discouraged pairs, contains relationships and other custom interactions.
+Documents supporting preferred combinations receive positive boosts, while discouraged combinations are penalized.
+LightWeightRanker provides an initial lexical ranking based on token overlap and simple heuristics.
+CrossEncoderReranker uses a BERT‑like model to compute semantic similarity between query and document.
+Cross encoders jointly encode the query and document, capturing complex interactions between tokens.
+Only the top candidates from RRF are passed to the cross‑encoder due to computational cost.
+EmbeddingModelCrossEncoderReranker integrates cross‑encoder scores with rule scores and synergy bonuses.
+The final score for a document may be expressed as crossScore + ruleBoost + synergyBonus.
+Scores may be normalized or clamped to prevent a single factor from dominating the ranking.
+Synergy bonuses reflect user feedback, boosting pairs with positive reactions and demoting unpopular ones.
+Authority weight ensures that even high‑scoring documents from low‑credibility sources are demoted.
+Reranker classes like NoopCrossEncoderReranker are used when cross‑encoder scoring is disabled.
+DefaultLightWeightRanker acts as a coarse filter to reduce the number of candidates before deeper scoring.
+ReciprocalRankFuser merges lists from web search, vector search, memory and self‑ask into one ranking.
+Fusion and ranking parameters are configurable, including the number of documents to keep at each stage.
+Cross‑encoder models may be fine‑tuned on domain‑specific datasets for improved relevance.
+Rule scoring uses weights stored in HyperparameterService to control the influence of dynamic rules.
+AdaptiveScoringService computes synergy bonuses using positive and negative feedback counts.
+Synergy bonuses are scaled by a factor and smoothed by a constant to avoid division by zero.
+The reranking layer ensures that documents that align with the knowledge base rules and user feedback appear first.
+Reranking also incorporates authority weighting so that official sources are prioritized in the final context.
+Multiple reranker implementations allow switching between cross‑encoder and embedding models.
+Reranker settings are controlled by application configuration and can be tuned per domain or intent.
+Documents that violate discouraged rules can receive a negative score adjustment during reranking.
+AuthorityScorer may also consider page age, citation counts or HTTPS usage in future extensions.
+Fusion ensures that documents from different retrieval sources contribute fairly to the final list.
+Rule boosting allows domain administrators to encode preferred or avoided pairings in the knowledge base.
+Synergy bonuses personalize rankings by incorporating collective user preferences across sessions.
+Cross‑encoder reranking significantly improves the semantic relevance of the final selection.
+Softmax fusion can be used instead of RRF when a sharper focus on top ranked documents is desired.
+The fusion layer outputs a unified, scored list that the context builder uses to assemble the prompt.
+Fusion performance can be monitored by measuring mean reciprocal rank and recall across test queries.
+Additional scorers can be added to the pipeline by implementing the DocumentScorer interface.
+AuthorityScorer weights may be adjusted per domain to reflect different trust levels (e.g. government websites vs hobby blogs).
+Rule types in the knowledge base can be extended to model more complex relationships such as substitutions.
+The ranking stage sits between retrieval and context construction, ensuring that only the most relevant evidence is used.
+Adaptive scoring ensures that the system learns from user feedback, improving rankings over time.
+Synergy bonuses are domain‑specific, so feedback in one domain does not affect rankings in another.
+Cross‑encoder scores are usually in an arbitrary range and must be combined carefully with rule scores.
+Thresholds in reranking configuration control how many documents proceed to the cross‑encoder stage.
+Fusion and ranking operate on normalized scores to maintain comparability across different scorers.
+The final ranked list is passed to the context builder, which will select as many documents as fit the token budget.
+Fusion weights such as k and temperature can be tuned for different retrieval sources and domains.
+The cross‑encoder’s training data influences how well semantic similarity is captured for domain queries.
+Rule scoring can penalize documents that contradict knowledge base rules, helping avoid invalid recommendations.
+Adaptive scoring decays the influence of older feedback over time to adapt to changing user preferences.
+The ranking component is extensible, allowing researchers to experiment with new scoring strategies.
+Clear separation between fusion, ranking and scoring makes the pipeline maintainable and testable.
+Future enhancements could include neural ranking models that incorporate multiple features at once.
+ContextOrchestrator builds a unified context string from ranked documents, memory and history.
+The orchestrator respects token budgets configured per verbosity level, ensuring prompts stay within model limits.
+Context assembly prioritizes authoritative sources and demotes low‑credibility documents.
+Duplicate sentences and overlapping content are removed to maximize information density.
+Long‑term memory snippets and recent session history are combined to maintain conversational continuity.
+PromptBuilder constructs system, user and context prompts using a standardized template.
+System prompts include instructions about allowed behaviors, such as discouraging hallucinations and citing sources.
+User prompts include the sanitized query and indicate the intent (e.g., recommend, explain, analyze).
+Context prompts include the selected evidence sections: previous answer, vector RAG, history, web and memory.
+Section ordering is defined by the prompt builder to guide the language model through the information.
+PromptContext holds all fields necessary for building the prompt: user query, subject, domain and protected terms.
+The builder injects dynamic interaction rules into the prompt to inform the model about preferred or discouraged combinations.
+Verbosity hints influence how many documents are selected and the minimum length of the answer.
+Audience hints allow the model to tailor the answer to novice or expert users.
+Citation style determines whether citations appear inline or as footnotes in the answer.
+ModelRouter selects an LLM based on intent and verbosity, routing high‑stakes queries to high‑tier models.
+The router also sets temperature and top‑p parameters to control randomness in generation.
+ChatModel abstracts the underlying LLM provider and exposes a unified API for sending prompts.
+DynamicChatModelFactory creates ChatModel instances with appropriate parameters for each request.
+AnswerExpanderService ensures deep and ultra verbosity answers meet minimum length by expanding concise answers.
+LengthVerifierService checks whether the generated answer satisfies length requirements before expansion.
+AnswerQualityEvaluator can score the generated answer along dimensions like factuality and clarity.
+PromptBuilder ensures that dynamic rules, protected terms and instructions are properly formatted and escaped.
+System prompts instruct the model to answer with '정보 없음' when evidence is insufficient.
+PromptBuilder avoids ad‑hoc string concatenation and centralizes prompt construction in one place.
+The orchestrator can include conversation history to handle follow‑up questions gracefully.
+PromptContext.sectionSpec indicates which context sections should appear for the given verbosity level.
+The builder ensures that prompts do not exceed the configured maximum token budget for the chosen model.
+After the prompt is built, ChatService invokes the ChatModel and receives a draft answer for verification.
+Context construction is vital for grounding the LLM’s responses in retrieved evidence and past conversation.
+Verification begins after the LLM generates a draft answer from the prompt.
+FactVerifierService computes coverage and contradiction metrics by comparing the answer to the context.
+Coverage measures the proportion of the answer supported by the retrieved evidence.
+Contradiction measures whether the answer conflicts with the context or previous answers.
+Answers with low coverage or high contradiction scores may be rejected or modified.
+FactVerifierService integrates EvidenceGate, ClaimVerifierService and sanitizers in the correct order.
+EvidenceGate checks whether sufficient evidence exists before calling the LLM to generate an answer.
+Evidence sufficiency is judged by the number of subject mentions, authority scores and variety of sources.
+If evidence is insufficient, EvidenceGate triggers EvidenceRepairHandler to search again.
+If repair fails to find evidence, the system aborts generation and returns a fallback response.
+NamedEntityValidator ensures that all named entities in the draft answer appear in context or memory.
+Unknown names in the answer indicate hallucination and cause the system to respond with '정보 없음'.
+NamedEntityValidator uses heuristic patterns and LLM extraction to detect proper nouns.
+ClaimVerifierService extracts individual claims (assertions) from the draft answer.
+Each claim is verified against the context using an LLM or external fact‑checking API.
+Claims are classified as supported, contradicted or lacking information.
+Unsupported claims are removed from the answer to prevent misinformation.
+If all claims are unsupported, the final answer becomes '정보 없음'.
+Claim verification prompts may ask the LLM: 'Given the context, is the statement supported?' and expect a categorical answer.
+FactVerifierService aggregates claim results and decides whether to accept the draft answer.
+AnswerSanitizers enforce domain policies by removing disallowed recommendations or profanity.
+Sanitizers operate in a chain of responsibility, each modifying the answer as needed.
+Sanitizers can be domain‑specific; for example, GenshinRecommendationSanitizer filters invalid character pairings.
+SmartFallbackService suggests refined queries when the system cannot answer due to insufficient evidence.
+FallbackHeuristics generate alternative queries by adding details or narrowing the scope.
+Fallback responses encourage users to refine their question rather than guessing.
+EvidenceGate prevents wasted LLM calls when context is too weak to support a meaningful answer.
+ClaimVerifierService may integrate external fact checking services such as FactCheck.org or Wikidata.
+AnswerSanitizers may enforce compliance rules, such as removing harmful medical advice.
+The multi‑layer verification pipeline reduces hallucination and improves factuality.
+EvidenceGate can set stricter thresholds for high‑stakes domains like medical or legal topics.
+NamedEntityValidator prevents the system from inventing people, products or locations not present in evidence.
+Claim extraction may use heuristics or LLMs to segment sentences into individual assertions.
+Claim verification uses classification models to determine support, contradiction or lack of information.
+AnswerSanitizers can also insert warning messages when the answer touches on sensitive topics.
+SmartFallbackService uses FallbackResult objects to encapsulate suggested queries and messages.
+Fallback messages are delivered to the user when the system declines to answer due to risk of hallucination.
+ClaimVerifierService logs claim verdicts for audit and analysis.
+FactVerifierService ensures that only supported statements survive into the final answer.
+EvidenceGate metrics include subject frequency, average domain weight and number of unique sources.
+ClaimVerifierService can be extended to use multiple fact checkers and aggregate their results via majority vote.
+NamedEntityValidator can be configured to treat unknown entities as soft errors or hard stops.
+Sanitizer chain order matters: more general sanitizers should run before domain‑specific ones.
+SmartFallbackService may provide suggestions like 'Please specify the subject' or 'Try rephrasing your question'.
+FactVerifierService can be tuned via thresholds to balance strictness and answer coverage.
+EvidenceGate uses domain‑specific thresholds so that less evidence is required for simple queries.
+NamedEntityValidator protects against the inclusion of malicious or irrelevant names.
+ClaimVerifierService may use a temperature parameter to control LLM randomness during verification.
+AnswerSanitizers may remove mentions of banned partners or harmful pairings according to rules.
+EvidenceGate may allow partial evidence if the query is a follow‑up with a strong previous answer.
+SmartFallbackService ensures that the system responds gracefully rather than hallucinating when data is lacking.
+Claim extraction often splits on punctuation but may also consider conjunctions and logical connectors.
+AnswerSanitizers can be added by implementing the AnswerSanitizer interface and registering it in the chain.
+The verification pipeline operates after generation and before reinforcement, ensuring only verified answers are stored.
+FactVerifierService logs decisions at each stage for transparency and debugging.
+EvidenceGate may skip the LLM call entirely when no evidence is found and immediately send a fallback.
+ClaimVerifierService can use a scoring approach to measure claim strength rather than strict categories.
+Sanitizers help enforce policies like removing hate speech, personal data or unsafe recommendations.
+EvidenceGate, ClaimVerifierService and sanitizers can be toggled via configuration for testing purposes.
+Verification ensures that the final answer is grounded, safe and compliant with domain policies.
+Fallback suggestions help users refine queries and improve retrieval success in future attempts.
+Verification results feed back into reinforcement learning, influencing memory and synergy updates.
+Fact verification reduces the risk of delivering false or unsupported answers to users.
+Claim verification ensures that each assertion is backed by evidence before it is communicated.
+The verification chain must balance strictness with user satisfaction to avoid over‑filtering answers.
+Answer sanitization allows domain administrators to enforce custom policies for different domains.
+EvidenceGate may call EvidenceRepairHandler for an additional search if the first retrieval fails.
+Verification performance can be monitored by measuring claim coverage, contradiction rates and fallback frequency.
+Testing the verification chain includes simulating unsupported claims and ensuring they are removed.
+Developers can implement custom validators to handle domain‑specific verification needs.
+Verification reduces hallucination by ensuring that named entities and claims appear in the evidence.
+Sanitizers may enforce regulatory compliance for domains like finance or healthcare.
+The multi‑layered approach ensures that if one layer misses an error, another may catch it.
+Fallback messages preserve user trust by admitting when the system lacks sufficient evidence.
+Verification logic can be updated via configuration to adapt to new failure patterns.
+Developers should test verification using a variety of queries, including ambiguous and adversarial ones.
+Verification may require balancing recall (answering more queries) with precision (avoiding errors).
+ClaimVerifierService must handle translations and synonyms to match claims with evidence.
+EvidenceGate metrics may incorporate dynamic thresholds based on query complexity.
+AnswerSanitizers should be tested for false positives to ensure they do not remove legitimate content.
+Verification ensures that memory reinforcement and synergy updates are based only on accurate answers.
+Claims extracted by ClaimVerifierService are often shorter than sentences to isolate atomic statements.
+FactVerifierService may use contradiction detection algorithms to identify conflicting statements.
+AnswerSanitizers can mask or replace sensitive terms to comply with privacy regulations.
+FallbackHeuristics help generate alternative queries that better target the intended subject or domain.
+Verification logic may be adjusted per domain, allowing stricter checks where necessary.
+EvidenceGate may consider user feedback on evidence sufficiency when adjusting thresholds.
+Claim verification can be computationally expensive; caching results may improve performance.
+Sanitizers should log modifications for audit trails, especially in regulated domains.
+The verification stage is the last line of defense before the answer reaches the user.
+Proper verification and fallback handling improve user trust and reduce the propagation of misinformation.
+Verification interacts with model routing by preventing calls when retrieval yields inadequate context.
+Tests should cover unsupported claim removal, entity validation and fallback suggestions to ensure reliability.
+Reinforcement learning allows the system to adapt based on user feedback and interaction statistics.
+MemoryReinforcementService computes a Boltzmann energy for each memory snippet based on similarity, Q‑value, success ratio, confidence and recency.
+Energy is calculated as a weighted sum of factors with weights configured in HyperparameterService.
+Similarity measures how closely a snippet matches the current query.
+Q‑value represents the learned reward associated with using the snippet.
+Success ratio is computed as the number of times the snippet yielded a successful answer divided by total uses.
+Confidence reflects how reliable the snippet is based on past verification outcomes.
+Recency decays over time using an exponential decay function with a configurable tauHours constant.
+Temperature controls exploration in selecting memory snippets; higher temperature leads to more exploration.
+Temperature annealing reduces exploration as more feedback is collected, focusing on high‑energy snippets.
+MinContentLength and MaxContentLength filters ensure that only snippets of appropriate length are reinforced.
+MemoryReinforcementService updates energy scores after reinforcement and stores them with each snippet.
+TranslationMemory entries hold metadata such as hit counts, Q‑values, confidence and timestamps.
+ReinforcementQueue manages reinforcement tasks asynchronously to avoid blocking the main chat loop.
+ReinforcementTask encapsulates the snippet and update parameters for asynchronous processing.
+AdaptiveScoringService computes synergy bonuses based on user feedback recorded in SynergyStat entries.
+SynergyStat stores the domain, subject, partner and counts of positive and negative reactions.
+The synergy bonus formula is (positive − negative) divided by (positive + negative + k) times a scaling factor.
+A smoothing constant k prevents division by zero when no feedback exists.
+Scaling factors control how strongly user feedback influences ranking scores.
+Synergy bonuses are added to cross‑encoder scores during reranking to personalize recommendations.
+Adaptive scoring is domain‑specific so that feedback in one domain does not influence another.
+FeedbackController captures thumbs up and thumbs down from users and updates SynergyStat records.
+StrategySelectorService implements a multi‑armed bandit algorithm to select retrieval strategies.
+Each retrieval strategy (e.g., web‑first, vector‑first, hybrid, self‑ask) has an estimated reward based on past performance.
+Softmax policy computes selection probabilities using strategy rewards and a temperature parameter.
+High temperature encourages exploration across strategies; low temperature favors exploitation of best performers.
+StrategyPerformance records success and failure counts and average rewards for each strategy.
+ContextualScorer evaluates the quality of answers along dimensions like factuality, clarity and novelty.
+Rewards produced by the ContextualScorer feed into the StrategySelectorService.
+DynamicHyperparameterTuner adjusts weights such as synergy weight, authority weight and exploration temperature based on performance metrics.
+Hyperparameter updates occur periodically, ensuring the system adapts to long‑term trends.
+BanditSelector inside MemoryReinforcementService selects memory entries according to their energy and temperature.
+RewardHyperparameterTuner tunes reward weights for the multi‑metric reward function in meta‑learning.
+Reinforcement learning ensures that frequently helpful snippets become more likely to be reused.
+User feedback drives synergy bonuses, reinforcing popular recommendations and demoting unpopular ones.
+The StrategySelectorService may assign negative rewards when a chosen strategy fails to produce a useful answer.
+SoftmaxUtil computes the softmax distribution over strategy rewards given a temperature.
+Success counts and rewards are updated after each query based on the quality of the answer.
+Annealing schedules determine how fast exploration temperature decreases over time.
+Initial exploration ensures that all strategies are tried before converging on the best performing ones.
+Different strategies may perform better for certain domains or query types; the bandit approach captures this.
+DynamicHyperparameterTuner uses aggregated metrics like retrieval latency, coverage and user satisfaction to update hyperparameters.
+Reinforcement components operate asynchronously to avoid blocking the main chat processing thread.
+Memory entries with low energy may be pruned over time to save storage and focus on relevant knowledge.
+Synergy bonuses decay as feedback ages, ensuring that outdated preferences lose influence.
+Rewards are computed after verification to ensure only verified answers influence learning.
+Feedback loops are essential for continuous improvement and personalization of the system.
+Bandit annealing adjusts exploration automatically based on the number of interactions.
+RewardHyperparameterTuner may use grid search or gradient‑free optimization to find optimal reward weights.
+ContextualScorer assigns negative rewards if an answer is rejected due to hallucination or lack of evidence.
+Adaptive scoring may be extended to incorporate other feedback metrics such as explicit user ratings.
+SynergyStatRepository persists synergy statistics, enabling long‑term personalization.
+Reinforcement components must remain privacy‑aware, ensuring that user feedback is anonymized.
+Hyperparameters controlling reinforcement, such as W_RECENCY and W_CONFIDENCE, are defined in application.yml.
+DynamicHyperparameterTuner updates these weights based on aggregated performance metrics.
+Reinforcement learning ensures that the system adapts over time, improving recall and precision for recurring users.
+StrategySelectorService logs strategy choices and rewards for analysis and debugging.
+ContextualScorer may assign separate rewards for retrieval success and answer quality.
+Synergy bonuses can be combined when multiple partners appear in one document by averaging or summing bonuses.
+Reinforcement processes are triggered after the final answer is delivered to the user.
+Reinforcement ensures that negative feedback reduces the likelihood of recommending unpopular pairings.
+Adaptive scoring provides a personalized experience without requiring explicit user profiles.
+BanditSelector ensures that both new and old memory entries remain candidates during learning.
+Reinforcement tasks operate on the translation memory and synergy statistics within a session context.
+Meta‑learning loops incorporate reinforcement signals into strategy selection and hyperparameter tuning.
+Synergy bonuses are scaled per domain to avoid biasing cross‑domain recommendations.
+Reinforcement learning components interact with the retrieval layer by influencing which snippets are loaded from memory.
+Adaptive scoring influences the ranking layer by modifying cross‑encoder scores based on user feedback.
+Bandit annealing and hyperparameter tuning ensure the system does not overfit to early feedback.
+Collectively, reinforcement and adaptive components help the system learn from users and continuously improve.
+The knowledge base replaces hard‑coded lexicons with database‑driven domain knowledge.
+DomainKnowledge entities store the domain, entity type and entity name for each item.
+EntityAttribute entities store key–value pairs for attributes such as element, weapon type or price.
+DomainKnowledgeRepository and EntityAttributeRepository provide CRUD operations on these tables.
+KnowledgeBaseService abstracts access to the knowledge base, returning attributes and interaction rules.
+DefaultKnowledgeBaseService uses JPA repositories and optional caching for frequent queries.
+SubjectResolver uses the knowledge base to identify the subject of a query by matching entity names.
+The longest or most relevant entity match is chosen when multiple names appear in a query.
+GuardrailQueryPreprocessor retrieves interaction rules from the knowledge base and injects them into the prompt.
+Interaction rules are stored as relationships between entities, such as preferred partners or discouraged pairs.
+RelationshipRuleScorer evaluates documents against these rules and adjusts ranking scores accordingly.
+Rule types include CONTAINS, IS_PART_OF, PREFERRED_PARTNER, DISCOURAGED_PAIR and AVOID_WITH.
+Administrators can define new rule types and weights without altering code, simply by updating the database.
+Knowledge base data can be updated through scripts or admin tools, making domain expansion easy.
+Knowledge base caching reduces database queries by storing frequently accessed entity names and rules.
+SubjectResolver disambiguates overlapping names by using domain hints and context.
+GuardrailQueryPreprocessor lists protected terms and instructs the model to respect them.
+RelationshipRuleScorer boosts documents aligning with rules and penalizes those that violate them.
+Dynamic rules generalize across domains, enabling pairing rules for recipes, products, instruments and more.
+KnowledgeBaseService exposes methods such as getAttribute, getInteractionRules and getAllEntityNames.
+Dynamic rules instruct the prompt builder about allowed and discouraged combinations.
+Knowledge base updates do not require redeploying the system, fostering agility.
+SubjectResolver may use fuzzy matching to handle typos or partial names in queries.
+GuardrailQueryPreprocessor includes domain policies like banned words and preferred sources.
+RelationshipRuleScorer uses weights from HyperparameterService to control the impact of each rule type.
+Knowledge base is essential for decoupling domain knowledge from code and enabling new domains.
+Dynamic rules and attributes make the system flexible enough to handle games, products, recipes and more.
+Administrators can insert new entities and rules through an admin interface or database scripts.
+Knowledge base design supports many‑to‑many relationships if future domains require complex interactions.
+Knowledge base caching ensures that repeated lookups for common terms do not hit the database.
+SubjectResolver may be extended with LLM‑based named entity recognition for improved accuracy.
+KnowledgeBaseService should support eventual integration with graph databases for richer relationships.
+Dynamic rules can enforce policies like avoiding allergens in recipe pairings or compatibility in electronics.
+The knowledge base underpins both retrieval (subject resolution) and ranking (rule scoring).
+Changing a rule in the knowledge base immediately affects recommendations without code changes.
+Knowledge base entries should be kept consistent and normalized to avoid duplication.
+Dynamic interaction rules allow the system to adapt to new guidelines and user preferences quickly.
+EntityAttribute values can include JSON or structured data for complex attributes if needed.
+Maintaining a clear and well‑structured knowledge base is essential for reliable system behaviour.
+Caching strategies at the knowledge base layer improve performance by avoiding redundant queries.
+Hallucination suppression aims to eliminate fabricated statements and unsupported entities from answers.
+ClaimVerifierService removes unsupported claims by verifying each assertion against evidence.
+EvidenceGate prevents the LLM from generating answers when the context lacks sufficient evidence.
+NamedEntityValidator blocks answers that mention names not present in the context or knowledge base.
+Authority‑weighted retrieval prioritizes credible sources, reducing the chance of hallucination.
+AnswerSanitizers enforce domain rules and remove disallowed pairings or unsafe content.
+Protected term injection instructs the model not to modify known proper nouns during correction or generation.
+Multiple verification layers work together: evidence sufficiency, fact verification, claim verification and sanitization.
+The system uses dynamic thresholds to decide when evidence is sufficient or claims are supported.
+Sanitizers can enforce regulatory compliance, such as removing medical advice or personal data.
+ClaimVerifierService may call external fact checkers to validate claims outside of the retrieved context.
+The hallucination suppression pipeline ensures that only answers grounded in evidence are delivered.
+EvidenceGate aborts or repairs the generation stage to avoid hallucinated responses.
+Claim extraction isolates atomic statements to enable granular verification.
+Verifying claims prevents the propagation of unverified or false information.
+The system default response when evidence is lacking is \"정보 없음\" to avoid guessing.
+Authority scoring demotes sources with low credibility, such as personal blogs, which are more prone to errors.
+Sanitization can include profanity filtering and removing banned pairings or illegal content.
+NamedEntityValidator cross‑checks named entities against context and memory before accepting them.
+EvidenceGate metrics can include subject mention frequency and average credibility score.
+Hallucination suppression balances strictness with answer completeness to avoid over‑filtering.
+Dynamic rules in the knowledge base also help prevent hallucinated combinations by penalizing invalid pairs.
+A robust hallucination suppression pipeline enhances user trust in the system's responses.
+Multiple layers ensure that if one mechanism misses an issue, another can catch it.
+Sensitive domains may require stricter hallucination suppression to meet safety standards.
+Sanitizers can be extended to handle new domain policies as they arise.
+Proper training of the LLM in the correction and verification phases helps reduce hallucinations.
+Hallucination suppression interacts with reinforcement learning by ensuring only verified answers are reinforced.
+Hallucination suppression is key to maintaining factuality and reliability in an AI assistant.
+Continuous monitoring and adjustment of hallucination thresholds are necessary as domains and models evolve.
+Meta‑learning adapts retrieval strategies and weights based on past performance and feedback.
+StrategySelectorService uses a softmax policy to choose among retrieval strategies.
+Each strategy's estimated reward is updated after queries via ContextualScorer and reinforcement signals.
+Softmax selection assigns probabilities to strategies based on rewards and a temperature parameter.
+High temperature values promote exploration by flattening the probability distribution over strategies.
+Low temperature values emphasize exploitation by focusing on strategies with higher rewards.
+DynamicHyperparameterTuner monitors aggregated metrics to adjust weights and temperatures over time.
+Hyperparameters such as synergy weight, authority weight and exploration temperature can be tuned dynamically.
+StrategyPerformance entity stores success counts, failure counts and average rewards for each strategy.
+RewardHyperparameterTuner modifies how rewards are computed by adjusting weights on different metrics.
+ContextualScorer assigns rewards based on answer quality, factuality and novelty.
+Bandit annealing schedules reduce exploration as more data is collected, converging on optimal strategies.
+Different strategies may excel in different domains or for different intents, warranting dynamic selection.
+Meta‑learning ensures that the system does not rely on a single retrieval pattern across all queries.
+Hyperparameter tuning must be gradual to avoid destabilizing the system.
+Temperature annealing formula often uses base / sqrt(n + 1) where n is the number of interactions.
+DynamicHyperparameterTuner can increase exploration when performance drops unexpectedly.
+StrategySelectorService logs selections and rewards to aid in debugging meta‑learning behaviour.
+HyperparameterService reads default weights from configuration and exposes them for tuning.
+Meta‑learning components can be extended to include new strategies or weights without changing the pipeline.
+Reward functions may combine multiple metrics; tuning adjusts how each metric contributes to the reward.
+Meta‑learning is critical for adapting to changing data patterns and user behaviours over time.
+A multi‑armed bandit approach balances exploration and exploitation when selecting retrieval modes.
+Hyperparameter tuning interacts with reinforcement learning by adjusting how feedback influences scores.
+Developers should monitor strategy selection frequencies to ensure adequate exploration.
+Meta‑learning loops run periodically and should not run too frequently to avoid oscillations.
+Temperature and weight adjustments can be exposed via admin interfaces for manual tuning.
+Proper logging of meta‑learning adjustments aids transparency and reproducibility of results.
+Sessions are identified by a unique session ID (META_SID) to isolate conversation history and caches.
+Session isolation ensures that different users' data does not interfere or leak across sessions.
+Caches are keyed by session ID to store retrieval results, memory entries and synergy bonuses per session.
+Retrieval caches store results from web and vector searches to reduce repeated requests.
+Memory caches store translation memory entries and their energy scores for quick lookup.
+Synergy caches store computed bonuses for subject–partner pairs within a session.
+Knowledge base caches store frequently accessed entity names, attributes and rules.
+Cache sizes and expiration times are configured via application.yml and CacheConfig.
+Caffeine library provides efficient in‑memory caching with time‑based expiration and size limits.
+Session caches expire after a configurable time to free resources and maintain privacy.
+Server‑sent events (SSE) stream intermediate results and progress updates to clients.
+SSE events include retrieval progress, context construction, draft answers and verification outcomes.
+The final SSE event includes metadata about the model used and whether retrieval was used.
+SSE uses WebFlux and non‑blocking I/O to handle many concurrent streams efficiently.
+Clients subscribe to /stream endpoints to receive real‑time updates during query processing.
+SSE improves transparency by showing how the system searches, builds context and verifies answers.
+Caches improve performance but must be invalidated after session expiry to avoid stale data.
+SessionConfig defines how session metadata is propagated through the pipeline.
+ChatSessionScope manages session‑scoped beans in the Spring context.
+PersistentChatMemory stores conversation history beyond the session, enabling long‑term memory.
+Per‑session caches prevent cross‑session interference and support privacy requirements.
+Cache expiration times must balance fresh data retrieval with performance benefits.
+SSE events are formatted as plain text with a 'data:' prefix and terminated by a blank line.
+Clients use EventSource or equivalent APIs to consume SSE streams.
+SSE reconnects automatically on network disruptions, but long outages may require a restart.
+Developers must avoid leaking sensitive data in intermediate SSE events.
+Caching retrieval results reduces API costs and latency for repeated queries within a session.
+Session ID should be unguessable and expire after a reasonable time to maintain security.
+Caches are cleared when a session ends or when explicit cache invalidation is triggered.
+SSE is preferred over WebSockets for one‑way streaming because it is simpler and fits HTTP semantics.
+Caches for knowledge base queries reduce the load on the database and improve response times.
+Translation memory caches hold frequently used memory entries to avoid database lookups.
+Synergy caches maintain per‑session synergy bonuses but update persistent statistics after feedback.
+Session caches can be monitored via cache statistics to tune sizes and expiration.
+Developers can clear caches during development to reflect new data immediately.
+SSE streams include flags such as 'done' and 'modelUsed' to mark completion and model details.
+Caches should not store sensitive information beyond the necessary session duration.
+Session isolation also applies to reinforcement data, ensuring user feedback does not cross sessions.
+Each chat session maintains its own conversation history and memory entries.
+CORS configuration restricts which origins can access SSE endpoints for security.
+Session metadata is included in retrieval cache keys to separate results per user.
+Developers should test SSE streaming under load to ensure reliability with many concurrent sessions.
+CacheConfig and SessionConfig are central to configuring caching and session behaviour.
+Session isolation, caching and streaming collectively ensure privacy, performance and transparency.
+Configuration is primarily managed through application.yml, which specifies keys and values for the system.
+abandonware.answer.detail.min-words defines minimum word counts for each verbosity level: brief, standard, deep and ultra.
+abandonware.answer.token-out defines the maximum number of tokens the model can generate for each verbosity.
+orchestrator.max-docs sets the maximum number of documents used in context per verbosity level.
+reranker.keep-top-n specifies how many documents to keep for reranking at each verbosity level.
+openai.model.moe designates the high-tier model (e.g., gpt-4o) used for high-stakes queries.
+search.authority.weights lists domain weights (e.g., official, wiki, community, blog) as domain:weight pairs.
+memory.snippet.min-length and memory.snippet.max-length define acceptable lengths for reinforcement.
+agent.knowledge-curation.enabled toggles the autonomous knowledge curation agent on or off.
+retrieval.mode chooses between RETRIEVAL_ON, RAG_ONLY and RETRIEVAL_OFF to control search behaviour.
+cache specifications in application.yml define maximum sizes and expiration times for various caches.
+Environment variables like OPENAI_API_KEY, PINECONE_API_KEY and NAVER_API_CLIENT_ID store credentials.
+spring.datasource.url, username and password configure the database connection and credentials.
+LangChain4j version purity is enforced to ensure all modules are version 1.0.1.
+Retrieval and ranking parameters can be tuned without code changes via configuration keys.
+Cache sizes and expiration times may need adjustments based on available memory and performance goals.
+Model routing parameters (temperature, top-p, tokenOut) are specified per intent and verbosity in the configuration.
+secure keys must be stored in environment variables and not committed to the repository.
+retrieval.max-docs controls how many documents are considered for context assembly.
+reranker.keep-top-n determines how many documents proceed to cross‑encoder reranking.
+Dynamic rule weights and synergy scaling factors are also configurable in application.yml.
+Caches are configured in CacheConfig.java and referenced by application.yml for size and expiry.
+Session expiration times are defined to clear session caches after inactivity.
+SSE endpoint configuration controls the streaming behaviour and allowed origins.
+Verbosity policies are set in configuration to specify minimum words and token budgets per level.
+Model selection and routing use configuration keys to decide when to use high‑tier models.
+Domain weights for authority scoring can be tuned via configuration to reflect trust differences.
+Adaptive scoring constants like synergy scaling factor and smoothing constant k are configured externally.
+EvidenceGate thresholds for evidence sufficiency can be adjusted through configuration keys.
+Claim verification thresholds and sampling temperature can also be set via configuration.
+Hyperparameter tuning intervals and parameters are specified in configuration for DynamicHyperparameterTuner.
+Cache configuration includes maximumSize, expireAfterWrite and other settings for each cache.
+spring.jpa.hibernate.ddl-auto controls how the database schema is created or updated on startup.
+server.port sets the HTTP port for the Spring Boot application.
+cors.allowed-origins restricts which domains can access the API and SSE endpoints.
+security.api-keys lists authorized API keys for accessing protected endpoints.
+session.expire-after defines how long sessions remain active before being cleared.
+Logging levels can be configured per package to control the verbosity of application logs.
+Model parameters such as temperature and top-p can be fine‑tuned per intent and verbosity.
+openai.api.key and other service keys must be set as environment variables at runtime.
+Database options allow switching from H2 to PostgreSQL or other persistent databases.
+Vector store configuration includes API keys and index names for services like Pinecone.
+Configuration keys enable quick experimentation without modifying the codebase.
+Configuration must be kept consistent across development, staging and production environments.
+It is important to document configuration keys and their effects for future maintainers.
+Using profiles (e.g., dev, prod) allows different configurations per environment.
+Configuration management is critical for controlling the behaviour of the AI pipeline.
+Version purity checks may abort startup if conflicting versions are detected in the classpath.
+Proper configuration of retrieval and ranking determines the trade‑off between recall and latency.
+Additional detail line 1 summarizing aspects of the system across query processing, retrieval, ranking, verification, reinforcement, knowledge base, hallucination suppression, meta-learning, session management, configuration, guidelines, algorithms, debugging, security, troubleshooting, future enhancements, commit summaries, examples and glossary terms.
+Additional detail line 2 summarizing aspects of the system across query processing, retrieval, ranking, verification, reinforcement, knowledge base, hallucination suppression, meta-learning, session management, configuration, guidelines, algorithms, debugging, security, troubleshooting, future enhancements, commit summaries, examples and glossary terms.
+
+...
+EmbeddingModelCrossEncoderReranker
+feat: Implement exponential scoring decay based on URL credibility.
+
+Improves ranking accuracy by using AuthorityScorer to determine the credibility level of a source URL (e.g., Official, Trusted) and applying a differential penalty to the final ranking score based on its level.
+
+feat: Apply a dynamic synergy weighting bonus at runtime.
+
+Enhances operational flexibility by fetching the synergyWeight value in real-time from HyperparameterService. This allows for immediate adjustments for A/B testing or hotfixes without requiring a redeployment.
+
+AuthorityScorer
+feat: Add a centralized credibility analyzer that classifies source credibility into an enum and maps it to an exponential decay constant.
+
+Implemented getSourceCredibility(), a method that classifies a URL into OFFICIAL, TRUSTED, COMMUNITY, or UNVERIFIED tiers.
+
+Added a decayFor() method that returns a predefined decay value (from 1.0 down to 0.25) for each tier, ensuring a consistent credibility policy across the system.
+
+HyperparameterService
+feat: Add the ability to dynamically fetch the reranking synergy weight (rerank.synergy-weight) at runtime.
+
+Greatly improves operational flexibility by allowing real-time adjustments to the influence of the synergy bonus via system properties or environment variables, eliminating the need for redeployment.
+EmbeddingModelCrossEncoderReranker now incorporates a dynamic synergy weight bonus and an exponential authority decay multiplier into its final score.
+AuthorityScorer classifies URLs into credibility tiers such as OFFICIAL, TRUSTED, COMMUNITY, and UNVERIFIED.
+An exponential scoring decay is applied based on the URL's credibility tier to penalize less reliable sources.
+HyperparameterService provides a dynamic reranking synergy weight, tunable at runtime via system properties or environment variables.
+A dedicated RerankSourceCredibility enum was created for the reranker to avoid conflicts with the existing SourceCredibility enum.
+RerankSourceCredibility (Enum)Of course. Here is the summary formatted for a Git commit message or pull request.
+
+✅ Summary of Changes
+chat-ui.html
+Adds a help button (#sendBtnHelp) that triggers a popover (#helpPopover).
+
+Introduces new CSS styles for the .help-icon and #helpPopover.
+
+Sets type="button" for the send and help buttons to prevent default form submission.
+
+chat.js
+Adds a click event listener in init() for #sendBtnHelp to call the /api/v1/help/context endpoint.
+
+Implements logic to handle the UI states for loading, success, and failure of the help content.
+
+EmbeddingModelCrossEncoderReranker.java
+Injects AuthorityScorer, HyperparameterService, and RerankSourceCredibility dependencies.
+
+Updates the scoring calculation to apply synergyWeight and authorityDecayMultiplier.
+
+Adds safeUrl() and clamp01to2() helper methods.
+
+AuthorityScorer.java
+Implements getSourceCredibility() and decayFor() methods.
+
+Marks the old weightFor() method as @Deprecated and delegates its call to the new implementation.
+
+Enhances the URL host parsing logic for better reliability.
+
+HyperparameterService.java
+Adds the getRerankSynergyWeight() method to provide a dynamic synergy weight at runtime.
+
+RerankSourceCredibility.java
+Creates a new enum class with values: OFFICIAL, TRUSTED, COMMUNITY, UNVERIFIED.
+feat: Create a new, dedicated RerankSourceCredibility enum for the reranker.
+
+A new type was defined to avoid potential conflicts with the existing SourceCredibility enum and to clearly segregate policies specific to the reranking stage.
+✨ Patch Notes — ModelRouter Routing Enhancements
+Summary
+
+MOE escalation rules: Route to the higher-tier (MOE) model using a composite of intent, risk, verbosity, and token-budget signals.
+
+Stability & performance: Resolution order now prefers injected beans → atomic cache (AtomicReference) → dynamic factory.
+
+Operational visibility: Added debug logs for routing decisions and a utility to report the effective SDK model name actually used.
 
 Changes
-Added com.example.lms.domain.Role Enum:
+1) Heuristic routing, upgraded
 
-A new enum, Role, has been introduced in the com.example.lms.domain package.
+Intent escalation: If intent ∈ HIGH_TIER_INTENTS (PAIRING, RECOMMENDATION, EXPLANATION, TUTORIAL, ANALYSIS) → MOE.
 
-It defines four essential user roles required by the application: ADMIN, USER, PROFESSOR, and STUDENT.
+Risk escalation: If riskLevel == "HIGH" → MOE.
 
-Impact
-Resolves Compilation Errors: The addition of the Role enum resolves all cannot find symbol errors that were occurring in files referencing user roles, most notably within AdminInitializer and Spring Security configurations.
+Verbosity escalation: If verbosityHint ∈ {"deep","ultra"} → MOE.
 
-No Unnecessary Stubs Created: Analysis confirmed that other classes referenced in the error log (e.g., GeminiClient, NamedEntityValidator, KgHandler) were already present in the codebase. The root cause of the build failure was isolated to the missing Role enum, which this patch specifically corrects.
+Token-budget escalation: If targetMaxTokens >= 1536 → MOE (large-answer heuristic).
 
-With this change, the project now compiles successfully, allowing for further development and deployment.
-Patch Notes: RAG Pipeline Hardening & Amplification
-This major update implements a comprehensive, three-phase amplification strategy to significantly enhance the precision, robustness, and cost-efficiency of the RAG pipeline. The core of this patch is the introduction of an advanced Entity Disambiguation pre-handler and the deep integration of its output throughout the retrieval, reranking, and generation stages.
+public ChatModel route(@Nullable String intent,
+                       @Nullable String riskLevel,
+                       @Nullable String verbosityHint,
+                       @Nullable Integer targetMaxTokens)
 
-Hard Gates (Non-Negotiable Constraints)
-LangChain4j Version Purity: The build will fail if any dev.langchain4j:* dependency other than version 1.0.1 is detected.
 
-Centralized Prompt Management: All LLM prompts must be generated exclusively via PromptBuilder.build(PromptContext). Direct string concatenation within services like ChatService is strictly prohibited.
+Decision log (DEBUG):
 
-Fault-Tolerant Chain: Individual handler failures within the retrieval chain must not propagate exceptions. Instead, they will be merged as partial results, ensuring the chain always completes.
+ModelRouter decision intent={}, risk={}, verbosity={}, maxTokens={}, useMoe={}
 
-Phase 1: Query Understanding Amplification 🧠
-This phase focuses on robustly resolving ambiguity at the very beginning of the pipeline.
+2) Model resolution path & temperature policy
 
-A1: Hybrid Candidate Generation & Context-Aware Fusion
+resolveMoe()
 
-New Components: CandidateGenerator (for lexical, fuzzy, and semantic matches), RankFusionService (using RRF), and ContextBooster.
+Use injected moe bean if present → reuse cache → otherwise build via DynamicChatModelFactory.
 
-Integration: A new EntityDisambiguationHandler is inserted as the first step after the MemoryHandler. It follows an internal pipeline: generate candidates → fuse with RRF (k≈60) → apply contextual boosts/penalties → pass to a DisambiguationDecisionPolicy.
+Dynamic build defaults: temperature=0.3 (consistency/factuality), top_p=1.0.
 
-Uncertainty Handling: If the confidence margin between the top two candidates is below a configurable threshold (τ), a one-time "Self-Ask Clarify" action is triggered via SSE to ask the user for input.
+resolveBase()
 
-A2: Dense-to-Cross-Encoder Reranking
+Use injected utility bean → reuse cache → otherwise dynamic build.
 
-New Component: A DisambiguationReranker utilizing a cross-encoder model.
+Dynamic build defaults: temperature=0.7, top_p=1.0.
 
-Integration: The final score for a disambiguation candidate is a normalized blend of the RRF score and the cross-encoder's semantic similarity score (final = α·RRF + (1−α)·s_ce).
+3) Factory guarantee & clearer exception
 
-Fallback: If the cross-encoder fails or times out, the system gracefully falls back to using the RRF score alone.
+If dynamic creation is required but no factory exists, ensureFactory() throws an actionable IllegalStateException:
 
-A3: Uncertainty Gate (Ask/Abstain Policy)
+Provide @Bean utilityChatModel/moeChatModel or enable DynamicChatModelFactory.
 
-Logic: The system calculates an uncertainty score based on the entropy of candidate probabilities and the confidence margin. If this score exceeds a threshold (θ), it first attempts to clarify with the user once. If uncertainty remains high, it will abstain from answering and return a "Could not resolve" message.
+4) Effective model name utility
 
-Observability: The DecisionGate exposes the reasoning and metrics (scores, margin) via SSE trace events.
+resolveModelName(ChatModel model):
 
-Phase 2: Intelligent Retrieval & Reranking Amplification 📈
-This phase leverages the resolved entities and intents from Phase 1 to dramatically improve search precision.
+If a dynamic factory is available, returns factory.effectiveModelName(model) (the exact model name sent to the SDK).
 
-B1: CognitiveState-Aware SmartQueryPlanner
+Falls back to unknown or the class name when factory/model is absent.
 
-Enhancement: The SmartQueryPlanner is now driven by the CognitiveState produced in Phase 1. It uses templated strategies based on user intent.
+Configuration & Defaults
 
-Example: For a COMPARATIVE_ANALYSIS intent, it will automatically generate distinct queries for each entity (Query for A, Query for B) and a comparative query (Query for A vs. B synergy), which are then processed by the HybridRetriever.
+No conflicts with existing keys. Dynamic creation is used only when no injected beans are provided.
 
-B2: Multi-Channel Fusion & Final Rerank
+Example – application.properties
 
-Integration: Before the final reranking step, the RankFusionService now uses RRF to merge the ranked lists from all retrieval channels (Web, Vector, Memory).
+# High/base model names
+router.moe.high=gpt-4o
+router.moe.mini=gpt-4o-mini
 
-Final Pass: Only the top-K candidates from this fused list are sent to the CrossEncoderReranker for the final, computationally expensive scoring.
+# Optional: routing heuristic
+router.retry_on_429=true
 
-B3: Authority & Freshness Weighting
 
-Heuristics: The fused score is now modulated by a weighted combination of source authority and content freshness: score' = score_fused × (a·w_authority + (1−a)·w_fresh).
+Temperatures are fixed in code (MOE 0.3 / Base 0.7, top_p=1.0). You can extend via factory options if needed.
 
-Configuration: Authority tiers and decay rates are fully configurable per domain.
+Compatibility
 
-Phase 3: Dynamic Generation & Autonomous Learning Amplification 🤖
-This phase optimizes model selection and enables the system to learn from its failures.
+Legacy signatures retained:
 
-C1: Cost-Aware Mixture of Experts (MoE) Routing
+route(String intent)
 
-Logic: The ModelRouter now implements a cost-aware escalation policy. The high-tier model is selected only if query complexity, uncertainty, or business impact exceeds configured thresholds. Otherwise, the base model is used.
+route(String, String, String, Integer)
 
-Implementation: High-tier and base-tier models are explicitly injected using Spring's @Qualifier to avoid ambiguity with @Primary.
+If beans are injected, existing behavior is preserved. Cache/dynamic creation are used only when beans are absent.
 
-C2: Instantaneous Learning Trigger on Failure
+Test Guide
 
-Event-Driven Learning: When the SmartFallbackService determines an answer cannot be provided (NO_ANSWER or LOW_EVIDENCE), it now fires an asynchronous event to the AutonomousExplorationService.
+Intent escalation: intent=ANALYSIS → MOE.
 
-Throttling: This immediate learning trigger is rate-limited by the FreeTierApiThrottleService to manage costs, with the actual knowledge ingestion handled by the existing curation scheduler.
+Risk escalation: riskLevel=HIGH → MOE.
 
-C3: Evidence-Weighted Decoding
+Verbosity escalation: verbosityHint ∈ {deep, ultra} → MOE.
 
-Enhancement: The generation process now maintains a mapping between generated sentences and the evidence snippets that support them. Sentences without strong evidence are flagged as "speculative" or suppressed, ensuring answers are grounded in retrieved facts.
+Token-budget escalation: targetMaxTokens=2048 → MOE.
 
-Observability & Diagnostics
-New SSE Events: Added DISAMBIGUATION, RRF, RERANK, and MOE_ROUTE events, each including a reason field and relevant metrics.
+Base path: None of the above → Base.
 
-New Metrics: Tracking disambiguation outcomes (auto/user/abort) and key scores (top1, top2, margin, confidence).
+Effective name: Verify resolveModelName(selectedModel) in logs/metrics.
+
+No factory configured: No injected beans & no cache & no factory → verify guided exception message.
+
+Ops Tips
+
+Enable DEBUG to trace routing rationale:
+
+logging.level.com.example.lms.model.ModelRouter=DEBUG
+
+
+Frequent high-cost requests? Provide a targetMaxTokens hint from the frontend/service layer to intentionally promote to MOE.
+
+Known Issues / Notes
+
+If configured model names don’t match your API account entitlements, dynamic creation will fail. Verify keys/permissions first.
+
+Do not mix LangChain4j versions on the classpath. Resolve version purity before rollout (no 0.2.x ↔ 1.0.x mixing).
+
+Commit Message (example)
+feat(router): multi-signal MOE routing + cache/factory fallback + effective model name
+
+- Add intent/risk/verbosity/token-budget heuristics for MOE escalation
+- Prefer injected beans, then atomic cache, then dynamic factory creation
+- MOE temp=0.3 / Base temp=0.7 (top_p=1.0) for stability vs. creativity balance
+- Debug logs for routing decisions
+- resolveModelName() to reveal the exact SDK model name
+- Helpful factor네, 맞습니다. 이전에는 각 클래스가 스스로 빈(Bean)으로 등록하려다 보니 이름 충돌이 났지만, RerankerConfig라는 중앙 관제탑을 만들어주니 문제가 해결된 것입니다.
+Change Summary
+
+Add build setup (Gradle): New build.gradle at the project root targeting Java 17 and Spring Boot 3.4.0, with LangChain4j 1.0.1 BOM. Declares core dependencies (Boot, Lucene, Reactor, Retrofit, Lombok, etc.). Adds ONNX Runtime via com.microsoft.onnxruntime:onnxruntime:1.18.0 to enable local ONNX inference.
+
+Introduce ONNX-based reranker: New package com.example.lms.service.onnx with:
+
+OnnxCrossEncoderReranker — implements both the internal CrossEncoderReranker contract and LangChain4j’s Reranker<Document> to provide local ONNX cross-encoder re-ranking. Bean activates only when abandonware.reranker.backend=onnx-runtime, and it takes precedence over the embedding reranker.
+
+OnnxRuntimeService — loads the ONNX model, initializes a session with the selected execution provider (cpu, cuda, or tensorrt), and exposes a predict API returning a query–document score matrix. If the model is missing, it falls back to Jaccard similarity.
+
+Adjust embedding reranker conditions: EmbeddingModelCrossEncoderReranker now activates only when abandonware.reranker.backend=embedding-model or the property is absent (default behavior remains embedding-based).
+
+Add configuration: Example application.yml added to define the abandonware.reranker namespace with backend, onnx.model-path, and onnx.execution-provider settings.
+
+Restructure sources: Project code is moved under src_onnx/src; the old src directory is removed. The service/domain layout stays the same; resources and tests live under the new structure.
+
+Commit Message (Conventional)
+feat(reranker): add ONNX runtime backend and configurable reranker selection
+
+Add root Gradle build with Spring Boot 3.4.0 and LangChain4j 1.0.1 BOM.
+Include ONNX Runtime (com.microsoft.onnxruntime:onnxruntime:1.18.0) to enable local ONNX inference.
+
+Introduce OnnxCrossEncoderReranker and OnnxRuntimeService to support ONNX-based cross-encoder reranking.
+Register the ONNX reranker when `abandonware.reranker.backend=onnx-runtime`; otherwise fall back to the embedding model.
+
+Update EmbeddingModelCrossEncoderReranker activation to follow the new `abandonware.reranker.backend` property and default to the embedding model when unset.
+
+Add example `application.yml` for `abandonware.reranker` (backend, onnx.model-path, onnx.execution-provider).
+
+Move sources under `src_onnx/src` and remove legacy `src` directory.
+
+PR Description
+Overview
+
+This PR introduces a local ONNX cross-encoder reranker that can be toggled at runtime, alongside cleanup of the build/config to standardize on Spring Boot 3.4 and LangChain4j 1.0.1. With ONNX Runtime in place, we can run cross-encoder models locally (CPU/CUDA/TensorRT) and switch between embedding-based and ONNX-based reranking via configuration.
+
+What’s Changed
+
+Build: New root build.gradle with Java 17 toolchain, Spring Boot plugin, LangChain4j 1.0.1 BOM, and onnxruntime:1.18.0.
+
+ONNX Reranker:
+
+OnnxCrossEncoderReranker implements internal and LangChain4j reranker interfaces for seamless use in both the RAG pipeline and LangChain APIs.
+
+OnnxRuntimeService loads the ONNX model and exposes predict for query–candidate scoring; falls back to Jaccard if no model is provided.
+
+Config Toggle: abandonware.reranker.backend selects the implementation:
+
+embedding-model (default)
+
+onnx-runtime (activates ONNX reranker)
+
+Conditional Beans: Embedding reranker only activates when backend is embedding-model or unset; ONNX reranker activates only when backend is onnx-runtime.
+
+Structure: Sources are moved to src_onnx/src; old src removed.
 
 Configuration
-New configuration keys have been added under abandonware.disambiguation.*, abandonware.vector.entity.*, and router.moe.* with sane defaults to control all new features. All features are toggleable via *.enabled flags for safe rollback.
-이 패치에는 엔티티 식별 모듈(CandidateSetBuilder, DisambiguationScorer, DisambiguationDecisionPolicy, EntityDisambiguationHandler)이 새로 추가되었고, 검색 체인을 수정해 엔티티 식별을 선행하도록 구성했습니다. 또한 application.yml에 관련 설정을 추가하고 변경사항을 정리한 CHANGELOG, DIFF_SUMMARY, TEST_REPORT 문서를 작성했습니다.
-BUILD | VersionPurityGate (CI) | Hard-fail on mixed dev.langchain4j lines; report only conflicting coordinates | Deterministic builds | BOM remains pinned to 1.0.1
-Changelog — src53 → src53core Upgrade
 
-Date: 2025-08-19 (KST)
-Scope: GPT-based Web Search plugin (Light/Deep/Auto), adaptive retrieval chain, UI controls, CI version-purity gate, docs/tests
+Example application.yml:
 
-TL;DR
+abandonware:
+  reranker:
+    # embedding-model (default) | onnx-runtime
+    backend: embedding-model
 
-Introduces GPT Web Search with three modes: LIGHT, DEEP, AUTO (hybrid gating).
+    onnx:
+      # Absolute or classpath file path to the ONNX model
+      model-path: /opt/models/cross-encoder.onnx
+      # cpu | cuda | tensorrt
+      execution-provider: cpu
 
-Adds AdaptiveWebSearchHandler before legacy Web/Vector stages + WEB_ADAPTIVE RRF channel.
 
-Enforces LangChain4j=1.0.1 purity (CI fails on mixed 0.2.x).
+Gradle snippet (root build.gradle):
 
-Centralizes prompts via PromptBuilder.build(PromptContext) (string concat in ChatService is forbidden).
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
 
-Extends DTO/Controller/UI to expose search controls (mode, providers, official-only).
+dependencies {
+    implementation platform("dev.langchain4j:langchain4j-bom:1.0.1")
+    implementation "dev.langchain4j:langchain4j"
+    implementation "org.springframework.boot:spring-boot-starter"
+    implementation "com.microsoft.onnxruntime:onnxruntime:1.18.0"
 
-Ships tests, CI scripts, sample configs, and docs.
+    compileOnly "org.projectlombok:lombok:1.18.32"
+    annotationProcessor "org.projectlombok:lombok:1.18.32"
+    testCompileOnly "org.projectlombok:lombok:1.18.32"
+    testAnnotationProcessor "org.projectlombok:lombok:1.18.32"
+}
 
-Packaging target for external delivery: src53core.zip.
+Default Behavior & Fallbacks
 
-Highlights
-New
+If abandonware.reranker.backend is unset, the embedding reranker remains the default.
 
-GPT Web Search plugin (module: gptsearch/*)
+If ONNX mode is selected but the model is missing/unreadable, the system boots and falls back to Jaccard similarity to avoid hard failure.
 
-Providers: BING, TAVILY, GOOGLECSE, SERPAPI, MOCK (fallback if keys absent).
+Migration Notes
 
-SearchMode: AUTO, OFF, FORCE_LIGHT, FORCE_DEEP.
+Source layout has changed to src_onnx/src. Ensure your Gradle source sets (and IDE) are aligned if you rely on non-standard paths.
 
-Decision gate: SearchDecisionService combines rules + LLM tool-signal to decide shouldSearch, depth (LIGHT/DEEP), providers, topK, reason.
+No API changes are required for callers; the reranker selection is configuration-only.
 
-Evidence injection: PromptBuilder adds ### WEB EVIDENCE with {title|host|snippet|source}, authority & freshness-weighted; token-pressure reduces to one snippet/doc.
+How to Enable ONNX Reranking
 
-Caching & resilience: Caffeine session cache; HTTP client with timeout, 429/5xx exponential backoff (≤3), per-minute/daily quotas.
+Place the desired ONNX cross-encoder model at a known path.
 
-AdaptiveWebSearchHandler (precedes legacy Web/Vector)
+Set:
 
-Runs providers in parallel → RRF (pre) → lightweight ranker → optional Cross-Encoder rerank.
+abandonware.reranker.backend=onnx-runtime
+abandonware.reranker.onnx.model-path=/opt/models/cross-encoder.onnx
+abandonware.reranker.onnx.execution-provider=cuda   # or cpu/tensorrt
 
-Writes results to SearchContext as channel=WEB_ADAPTIVE.
 
-Fail-soft: exceptions are converted to partial warnings; chain continues.
+Start the app and verify logs for ONNX session initialization.
 
-RRF fusion update
+Testing
 
-Adds WEB_ADAPTIVE channel into existing fusion with authority × freshness multipliers (coeffs in yml).
+Unit tests validate bean activation per backend setting and the Jaccard fallback path.
 
-Prompting policy
+Manual smoke test:
 
-All prompts must be built via PromptBuilder.build(PromptContext); no string concatenation in ChatService.
+With default config: confirm embedding reranking is used.
 
-Model routing (MoE)
+Switch to ONNX: confirm ONNX reranking scores and ordering differ as expected.
 
-Use @Qualifier("high") / @Qualifier("mini"); disallow @Primary.
+Risks
 
-One-shot escalation rule: if complexity=HIGH OR uncertainty≥0.70 OR intent ∈ {FACT_CHECK, HIGH_RISK, COMPARATIVE}, escalate once to high.
+Running ONNX on CUDA/TensorRT requires compatible drivers/runtimes; misconfiguration will trigger the fallback path.
 
-DTO / Controller / SSE
+The non-standard source directory requires IDE/Gradle alignment.
 
-ChatRequestDto adds:
+ Decision logs print as expected.
 
-SearchMode searchMode (default AUTO)
+ resolveModelName() reports the actual SDK model name.
 
-boolean officialSourcesOnly
+ Works correctly with and without injected beans.
 
-List<String> webProviders
-
-Integer webTopK
-
-ChatApiController interprets searchMode independently of retrieval on/off.
-
-SSE events extended:
-SEARCH_DECISION(reason, mode, providers),
-SEARCH_PROGRESS(stage),
-SEARCH_RESULT(count, fusedTopK),
-MOE_ROUTE(reason).
-
-UI (HTML/JS)
-
-Adds controls: Search Mode (AUTO/OFF/LIGHT/DEEP), Official sources only, Provider multiselect.
-
-Renders search decision/results in a neutral card (separate from answer bubbles) to prevent badge/button duplication.
-
-Persists user choices in localStorage; fixes initial session duplicate controls.
-
-Security & policy
-
-Optional server proxy for external URLs; blocked domains/keywords configurable.
-
-Logs: PII stored as length/hash only; URLs log host only; queries hashed.
-
-CI: LangChain4j version purity
-
-Enforces dev.langchain4j:* == 1.0.1 across build (including gradle.lockfile and version catalog).
-
-If any 0.2.x artifact is detected, CI fails and prints conflict coordinates only.
-
-Docs & tests
-
-docs/CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptsearch-ops.md
-
-tests/unit, it, smoke including decision/cache/escalation checks.
-
-ci/VersionPurityCheck scripts + logs.
-
-Chain & Behavior Changes
-
-Chain order (backwards-compatible):
-
-memory → self-ask (gated) → analyse (gated) → adaptive-web (NEW) → web → vector → repair
-
-
-If adaptive-web succeeds, the legacy web stage may be skipped; reason logged to diagnostics.
-
-RRF formula
-
-score' = RRF × authority × freshness (coefficients configurable).
-
-Configuration (samples)
-# GPT Search
-abandonware.gptsearch.enabled: true
-abandonware.gptsearch.mode.default: AUTO        # AUTO|OFF|FORCE_LIGHT|FORCE_DEEP
-abandonware.gptsearch.topK: 6
-abandonware.gptsearch.providers: [BING, TAVILY]
-abandonware.gptsearch.rrf.k: 60
-abandonware.gptsearch.authority-weights:
-  OFFICIAL: 1.0
-  TRUSTED: 0.85
-  COMMUNITY: 0.5
-  UNVERIFIED: 0.2
-abandonware.gptsearch.freshness.halfLifeDays: 14
-abandonware.gptsearch.official-only: false
-
-# Provider keys (via env/secret)
-provider.bing.apiKey: ${BING_API_KEY:}
-provider.tavily.apiKey: ${TAVILY_API_KEY:}
-provider.googlecse.cx: ${GOOGLE_CSE_CX:}
-provider.googlecse.apiKey: ${GOOGLE_CSE_KEY:}
-
-# MoE routing
-router.moe.high: <high-model-name>
-router.moe.mini: <mini-model-name>
-router.allow-header-override: false
-
-# Build guard
-build.guard.langchain4j.strictVersion: "1.0.1"
-
-Packaging Layout (deliverable: src53core.zip)
-core/
-  query/, prompt/, router/, verify/, diagnostics/
-  retrieval/chain/, retrieval/handler/, rerank/
-gptsearch/
-  web/          # adapters/services/handler/cache
-  client/       # shared HTTP client, keys/quotas/retries
-  decision/     # SearchDecision gate (rules+LLM)
-  dto/          # request/response, provider/mode/filters
-integration/
-  handlers/     # AdaptiveWebSearchHandler, RankFusion wiring
-  controller/   # ChatApiController + SSE events
-  web/          # chat-ui.html, chat.js
-config/
-  application.yml.sample
-  application-ultra.properties
-tests/
-  unit/, it/, smoke/
-docs/
-  CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptsearch-ops.md
-ci/
-  VersionPurityCheck/
-
-Acceptance Criteria
-
-Version Purity: any 0.2.x LangChain4j detection → CI fails with conflict coordinates.
-
-AUTO (lightweight): simple queries trigger SEARCH_DECISION mode=LIGHT, ≤1 web call, quality parity.
-
-DEEP (reinforced): comparative/fact-check queries show Self-Ask decomposition, pass Claim/FactVerifier, one MoE escalation.
-
-Hybrid switching: within one session, simple→hard queries log LIGHT→DEEP switch.
-
-RRF: WEB_ADAPTIVE contributes to fused Top-K.
-
-UI: toggles & provider pickers populate DTO; SSE cards render without duplicate badges/buttons.
-
-Fail-soft: provider failures logged as partial warnings; chain continues; diagnostics aggregates.
-
-Breaking/Strict Policies
-
-Prompt centralization: any prompt built outside PromptBuilder.build(PromptContext) is non-compliant.
-
-Qualifier-only MoE injection: @Primary is prohibited for model beans.
-
-Exception handling: retrieval handlers must not propagate; return partials + warnings.
-
-Migration Checklist (minimal changes)
-
-Register AdaptiveWebSearchHandler and insert before legacy Web handler.
-
-Add WEB_ADAPTIVE to ReciprocalRankFuser.
-
-Extend PromptBuilder with ### WEB EVIDENCE.
-
-Implement SearchDecisionService (rules + LLM tool signal).
-
-Wire WebSearchProvider implementations & priorities.
-
-Extend ChatRequestDto & controller mapping.
-
-Update chat-ui.html / chat.js (toggles, SSE cards, no bubble-class for traces).
-
-Centralize authority/freshness weights in yml.
-
-Enable CI VersionPurityCheck.
-
-Notes & Guardrails
-
-When quotas hit ≥80%, force LIGHT and disable Cross-Encoder rerank.
-
-officialSourcesOnly=true lifts authority floor to ≥0.8.
-
-Reuse SearchContext across immediate follow-ups to avoid duplicate calls.
-
-Korean morphology normalization in AnalyzeHandler is reused for search query hygiene.
-
-Known Limitations
-
-MOCK provider is for tests only (no crawling).
-
-Cross-Encoder rerank is disabled under heavy token pressure or quota throttling.
-
-How to Verify Locally
-
-Set provider keys (or rely on MOCK).
-
-Start app, toggle AUTO/LIGHT/DEEP in UI; watch SSE: SEARCH_DECISION/RESULT/MOE_ROUTE.
-
-Run tests/smoke to validate decision gating, caching, escalation.
-
-Trigger CI to confirm LangChain4j=1.0.1 purity.
-
-Deliverable
-
-src53core.zip — full code, tests, docs, sample configs, and CI logs as described above.
-
-This upgrade keeps the legacy HybridRetriever order intact, while adding an adaptive web layer, strict prompt/model policies, and observable, fail-soft behavior suitable for production.
-Changelog — src50 → src50core (UI-inclusive)
-
-Date: 2025-08-19 (KST)
-Scope: GPT API File Search + Images end-to-end, Hybrid RAG integration, PromptBuilder/MoE policies, chat-ui.html & chat.js migration, CI version-purity gate.
-
-TL;DR
-
-Adds GPT API File Search and Images (generate/edit/variation) with full backend + UI wiring.
-
-Keeps legacy HybridRetriever order; inserts FileSearchHandler and adds FILE channel to RRF.
-
-Enforces LangChain4j=1.0.1 version purity (CI fails on 0.2.x contamination).
-
-Centralizes prompts via PromptBuilder.build(PromptContext); no string concatenation in ChatService.
-
-Expands SSE events and UI controls (toggles, image panel, trace & gallery panes).
-
-MoE one-shot escalation removes “lower-model lock-in” under risk/uncertainty/multimodal intents.
-
-Added
-
-GPT API modules (gptapi/*)
-
-File Search: GptFileSearchClient/Service (indexing, async chunk upload, MIME→text extraction ready), FileSearchHandler (fail-soft), FileSearchFusionPolicy.
-
-Images: GptImageClient + ImageGenerationService (generate/edit/variation, base64/URL intake, safe-mode checks).
-
-Chain updates
-
-Entry: HybridRetriever retains order; FileSearchHandler inserted before Web; failures return partial results.
-
-RRF fusion adds FILE channel; shared authority/freshness weights.
-
-Prompting
-
-New sections: ### FILES (title|path|snippet|source), ### IMAGE TASK (mode/prompt/size/mask).
-
-Model routing (MoE)
-
-@Qualifier("high") / @Qualifier("mini"); @Primary disallowed.
-
-Escalate once when complexity=HIGH OR uncertainty≥0.70 OR intent ∈ {FACT_CHECK, HIGH_RISK, MULTIMODAL_IMAGE}; SSE MOE_ROUTE emits reason.
-
-Controller/DTO/SSE
-
-ChatRequestDto: boolean fileSearch, ImageTask imageTask{mode,prompt,size,maskBase64?}.
-
-ChatApiController: toggles FILE channel; triggers image flow; CSRF via CookieCsrfTokenRepository.withHttpOnlyFalse().
-
-SSE events: trace, filesearch.trace, verification, DISAMBIGUATION, RRF, RERANK, MOE_ROUTE, image.started, image.done, optional image.progress.
-
-Frontend (UI)
-
-chat-ui.html:
-
-Controls: “Use File Search” (#optFileSearch).
-
-Image panel (collapsible): #imgMode, #imgPrompt, #imgMaskFile, #imgSize.
-
-Upload: #fileUpload[multiple].
-
-Neutral trace container: #tracePane (not an assistant bubble).
-
-Image gallery: #imagePane (thumbnails → original).
-
-Accessibility: all buttons type="button", labels for, aria-live="polite".
-
-chat.js:
-
-Request serialization: fileSearch, imageTask{mode,prompt,size,maskBase64?}; toBase64(file) util; chunk upload support.
-
-SSE routing: trace/filesearch.trace → #tracePane; image.* → #imagePane; MOE_ROUTE badge; verification icons.
-
-Duplicate-UI fix: reuse initial loader bubble; prevent duplicate recommendation/model badges.
-
-State persistence: localStorage for fileSearch, imgMode, imgSize.
-
-Security: client-side keyword guard; inject X-CSRF-TOKEN on all fetches.
-
-Changed
-
-Fail-soft chain policy: handler exceptions become partial warnings; chain continues.
-
-Authority/Freshness weights shared across Web & File channels (YAML).
-
-Diagnostics: session-scoped keys; PII logged as length/hash only; URLs log host only.
-
-Security & Resilience
-
-All GPT API clients: timeout + 429/5xx exponential backoff (≤3); RPM/RPD quotas.
-
-File paths/metadata are session-scoped; external URLs optionally proxied.
-
-Image tasks enforce safety categories (blocked on client & server).
-
-Configuration (samples)
-# GPT API (common)
-gptapi.base-url: <redacted>
-gptapi.api-key: ${GPT_API_KEY}
-gptapi.timeout-ms: 30000
-gptapi.retry.max: 3
-gptapi.quota.rpm: 60
-gptapi.quota.rpd: 1000
-
-# File Search
-abandonware.gptapi.filesearch.enabled: true
-abandonware.gptapi.filesearch.topK: 6
-abandonware.gptapi.filesearch.rrf.k: 60
-abandonware.gptapi.filesearch.authority-weights:
-  OFFICIAL: 1.0
-  PRIVATE: 0.8
-  COMMUNITY: 0.45
-  UNVERIFIED: 0.2
-
-# Images
-abandonware.gptapi.images.enabled: true
-abandonware.gptapi.images.default-size: 1024
-
-# Global RAG/Rerank
-abandonware.rerank.rrf.k: 60
-abandonware.disambiguation.enabled: true
-abandonware.verifier.enabled: true
-
-# MoE
-router.moe.high: <high-model-name>
-router.moe.mini: <mini-model-name>
-router.allow-header-override: false
-
-# Build guard
-build.guard.langchain4j.strictVersion: "1.0.1"
-
-Packaging (deliverable: src50core.zip)
-core/
-  query/, prompt/, router/, verify/, diagnostics/
-  retrieval/chain/, retrieval/handler/, rerank/
-gptapi/
-  filesearch/, images/, client/
-integration/
-  handlers/, dto/, web/        # Controller + SSE
-frontend/
-  chat-ui.html, js/chat.js
-config/
-  application.yml.sample, application-ultra.properties
-tests/
-  unit/, it/, smoke/ (+ comparison metrics)
-docs/
-  CHANGELOG.md, DIFF_SUMMARY.md, TEST_REPORT.md, gptapi-ops.md
-ci/
-  VersionPurityCheck/ (conflict coordinates only on failure)
-
-Acceptance Criteria
-
-Version purity: any LangChain4j 0.2.x detection → CI fail with conflict coordinates only.
-
-FileSearch fusion: FILE channel contributes additional snippets; visible in RRF logs/metrics.
-
-Images: one successful imageTask end-to-end; SSE image.started→image.done(url); gallery renders.
-
-UI toggles: #optFileSearch, imgMode, imgSize reflect in payload and persist via localStorage.
-
-MoE: escalation on uncertainty/high-risk/multimodal; SSE MOE_ROUTE shows reason.
-
-Fail-soft: forced exceptions in FileSearch/Images still yield a safe response; diagnostics aggregates partials.
-
-No duplicates: first-message recommendation/model badges render once (snapshot/manual check).
-
-Migration Checklist (minimal touch)
-
-Register FileSearchHandler (pre-Web) and enable FILE in ReciprocalRankFuser.
-
-Extend PromptBuilder with ### FILES & ### IMAGE TASK.
-
-Implement GptFileSearchClient/Service and GptImageClient/ImageGenerationService.
-
-Update DTO/Controller for fileSearch & imageTask; wire SSE events.
-
-Migrate chat-ui.html (control panel, trace/image panes) & chat.js (serialization/SSE/dup-guard/localStorage).
-
-Share authority/freshness coefficients in YAML across Web & File channels.
-
-Verify CSRF token propagation.
-
-Run CI VersionPurityCheck.
-
-Notes (Bias mitigation)
-
-Maintains SynergyStat decay in RRF to avoid recency over-dominance.
-
-Removes “lower-model bias”: on uncertainty/comparative/fact-check/multimodal image tasks, force single escalation to the high-tier model.
+ Config keys apply correctly across environments.

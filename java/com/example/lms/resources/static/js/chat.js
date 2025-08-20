@@ -78,84 +78,10 @@ import { apiCall } from "./fetch-wrapper.js";
     sideNav: $("sideNav"),
     sideOpen: $("sideOpen"),
     sideClose: $("sideClose"),
-    // Voice input button (microphone)
-    voiceBtn: $("voiceBtn"),
   };
 
   // 원본 버튼 HTML 저장
   let sendBtnHtml, saveModelBtnHtml, saveSettingsBtnHtml, adminStatusInitialHtml;
-
-  /* --------------------------------------------------
-   * Speech Recognition (Voice Input)
-   * -------------------------------------------------- */
-  // Global variables to manage speech recognition state
-  let recognition = null;
-  let recognitionActive = false;
-  // Tracks whether the current input originated from voice or text.  Defaults
-  // to 'text' and is reset after each send.  When recognition is active,
-  // this flag is set to 'voice' so that the backend can adapt query
-  // processing for colloquial speech.
-  let currentInputType = 'text';
-
-  /**
-   * Lazily initialize and return a configured SpeechRecognition instance.
-   * Returns null if the Web Speech API is not supported.
-   */
-  function getRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.warn('SpeechRecognition API is not available in this browser.');
-      return null;
-    }
-    if (recognition) return recognition;
-    recognition = new SpeechRecognition();
-    recognition.lang = 'ko-KR';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognition.onstart = () => {
-      recognitionActive = true;
-      currentInputType = 'voice';
-      if (dom.voiceBtn) dom.voiceBtn.classList.add('active');
-    };
-    recognition.onend = () => {
-      recognitionActive = false;
-      if (dom.voiceBtn) dom.voiceBtn.classList.remove('active');
-    };
-    recognition.onerror = () => {
-      recognitionActive = false;
-      if (dom.voiceBtn) dom.voiceBtn.classList.remove('active');
-    };
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((r) => r[0].transcript)
-        .join('');
-      // Populate the message input with the recognised text.  Do not trim
-      // trailing whitespace to allow the user to continue dictating.
-      if (dom.messageInput) {
-        dom.messageInput.value = transcript;
-      }
-    };
-    return recognition;
-  }
-
-  /**
-   * Toggle speech recognition on or off.  When activated, starts
-   * recognition and clears the current message input.  When deactivated,
-   * stops recognition.
-   */
-  function handleVoiceInputToggle() {
-    const rec = getRecognition();
-    if (!rec) return;
-    if (recognitionActive) {
-      rec.stop();
-    } else {
-      // Clear existing text to avoid mixing typed and spoken input
-      if (dom.messageInput) {
-        dom.messageInput.value = '';
-      }
-      rec.start();
-    }
-  }
 
   /* --------------------------------------------------
    * 3. UI 헬퍼 함수
@@ -487,9 +413,6 @@ const payload = {
     maxRagTokens:    dom.sliders.maxRagTokens.el.value,    // 💡 추가
         /* (NEW) 웹 검색 개수 */
         webTopK:         dom.sliders.searchTopK.el.value,
-        // Include the origin of the input ('voice' or 'text') so the backend
-        // can distinguish voice queries from typed ones.
-        inputType: currentInputType,
 };
 
       const res = await apiCall("/api/chat", {
@@ -538,10 +461,10 @@ const payload = {
     } finally {
       state.isLoading = false;
       setLoading(dom.sendBtn, false, sendBtnHtml);
-      dom.messageInput.disabled = false;
+       // ▼▼▼ [수정] 이 부분을 추가하세요 ▼▼▼
+            dom.messageInput.disabled = false;
+            // ▲▲▲ [수정 끝] ▲▲▲
       dom.messageInput.focus();
-      // Reset input type to text for the next message
-      currentInputType = 'text';
     }
   }
 
@@ -612,13 +535,6 @@ const payload = {
 
      // 채팅
       dom.sendBtn.addEventListener("click", sendMessage);
-      // Voice button toggles speech recognition; optional if the element exists
-      dom.voiceBtn?.addEventListener('click', handleVoiceInputToggle);
-
-      // When the user types manually, revert the input type back to text
-      dom.messageInput?.addEventListener('input', () => {
-        currentInputType = 'text';
-      });
 
       // ▼▼▼ [수정] 기존 keydown 리스너를 아래 코드로 전체 교체 ▼▼▼
       dom.messageInput.addEventListener("keydown", (e) => {

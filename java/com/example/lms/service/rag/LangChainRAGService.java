@@ -32,10 +32,6 @@ import java.util.List;
 import java.util.Map;
 
 import java.util.Optional;
-// Use the adapter router rather than the legacy implementation.  This ensures
-// that all routing decisions are delegated to the unified service routing
-// implementation via a single bean named "modelRouter".
-import com.example.lms.infrastructure.llm.ModelRouter;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
@@ -49,7 +45,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 @RequiredArgsConstructor
 public class LangChainRAGService {
-
     /** Unified metadata key – 모든 서비스가 동일 키 사용 */
     public static final String META_SID = "sid";   // ← ChatService & NaverSearchService 와 통일
     /** sid 필터: null 또는 "*"는 공용으로 간주하여 통과 */
@@ -77,8 +72,12 @@ public class LangChainRAGService {
         }
     }
 
+    @Qualifier("utilityChatModel")
+    private final ChatModel                   chatModel; // 기본
+    private final com.example.lms.model.ModelRouter modelRouter; // ★ NEW
 
-    private final ModelRouter modelRouter; // delegate to unified router
+    @Qualifier("moeChatModel")
+    private final ChatModel                   moeChatModel;
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final MemoryReinforcementService  memorySvc;
