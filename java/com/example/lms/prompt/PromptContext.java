@@ -19,6 +19,12 @@ public record PromptContext(
         List<Content> web,            // 라이브 웹/하이브리드 검색 결과
         List<Content> rag,            // 벡터 DB 검색 결과
         String memory,                // 장기 메모리 (요약 또는 스니펫)
+        /**
+         * When a user uploads a file, its extracted plain‑text contents are stored here.
+         * This context has the highest authority in the prompt and is injected before any
+         * other sources.  If no file is uploaded, this value will be {@code null}.
+         */
+        String fileContext,
 
         // ───── 3. 도메인 및 규칙 ─────
         String domain,                // 현재 대화의 도메인 (예: "Genshin Impact")
@@ -57,6 +63,7 @@ public record PromptContext(
         private List<Content> web = Collections.emptyList();
         private List<Content> rag = Collections.emptyList();
         private String memory;
+        private String fileContext;              // uploaded file plain text (nullable)
         private String domain;
         private String intent;
         private String subject;
@@ -77,6 +84,7 @@ public record PromptContext(
         public Builder web(List<Content> v) { this.web = (v == null ? Collections.emptyList() : v); return this; }
         public Builder rag(List<Content> v) { this.rag = (v == null ? Collections.emptyList() : v); return this; }
         public Builder memory(String v) { this.memory = v; return this; }
+        public Builder fileContext(String v) { this.fileContext = v; return this; }
         public Builder domain(String v) { this.domain = v; return this; }
         public Builder intent(String v) { this.intent = v; return this; }
         public Builder subject(String v) { this.subject = v; return this; }
@@ -100,6 +108,7 @@ public record PromptContext(
             return new PromptContext(
                     userQuery, lastAssistantAnswer, history,
                     web, rag, memory,
+                    fileContext,
                     domain, intent, subject, protectedTerms, interactionRules,
                     cognitiveState, // ✅ [추가]
                     verbosityHint, minWordCount, sectionSpec, targetTokenBudgetOut,

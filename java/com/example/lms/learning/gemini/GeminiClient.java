@@ -17,7 +17,8 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 /**
  * 통합 Gemini 클라이언트.
  * - REST 호출(번역/프롬프트 생성) + 학습 파이프라인용 스텁(curate/batch/tuning)을 한 곳에 모음.
@@ -79,11 +80,12 @@ public class GeminiClient {
     }
 
     private String toPrettyJson(GeminiResponse r) {
-        return """
-               {
-                 "ok"  : true,
-                 "data": "%s"
-               }""".formatted(r.candidates().get(0).content().parts().get(0).text());
+        String text = r.candidates().get(0).content().parts().get(0).text();
+        ObjectMapper om = new ObjectMapper();
+        ObjectNode node = om.createObjectNode();
+        node.put("ok", true);
+        node.put("data", text); // 자동 이스케이프
+        return node.toPrettyString();
     }
 
     /*───────────────────────────────────────────────────────────────────

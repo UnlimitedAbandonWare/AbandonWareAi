@@ -4,7 +4,6 @@ import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.search.QueryHygieneFilter;
 import com.example.lms.util.SoftmaxUtil;
-import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -12,10 +11,10 @@ import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import lombok.RequiredArgsConstructor;
 // imports
 import com.example.lms.service.rag.rerank.LightWeightRanker;
 import com.example.lms.service.rag.rerank.ElementConstraintScorer;  //  신규 재랭커
@@ -33,6 +32,7 @@ import com.example.lms.service.config.HyperparameterService;   // ★ NEW
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.scoring.AdaptiveScoringService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
+import com.example.lms.learning.NeuralPathFormationService;
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -62,6 +62,8 @@ public class HybridRetriever implements ContentRetriever {
     private final QueryTransformer queryTransformer;               // ★ NEW: 상태 기반 질의 생성
     private final AdaptiveScoringService scoring;
     private final KnowledgeBaseService kb;
+    // Path formation service used to reinforce high-consistency entity pairs.
+    private final NeuralPathFormationService pathFormation;
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
     private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
@@ -110,6 +112,7 @@ public class HybridRetriever implements ContentRetriever {
     @Override
     public List<Content> retrieve(Query query) {
 
+
         // 0) 메타 파싱
         String sessionKey = Optional.ofNullable(query)
                 .map(Query::metadata)
@@ -138,6 +141,46 @@ public class HybridRetriever implements ContentRetriever {
 
         // 1) 난이도 게이팅
         final String q = (query != null && query.text() != null) ? query.text().strip() : "";
+
+        // ── 조건부 파이프라인: 교육/국비 키워드 → 벡터 검색 모드 ──────────────────
+        // 사용자가 "학원" 또는 "국비"라는 키워드를 포함한 질문을 할 경우, 시스템은
+        // 전통적인 웹/키워드 검색을 건너뛰고 벡터 기반 검색을 수행한다. 이는 교육
+        // 도메인 질문의 맥락에서 의미 기반 유사도 검색이 더 유용하다는 요구에 따른
+        // 것으로, 최상위 결과는 코사인 유사도에 따라 정렬된다.
+        try {
+            String qLower = q.toLowerCase(java.util.Locale.ROOT);
+            if (qLower.contains("학원") || qLower.contains("국비")) {
+                ContentRetriever pineRetriever = ragService.asContentRetriever(pineconeIndexName);
+                List<Content> vectResults = pineRetriever.retrieve(query);
+                // deduplicate results while preserving order
+                LinkedHashSet<Content> unique = new LinkedHashSet<>(vectResults);
+                List<Content> deduped = new ArrayList<>(unique);
+                // rank by cosine similarity.  Use textSegment() when available; fallback to
+                // toString() which may include URL but still provides signal.
+                try {
+                    deduped.sort((c1, c2) -> {
+                        String t1 = java.util.Optional.ofNullable(c1.textSegment())
+                                .map(dev.langchain4j.data.segment.TextSegment::text)
+                                .orElse(c1.toString());
+                        String t2 = java.util.Optional.ofNullable(c2.textSegment())
+                                .map(dev.langchain4j.data.segment.TextSegment::text)
+                                .orElse(c2.toString());
+                        double s1 = cosineSimilarity(q, t1);
+                        double s2 = cosineSimilarity(q, t2);
+                        return Double.compare(s2, s1);
+                    });
+                } catch (Exception ignore) {
+                    // if ranking fails, maintain original order
+                }
+                // limit to topK
+                List<Content> topList = deduped.size() > topK ? deduped.subList(0, topK) : deduped;
+                // finalise and return
+                return finalizeResults(new ArrayList<>(topList), dedupeKey, officialDomains, q);
+            }
+        } catch (Exception ignore) {
+            // on error continue with default behaviour
+        }
+
         QueryComplexityGate.Level level = gate.assess(q);
         log.debug("[Hybrid] level={} q='{}'", level, q);
 
@@ -228,6 +271,14 @@ public class HybridRetriever implements ContentRetriever {
         if (total <= 0) return;
         double consistency = hit / (double) total;
         scoring.applyImplicitPositive(domain, subject, partner, consistency);
+        // If the consistency score is high enough, attempt to persist the path for future alignment.
+        try {
+            if (pathFormation != null) {
+                pathFormation.maybeFormPath(subject + "->" + partner, consistency);
+            }
+        } catch (Throwable ignore) {
+            // path reinforcement failures should not break retrieval
+        }
     }
 
     /**

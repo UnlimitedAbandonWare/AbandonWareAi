@@ -1,7 +1,7 @@
 
         package com.example.lms.service.rag.guard;
 
-import com.example.lms.service.ChatHistoryService;
+import com.example.lms.service.ChatSessionService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class MemoryAsEvidenceAdapter {
 
-    private final ChatHistoryService history;
+    private final ChatSessionService history;
 
     // KnowledgeBaseService는 선택적으로 주입됩니다.
     @Autowired(required = false)

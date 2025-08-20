@@ -100,6 +100,17 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
                 expandedQueries.add(joinedCoreTokens + " 요약");
             }
         }
+        // 형태소 변형 추가: 한글 연속 블록을 분리하고 하이픈을 변환하여 검색 다양성을 높인다.
+        try {
+            java.util.List<String> morphVariants = generateMorphVariants(originalQuery);
+            for (String mv : morphVariants) {
+                if (!expandedQueries.contains(mv)) {
+                    expandedQueries.add(mv);
+                }
+            }
+        } catch (Exception ignore) {
+            // 변형 생성 실패 시 무시
+        }
 
         return expandedQueries;
     }
@@ -131,5 +142,41 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
             log.warn("[Analyze] Text tokenizing failed for text: '{}'. Reason: {}", text, e.getMessage());
         }
         return terms;
+    }
+
+    /**
+     * 한국어 형태소/띄어쓰기 변형을 생성한다. 원본 문자열에서 연속된 한글 블록을 찾아 다양한 분리 변형을 만든다.
+     * 예: "국비학원" → ["국비 학원", "국 비학원", "국 비 학원"]
+     * 또한 하이픈을 공백 또는 제거하여 변형을 생성한다. '국비'와 '학원'이 모두 포함되면 '국비지원 학원' 변형도 추가한다.
+     *
+     * @param query 원본 쿼리
+     * @return 생성된 변형 목록
+     */
+    private java.util.List<String> generateMorphVariants(String query) {
+        if (query == null || query.isBlank()) return java.util.Collections.emptyList();
+        java.util.List<String> vars = new java.util.ArrayList<>();
+        // 하이픈 변형: 하이픈을 공백으로, 하이픈 제거
+        if (query.contains("-")) {
+            vars.add(query.replace('-', ' '));
+            vars.add(query.replace("-", ""));
+        }
+        // 연속된 한글 블록을 찾아 분리 변형 생성
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("([\\p{IsHangul}]{3,})").matcher(query);
+        while (matcher.find()) {
+            String block = matcher.group(1);
+            int len = block.length();
+            for (int i = 1; i < len; i++) {
+                String left = block.substring(0, i);
+                String right = block.substring(i);
+                vars.add(query.replace(block, left + " " + right));
+            }
+        }
+        // 국비와 학원이 모두 포함되면 국비지원 변형 추가
+        String lower = query.toLowerCase(java.util.Locale.ROOT);
+        if ((lower.contains("국비") || lower.contains("국 비")) && lower.contains("학원")) {
+            vars.add(query.replaceAll("국 ?비[- ]?학원", "국비지원 학원"));
+            vars.add(query.replaceAll("국비", "국비지원"));
+        }
+        return vars;
     }
 }

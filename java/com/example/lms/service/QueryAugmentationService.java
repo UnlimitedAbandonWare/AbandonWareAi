@@ -6,6 +6,8 @@ import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 @Service
@@ -25,6 +27,12 @@ public class QueryAugmentationService {
 
     private static final int MAX_OUT = 4;
 
+    // 특정 주요 키워드의 동의어/연관어 매핑
+    private static final Map<String, List<String>> SYNONYM_MAP = Map.of(
+            "자바", List.of("JVM", "스프링"),
+            "갤럭시 폴드", List.of("z fold", "z 폴드")
+    );
+
     public List<String> augment(String original) {
         String base = clean(original);
         if (!StringUtils.hasText(base)) return List.of();
@@ -34,6 +42,19 @@ public class QueryAugmentationService {
 
         LinkedHashSet<String> out = new LinkedHashSet<>();
         out.add(base); // 항상 원본 우선
+
+        // 동의어 확장: 키워드가 포함된 경우 매핑된 동의어를 추가한다
+        String baseLower = base.toLowerCase(Locale.ROOT);
+        SYNONYM_MAP.forEach((key, synonyms) -> {
+            String keyLower = key.toLowerCase(Locale.ROOT);
+            if (baseLower.contains(keyLower)) {
+                for (String syn : synonyms) {
+                    if (syn != null && !syn.isBlank()) {
+                        out.add(syn);
+                    }
+                }
+            }
+        });
 
         if (isPerson) {
             // 사람: 최소 확장(프로필/소속/경력)

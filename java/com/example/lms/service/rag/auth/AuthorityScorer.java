@@ -95,6 +95,25 @@ public class AuthorityScorer {
         }
 
         // 2) 내장 휴리스틱
+
+        // 국내 정부/교육 도메인은 최상위 OFFICIAL로 분류 (보호 차원에서 강조)
+        if (h.endsWith(".go.kr") || h.endsWith(".ac.kr")) {
+            return RerankSourceCredibility.OFFICIAL;
+        }
+
+        // 국내 주요 언론사 및 대형 포털 사이트는 TRUSTED 등급으로 상향
+        if (h.endsWith("hani.co.kr") || h.endsWith("chosun.com") || h.endsWith("joongang.co.kr")
+                || h.endsWith("donga.com") || h.endsWith("naver.com") || h.endsWith("daum.net")
+                || h.endsWith("kbs.co.kr") || h.endsWith("mbc.co.kr") || h.endsWith("sbs.co.kr")
+                || h.endsWith("news1.kr") || h.endsWith("newsis.com")) {
+            return RerankSourceCredibility.TRUSTED;
+        }
+
+        // 블로그 도메인과 개인 포털 블로그는 UNVERIFIED로 하향 (신뢰도 낮음)
+        if (h.contains("blog.") || h.contains("blog.naver.com") || h.contains("tistory.com")
+                || h.contains("velog.io")) {
+            return RerankSourceCredibility.UNVERIFIED;
+        }
         // OFFICIAL: 정부/교육/공식 문서/벤더/개발자 문서
         if (isGovOrEdu(h)
                 || h.endsWith("apache.org") || h.endsWith("oracle.com")
@@ -115,19 +134,21 @@ public class AuthorityScorer {
             return RerankSourceCredibility.TRUSTED;
         }
 
-        // 벤더/게임 공식 (도메인 특화)
-        if (h.contains("hoyoverse.com") || h.contains("hoyolab.com")) {
-            return RerankSourceCredibility.OFFICIAL;
-        }
+        // 게임 벤더 도메인(hoyoverse/hoyolab)은 더 이상 특별히 우대하지 않는다.
+        // 교육 도메인(HRD)과 정부/교육 도메인은 아래 isGovOrEdu()에서 처리된다.
+        // 이전에는 호요버스(hoyoverse) 관련 도메인을 OFFICIAL로 분류했지만,
+        // 특정 도메인에 편향된 가중치를 방지하기 위해 제거하였다.
 
-        // COMMUNITY
+        // COMMUNITY: 개발자/커뮤니티/블로그 플랫폼
         if (h.endsWith("github.com") || h.endsWith("stackoverflow.com")
                 || h.endsWith("reddit.com") || h.endsWith("medium.com")
-                || h.endsWith("hashnode.com") || h.endsWith("fandom.com")
-                || h.endsWith("namu.wiki")
+                || h.endsWith("hashnode.com")
         ) {
             return RerankSourceCredibility.COMMUNITY;
         }
+
+        // 이전에는 fandom.com과 namu.wiki를 COMMUNITY로 분류하였으나
+        // 교육/일반 도메인에 대한 검색 결과를 오염시키는 문제가 있어 UNVERIFIED로 분류한다.
 
         // 그 외
         return RerankSourceCredibility.UNVERIFIED;

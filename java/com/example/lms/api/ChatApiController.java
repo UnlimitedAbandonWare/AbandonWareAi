@@ -4,8 +4,9 @@ import com.example.lms.domain.ChatSession;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.dto.ChatResponseDto;
 import com.example.lms.dto.ChatStreamEvent;
+import com.example.lms.service.chat.ChatStreamEmitter;
 import com.example.lms.service.AdaptiveTranslationService;
-import com.example.lms.service.ChatHistoryService;
+import com.example.lms.service.ChatSessionService;
 import com.example.lms.service.ChatService;
 import com.example.lms.service.NaverSearchService;
 import com.example.lms.service.SettingsService;
@@ -21,6 +22,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.RequestParam;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -54,12 +56,41 @@ public class ChatApiController {
     private static final String EXPOSE_HEADERS = "X-Model-Used,X-RAG-Used,X-User,X-Session-Owner";
 
     // ===== services =====
-    private final ChatHistoryService historyService;
+    private final ChatSessionService historyService;
     private final ChatService chatService;
     private final AdaptiveTranslationService adaptiveService;
     private final SettingsService settingsService;
     private final TranslationService translationService;
     private final NaverSearchService searchService;
+
+    /**
+     * Emitter used to push additional events such as understanding summaries
+     * to the client over SSE.  The controller registers and unregisters a
+     * sink per session to receive asynchronous events from downstream
+     * services.  This bean is optional so that the application can run
+     * without the understanding feature enabled.
+     */
+    private final ChatStreamEmitter chatStreamEmitter;
+
+    /**
+     * Cancel the currently running chat streaming for the given session.  This endpoint can be
+     * invoked by the client when the user clicks a "Stop generation" button to terminate long
+     * running operations.  The current implementation delegates to {@link ChatService#cancelSession(Long)}
+     * which performs best‑effort cancellation of any in‑flight tasks.  This method always returns
+     * HTTP 200 OK regardless of whether there was an active stream to cancel.
+     *
+     * @param sessionId the session identifier to cancel; may be {@code null}
+     * @return 200 OK
+     */
+    @PostMapping("/cancel")
+    public ResponseEntity<Void> cancel(@RequestParam(required = false) Long sessionId) {
+        try {
+            chatService.cancelSession(sessionId);
+        } catch (Exception ignore) {
+            // swallow all exceptions to avoid leaking implementation details
+        }
+        return ResponseEntity.ok().build();
+    }
 
     // ===== sync chat =====
     @PostMapping
@@ -105,79 +136,138 @@ public class ChatApiController {
         String username = (principal != null) ? principal.getUsername() : "anonymousUser";
         Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink = Sinks.many().unicast().onBackpressureBuffer();
 
+        // Holder for the computed session key so that it can be referenced in finally
+        final String[] currentSessionKeyHolder = new String[1];
         Mono.fromRunnable(() -> {
-            try {
-                // 1) 설정 병합
-                ChatRequestDto dto = mergeWithSettings(req);
+                    try {
+                        // 1) 설정 병합
+                        ChatRequestDto dto = mergeWithSettings(req);
 
-                // 2) 세션 upsert
-                ChatSession session = (req.getSessionId() == null)
-                        ? historyService.startNewSession(dto.getMessage(), username)
-                        .orElseThrow(() -> new IllegalStateException("세션 생성 실패"))
-                        : historyService.getSessionWithMessages(req.getSessionId());
+                        // 2) 세션 upsert
+                        ChatSession session = (req.getSessionId() == null)
+                                ? historyService.startNewSession(dto.getMessage(), username)
+                                .orElseThrow(() -> new IllegalStateException("세션 생성 실패"))
+                                : historyService.getSessionWithMessages(req.getSessionId());
 
-                if (req.getSessionId() != null) {
-                    historyService.appendMessage(session.getId(), "user", dto.getMessage());
-                }
+                        // 2-a) 세션 키 계산 및 SSE sink 등록
+                        String sessionKey;
+                        if (session != null && session.getId() != null) {
+                            String s = String.valueOf(session.getId());
+                            sessionKey = s.startsWith("chat-") ? s : (s.matches("\\d+") ? "chat-" + s : s);
+                        } else {
+                            sessionKey = java.util.UUID.randomUUID().toString();
+                        }
+                        // store for later cleanup
+                        currentSessionKeyHolder[0] = sessionKey;
+                        try {
+                            chatStreamEmitter.registerSink(sessionKey, sink);
+                        } catch (Throwable t) {
+                            // registration is best-effort; proceed even if it fails
+                            log.debug("Failed to register SSE sink: {}", t.toString());
+                        }
 
-                // 3) 상태
-                sink.tryEmitNext(sse(ChatStreamEvent.status("쿼리 분석 중…")));
-                sink.tryEmitNext(sse(ChatStreamEvent.status("웹/하이브리드 검색 준비…")));
+                        if (req.getSessionId() != null) {
+                            historyService.appendMessage(session.getId(), "user", dto.getMessage());
+                        }
 
-                // 4) 웹 검색(추적)
-                NaverSearchService.SearchResult sr = dto.isUseWebSearch()
-                        ? searchService.searchWithTrace(dto.getMessage(), 5)
-                        : new NaverSearchService.SearchResult(List.of(), null);
+                        // Emit an initial thought event so the client knows the agent has started processing
+                        sink.tryEmitNext(sse(ChatStreamEvent.thought("처리를 시작합니다…")));
 
-                String traceHtml = null;
-                if (sr.trace() != null) {
-                    traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
-                    sink.tryEmitNext(sse(ChatStreamEvent.trace(traceHtml)));
-                }
+                        // 3) 상태
+                        // Broadcast both status and thought updates so that the UI can display the
+                        // same message in the status line and the thought process panel.  Each
+                        // call to status() is immediately followed by a corresponding call to
+                        // thought() with the same message to satisfy the requirement of
+                        // streaming thought events for every step of the agent’s work.
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("쿼리 분석 중…")));
+                        sink.tryEmitNext(sse(ChatStreamEvent.thought("쿼리 분석 중…")));
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("웹/하이브리드 검색 준비…")));
+                        sink.tryEmitNext(sse(ChatStreamEvent.thought("웹/하이브리드 검색 준비…")));
 
-                // 5) 본 호출
-                sink.tryEmitNext(sse(ChatStreamEvent.status("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
-                ChatRequestDto dtoForCall = ChatRequestDto.builder()
-                        .sessionId(session.getId())
-                        .message(dto.getMessage())
-                        .history(dto.getHistory())
-                        .model(dto.getModel())
-                        .temperature(dto.getTemperature())
-                        .topP(dto.getTopP())
-                        .frequencyPenalty(dto.getFrequencyPenalty())
-                        .presencePenalty(dto.getPresencePenalty())
-                        .useRag(dto.isUseRag())
-                        .useWebSearch(dto.isUseWebSearch())
-                        .build();
 
-                sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
-                ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
-                String finalText = result.content();
+                        // 4) 웹 검색(추적)
+                        // 검색 모드는 ChatRequestDto.searchMode에 의해 제어된다.  OFF이면 검색을 건너뛰고,
+                        // FORCE_LIGHT/DEEP는 항상 검색을 수행한다.  AUTO는 useWebSearch 플래그에 따라
+                        // 검색을 수행할지 결정한다.  topK는 webTopK 필드에 의해 지정된다.
+                        boolean performSearch;
+                        int topKParam = (dto.getWebTopK() == null || dto.getWebTopK() <= 0) ? 5 : dto.getWebTopK();
+                        com.example.lms.gptsearch.dto.SearchMode sm = dto.getSearchMode();
+                        if (sm == null) sm = com.example.lms.gptsearch.dto.SearchMode.AUTO;
+                        switch (sm) {
+                            case OFF -> performSearch = false;
+                            case FORCE_LIGHT, FORCE_DEEP -> performSearch = true;
+                            case AUTO -> performSearch = dto.isUseWebSearch();
+                            default -> performSearch = dto.isUseWebSearch();
+                        }
+                        NaverSearchService.SearchResult sr = performSearch
+                                ? searchService.searchWithTrace(dto.getMessage(), topKParam)
+                                : new NaverSearchService.SearchResult(List.of(), null);
 
-                // 6) 토큰 스트리밍(청크)
-                for (String c : chunk(finalText, 60)) {
-                    sink.tryEmitNext(sse(ChatStreamEvent.token(c)));
-                }
+                        String traceHtml = null;
+                        if (sr.trace() != null) {
+                            traceHtml = searchService.buildTraceHtml(sr.trace(), sr.snippets());
+                            sink.tryEmitNext(sse(ChatStreamEvent.trace(traceHtml)));
+                        }
 
-                // 7) 세션 저장 + 모델/트레이스 메타
-                historyService.appendMessage(session.getId(), "assistant", finalText);
+                        // 5) 본 호출
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
+                        sink.tryEmitNext(sse(ChatStreamEvent.thought("하이브리드 검색/재정렬 및 컨텍스트 구성…")));
+                        ChatRequestDto dtoForCall = ChatRequestDto.builder()
+                                .sessionId(session.getId())
+                                .message(dto.getMessage())
+                                .history(dto.getHistory())
+                                .model(dto.getModel())
+                                .temperature(dto.getTemperature())
+                                .topP(dto.getTopP())
+                                .frequencyPenalty(dto.getFrequencyPenalty())
+                                .presencePenalty(dto.getPresencePenalty())
+                                .useRag(dto.isUseRag())
+                                .useWebSearch(dto.isUseWebSearch())
+                                .understandingEnabled(dto.isUnderstandingEnabled())
+        .searchMode(dto.getSearchMode())
+        .webProviders(dto.getWebProviders())
+        .officialSourcesOnly(dto.getOfficialSourcesOnly())
+        .webTopK(dto.getWebTopK())
+                                .build();
 
-                String modelUsedFinal = resolveModelUsed(result.modelUsed(), dto.getModel());
+                        sink.tryEmitNext(sse(ChatStreamEvent.status("답변 생성 중…")));
+                        sink.tryEmitNext(sse(ChatStreamEvent.thought("답변 생성 중…")));
+                        ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
+                        String finalText = result.content();
 
-                historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
+                        // 6) 토큰 스트리밍(청크)
+                        for (String c : chunk(finalText, 60)) {
+                            sink.tryEmitNext(sse(ChatStreamEvent.token(c)));
+                        }
 
-                if (traceHtml != null) {
-                    // ※ 여기에서 + 누락했던 부분
-                    historyService.appendMessage(session.getId(), "system", TRACE_META_PREFIX + traceHtml);
-                }
+                        // 7) 세션 저장 + 모델/트레이스 메타
+                        historyService.appendMessage(session.getId(), "assistant", finalText);
 
-                sink.tryEmitNext(sse(ChatStreamEvent.done(modelUsedFinal, result.ragUsed(), session.getId())));
-            } catch (Exception ex) {
-                log.error("chatStream() 처리 오류", ex);
-                sink.tryEmitNext(sse(ChatStreamEvent.error("오류: " + ex.getMessage())));
-            } finally {
-                sink.tryEmitComplete();
-            }
+                        String modelUsedFinal = resolveModelUsed(result.modelUsed(), dto.getModel());
+
+                        historyService.appendMessage(session.getId(), "system", MODEL_META_PREFIX + modelUsedFinal);
+
+                        if (traceHtml != null) {
+                            // ※ 여기에서 + 누락했던 부분
+                            historyService.appendMessage(session.getId(), "system", TRACE_META_PREFIX + traceHtml);
+                        }
+
+                        sink.tryEmitNext(sse(ChatStreamEvent.done(modelUsedFinal, result.ragUsed(), session.getId())));
+                    } catch (Exception ex) {
+                        log.error("chatStream() 처리 오류", ex);
+                        sink.tryEmitNext(sse(ChatStreamEvent.error("오류: " + ex.getMessage())));
+                    } finally {
+                        // 완료시 SSE sink 등록 해제 및 스트림 완료
+                        try {
+                            String sKey = currentSessionKeyHolder[0];
+                            if (sKey != null) {
+                                chatStreamEmitter.unregisterSink(sKey);
+                            }
+                        } catch (Throwable t) {
+                            log.debug("Failed to unregister SSE sink: {}", t.toString());
+                        }
+                        sink.tryEmitComplete();
+                    }
                 })
                 .subscribeOn(Schedulers.boundedElastic())
                 .subscribe();
@@ -218,8 +308,21 @@ public class ChatApiController {
         }
 
         // 3) 웹 검색
-        NaverSearchService.SearchResult sr = dto.isUseWebSearch()
-                ? searchService.searchWithTrace(dto.getMessage(), 5)
+        // 검색 모드는 ChatRequestDto.searchMode에 의해 제어된다.  OFF이면 검색을 건너뛰고,
+        // FORCE_LIGHT/DEEP는 항상 검색을 수행한다.  AUTO는 useWebSearch 플래그에 따라
+        // 검색을 수행할지 결정한다.  topK는 webTopK 필드에 의해 지정된다.
+        boolean performSearch;
+        int topKParam = (dto.getWebTopK() == null || dto.getWebTopK() <= 0) ? 5 : dto.getWebTopK();
+        com.example.lms.gptsearch.dto.SearchMode sm = dto.getSearchMode();
+        if (sm == null) sm = com.example.lms.gptsearch.dto.SearchMode.AUTO;
+        switch (sm) {
+            case OFF -> performSearch = false;
+            case FORCE_LIGHT, FORCE_DEEP -> performSearch = true;
+            case AUTO -> performSearch = dto.isUseWebSearch();
+            default -> performSearch = dto.isUseWebSearch();
+        }
+        NaverSearchService.SearchResult sr = performSearch
+                ? searchService.searchWithTrace(dto.getMessage(), topKParam)
                 : new NaverSearchService.SearchResult(List.of(), null);
 
         // 4) LLM 호출
@@ -234,6 +337,11 @@ public class ChatApiController {
                 .presencePenalty(dto.getPresencePenalty())
                 .useRag(dto.isUseRag())
                 .useWebSearch(dto.isUseWebSearch())
+                .understandingEnabled(dto.isUnderstandingEnabled())
+                .searchMode(dto.getSearchMode())
+                .webProviders(dto.getWebProviders())
+                .officialSourcesOnly(dto.getOfficialSourcesOnly())
+                .webTopK(dto.getWebTopK())
                 .build();
 
         ChatService.ChatResult result = chatService.continueChat(dtoForCall, q -> sr.snippets());
@@ -296,6 +404,12 @@ public class ChatApiController {
                 .presencePenalty(presencePenalty)
                 .useRag(ui.isUseRag())
                 .useWebSearch(ui.isUseWebSearch())
+                .understandingEnabled(ui.isUnderstandingEnabled())
+                // Propagate GPT search preferences
+                .searchMode(ui.getSearchMode())
+                .webProviders(ui.getWebProviders())
+                .officialSourcesOnly(ui.getOfficialSourcesOnly())
+                .webTopK(ui.getWebTopK())
                 .build();
     }
 
