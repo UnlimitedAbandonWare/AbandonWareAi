@@ -1,5 +1,10 @@
 package com.example.lms.service;
 import com.example.lms.prompt.PromptContext;
+// 상단 import 블록에 추가
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CancellationException;
+
 import com.example.lms.prompt.PromptBuilder;
 import com.example.lms.model.ModelRouter;
 import com.example.lms.service.rag.ContextOrchestrator;
@@ -218,6 +223,10 @@ public class ChatService {
     private final com.example.lms.service.rag.handler.MemoryWriteInterceptor memoryWriteInterceptor;
     // 신규: 학습 기록 인터셉터
     private final com.example.lms.learning.gemini.LearningWriteInterceptor learningWriteInterceptor;
+    // 신규: 이해 요약 및 기억 모듈 인터셉터
+    private final com.example.lms.service.chat.interceptor.UnderstandAndMemorizeInterceptor understandAndMemorizeInterceptor;
+    /** In‑flight cancel flags per session (best‑effort) */
+    private final ConcurrentHashMap<Long, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
 
     @Value("${rag.hybrid.top-k:50}") private int hybridTopK;
     @Value("${rag.rerank.top-n:10}") private int rerankTopN;
@@ -339,7 +348,8 @@ public class ChatService {
     // ① 1-인자 래퍼 ─ 컨트롤러가 호출
     @Cacheable(
             value = "chatResponses",
-            key = "#req.message + ':' + #req.useRag + ':' + #req.useWebSearch"
+            // 캐시 키는 세션과 모델별로 격리: 동일 메시지라도 세션·모델이 다르면 별도 저장
+            key = "#req.sessionId + ':' + #req.model + ':' + #req.message + ':' + #req.useRag + ':' + #req.useWebSearch"
     )
     public ChatResult continueChat(ChatRequestDto req) {
         Function<String, List<String>> defaultProvider =
@@ -409,6 +419,7 @@ public class ChatService {
 
         // ── 0-A) 세션ID 정규화 & 쿼리 재작성(Disambiguation) ─────────
         Long sessionIdLong = parseNumericSessionId(req.getSessionId());
+        throwIfCancelled(sessionIdLong);  // ★ 추가
         final String finalQuery = decideFinalQuery(userQuery, sessionIdLong);
         // ── 0-1) Verbosity 감지 & 섹션 스펙 ─────────────────────────
         VerbosityProfile vp = verbosityDetector.detect(finalQuery);
@@ -417,6 +428,7 @@ public class ChatService {
 
         // ── 1) 검색/융합: Self-Ask → HybridRetriever → Cross-Encoder Rerank ─
         // 0‑2) Retrieval 플래그
+
         boolean useWeb = req.isUseWebSearch();
         boolean useRag = req.isUseRag();
 
@@ -428,6 +440,8 @@ public class ChatService {
             if (planned.isEmpty()) planned = List.of(finalQuery);
             fused = hybridRetriever.retrieveAll(planned, hybridTopK);
         }
+        // planned / fused 생성한 다음쯤
+        throwIfCancelled(sessionIdLong);  // ★ 추가
         Map<String, Set<String>> rules = qcPreprocessor.getInteractionRules(finalQuery);
 
         int keepN = switch (Objects.toString(vp.hint(), "standard").toLowerCase(Locale.ROOT)) {
@@ -507,6 +521,8 @@ public class ChatService {
         msgs.add(dev.langchain4j.data.message.UserMessage.from(finalQuery));
 
         // ── 5) 단일 호출 → 초안 ─────────────────────────────────────
+        // 모델 라우팅을 마친 뒤, 실제 chat() 호출 바로 직전
+        throwIfCancelled(sessionIdLong);  // ★ 추가
         String draft = model.chat(msgs).aiMessage().text();
 
         String verified = shouldVerify(unifiedCtx, req)
@@ -521,14 +537,26 @@ public class ChatService {
         }
 
         // ── 7) 후처리/강화/리턴 ──────────────────────────────────────
-        // (항상 저장) – 인터셉터  +기존 강화 로직 병행 허용
+        // (항상 저장) – 인터셉터  + 기존 강화 로직 병행 허용
         try {
             // 먼저 학습용 인터셉터에 전달하여 구조화된 지식 학습을 수행합니다.
             learningWriteInterceptor.ingest(sessionKey, userQuery, out, /*score*/ 0.5);
         } catch (Throwable ignore) {
             // swallow errors to avoid breaking the chat flow
         }
-        try { memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5); } catch (Throwable ignore) {}
+        try {
+            memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5);
+        } catch (Throwable ignore) {}
+        // 이해 요약 및 기억 인터셉터: 검증/확장된 최종 답변을 구조화 요약하여 저장하고 SSE로 전송
+        try {
+            understandAndMemorizeInterceptor.afterVerified(
+                    sessionKey,
+                    userQuery,
+                    out,
+                    req.isUnderstandingEnabled());
+        } catch (Throwable ignore) {
+            // swallow errors to avoid breaking the chat flow
+        }
         reinforce(sessionKey, userQuery, out);
         // ✅ 실제 모델명으로 보고 (실패 시 안전 폴백)
         String modelUsed;
@@ -543,6 +571,8 @@ public class ChatService {
         if (useRag && !vectorDocs.isEmpty()) evidence.add("RAG");
         if (memoryCtx != null && !memoryCtx.isBlank()) evidence.add("MEMORY");
         boolean ragUsed = evidence.contains("WEB") || evidence.contains("RAG");
+        clearCancel(sessionIdLong);       // ★ 추가
+
         return ChatResult.of(out, modelUsed, ragUsed, java.util.Collections.unmodifiableSet(evidence));
     } // ② 메서드 끝!  ←★★ 반드시 닫는 중괄호 확인
 
@@ -674,7 +704,19 @@ public class ChatService {
             String out = ruleEngine.apply(finalText, "ko", RulePhase.POST);
             //  폴백 여부에 따라 태깅하여 강화
             String srcTag = (fb != null && fb.isFallback()) ? "SMART_FALLBACK" : "ASSISTANT";
-            try { memorySvc.reinforceWithSnippet(sessionKey, correctedMsg, out, srcTag, /*score*/ 0.5); } catch (Throwable ignore) {}
+            // 이해 요약 및 기억 인터셉터를 먼저 실행하여 요약을 저장하고 SSE로 전송한다.
+            try {
+                understandAndMemorizeInterceptor.afterVerified(
+                        sessionKey,
+                        correctedMsg,
+                        out,
+                        req.isUnderstandingEnabled());
+            } catch (Throwable ignore) {
+                // swallow errors to avoid breaking the chat flow
+            }
+            try {
+                memorySvc.reinforceWithSnippet(sessionKey, correctedMsg, out, srcTag, /*score*/ 0.5);
+            } catch (Throwable ignore) {}
             return ChatResult.of(out, modelId, req.isUseRag());
 
         } catch (Exception ex) {
@@ -1126,6 +1168,26 @@ public class ChatService {
                 || s.matches(".*근거(는|가)\\s*뭐(야|지).*")
                 || s.matches("^(tell me more|more details|give me an example|why is that).*");
     }
+    /** Called by /api/chat/cancel */
+    public void cancelSession(Long sessionId) {
+        if (sessionId == null) return;
+        cancelFlags.computeIfAbsent(sessionId, id -> new AtomicBoolean(false)).set(true);
+    }
 
+    private boolean isCancelled(Long sessionId) {
+        AtomicBoolean f = (sessionId == null) ? null : cancelFlags.get(sessionId);
+        return f != null && f.get();
+    }
+
+    private void clearCancel(Long sessionId) {
+        if (sessionId != null) cancelFlags.remove(sessionId);
+    }
+
+    private void throwIfCancelled(Long sessionId) {
+        if (isCancelled(sessionId)) {
+            clearCancel(sessionId);
+            throw new CancellationException("cancelled by client");
+        }
+    }
 
 }

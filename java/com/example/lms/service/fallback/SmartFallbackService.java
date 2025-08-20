@@ -15,12 +15,24 @@ import org.springframework.util.StringUtils;
 
 import java.util.List;
 
+// Knowledge gap logging and domain/subject resolution
+import com.example.lms.agent.KnowledgeGapLogger;
+import com.example.lms.service.knowledge.KnowledgeBaseService;
+import com.example.lms.service.subject.SubjectResolver;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class SmartFallbackService {
 
     private final ObjectProvider<OpenAiService> openAiProvider;
+
+    // Knowledge gap logging dependencies.  These are optional and will be null if the corresponding
+    // beans are not defined in the Spring context.  They allow the fallback service to record
+    // failed queries for autonomous exploration.
+    private final com.example.lms.agent.KnowledgeGapLogger gapLogger;
+    private final com.example.lms.service.knowledge.KnowledgeBaseService knowledgeBase;
+    private final com.example.lms.service.subject.SubjectResolver subjectResolver;
 
     @Value("${fallback.enabled:true}")
     private boolean enabled;
@@ -113,6 +125,16 @@ public class SmartFallbackService {
                 || "정보 없음".equalsIgnoreCase(safeAnswer);
         final String suggestion = maybeSuggest(query, joinedContext, safeAnswer);
         final boolean isFallback = ctxEmpty || StringUtils.hasText(suggestion);
+        // When a fallback has occurred, log the knowledge gap for later autonomous exploration.
+        if (isFallback && gapLogger != null && knowledgeBase != null && subjectResolver != null) {
+            try {
+                String domain = knowledgeBase.inferDomain(query);
+                String subj   = subjectResolver.resolve(query, domain).orElse(null);
+                gapLogger.logEvent(query, domain, subj, null);
+            } catch (Exception e) {
+                // ignore logging errors
+            }
+        }
         return new FallbackResult(suggestion, isFallback);
     }
 

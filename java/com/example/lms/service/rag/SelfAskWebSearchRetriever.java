@@ -61,7 +61,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         if (!StringUtils.hasText(q)) return 1;
         int len = q.codePointCount(0, q.length());
         long spaces = q.chars().filter(ch -> ch == ' ').count();
-        boolean hasWh = q.matches(".*(누가|언제|어디|무엇|왜|어떻게|비교|차이|원리).*");
+        // vs (대소문자 무관) 도 비교/차이 질문의 한 형태이므로 패턴에 포함한다.
+        boolean hasWh = q.matches(".*(?i)(누가|언제|어디|무엇|왜|어떻게|비교|차이|원리|vs).*");
         int score = 0;
         if (len > 30) score++;
         if (spaces > 6) score++;
@@ -124,7 +125,11 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
         // 질의 복잡도 간단 판정
         boolean enableSelfAsk = qText.length() > 25
-                || qText.chars().filter(ch -> ch == ' ').count() > 3;
+                || qText.chars().filter(ch -> ch == ' ').count() > 3
+                // '비교', '차이' 또는 ' vs '가 포함되면 Self-Ask가 필요하다.
+                || qText.contains("비교")
+                || qText.contains("차이")
+                || qText.toLowerCase(Locale.ROOT).contains(" vs ");
         // 질의 복잡도 기반 동적 깊이(1..maxDepth)
         final int depthLimit = Math.max(1, Math.min(maxDepth, estimateDepthByComplexity(qText)));
 

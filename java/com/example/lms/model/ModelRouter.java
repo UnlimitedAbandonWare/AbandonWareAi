@@ -6,14 +6,15 @@ import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.lang.Nullable;
+import org.springframework.context.annotation.Profile;      // ⬅ 추가
 import org.springframework.stereotype.Component;
 
+import org.springframework.lang.Nullable;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
-@Component
+@Component("modelRouterLegacy") // 이름은 유지해도 되고, @Primary 없어도 타입 주입으로 해결됨
 public class ModelRouter {
 
     /** 상위 모델로 라우팅할 의도 집합(확장) */
@@ -32,7 +33,7 @@ public class ModelRouter {
     @Nullable private final DynamicChatModelFactory factory;
 
     /** 선택적으로 주입될 수 있는 사전 구성 모델(있으면 최우선 사용) */
-    @Nullable private final ChatModel utility; // 기본
+    @Nullable private final ChatModel utility; // 기본 (@Primary 여도 Qualifier로 명시 주입)
     @Nullable private final ChatModel moe;     // 상위
 
     /** 동적 생성 시 사용할 모델명(프로퍼티로 설정, 기본값 포함) */
@@ -43,10 +44,14 @@ public class ModelRouter {
     private final AtomicReference<ChatModel> cachedMoe  = new AtomicReference<>();
     private final AtomicReference<ChatModel> cachedBase = new AtomicReference<>();
 
+    /**
+     * NOTE: @Qualifier로 명시 주입하여 @Primary utilityChatModel이
+     * 암묵적으로 꽂히는 문제를 차단합니다.
+     */
     public ModelRouter(
             @Nullable DynamicChatModelFactory factory,
-            @Nullable @Qualifier("utilityChatModel") ChatModel utility,
-            @Nullable @Qualifier("moeChatModel") ChatModel moe,
+            @Nullable @Qualifier("mini") ChatModel utility,   // ← ModelConfig와 매칭
+            @Nullable @Qualifier("high") ChatModel moe,       // ← ModelConfig와 매칭
             @Value("${openai.model.moe:gpt-4o}") String moeModelName,
             @Value("${langchain4j.openai.chat-model.model-name:gpt-4o-mini}") String baseModelName,
             @Value("${router.moe.learning-intents:}") String learningIntentsStr
@@ -104,7 +109,7 @@ public class ModelRouter {
 
     /** 상위(MOE) 모델 해석 */
     private ChatModel resolveMoe() {
-        if (moe != null) return moe;                       // 주입 우선
+        if (moe != null) return moe;                       // 명시 주입 우선
         ChatModel cached = cachedMoe.get();
         if (cached != null) return cached;                 // 캐시 사용
         ensureFactory();                                   // 없으면 동적 생성
@@ -117,7 +122,7 @@ public class ModelRouter {
 
     /** 기본(utility) 모델 해석 */
     private ChatModel resolveBase() {
-        if (utility != null) return utility;               // 주입 우선
+        if (utility != null) return utility;               // 명시 주입 우선
         ChatModel cached = cachedBase.get();
         if (cached != null) return cached;                 // 캐시 사용
         ensureFactory();                                   // 없으면 동적 생성
@@ -134,7 +139,6 @@ public class ModelRouter {
                             "Provide @Bean utilityChatModel/moeChatModel or enable DynamicChatModelFactory."
             );
         }
-
     }
 
     /** ✅ 실제 SDK에 내려간 모델명 해석(가능한 한 정확히) */
