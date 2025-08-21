@@ -1,13 +1,18 @@
-package com.example.lms.service.onnx;
+
+
+        package com.example.lms.service.onnx;
 
 import ai.onnxruntime.OrtEnvironment;
-import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.OrtException;
+import ai.onnxruntime.OrtSession;
+import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
-import jakarta.annotation.PostConstruct;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -25,7 +30,14 @@ import java.util.Set;
  * {@link #init()} and remains active for the lifetime of the application.</p>
  */
 @Service
+// 개선: onnx 백엔드일 때에만 서비스 생성(선택)
+@ConditionalOnProperty(
+        prefix = "abandonware.reranker", name = "backend", havingValue = "onnx-runtime"
+)
 public class OnnxRuntimeService {
+
+    // 개선: 로거 추가
+    private static final Logger log = LoggerFactory.getLogger(OnnxRuntimeService.class);
 
     /** Model file path. May be prefixed with {@code classpath:} to load from resources. */
     @Value("${abandonware.reranker.onnx.model-path:}")
@@ -48,20 +60,25 @@ public class OnnxRuntimeService {
      * TensorRT when available.
      */
     @PostConstruct
-    public void init() throws OrtException, IOException {
-        this.env = OrtEnvironment.getEnvironment();
-        OrtSession.SessionOptions options = new OrtSession.SessionOptions();
-        String provider = (executionProvider == null ? "" : executionProvider.trim().toLowerCase());
-        switch (provider) {
-            case "cuda" -> options.addCUDA();
-            // "cpu" 및 그 외는 기본 EP 사용
-            default -> { /* no-op */ }
-        }
-        String resolvedPath = resolveModelPath(modelPath);
-        if (resolvedPath != null && !resolvedPath.isEmpty()) {
-            this.session = env.createSession(resolvedPath, options);
-        } else {
+    public void init() {
+        try {
+            this.env = OrtEnvironment.getEnvironment();
+            OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+            String provider = (executionProvider == null ? "" : executionProvider.trim().toLowerCase());
+            if ("cuda".equals(provider)) options.addCUDA(); // 수정: switch→단순 분기
+
+            String resolvedPath = resolveModelPath(modelPath);
+            if (resolvedPath != null && !resolvedPath.isBlank()) {
+                this.session = env.createSession(resolvedPath, options);
+                log.info("[ONNX] model loaded: {}", resolvedPath);
+            } else {
+                this.session = null; // 개선: 모델 없으면 폴백(예외 미던짐)
+                log.warn("[ONNX] model-path not set or not resolvable. Falling back to lexical scorer.");
+            }
+        } catch (Throwable t) {
+            // 개선: 어떤 예외도 앱 기동을 막지 않음
             this.session = null;
+            log.warn("[ONNX] initialisation failed, falling back (reason: {})", t.toString());
         }
     }
 
@@ -69,10 +86,10 @@ public class OnnxRuntimeService {
      * Resolve a model path that may be prefixed with {@code classpath:}.
      *
      * @param path the configured path
-     * @return a file system path suitable for {@link OrtSession#createSession(String, SessionOptions)}
-     * @throws IOException if the classpath resource cannot be resolved
+     * @return a file system path suitable for {@link OrtSession#createSession(String, OrtSession.SessionOptions)}
      */
-    private String resolveModelPath(String path) throws IOException {
+    // 수정: throws 제거, 내부에서 안전 처리
+    private String resolveModelPath(String path) {
         if (path == null || path.isBlank()) {
             return null;
         }
@@ -81,9 +98,25 @@ public class OnnxRuntimeService {
         if (trimmed.startsWith(prefix)) {
             String location = trimmed.substring(prefix.length());
             Resource resource = new ClassPathResource(location);
-            return resource.getFile().getAbsolutePath();
+            if (!resource.exists()) {
+                log.warn("[ONNX] classpath resource not found: {}", location);
+                return null;
+            }
+            try {
+                // 개발환경(Exploded)에서는 파일 경로가 나옴
+                return resource.getFile().getAbsolutePath();
+            } catch (IOException e) {
+                // 패키징(JAR)된 경우 getFile() 불가 → 여기서는 로드 건너뛰고 폴백
+                log.warn("[ONNX] resource is not a file (likely inside JAR). Skipping ONNX load.");
+                return null;
+            }
         }
         return trimmed;
+    }
+
+    // 개선: 상위 레이어에서 ONNX 세션 가용성 체크용
+    public boolean available() {
+        return session != null;
     }
 
     /**
@@ -100,6 +133,7 @@ public class OnnxRuntimeService {
      * @return a 2D float array of confidence scores
      */
     public float[][] predict(String[] queries, String[] documents) {
+        // TODO: Add actual ONNX inference logic here if `available()` is true
         int m = (queries == null ? 0 : queries.length);
         int n = (documents == null ? 0 : documents.length);
         float[][] result = new float[m][n];

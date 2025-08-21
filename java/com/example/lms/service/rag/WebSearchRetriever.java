@@ -29,12 +29,43 @@ public class WebSearchRetriever implements ContentRetriever {
     /* DuckDuckGo 등에서 반환되는 캡차/봇 차단 힌트 제거용 */
     private static final Pattern CAPTCHA_HINT = Pattern.compile(
             "(?i)(captcha|are you (a )?robot|unusual\\s*traffic|verify you are human|duckduckgo\\.com/captcha|bots\\s*use\\s*duckduckgo)");
+
+
     private static String normalize(String raw) {        /* 🔴 NEW */
         if (raw == null) return "";
 
         String s = META_TAG.matcher(raw).replaceAll("");
         s = TIME_TAG.matcher(s).replaceAll("");
         return s.replace("\n", " ").trim();
+    }
+
+    /**
+     * Extract a version token from the query string.  A version is defined
+     * as two numeric components separated by a dot or middot character.  If
+     * no such token is present, {@code null} is returned.
+     *
+     * @param q the query text
+     * @return the extracted version (e.g. "5.8") or null
+     */
+    private static String extractVersion(String q) {
+        if (q == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)[\\.·](\\d+)").matcher(q);
+        return m.find() ? (m.group(1) + "." + m.group(2)) : null;
+    }
+
+    /**
+     * Build a regex that matches the exact version token in text.  Dots in
+     * the version are replaced with a character class that matches dot or
+     * middot to handle variations in punctuation.  Anchors ensure that
+     * longer numbers containing the version as a substring are not falsely
+     * matched.
+     *
+     * @param v the version string (e.g. "5.8")
+     * @return a compiled regex pattern matching the exact token
+     */
+    private static java.util.regex.Pattern versionRegex(String v) {
+        String core = v.replace(".", "[\\.·\\s]");
+        return java.util.regex.Pattern.compile("(?<!\\d)" + core + "(?!\\d)");
     }
 
     /* ✅ 선호 도메인: 제거가 아닌 '우선 정렬'만 수행 */
@@ -52,10 +83,17 @@ public class WebSearchRetriever implements ContentRetriever {
     @Override
     public List<Content> retrieve(Query query) {
         String normalized = normalize(query != null ? query.text() : "");
+        // Extract a version token from the query.  When present, enforce that
+        // each snippet contains the exact version.  This helps prevent
+        // contamination from neighbouring versions (e.g. 5.7 or 5.9) when the
+        // user asks about a specific patch.
+        String ver = extractVersion(normalized);
+        java.util.regex.Pattern must = (ver != null) ? versionRegex(ver) : null;
         // 1) 1차 수집: topK*2 → 중복/정렬 후 topK
         List<String> first = searchSvc.searchSnippets(normalized, Math.max(topK, 1) * 2)
                 .stream()
                 .filter(s -> !CAPTCHA_HINT.matcher(s).find())  // 🔒 캡차 노이즈 컷
+                .filter(s -> must == null || must.matcher(s).find()) // enforce version token when necessary
                 .toList();
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] first raw={} (q='{}')", first.size(), normalized);

@@ -37,7 +37,14 @@ public final class SearchDisambiguation {
             "fold 6", "fold6", "폴드6",
             "fold 7", "fold7", "폴드7"
     );
-
+    // ── Genshin 전용 오염 제거 ──
+    private static final Set<String> GENSHIN_TOKENS = Set.of("원신","genshin","hoyoverse","hoyolab");
+    private static final Set<String> GENSHIN_NEG_KWS = Set.of(
+            "핵","치트","cheat","hack","minty","shika","스킵","무제한","crack"
+    );
+    private static final Set<String> GENSHIN_BLOCKED_HOSTS = Set.of(
+            "pastebin.com","mega.nz","discord.gg"
+    );
     private static final Set<String> ZFOLD_NEG_KWS = Set.of(
             "중고차", "차량", "엔진오일", "자동차"
     );
@@ -51,7 +58,11 @@ public final class SearchDisambiguation {
      * 원 질의에 기반하여 적용할 프로필을 결정한다.
      */
     public static Profile resolve(String originalQuery) {
+
         String q = originalQuery == null ? "" : originalQuery.toLowerCase(Locale.ROOT);
+        if (containsAny(q, GENSHIN_TOKENS)) {
+            return new Profile(GENSHIN_NEG_KWS, GENSHIN_BLOCKED_HOSTS);
+        }
         if (containsAny(q, K8PLUS_TOKENS)) {
             return new Profile(K8PLUS_NEG_KWS, K8PLUS_BLOCKED_HOSTS);
         }

@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
 import com.example.lms.service.rag.detector.GameDomainDetector;       // + 도메인 감지
+import com.example.lms.search.TypoNormalizer;                         // NEW: typo normalizer
 import org.springframework.util.StringUtils;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -35,6 +36,10 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     @Qualifier("guardrailQueryPreprocessor")
     private final QueryContextPreprocessor preprocessor;
     private final GameDomainDetector domainDetector; // + GENSHIN 감지용
+
+    // Optional typo normalizer for hygiene. Injected if available.
+    @Autowired(required = false)
+    private TypoNormalizer typoNormalizer;
 
     /* 선택적 Tavily 폴백(존재 시에만 사용) */
     @Autowired(required = false)
@@ -113,6 +118,10 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
 
         String qText = (query != null) ? query.text() : null;
+        // Apply typo normalization if configured
+        if (typoNormalizer != null && qText != null) {
+            qText = typoNormalizer.normalize(qText);
+        }
         // ① Guardrail: 오타 교정/금칙어/중복 정리 (중복 호출 제거 + NPE 가드)
         qText = (preprocessor != null) ? preprocessor.enrich(qText) : qText;
         if (!StringUtils.hasText(qText)) {

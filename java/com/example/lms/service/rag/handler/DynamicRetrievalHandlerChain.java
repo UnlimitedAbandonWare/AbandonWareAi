@@ -70,7 +70,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
                 String hist = memoryHandler.loadForSession(sessionId);
                 if (hist != null && !hist.isBlank()) {
                     accumulator.add(Content.from(hist));
-                    if (accumulator.size() >= topK) return;
+                    // Early‑cut removed: do not return when reaching topK at this stage
                 }
             } catch (Exception e) {
                 log.warn("[Memory] {}", e.toString());
@@ -88,7 +88,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (needSelf) {
             try {
                 add(accumulator, selfAsk.retrieve(query));
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: continue gathering evidence instead of returning
             } catch (Exception e) {
                 log.warn("[SelfAsk] {}", e.toString());
             }
@@ -103,7 +103,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (needAnalyze) {
             try {
                 add(accumulator, analyze.retrieve(query));
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: continue gathering evidence instead of returning
             } catch (Exception e) {
                 log.warn("[Analyze] {}", e.toString());
             }
@@ -112,7 +112,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (adaptiveWeb != null) {
             try {
                 adaptiveWeb.handle(query, accumulator);
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: do not return here; allow subsequent stages
             } catch (Exception e) {
                 log.warn("[AdaptiveWeb] {}", e.toString());
             }
@@ -137,7 +137,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         }
         log.debug("[ORDER_DECISION] plan={} reason={}", plan, "heuristic");
         for (Source src : plan) {
-            if (accumulator.size() >= topK) break;
+            // Early‑cut removed: do not break when accumulator reaches topK; continue through all sources
             try {
                 switch (src) {
                     case WEB -> {
@@ -153,7 +153,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
                         }
                     }
                 }
-                if (accumulator.size() >= topK) break;
+                // Early‑cut removed: do not break mid‑plan; allow all sources to contribute
             } catch (Exception e) {
                 log.warn("[{}] fail-soft: {}", src, e.toString());
             }

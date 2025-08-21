@@ -40,6 +40,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import com.example.lms.service.rag.extract.PageContentScraper;
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;
+import com.example.lms.config.VectorStoreHealthIndicator;
 import java.time.Duration;
 @Slf4j
 @Configuration
@@ -75,6 +76,17 @@ public class LangChainConfig {
 
     @Value("${pinecone.embedding-model:text-embedding-3-small}")
     private String embeddingModelName;
+
+    /**
+     * Determines whether the application should fail fast if the vector store
+     * (e.g. Pinecone) cannot be initialized.  When set to {@code true}, any
+     * exception thrown during vector store initialization will be rethrown,
+     * causing the application context to fail to start.  When {@code false},
+     * the application will log an error, register a DOWN health status and
+     * fall back to an in-memory embedding store instead.
+     */
+    @Value("${vector.store.failfast:false}")
+    private boolean vectorStoreFailfast;
 
     /* ───── Self-Ask 검색 튜닝 ───── */
     @Value("${search.selfask.max-depth:2}")
@@ -145,7 +157,12 @@ public class LangChainConfig {
                     .nameSpace(p.getNamespace())
                     .build();
         } catch (Throwable t) {
-            log.warn("Pinecone init failed; falling back to InMemoryEmbeddingStore", t);
+            if (vectorStoreFailfast) {
+                // fail‑fast: propagate the exception to prevent silent fallback in production
+                throw t;
+            }
+            // fail‑soft: log the error and fall back to an in‑memory embedding store
+            log.error("Pinecone init failed; falling back to InMemoryEmbeddingStore", t);
             return new InMemoryEmbeddingStore<>();
         }
     }
@@ -200,6 +217,18 @@ public class LangChainConfig {
             QueryContextPreprocessor preprocessor
     ) {
         return new AnalyzeWebSearchRetriever(koreanAnalyzer, svc, maxTokens, preprocessor);
+    }
+
+    /**
+     * Health indicator bean that exposes the status of the configured embedding
+     * store.  When the application falls back to an in‑memory store due to a
+     * remote vector store failure, this indicator will report {@code DOWN} to
+     * the health endpoint.  When a proper remote store is in use, it reports
+     * {@code UP} unless an exception occurs when probing the store.
+     */
+    @Bean
+    public VectorStoreHealthIndicator vectorStoreHealthIndicator(EmbeddingStore<TextSegment> embeddingStore) {
+        return new VectorStoreHealthIndicator(embeddingStore);
     }
 
     // ⚠️ LangChainRAGService 는 @Service 로 등록됩니다.

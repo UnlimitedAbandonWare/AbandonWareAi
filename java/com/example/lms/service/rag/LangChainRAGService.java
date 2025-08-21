@@ -78,6 +78,7 @@ public class LangChainRAGService {
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final MemoryReinforcementService  memorySvc;
+    @Qualifier("compositeQueryContextPreprocessor")
     private final QueryContextPreprocessor    preprocessor;   //  의도/도메인/원소 제약 주입원
     private final PromptBuilder               promptBuilder;
     private final AnswerSanitizer             answerSanitizer;

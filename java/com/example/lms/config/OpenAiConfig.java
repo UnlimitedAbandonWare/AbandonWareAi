@@ -27,10 +27,7 @@ public class OpenAiConfig {
         return new OpenAiService(openAiKey, Duration.ofSeconds(60));
     }
 
-    /** FactStatusClassifier 빈 제공 (FactVerifierService에서 주입받음) */
-    @Bean
-    public FactStatusClassifier factStatusClassifier(ObjectProvider<OpenAiService> openAiProvider) {
-        // FactStatusClassifier 생성자가 ObjectProvider<OpenAiService>를 받도록 맞춤
-        return new FactStatusClassifier(openAiProvider);
-    }
+    // FactStatusClassifier is now annotated with @Service and directly injects
+    // an ObjectProvider<ChatModel>.  A separate @Bean definition is no longer
+    // necessary here.
 }

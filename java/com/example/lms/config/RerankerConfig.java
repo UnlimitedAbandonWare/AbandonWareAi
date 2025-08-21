@@ -22,12 +22,11 @@ public class RerankerConfig {
 
     /** Embedding 기반 재랭커 (기본값) */
     @Bean(name = "embeddingCrossEncoderReranker")
-    @Primary
     @ConditionalOnProperty(
             prefix = "abandonware.reranker",
-            name = "backend",
+            name   = "backend",
             havingValue = "embedding-model",
-            matchIfMissing = true
+            matchIfMissing = false
     )
     public CrossEncoderReranker embeddingModelCrossEncoderReranker(
             EmbeddingModel embeddingModel,
@@ -51,14 +50,12 @@ public class RerankerConfig {
         );
     }
 
-    /** ONNX 기반 재랭커 */
-    @Bean(name = "embeddingCrossEncoderReranker")
-    @ConditionalOnProperty(
-            prefix = "abandonware.reranker",
-            name = "backend",
-            havingValue = "onnx-runtime"
+    @Bean(name = "onnxCrossEncoderReranker")
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression(
+            "'${abandonware.reranker.backend:}'=='onnx-runtime' and "
+                    + "'${abandonware.reranker.onnx.model-path:}'!=''"
     )
-    public CrossEncoderReranker onnxCrossEncoderReranker(OnnxRuntimeService onnxRuntimeService) {
-        return new OnnxCrossEncoderReranker(onnxRuntimeService);
+    public CrossEncoderReranker onnxCrossEncoderReranker(com.example.lms.service.onnx.OnnxRuntimeService onnxRuntimeService) {
+        return new com.example.lms.service.onnx.OnnxCrossEncoderReranker(onnxRuntimeService);
     }
 }

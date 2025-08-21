@@ -17,7 +17,7 @@ public class OpenAiChatModel implements ChatModel {
 
     private final OpenAiService openAi;
 
-    @Value("${openai.chat.model:gpt-4o-mini}")
+    @Value("${openai.chat.model:gpt-5-mini}")
     private String defaultModel;
 
     @Override

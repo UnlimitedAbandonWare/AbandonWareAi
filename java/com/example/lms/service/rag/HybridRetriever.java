@@ -33,6 +33,9 @@ import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.scoring.AdaptiveScoringService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.learning.NeuralPathFormationService;
+import org.springframework.beans.factory.annotation.Qualifier; // - FIX: 다중 빈 모호성 해결용 @Qualifier
+import jakarta.annotation.PostConstruct; // + 개선: 프로퍼티 기반 백엔드 선택 지원
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -64,9 +67,18 @@ public class HybridRetriever implements ContentRetriever {
     private final KnowledgeBaseService kb;
     // Path formation service used to reinforce high-consistency entity pairs.
     private final NeuralPathFormationService pathFormation;
+
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
+    @Qualifier("noopCrossEncoderReranker") // - FIX: 빈 3개(onnx/noop/embedding) 충돌 → 기본 noop로 명시
     private com.example.lms.service.rag.rerank.CrossEncoderReranker crossEncoderReranker;
+
+    @Autowired(required = false)
+    private Map<String, com.example.lms.service.rag.rerank.CrossEncoderReranker> rerankers = java.util.Collections.emptyMap(); // + 개선: 런타임에 백엔드 스위칭 가능
+
+    @Value("${abandonware.reranker.backend:noop}")
+    private String rerankerBackend; // + 개선: 프로퍼티로 onnx/embedding/noop 선택
+
     // 리트리버들
     private final SelfAskWebSearchRetriever selfAskRetriever;
     private final AnalyzeWebSearchRetriever analyzeRetriever;
@@ -109,9 +121,26 @@ public class HybridRetriever implements ContentRetriever {
     @Value("${retrieval.consistency.threshold:0.8}")
     private double consistencyThreshold;
 
+    @PostConstruct
+    private void selectRerankerByProperty() {
+        // + 개선: application.yml 의 abandonware.reranker.backend 값에 따라 백엔드 자동 선택
+        try {
+            String key = rerankerBackend + "CrossEncoderReranker";
+            var chosen = rerankers.get(key);
+            if (chosen != null) {
+                this.crossEncoderReranker = chosen;
+                log.info("[Hybrid] CrossEncoderReranker set via property: {}", key); // + 개선: 가시성 로그
+            } else {
+                log.info("[Hybrid] backend='{}' not found; using default: {}", rerankerBackend,
+                        (crossEncoderReranker != null ? crossEncoderReranker.getClass().getSimpleName() : "none"));
+            }
+        } catch (Exception ignore) {
+            // 안전: 선택 실패해도 기본 주입 유지
+        }
+    }
+
     @Override
     public List<Content> retrieve(Query query) {
-
 
         // 0) 메타 파싱
         String sessionKey = Optional.ofNullable(query)
@@ -143,10 +172,6 @@ public class HybridRetriever implements ContentRetriever {
         final String q = (query != null && query.text() != null) ? query.text().strip() : "";
 
         // ── 조건부 파이프라인: 교육/국비 키워드 → 벡터 검색 모드 ──────────────────
-        // 사용자가 "학원" 또는 "국비"라는 키워드를 포함한 질문을 할 경우, 시스템은
-        // 전통적인 웹/키워드 검색을 건너뛰고 벡터 기반 검색을 수행한다. 이는 교육
-        // 도메인 질문의 맥락에서 의미 기반 유사도 검색이 더 유용하다는 요구에 따른
-        // 것으로, 최상위 결과는 코사인 유사도에 따라 정렬된다.
         try {
             String qLower = q.toLowerCase(java.util.Locale.ROOT);
             if (qLower.contains("학원") || qLower.contains("국비")) {
@@ -155,8 +180,7 @@ public class HybridRetriever implements ContentRetriever {
                 // deduplicate results while preserving order
                 LinkedHashSet<Content> unique = new LinkedHashSet<>(vectResults);
                 List<Content> deduped = new ArrayList<>(unique);
-                // rank by cosine similarity.  Use textSegment() when available; fallback to
-                // toString() which may include URL but still provides signal.
+                // rank by cosine similarity.
                 try {
                     deduped.sort((c1, c2) -> {
                         String t1 = java.util.Optional.ofNullable(c1.textSegment())
@@ -304,7 +328,7 @@ public class HybridRetriever implements ContentRetriever {
                 return out.size() > top ? out.subList(0, top) : out;
             }
 
-            // 2) Self‑Ask로 1~2개 핵심 질의 생성 → 위생 필터
+            // 2) Self-Ask로 1~2개 핵심 질의 생성 → 위생 필터
             List<String> planned = (selfAskPlanner != null) ? selfAskPlanner.plan(question, 2) : List.of(question);
             List<String> queries = QueryHygieneFilter.sanitize(planned, 2, 0.80);
 
@@ -322,7 +346,6 @@ public class HybridRetriever implements ContentRetriever {
                 buckets.add(acc);
             }
 
-
             // 융합 및 최종 정제 후 상위 top 반환
             List<Content> fused = "softmax".equalsIgnoreCase(fusionMode)
                     ? fuseWithSoftmax(buckets, top, question) // ★ 대안 융합
@@ -338,11 +361,6 @@ public class HybridRetriever implements ContentRetriever {
             return List.of(Content.from("[검색 오류]"));
         }
     }
-
-
-/**
- * 다중 쿼리 병렬 검색  RRF 융합
- */
 
     /**
      * 다중 쿼리 병렬 검색 + RRF 융합
@@ -414,9 +432,6 @@ public class HybridRetriever implements ContentRetriever {
         if (queries.isEmpty()) queries = List.of(userQ);
         return retrieveAll(queries, Math.max(1, limit));
     }
-
-    // ───────────────────────────── 헬퍼들 ─────────────────────────────
-
 
     // ───────────────────────────── 헬퍼들 ─────────────────────────────
 
@@ -542,11 +557,15 @@ public class HybridRetriever implements ContentRetriever {
             } catch (Exception ignore) { /* 안전 무시 */ }
         }
 
-        // 2‑B) 🔴 (옵션) 교차엔코더 재정렬: 질문과의 의미 유사도 정밀 재계산
-        if (crossEncoderReranker != null && !candidates.isEmpty()) {
+        // 2-B) 🔴 (옵션) 교차엔코더 재정렬: 질문과의 의미 유사도 정밀 재계산
+        // - FIX: 잘못된 입력 리스트(candidates) → 1차 전처리 결과(firstPass)로 교체
+        if (crossEncoderReranker != null && !firstPass.isEmpty()) { // - FIX: firstPass 기준으로 체크
             try {
-                candidates = crossEncoderReranker.rerank(
-                        Optional.ofNullable(queryText).orElse(""), candidates, Math.max(topK * 2, 20));
+                firstPass = crossEncoderReranker.rerank( // - FIX: 대상 컬렉션 교체 (candidates → firstPass)
+                        Optional.ofNullable(queryText).orElse(""),
+                        firstPass,
+                        Math.max(topK * 2, 20)
+                );
             } catch (Exception e) {
                 log.debug("[Hybrid] cross-encoder rerank skipped: {}", e.toString());
             }
@@ -599,7 +618,7 @@ public class HybridRetriever implements ContentRetriever {
             if (isOfficial(url, officialDomains)) {
                 score0 += bonusOfficial;
             }
-// ★ NEW: ML 비선형 보정(옵션) – 값域 보정 및 tail 제어
+            // ★ NEW: ML 비선형 보정(옵션) – 값域 보정 및 tail 제어
             double finalScore = useMlCorrection
                     ? MLCalibrationUtil.finalCorrection(score0, alpha, beta, gamma, d0, mu, lambda, true)
                     : score0;
@@ -612,6 +631,7 @@ public class HybridRetriever implements ContentRetriever {
                 .map(s -> s.content)
                 .collect(Collectors.toList());
     }
+
     // ───────────────────────────── NEW: Softmax 융합(단일 정의만 유지) ─────────────────────────────
     /** 여러 버킷의 결과를 하나로 모아 점수(logit)를 만들고 softmax로 정규화한 뒤 상위 N을 고른다. */
     private List<Content> fuseWithSoftmax(List<List<Content>> buckets, int limit, String queryText) {
@@ -657,6 +677,5 @@ public class HybridRetriever implements ContentRetriever {
         }
         return out;
     }
-
 
 }

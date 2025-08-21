@@ -62,6 +62,13 @@ public class ChatApiController {
     private final SettingsService settingsService;
     private final TranslationService translationService;
     private final NaverSearchService searchService;
+    /**
+     * Location service for intent detection and personalised location
+     * responses.  Injected to allow early interception of "where am I"
+     * queries before invoking the language model or performing any
+     * network searches.
+     */
+    private final com.example.lms.location.LocationService locationService;
 
     /**
      * Emitter used to push additional events such as understanding summaries
@@ -71,6 +78,12 @@ public class ChatApiController {
      * without the understanding feature enabled.
      */
     private final ChatStreamEmitter chatStreamEmitter;
+
+    // === Default RAG toggle ===
+    // Use server-side default when the client does not explicitly set useRag.
+    // This property is defined in application.yml under chat.defaults.useRag and defaults to true.
+    @org.springframework.beans.factory.annotation.Value("${chat.defaults.useRag:true}")
+    private boolean defaultUseRag;
 
     /**
      * Cancel the currently running chat streaming for the given session.  This endpoint can be
@@ -98,6 +111,11 @@ public class ChatApiController {
                                                       @AuthenticationPrincipal UserDetails principal) {
         String username = (principal != null) ? principal.getUsername() : "anonymousUser";
 
+        // If client didn't explicitly request RAG, apply server default.
+        // When useRag is false on the request DTO, override with defaultUseRag.
+        if (!req.isUseRag()) {
+            req.setUseRag(defaultUseRag);
+        }
         if (req.isUseAdaptive()) {
             return adaptiveService.translate(req.getMessage(), "ko", "en")
                     .map(t -> new ChatResponseDto(t, null, "Adaptive-Translator", false))
@@ -293,6 +311,29 @@ public class ChatApiController {
 
     // ===== internal =====
     private ChatResponseDto handleChat(ChatRequestDto uiReq, String username) {
+        // 0) 위치 문의는 LLM 호출 이전에 조기 응답 처리한다.  감지된 경우
+        // consent, last location and reverse geocoding are evaluated via LocationService.
+        try {
+            com.example.lms.location.intent.LocationIntent intent =
+                    locationService.detectIntent(uiReq.getMessage());
+            if (intent == com.example.lms.location.intent.LocationIntent.WHERE_AM_I) {
+                // Resolve the user identifier for the location lookup.  Prefer the
+                // authenticated principal's username (passed as 'username') and fall back
+                // to any identifier encoded in the request if such a property exists.
+                String userId = (username != null && !username.isBlank()) ? username : null;
+                var msgOpt = locationService.answerWhereAmI(userId);
+                if (msgOpt.isPresent()) {
+                    // Immediate deterministic response; avoid session creation and web search.
+                    return new ChatResponseDto(msgOpt.get(), null, "location:deterministic", false);
+                }
+                // When the personalised location message cannot be produced (no consent,
+                // missing coordinate etc.), continue to the standard flow below.
+            }
+        } catch (Exception e) {
+            // Log but do not interrupt the standard chat flow
+            log.debug("handleChat: location interception failed", e);
+        }
+
         // 1) 설정 병합
         ChatRequestDto dto = mergeWithSettings(uiReq);
 

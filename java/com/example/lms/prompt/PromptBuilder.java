@@ -83,6 +83,74 @@ public class PromptBuilder {
             if (StringUtils.hasText(ctx.history())) {
                 sb.append(HIS_PREFIX.formatted(ctx.history()));
             }
+            // ### MUST_INCLUDE: extract up to four unique non‑stopword tokens from web and RAG evidence.
+            if (ctx != null) {
+            // Optional location context.  When present this section provides
+            // the user's last known latitude/longitude along with the reported
+            // accuracy and timestamp.  Downstream models may use this information
+            // to ground location‑aware queries such as "나 지금 어디야?".
+            if (ctx.location() != null || ctx.locationAddress() != null) {
+                sb.append("\n### LOCATION CONTEXT\n");
+                if (ctx.location() != null) {
+                    var loc = ctx.location();
+                    sb.append("- lat: ").append(loc.lat())
+                            .append(", lng: ").append(loc.lng())
+                            .append(", accuracy(m): ").append(loc.accuracy())
+                            .append('\n');
+                    sb.append("- capturedAt: ").append(loc.capturedAt()).append('\n');
+                }
+                if (ctx.locationAddress() != null && !ctx.locationAddress().isBlank()) {
+                    sb.append("- address: ").append(ctx.locationAddress()).append('\n');
+                }
+            }
+                java.util.LinkedHashSet<String> must = new java.util.LinkedHashSet<>();
+                if (ctx.web() != null) {
+                    for (var c : ctx.web()) {
+                        if (c == null) continue;
+                        String text = null;
+                        try {
+                            var seg = c.textSegment();
+                            if (seg != null) text = seg.text();
+                        } catch (Exception ignore) {}
+                        if (text == null || text.isBlank()) {
+                            text = c.toString();
+                        }
+                        if (text != null) {
+                            String[] arr = text.split("[\\s,;:/()\\[\\]{}<>|]+");
+                            for (String w : arr) {
+                                if (w != null && w.length() >= 2 && !w.matches("(?i)the|and|or|with|of")) {
+                                    must.add(w);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (ctx.rag() != null) {
+                    for (var c : ctx.rag()) {
+                        if (c == null) continue;
+                        String text = null;
+                        try {
+                            var seg = c.textSegment();
+                            if (seg != null) text = seg.text();
+                        } catch (Exception ignore) {}
+                        if (text == null || text.isBlank()) {
+                            text = c.toString();
+                        }
+                        if (text != null) {
+                            String[] arr = text.split("[\\s,;:/()\\[\\]{}<>|]+");
+                            for (String w : arr) {
+                                if (w != null && w.length() >= 2 && !w.matches("(?i)the|and|or|with|of")) {
+                                    must.add(w);
+                                }
+                            }
+                        }
+                    }
+                }
+                java.util.List<String> mustShort = must.stream().limit(4).toList();
+                if (!mustShort.isEmpty()) {
+                    sb.append("### MUST_INCLUDE\n- ").append(String.join(", ", mustShort)).append("\n\n");
+                }
+            }
         }
         return sb.toString();
     }
@@ -179,8 +247,12 @@ public class PromptBuilder {
                 });
             }
 
-            // 공통 보수적 가드
-            sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
+            // Evidence-aware guidance
+            if ((ctx != null) && ((ctx.web() != null && !ctx.web().isEmpty()) || (ctx.rag() != null && !ctx.rag().isEmpty()))) {
+                sys.append("- When uncertain but evidence exists, list candidate pairings with citations; do NOT say '정보 없음'.\n");
+            } else {
+                sys.append("- If no evidence is available, reply '정보 없음'.\n");
+            }
             sys.append("- If evidence is weak but related to the same subject, provide a conservative summary and add a short 'clarify' question instead of refusing outright.\n");
 
             // ▼ Verbosity/Output policy (섹션/최소길이/상세도 강제)
@@ -208,8 +280,12 @@ public class PromptBuilder {
             String cite = Objects.toString(ctx.citationStyle(), "inline");
             sys.append("- Citation style: ").append(cite).append('\n');
 
-            // 보수적 가드 재확인
-            sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
+            // Evidence-aware guidance reinforcement
+            if ((ctx != null) && ((ctx.web() != null && !ctx.web().isEmpty()) || (ctx.rag() != null && !ctx.rag().isEmpty()))) {
+                sys.append("- When uncertain but evidence exists, list candidate pairings with citations; do NOT say '정보 없음'.\n");
+            } else {
+                sys.append("- If no evidence is available, reply '정보 없음'.\n");
+            }
         }
         return sys.toString();
     }

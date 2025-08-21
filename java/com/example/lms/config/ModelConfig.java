@@ -15,10 +15,13 @@ public class ModelConfig {
     // application.properties 의 openai.api.key 우선, 없으면 환경변수 OPENAI_API_KEY 사용
     @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String apiKey;
-    @Value("${router.moe.mini:gpt-4o-mini}")
+    // Centralised model names are provided via openai.chat.model.default and openai.chat.model.moe.
+    // Avoid hard‑coding fallback values here; defaults are defined in application.properties.
+    @Value("${openai.chat.model.default:${openai.model.moe:${langchain4j.openai.chat-model.model-name:gpt-4o-mini}}}")
     private String miniModelName;
-
-    @Value("${router.moe.high:gpt-4o}")
+    @Value("${openai.chat.model.moe:${openai.model.moe:${langchain4j.openai.chat-model.model-name:gpt-4o-mini}}}")
+    private String moeModel;
+    @Value("${openai.chat.model.moe}")
     private String highModelName;
 
     @Bean

@@ -4,6 +4,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import com.example.lms.llm.ModelCapabilities;
 import org.springframework.util.StringUtils;
 
 @Component
@@ -15,7 +16,7 @@ public class DynamicChatModelFactory {
     public ChatModel lc(String modelId, double temperature, double topP, Integer maxTokens) {
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
                 .modelName(modelId)
-                .temperature(temperature)
+                .temperature(ModelCapabilities.sanitizeTemperature(modelId, temperature))
                 .topP(topP);
 
         String key = StringUtils.hasText(openaiApiKey) ? openaiApiKey : System.getenv("OPENAI_API_KEY");

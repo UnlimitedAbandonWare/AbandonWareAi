@@ -15,10 +15,14 @@ import java.util.List;
  * A cross‑encoder reranker backed by a local ONNX runtime.
  * Bean registration is handled centrally in RerankerConfig.
  */
-@RequiredArgsConstructor
+
 public class OnnxCrossEncoderReranker implements CrossEncoderReranker {
 
     private final OnnxRuntimeService onnx;
+
+    public OnnxCrossEncoderReranker(OnnxRuntimeService onnx) {
+        this.onnx = onnx;
+    }
 
     /*
      * ---------------------------- Internal API (AbandonWare) ----------------------------

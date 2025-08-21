@@ -6,6 +6,8 @@ import com.example.lms.service.rag.SelfAskWebSearchRetriever;
 import com.example.lms.service.rag.WebSearchRetriever;
 import com.example.lms.service.rag.QueryComplexityGate;
 import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
+import com.example.lms.location.LocationService;
+import com.example.lms.location.intent.LocationIntent;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
@@ -31,6 +33,15 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
     private final LangChainRAGService rag;
     private final com.example.lms.service.rag.handler.EvidenceRepairHandler repair;
     private final QueryComplexityGate gate;
+
+    /**
+     * Service used to detect location-related intents.  When the user's query
+     * is determined to be about their current location (e.g. "나 지금 어디야?"),
+     * the retrieval chain will short-circuit and avoid performing any
+     * expensive web or vector lookups.  A specialized chat handler can then
+     * take over to generate the appropriate response.
+     */
+    private final LocationService locationService;
 
     @Value("${pinecone.index.name}")
     private String pineconeIndexName;
@@ -61,7 +72,7 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
                 String hist = memoryHandler.loadForSession(sessionId);
                 if (hist != null && !hist.isBlank()) {
                     accumulator.add(Content.from(hist));
-                    if (accumulator.size() >= topK) return;
+                    // Early‑cut removed: do not terminate when reaching topK here
                 }
             } catch (Exception ignore) {
                 // ignore
@@ -75,7 +86,7 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
         } catch (Exception ignore) {}
         if (needSelf) {
             add(accumulator, selfAsk.retrieve(query));
-            if (accumulator.size() >= topK) return;
+            // Early‑cut removed: continue gathering evidence instead of returning
         }
         // 3. Analyze: 모호 또는 복잡한 경우만
         boolean needAnalyze = false;
@@ -84,25 +95,42 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
         } catch (Exception ignore) {}
         if (needAnalyze) {
             add(accumulator, analyze.retrieve(query));
-            if (accumulator.size() >= topK) return;
+            // Early‑cut removed: continue gathering evidence instead of returning
+        }
+        // 3-b. Location: detect and short-circuit when the query is location-related
+        try {
+            // When the location service is available and consent has been granted
+            // it will classify the user query into a location intent.  If the
+            // intent is not NONE, then retrieval is skipped so that a dedicated
+            // location handler can generate a reply without any web or vector
+            // evidence.  Do not add any content to the accumulator in this case.
+            if (locationService != null) {
+                LocationIntent li = locationService.detectIntent(q);
+                if (li != null && li != LocationIntent.NONE) {
+                    // Skip retrieval entirely.  Downstream chat logic should
+                    // handle location queries by consulting the location service.
+                    return;
+                }
+            }
+        } catch (Exception ignore) {
+            // fail-soft: ignore any errors during location detection
         }
         // 4. Adaptive Web Search (new stage before normal web)
         try {
             if (adaptiveWeb != null) {
                 adaptiveWeb.handle(query, accumulator);
-                // If adaptive search fills the required slots, skip normal web
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: do not return here; allow subsequent stages
             }
         } catch (Exception ignore) {
             // Swallow exceptions to maintain chain robustness
         }
         // 5. Fallback Web Search
         add(accumulator, web.retrieve(query));
-        if (accumulator.size() >= topK) return;
+        // Early‑cut removed: continue to vector and repair stages regardless of accumulator size
         // 6. Vector
         ContentRetriever vector = rag.asContentRetriever(pineconeIndexName);
         add(accumulator, vector.retrieve(query));
-        if (accumulator.size() >= topK) return;
+        // Early‑cut removed: continue to repair stage
         // 7. Repair
         try {
             if (repair != null) {

@@ -17,9 +17,11 @@ public class VectorDbHandler extends AbstractRetrievalHandler {
             ContentRetriever pine = ragSvc.asContentRetriever(indexName);
             acc.addAll(pine.retrieve(q));
         } catch (Exception e) {
-            log.warn("[VectorDB] 실패 – 체인 종료", e);
-            return false;            // 에러 땐 중단
+            // fail-soft: log the error but allow the chain to continue
+            log.warn("[VectorDB] 실패 – fail-soft", e);
+            return true;
         }
-        return false;                // 마지막 핸들러
+        // Always continue to the next handler.
+        return true;
     }
 }

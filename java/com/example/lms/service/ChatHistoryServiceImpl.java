@@ -30,6 +30,9 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final AdministratorRepository administratorRepository;
+    @org.springframework.beans.factory.annotation.Value("${history.skip-weak-assistant:true}")
+    private boolean skipWeakAssistant;
+
 
     /* -------------------- META PREFIXES -------------------- */
     private static final String TRACE_META_PREFIX          = "⎔TRACE⎔";
@@ -115,6 +118,16 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
             log.debug("Unsupported role '{}' → skip persist (session {})", role, sessionId);
             return;
         }
+        // Skip weak assistant drafts like "정보 없음" when toggle is on
+        if (skipWeakAssistant && "assistant".equals(r)) {
+            try {
+                if (com.example.lms.service.guard.EvidenceAwareGuard.looksWeak(c)) {
+                    log.debug("weak assistant draft suppressed → skip persist (session {})", sessionId);
+                    return;
+                }
+            } catch (Throwable ignore) {}
+        }
+
 
         // 1) TRACE 메타(system)면 무조건 저장
         if ("system".equals(r) && isTraceMeta(c)) {

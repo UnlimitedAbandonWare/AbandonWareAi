@@ -1,10 +1,8 @@
 package com.example.lms.service.correction;
 
 import com.example.lms.util.ProductAliasNormalizer;
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,22 +18,22 @@ import java.util.Set;
 @Service
 public class LLMQueryCorrectionService implements QueryCorrectionService {
 
-    private final ObjectProvider<OpenAiService> openAiProvider;
+    private final ObjectProvider<ChatModel> chatModelProvider;
     private final DomainTermDictionary dictionaryProvider;
 
     @Value("${query.correction.enabled:true}")
     private boolean enabled;
-    @Value("${query.correction.model:gpt-4o-mini}")
+    @Value("${query.correction.model:gpt-5-mini}")
     private String openAiModel;
     @Value("${query.correction.max-length:140}")
     private int maxLength;
 
     // --- @RequiredArgsConstructor 대신 생성자 직접 작성 ---
     public LLMQueryCorrectionService(
-            ObjectProvider<OpenAiService> openAiProvider,
+            ObjectProvider<ChatModel> chatModelProvider,
             @Qualifier("defaultDomainTermDictionary") DomainTermDictionary dictionaryProvider // ✅ 특정 빈 선택
     ) {
-        this.openAiProvider = openAiProvider;
+        this.chatModelProvider = chatModelProvider;
         this.dictionaryProvider = dictionaryProvider;
     }
     // ----------------------------------------------------
@@ -60,12 +58,10 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
                 """.formatted(protectionInstruction);
 
         try {
-            OpenAiService openAi = openAiProvider.getIfAvailable();
-            if (openAi == null) return originalInput;
-
-            String corrected = callOpenAiJava(openAi, openAiModel, systemPrompt, originalInput);
+            ChatModel llm = chatModelProvider.getIfAvailable();
+            if (llm == null) return originalInput;
+            String corrected = callChatModel(llm, systemPrompt + "\n" + originalInput);
             if (corrected == null || corrected.isBlank()) return originalInput;
-
             corrected = corrected.trim();
             if (!protectedTerms.isEmpty()) {
                 String outLower = corrected.toLowerCase(Locale.ROOT);
@@ -85,18 +81,22 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
         return (found == null) ? Set.of() : found;
     }
 
-    private static String callOpenAiJava(OpenAiService openAi, String model, String sys, String user) {
-        ChatCompletionRequest req = ChatCompletionRequest.builder()
-                .model(model)
-                .messages(List.of(
-                        new ChatMessage(ChatMessageRole.SYSTEM.value(), sys),
-                        new ChatMessage(ChatMessageRole.USER.value(), user)
-                ))
-                .temperature(0d)
-                .topP(0.05d)
-                .build();
-        String out = openAi.createChatCompletion(req)
-                .getChoices().get(0).getMessage().getContent();
-        return out == null ? "" : out.trim();
+    /**
+     * Execute a correction prompt via the provided ChatModel.  The prompt
+     * should include any system instructions and user content concatenated
+     * together.  Returns the trimmed response text or an empty string on
+     * failure.
+     */
+    private String callChatModel(ChatModel llm, String prompt) {
+        if (llm == null || prompt == null) return "";
+        try {
+            var res = llm.chat(UserMessage.from(prompt));
+            if (res == null || res.aiMessage() == null) return "";
+            var ai = res.aiMessage();
+            return ai.text() == null ? "" : ai.text().trim();
+        } catch (Exception e) {
+            log.debug("[LLMQueryCorrection] ChatModel call failed: {}", e.toString());
+            return "";
+        }
     }
 }

@@ -40,7 +40,7 @@ public class SettingsService {
     @Value("${gpt.system.prompt.default:You are a helpful assistant.}")
     private String defaultSystemPrompt;
 
-    @Value("${openai.api.model.default:gpt-4o-mini}")
+    @Value("${openai.api.model.default:gpt-5-mini}")
     private String defaultModel;
 
     @Value("${openai.api.temperature.default:0.7}")
