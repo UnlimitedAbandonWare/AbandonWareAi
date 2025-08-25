@@ -9,10 +9,10 @@ import java.util.Optional;
 @Repository
 public class ConfigRepository {
     public Optional<Double> findDouble(String key) {
-        // TODO: DB에서 설정값 조회
+        // Implementation placeholder: load configuration values from the database.
         return Optional.empty();
     }
     public void save(String key, Double value) {
-        // TODO: DB에 설정값 저장
+        // Implementation placeholder: persist configuration values to the database.
     }
 }

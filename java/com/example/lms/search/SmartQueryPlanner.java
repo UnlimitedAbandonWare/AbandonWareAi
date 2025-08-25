@@ -49,12 +49,23 @@ public class SmartQueryPlanner {
      * @return 정제된 쿼리 문자열 목록
      */
     public List<String> plan(String userPrompt, @Nullable String assistantDraft, int maxQueries) {
-        // 쿼리 개수를 1개 이상 4개 이하로 보정
-        int cap = Math.max(1, Math.min(4, maxQueries));
-
         // 0) 도메인/주제 추정 → 앵커
         String domain = knowledgeBase.inferDomain(userPrompt);
         String subject = subjectResolver.resolve(userPrompt, domain).orElse(null);
+
+        // 쿼리 개수 및 유사도 임계치를 도메인에 따라 조정
+        boolean isGeneral = "GENERAL".equalsIgnoreCase(domain);
+        int cap;
+        double jaccard;
+        if (isGeneral) {
+            // GENERAL 도메인은 쿼리 다양성을 확대 (6~8개 허용)
+            cap = Math.min(8, Math.max(6, maxQueries));
+            jaccard = 0.60;
+        } else {
+            // 특화 도메인은 기존 제한 유지
+            cap = Math.max(1, Math.min(4, maxQueries));
+            jaccard = 0.80;
+        }
 
         // QueryTransformer를 통해 원시 쿼리 목록 생성(주제 앵커 전달)
         List<String> raw = transformer.transformEnhanced(
@@ -64,7 +75,7 @@ public class SmartQueryPlanner {
         );
 
         // 위생 필터를 적용하여 최종 쿼리 목록 반환
-        return QueryHygieneFilter.sanitize(raw, cap, 0.80);
+        return QueryHygieneFilter.sanitize(raw, cap, jaccard);
     }
 
     /**

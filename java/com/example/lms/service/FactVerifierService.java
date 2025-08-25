@@ -9,10 +9,8 @@ import com.example.lms.service.verification.FactStatusClassifier;
 import com.example.lms.service.verification.FactVerificationStatus;
 import com.example.lms.service.verification.NamedEntityValidator;
 import com.example.lms.service.verification.SourceAnalyzerService;
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
 import com.example.lms.prompt.PromptBuilder;     // 🆕 치유 프롬프트 빌더
 import com.example.lms.prompt.PromptContext;    // 🆕 치유 컨텍스트
 import lombok.extern.slf4j.Slf4j;
@@ -32,7 +30,7 @@ import java.util.regex.Pattern;
 public class FactVerifierService {
 
     private final SourceAnalyzerService sourceAnalyzer;
-    private final OpenAiService openAi;
+    private final ChatModel verifier;
     private final FactStatusClassifier classifier;
     private final ClaimVerifierService claimVerifier;
     private final EvidenceGate evidenceGate;
@@ -46,13 +44,13 @@ public class FactVerifierService {
     @Autowired(required = false)
     private NamedEntityValidator namedEntityValidator;
 
-    public FactVerifierService(OpenAiService openAi,
+    public FactVerifierService(ChatModel verifier,
                                FactStatusClassifier classifier,
                                SourceAnalyzerService sourceAnalyzer,
                                ClaimVerifierService claimVerifier,
                                EvidenceGate evidenceGate,
                                PromptBuilder promptBuilder) {
-        this.openAi = Objects.requireNonNull(openAi, "openAi");
+        this.verifier = Objects.requireNonNull(verifier, "verifier");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
         this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
         this.claimVerifier = Objects.requireNonNull(claimVerifier, "claimVerifier");
@@ -179,7 +177,7 @@ public class FactVerifierService {
         // 2b. LLM을 이용한 질문-컨텍스트 정합성 분석
         try {
             String metaPrompt = String.format(META_TEMPLATE, question, context);
-            String metaVerdict = callOpenAi(metaPrompt, model, 0.0, 0.05, 5);
+            String metaVerdict = callChatModel(metaPrompt);
             if (metaVerdict.trim().toUpperCase(Locale.ROOT).startsWith("MISMATCH")) {
                 log.debug("[Verify] META-CHECK detected MISMATCH -> '정보 없음' 반환");
                 return "정보 없음";
@@ -229,7 +227,7 @@ public class FactVerifierService {
                 log.debug("[Verify] CORRECTED 상태이며 근거 충분 -> LLM 기반 수정 시도");
                 String correctionPrompt = String.format(CORRECTION_TEMPLATE, question, context, draft);
                 try {
-                    String rawResponse = callOpenAi(correctionPrompt, model, 0.0, 0.05, 256);
+                    String rawResponse = callChatModel(correctionPrompt);
                     int contentStartIndex = rawResponse.indexOf("CONTENT:");
                     String correctedText = (contentStartIndex > -1) ? rawResponse.substring(contentStartIndex + 8).trim() : rawResponse.trim();
 
@@ -256,28 +254,46 @@ public class FactVerifierService {
 
     // --- Private Helper Methods ---
 
-    private String callOpenAi(String prompt, String model, double temp, double topP, int maxTokens) {
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(model)
-                .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
-                .temperature(temp)
-                .topP(topP)
-                .maxTokens(maxTokens)
-                .build();
-        return openAi.createChatCompletion(request).getChoices().get(0).getMessage().getContent();
+    /**
+     * Execute a chat completion using the LangChain4j ChatModel.  The model
+     * has been preconfigured with reasonable defaults (e.g., temperature,
+     * top‑p, timeout) and cannot be tuned per invocation.  This method
+     * concatenates the prompt segments into a single user message and
+     * returns the generated AI text.  If the model returns a null
+     * response, an empty string is returned instead.
+     *
+     * @param prompt the prompt to send to the chat model
+     * @return the generated response text or an empty string if none
+     */
+    private String callChatModel(String prompt) {
+        try {
+            var res = verifier.chat(UserMessage.from(prompt));
+            if (res == null || res.aiMessage() == null) return "";
+            var ai = res.aiMessage();
+            return ai.text() == null ? "" : ai.text();
+        } catch (Exception e) {
+            log.debug("[FactVerifier] ChatModel call failed: {}", e.toString());
+            return "";
+        }
     }
 
-
-    // 🆕 다중 메시지 버전
-    private String callOpenAi(List<ChatMessage> messages, String model, double temp, double topP, int maxTokens) {
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(model)
-                .messages(messages)
-                .temperature(temp)
-                .topP(topP)
-                .maxTokens(maxTokens)
-                .build();
-        return openAi.createChatCompletion(request).getChoices().get(0).getMessage().getContent();
+    /**
+     * Execute a chat completion with multiple message segments by joining
+     * their contents with newlines.  Each message role is ignored and the
+     * resulting text is sent as a single prompt to the chat model.
+     *
+     * @param messages list of message objects containing content
+     * @return AI response text
+     */
+    private String callChatModel(List<Object> messages) {
+        if (messages == null || messages.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Object m : messages) {
+            if (m == null) continue;
+            sb.append(String.valueOf(m));
+            sb.append('\n');
+        }
+        return callChatModel(sb.toString());
     }
 
     // 🆕 미지원 주장(개체) 계산: 컨텍스트/메모리에 등장하지 않는 개체를 탐지
@@ -308,21 +324,19 @@ public class FactVerifierService {
             String healCtxSection = promptBuilder.build(healCtx);          // DRAFT_ANSWER 등
             String healInstr = promptBuilder.buildInstructions(healCtx);      // 치유 규칙 + UNSUPPORTED_CLAIMS
 
-            List<ChatMessage> msgs = new ArrayList<>();
-            // 1) 근거(컨텍스트)를 최우선 System 메시지로
+            // Assemble the prompt segments as plain strings.  The role
+            // information (SYSTEM/USER) is ignored and the segments are
+            // concatenated in order for the ChatModel.
+            List<String> msgs = new ArrayList<>();
             if (StringUtils.hasText(context)) {
-                msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), context));
+                msgs.add(context);
             }
-            // 2) 치유용 컨텍스트 섹션(DRAFT 포함)
             if (StringUtils.hasText(healCtxSection)) {
-                msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), healCtxSection));
+                msgs.add(healCtxSection);
             }
-            // 3) 치유용 인스트럭션
-            msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), healInstr));
-            // 4) 사용자 지시: 초안 수정 요청
-            msgs.add(new ChatMessage(ChatMessageRole.USER.value(), "위 지시를 따르고, 미지원 주장을 제거·수정하여 정답을 한국어로 다시 작성하세요."));
-
-            return callOpenAi(msgs, model, 0.2, 1.0, 512);
+            msgs.add(healInstr);
+            msgs.add("위 지시를 따르고, 미지원 주장을 제거·수정하여 정답을 한국어로 다시 작성하세요.");
+            return callChatModel(new java.util.ArrayList<>(msgs));
         } catch (Exception e) {
             log.warn("[Self-Healing] correctiveRegenerate failed: {}", e.toString());
             return draft; // 실패 시 기존 초안 유지

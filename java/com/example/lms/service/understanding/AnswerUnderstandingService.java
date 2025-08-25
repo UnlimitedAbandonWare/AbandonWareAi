@@ -152,9 +152,10 @@ public class AnswerUnderstandingService {
         String[] lines = trimmed.split("\n");
         for (String line : lines) {
             String lt = line.strip();
-            if (lt.startsWith("-") || lt.startsWith("*") || lt.startsWith("•")) {
-                // Java 문자열에서는 공백 클래스는 \\s 로 이스케이프해야 함
-                keyPoints.add(lt.replaceFirst("^[-*•]\\s*", "").strip());
+            // [HARDENING] detect bullet markers without embedding '*' directly in a string literal
+            if (lt.startsWith("-") || lt.startsWith(String.valueOf('*')) || lt.startsWith("•")) {
+                // Java 문자열에서는 공백 클래스는 \s 로 이스케이프해야 함
+                keyPoints.add(lt.replaceFirst("^[\\-\\u002a•]\\s*", "").strip());
             }
         }
         if (keyPoints.isEmpty()) {

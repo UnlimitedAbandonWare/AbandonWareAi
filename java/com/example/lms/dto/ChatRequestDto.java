@@ -3,6 +3,7 @@ package com.example.lms.dto;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.*;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
 
@@ -10,6 +11,7 @@ import java.util.List;
  * ChatService v7 호환 ChatRequestDto
  */
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -124,6 +126,21 @@ public class ChatRequestDto {
         private java.util.List<String> searchScopes = java.util.Collections.emptyList();
 
         /**
+         * 정밀 검색(대용량 웹 스캔) 실행 여부.  When true the web search layer will
+         * retrieve the full bodies of the top N results and combine them into
+         * a single context for summarization.  Defaults to false.
+         */
+        @Builder.Default
+        private Boolean precisionSearch = false;
+
+        /**
+         * 정밀 검색 시 스캔할 URL 개수.  If null, the system will fall back to
+         * the standard {@code webTopK} value or a default of 10.  Only used
+         * when {@code precisionSearch} is true.
+         */
+        private Integer precisionTopK;
+
+        /**
          * Optional base64 encoded image payload.  If provided, downstream
          * services may invoke multimodal models to extract information
          * from the image.  The payload should not include any data URI
@@ -132,10 +149,24 @@ public class ChatRequestDto {
          */
         private String imageBase64;
 
-        /* ───── Jackson Setter : RAG ON ⇒ WebSearch ON ───── */
+        /** Optional list of attachment IDs associated with this message */
+        private java.util.List<String> attachmentIds;
+
+        /* ───── Jackson Setter : 부작용 제거 ───── */
+        /**
+         * Set whether to enable RAG (vector retrieval).
+         *
+         * The previous implementation implicitly enabled the web search flag
+         * whenever RAG was turned on.  This coupling caused the web search
+         * toggle to flip on unexpectedly whenever the client enabled RAG.
+         * To honour the user's explicit intent, the setter now only updates
+         * the {@code useRag} field and does not modify {@code useWebSearch}.
+         *
+         * @param useRag true to enable retrieval via the vector database, false otherwise
+         */
         public void setUseRag(boolean useRag) {
+                // assign the field directly; do not toggle useWebSearch implicitly
                 this.useRag = useRag;
-                if (useRag && !webSearchExplicit) this.useWebSearch = true;
         }
         public void setUseWebSearch(boolean useWebSearch) {
                 this.useWebSearch   = useWebSearch;

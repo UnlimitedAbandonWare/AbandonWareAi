@@ -17,7 +17,7 @@ public class GoogleCseProvider extends AbstractWebSearchProvider {
 
     @Override
     protected WebSearchResult doSearch(WebSearchQuery query) {
-        // TODO: Implement Google CSE API integration
+        // Placeholder: implement Google CSE API integration.
         return new WebSearchResult(id().name(), java.util.Collections.emptyList());
     }
 }

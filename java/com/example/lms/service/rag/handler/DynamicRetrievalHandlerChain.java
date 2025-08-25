@@ -70,7 +70,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
                 String hist = memoryHandler.loadForSession(sessionId);
                 if (hist != null && !hist.isBlank()) {
                     accumulator.add(Content.from(hist));
-                    if (accumulator.size() >= topK) return;
+                    // Early‑cut removed: do not return when reaching topK at this stage
                 }
             } catch (Exception e) {
                 log.warn("[Memory] {}", e.toString());
@@ -88,7 +88,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (needSelf) {
             try {
                 add(accumulator, selfAsk.retrieve(query));
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: continue gathering evidence instead of returning
             } catch (Exception e) {
                 log.warn("[SelfAsk] {}", e.toString());
             }
@@ -103,7 +103,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (needAnalyze) {
             try {
                 add(accumulator, analyze.retrieve(query));
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: continue gathering evidence instead of returning
             } catch (Exception e) {
                 log.warn("[Analyze] {}", e.toString());
             }
@@ -112,7 +112,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (adaptiveWeb != null) {
             try {
                 adaptiveWeb.handle(query, accumulator);
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: do not return here; allow subsequent stages
             } catch (Exception e) {
                 log.warn("[AdaptiveWeb] {}", e.toString());
             }
@@ -137,7 +137,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         }
         log.debug("[ORDER_DECISION] plan={} reason={}", plan, "heuristic");
         for (Source src : plan) {
-            if (accumulator.size() >= topK) break;
+            // Early‑cut removed: do not break when accumulator reaches topK; continue through all sources
             try {
                 switch (src) {
                     case WEB -> {
@@ -153,7 +153,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
                         }
                     }
                 }
-                if (accumulator.size() >= topK) break;
+                // Early‑cut removed: do not break mid‑plan; allow all sources to contribute
             } catch (Exception e) {
                 log.warn("[{}] fail-soft: {}", src, e.toString());
             }
@@ -191,4 +191,17 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
             return java.util.Map.of();
         }
     }
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = original.metadata() != null
+            ? original.metadata()
+            : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        // Directly construct a new Query with the updated metadata.  LangChain4j 1.0.x
+        // exposes a public constructor taking text and metadata, so we avoid the deprecated
+        // builder API and any reflective fallback.
+        return new dev.langchain4j.rag.query.Query(original.text(), md);
+    }
+
 }

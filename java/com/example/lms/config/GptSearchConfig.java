@@ -2,20 +2,24 @@ package com.example.lms.config;
 
 import com.example.lms.gptsearch.decision.SearchDecisionService;
 import com.example.lms.gptsearch.web.WebSearchProvider;
-import com.example.lms.gptsearch.web.impl.BingProvider;
-import com.example.lms.gptsearch.web.impl.TavilyProvider;
-import com.example.lms.gptsearch.web.impl.GoogleCseProvider;
-import com.example.lms.gptsearch.web.impl.SerpApiProvider;
 import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
- * Configuration class for the GPT Web Search integration.  Declares beans
- * for the search decision engine, web providers and the adaptive search
- * handler.  Providers that require API keys can be conditionally
- * instantiated using environment variables or application properties.
+ * GPT Web Search 통합 설정.
+ * - SearchDecisionService: 검색 여부·전략 결정
+ * - webSearchProviders: 컨텍스트에 등록된 모든 WebSearchProvider를 선택적으로 수집
+ * - AdaptiveWebSearchHandler: 결정 서비스 + 공급자 목록 주입
+ *
+ * 주의:
+ * - Bing/Tavily/SerpAPI/GoogleCSE/Naver 등 구체 Provider 빈은 @Component 또는
+ *   별도 @Bean/@ConditionalOnProperty 등으로 정의돼 있어야 수집됩니다.
+ * - 어떤 Provider가 없어도 여기서 오류가 나지 않도록 선택 수집(ObjectProvider)만 사용합니다.
  */
 @Configuration
 public class GptSearchConfig {
@@ -25,22 +29,22 @@ public class GptSearchConfig {
         return new SearchDecisionService();
     }
 
+    /**
+     * 컨테이너에 등록된 모든 WebSearchProvider를 "있는 것만" 모아 반환합니다.
+     * (예: NaverProvider만 있어도 OK, BingProvider가 없어도 에러 없음)
+     */
     @Bean
-    public List<WebSearchProvider> webSearchProviders() {
-        // Assemble the default provider list.  Real implementations would
-        // check for configured API keys and replace missing ones with the
-        // MockProvider.
-        return java.util.List.of(
-                new BingProvider(),
-                new TavilyProvider(),
-                new GoogleCseProvider(),
-                new SerpApiProvider()
-        );
+    public List<WebSearchProvider> webSearchProviders(ObjectProvider<WebSearchProvider> providers) {
+        return providers.orderedStream().collect(Collectors.toList());
     }
 
     @Bean
-    public AdaptiveWebSearchHandler adaptiveWebSearchHandler(SearchDecisionService decisionService,
-                                                             List<WebSearchProvider> webSearchProviders) {
-        return new AdaptiveWebSearchHandler(decisionService, webSearchProviders);
+    public AdaptiveWebSearchHandler adaptiveWebSearchHandler(
+            SearchDecisionService decisionService,
+            List<WebSearchProvider> webSearchProviders,
+            com.example.lms.service.rag.extract.PageContentScraper scraper,
+            com.example.lms.service.rag.RelevanceScoringService relevanceScoringService
+    ) {
+        return new AdaptiveWebSearchHandler(decisionService, webSearchProviders, scraper, relevanceScoringService);
     }
 }

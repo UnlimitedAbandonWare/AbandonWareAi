@@ -15,27 +15,48 @@ public class ModelConfig {
     // application.properties 의 openai.api.key 우선, 없으면 환경변수 OPENAI_API_KEY 사용
     @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String apiKey;
-    @Value("${router.moe.mini:gpt-4o-mini}")
+    // Centralised model names are provided via openai.chat.model.default and openai.chat.model.moe.
+    // Avoid hard‑coding fallback values here; defaults are defined in application.properties.
+    @Value("${openai.chat.model.default:${openai.model.moe:${langchain4j.openai.chat-model.model-name:gpt-4o-mini}}}")
     private String miniModelName;
-
-    @Value("${router.moe.high:gpt-4o}")
+    @Value("${openai.chat.model.moe:${openai.model.moe:${langchain4j.openai.chat-model.model-name:gpt-4o-mini}}}")
+    private String moeModel;
+    @Value("${openai.chat.model.moe}")
     private String highModelName;
+
+    @Value("${local-llm.enabled:false}")
+    private boolean localEnabled;
+
+    @Value("${local-llm.base-url:}")
+    private String localBaseUrl;
+
+// import org.springframework.util.StringUtils;
 
     @Bean
     @Qualifier("mini")
-    public ChatModel miniModel() {            // ✅ 반환 타입 변경
-        return OpenAiChatModel.builder()
+    public ChatModel miniModel() {
+        var b = OpenAiChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(miniModelName)
-                .build();
+                .timeout(java.time.Duration.ofSeconds(65));
+
+        if (localEnabled && org.springframework.util.StringUtils.hasText(localBaseUrl)) {
+            b = b.baseUrl(localBaseUrl.trim());
+        }
+
+        return b.build();
     }
 
     @Bean
     @Qualifier("high")
-    public ChatModel highModel() {            // ✅ 반환 타입 변경
-        return OpenAiChatModel.builder()
+    public ChatModel highModel() {
+        var b = OpenAiChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(highModelName)
-                .build();
+                .timeout(java.time.Duration.ofSeconds(65));
+        if (localEnabled && org.springframework.util.StringUtils.hasText(localBaseUrl)) {
+            b = b.baseUrl(localBaseUrl.trim());
+        }
+        return b.build();
     }
 }

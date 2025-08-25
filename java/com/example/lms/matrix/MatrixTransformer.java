@@ -299,7 +299,11 @@ public class MatrixTransformer {
      *  are replaced with spaces, and tokens of length one are dropped. */
     private static Set<String> toTokens(String s) {
         return Arrays.stream(s.toLowerCase(Locale.ROOT)
-                        .replaceAll("[^\\p{IsAlphabetic}\\p{IsDigit}\\s]", " ")
+                        // Preserve plus (+), hyphens/dashes, apostrophes and slashes when tokenizing.
+                        // We replace all other punctuation with a space before splitting.  Note: \p{L} matches
+                        // any kind of letter from any language, and \p{N} matches any kind of digit.  Slash, hyphen
+                        // variations and apostrophes are kept to retain compound names like "a/b+c", "jean-paul's".
+                        .replaceAll("[^\\p{L}\\p{N}\\s/\\-+'’‐–—]+", " ")
                         .split("\\s+"))
                 .filter(t -> t.length() > 1)
                 .limit(60)

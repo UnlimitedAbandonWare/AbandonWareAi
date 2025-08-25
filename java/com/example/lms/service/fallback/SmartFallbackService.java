@@ -1,10 +1,9 @@
 
         package com.example.lms.service.fallback;
 
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -25,7 +24,13 @@ import com.example.lms.service.subject.SubjectResolver;
 @RequiredArgsConstructor
 public class SmartFallbackService {
 
-    private final ObjectProvider<OpenAiService> openAiProvider;
+    /**
+     * Lazily provide a ChatModel for fallback generation.  We use an
+     * ObjectProvider so that the fallback service does not eagerly
+     * initialize an expensive LLM client on startup.  When no ChatModel
+     * is available, the service falls back to a template‑based response.
+     */
+    private final ObjectProvider<ChatModel> chatModelProvider;
 
     // Knowledge gap logging dependencies.  These are optional and will be null if the corresponding
     // beans are not defined in the Spring context.  They allow the fallback service to record
@@ -36,7 +41,7 @@ public class SmartFallbackService {
 
     @Value("${fallback.enabled:true}")
     private boolean enabled;
-    @Value("${fallback.model:gpt-4o-mini}")
+    @Value("${fallback.model:gpt-5-mini}")
     private String model;
     @Value("${fallback.temperature:0.2}")
     private double temperature;
@@ -63,8 +68,8 @@ public class SmartFallbackService {
 
         List<String> candidates = FallbackHeuristics.suggestAlternatives(det.domain(), det.wrongTerm());
 
-        OpenAiService openAi = openAiProvider.getIfAvailable();
-        if (openAi == null) return templateFallback(det, candidates, userQuery); // 안전 템플릿
+        ChatModel llm = chatModelProvider.getIfAvailable();
+        if (llm == null) return templateFallback(det, candidates, userQuery); // 안전 템플릿
 
         String system = """
                 너는 컨텍스트가 부족한 상황에서 사용자 의도를 정중히 바로잡는 한국어 어시스턴트다.
@@ -92,22 +97,12 @@ public class SmartFallbackService {
         );
 
         try {
-            ChatCompletionRequest req = ChatCompletionRequest.builder()
-                    .model(model)
-                    .messages(List.of(
-                            new ChatMessage(ChatMessageRole.SYSTEM.value(), system),
-                            new ChatMessage(ChatMessageRole.USER.value(), user)
-                    ))
-                    .temperature(temperature)
-                    .topP(topP)
-                    .maxTokens(maxTokens)
-                    .build();
-
-            String out = openAi.createChatCompletion(req)
-                    .getChoices().get(0).getMessage().getContent();
+            String prompt = system + "\n" + user;
+            ChatResponse res = llm.chat(UserMessage.from(prompt));
+            String out = (res == null || res.aiMessage() == null) ? null : res.aiMessage().text();
             return (out == null || out.isBlank()) ? templateFallback(det, candidates, userQuery) : out.trim();
         } catch (Exception e) {
-            log.debug("[SmartFallback] OpenAI 호출 실패 → 템플릿 폴백 사용: {}", e.toString());
+            log.debug("[SmartFallback] ChatModel 호출 실패 → 템플릿 폴백 사용: {}", e.toString());
             return templateFallback(det, candidates, userQuery);
         }
     }

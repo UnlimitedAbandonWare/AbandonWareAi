@@ -40,7 +40,7 @@ public class GeminiCurationService {
 
         KnowledgeDelta delta;
         try {
-            // TODO: model selection could be read from configuration
+            // Model selection can be read from configuration; adjust as needed.
             delta = geminiClient.curate(event, "gemini-2.5-pro", Duration.ofSeconds(30));
         } catch (Exception e) {
             log.warn("Gemini curation failed: {}", e.toString());

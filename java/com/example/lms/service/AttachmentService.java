@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class AttachmentService {
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.List<String>> sessionIndex = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final LocalFileStorageService storage;
     /** In-memory 저장소로 첨부 메타를 보관합니다. */
@@ -69,4 +70,30 @@ public class AttachmentService {
             // 실제 파일 삭제는 필요 시 LocalFileStorageService에 메서드를 추가하여 호출할 수 있습니다.
         }
     }
+
+    public java.util.List<com.example.lms.dto.AttachmentDto> saveAll(java.util.List<org.springframework.web.multipart.MultipartFile> files, String sessionId) {
+        java.util.List<com.example.lms.dto.AttachmentDto> dtos = saveAll(files);
+        if (sessionId != null && !sessionId.isBlank()) {
+            sessionIndex.computeIfAbsent(sessionId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                    // AttachmentDto는 record → accessor 는 id()
+                    .addAll(dtos.stream().map(com.example.lms.dto.AttachmentDto::id).toList());
+        }
+        return dtos;
+    }
+
+    public java.util.List<com.example.lms.dto.AttachmentDto> findBySession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return java.util.List.of();
+        java.util.List<String> ids = sessionIndex.getOrDefault(sessionId, java.util.List.of());
+        // ConcurrentHashMap does not provide a snapshot() method.  Make a shallow copy
+        // to avoid concurrent modification issues while iterating.  Using a plain
+        // HashMap preserves current entries at the point of invocation.
+        java.util.Map<String, com.example.lms.dto.AttachmentDto> map = new java.util.HashMap<>(repo);
+        java.util.List<com.example.lms.dto.AttachmentDto> out = new java.util.ArrayList<>();
+        for (String id : ids) {
+            com.example.lms.dto.AttachmentDto dto = map.get(id);
+            if (dto != null) out.add(dto);
+        }
+        return out;
+    }
+    
 }

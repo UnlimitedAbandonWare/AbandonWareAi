@@ -23,12 +23,9 @@ public enum TranslationRoute {
     GOOGLE_TRANSLATE,
 
     /* ──────────────── 레거시 호환 ──────────────── */
-    /** @deprecated 이전 버전 호환용 */
-    MEM,
-    /** @deprecated 이전 버전 호환용 */
-    GT,
-    /** @deprecated 이전 버전 호환용 */
-    GPT,
+    @Deprecated MEM,
+    @Deprecated GT,
+    @Deprecated GPT,
 
     /* ──────────────── 새로 추가 ──────────────── */
     /** 모든 외부 번역 시도가 실패했을 때 */

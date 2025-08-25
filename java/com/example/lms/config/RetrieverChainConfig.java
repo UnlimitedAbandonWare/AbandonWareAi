@@ -14,6 +14,8 @@ import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.service.rag.handler.EvidenceRepairHandler;
 import com.example.lms.service.rag.handler.MemoryHandler;
 import com.example.lms.service.rag.handler.DynamicRetrievalHandlerChain;
+import com.example.lms.service.rag.handler.DefaultRetrievalHandlerChain;
+import com.example.lms.location.LocationService;
 import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
 import com.example.lms.service.rag.QueryComplexityGate;
 import com.example.lms.service.rag.handler.KnowledgeGraphHandler;
@@ -36,9 +38,17 @@ public class RetrieverChainConfig {
             QueryComplexityGate gate,
             KnowledgeGraphHandler kg,
             RetrievalOrderService orderService,
-            SseEventPublisher sse) {
-        // Build a dynamic retrieval chain that decides the order of Web, Vector and KG sources
-        return new DynamicRetrievalHandlerChain(
+            SseEventPublisher sse,
+            LocationService locationService) {
+        /*
+         * Construct a fixed-order retrieval chain with an additional location-aware
+         * short-circuit stage.  The chain executes the following steps:
+         *   Memory → Self‑Ask → Analyze → Location detection → Adaptive Web → Web → Vector → Repair
+         * When the location service detects a location-related intent the chain returns
+         * immediately without performing any web or vector retrieval.  This allows
+         * downstream chat logic to handle location queries via specialized services.
+         */
+        return new DefaultRetrievalHandlerChain(
                 memoryHandler,
                 selfAsk,
                 analyze,
@@ -47,9 +57,7 @@ public class RetrieverChainConfig {
                 rag,
                 evidenceRepairHandler,
                 gate,
-                kg,
-                orderService,
-                sse
+                locationService
         );
     }
 

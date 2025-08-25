@@ -83,6 +83,74 @@ public class PromptBuilder {
             if (StringUtils.hasText(ctx.history())) {
                 sb.append(HIS_PREFIX.formatted(ctx.history()));
             }
+            // ### MUST_INCLUDE: extract up to four unique non‑stopword tokens from web and RAG evidence.
+            if (ctx != null) {
+            // Optional location context.  When present this section provides
+            // the user's last known latitude/longitude along with the reported
+            // accuracy and timestamp.  Downstream models may use this information
+            // to ground location‑aware queries such as "나 지금 어디야?".
+            if (ctx.location() != null || ctx.locationAddress() != null) {
+                sb.append("\n### LOCATION CONTEXT\n");
+                if (ctx.location() != null) {
+                    var loc = ctx.location();
+                    sb.append("- lat: ").append(loc.lat())
+                            .append(", lng: ").append(loc.lng())
+                            .append(", accuracy(m): ").append(loc.accuracy())
+                            .append('\n');
+                    sb.append("- capturedAt: ").append(loc.capturedAt()).append('\n');
+                }
+                if (ctx.locationAddress() != null && !ctx.locationAddress().isBlank()) {
+                    sb.append("- address: ").append(ctx.locationAddress()).append('\n');
+                }
+            }
+                java.util.LinkedHashSet<String> must = new java.util.LinkedHashSet<>();
+                if (ctx.web() != null) {
+                    for (var c : ctx.web()) {
+                        if (c == null) continue;
+                        String text = null;
+                        try {
+                            var seg = c.textSegment();
+                            if (seg != null) text = seg.text();
+                        } catch (Exception ignore) {}
+                        if (text == null || text.isBlank()) {
+                            text = c.toString();
+                        }
+                        if (text != null) {
+                            String[] arr = text.split("[\\s,;:/()\\[\\]{}<>|]+");
+                            for (String w : arr) {
+                                if (w != null && w.length() >= 2 && !w.matches("(?i)the|and|or|with|of")) {
+                                    must.add(w);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (ctx.rag() != null) {
+                    for (var c : ctx.rag()) {
+                        if (c == null) continue;
+                        String text = null;
+                        try {
+                            var seg = c.textSegment();
+                            if (seg != null) text = seg.text();
+                        } catch (Exception ignore) {}
+                        if (text == null || text.isBlank()) {
+                            text = c.toString();
+                        }
+                        if (text != null) {
+                            String[] arr = text.split("[\\s,;:/()\\[\\]{}<>|]+");
+                            for (String w : arr) {
+                                if (w != null && w.length() >= 2 && !w.matches("(?i)the|and|or|with|of")) {
+                                    must.add(w);
+                                }
+                            }
+                        }
+                    }
+                }
+                java.util.List<String> mustShort = must.stream().limit(4).toList();
+                if (!mustShort.isEmpty()) {
+                    sb.append("### MUST_INCLUDE\n- ").append(String.join(", ", mustShort)).append("\n\n");
+                }
+            }
         }
         return sb.toString();
     }
@@ -179,8 +247,12 @@ public class PromptBuilder {
                 });
             }
 
-            // 공통 보수적 가드
-            sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
+            // Evidence-aware guidance
+            if ((ctx != null) && ((ctx.web() != null && !ctx.web().isEmpty()) || (ctx.rag() != null && !ctx.rag().isEmpty()))) {
+                sys.append("- When uncertain but evidence exists, list candidate pairings with citations; do NOT say '정보 없음'.\n");
+            } else {
+                sys.append("- If no evidence is available, reply '정보 없음'.\n");
+            }
             sys.append("- If evidence is weak but related to the same subject, provide a conservative summary and add a short 'clarify' question instead of refusing outright.\n");
 
             // ▼ Verbosity/Output policy (섹션/최소길이/상세도 강제)
@@ -208,21 +280,105 @@ public class PromptBuilder {
             String cite = Objects.toString(ctx.citationStyle(), "inline");
             sys.append("- Citation style: ").append(cite).append('\n');
 
-            // 보수적 가드 재확인
-            sys.append("- Answer conservatively; prefer synergy evidence; if unsure, say '정보 없음'.\n");
+            // Evidence-aware guidance reinforcement
+            if ((ctx != null) && ((ctx.web() != null && !ctx.web().isEmpty()) || (ctx.rag() != null && !ctx.rag().isEmpty()))) {
+                sys.append("- When uncertain but evidence exists, list candidate pairings with citations; do NOT say '정보 없음'.\n");
+            } else {
+                sys.append("- If no evidence is available, reply '정보 없음'.\n");
+            }
         }
         return sys.toString();
     }
 
     private static String join(List<Content> list) {
-        return list.stream()
-                .map(c -> {
-                    var seg = c.textSegment();
-                    return (seg != null && seg.text() != null && !seg.text().isBlank())
-                            ? seg.text()
-                            : c.toString();
-                })
-                .collect(Collectors.joining("\n"));
+        if (list == null || list.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (Content c : list) {
+            if (c == null) continue;
+            String text;
+            // 한 번만 생성(재할당 금지) → 람다 캡처 오류 방지
+            final java.util.Map<String, Object> md = new java.util.HashMap<>();
+            try {
+                var seg = c.textSegment();
+                if (seg != null) {
+                    text = (seg.text() != null && !seg.text().isBlank()) ? seg.text() : null;
+                    try {
+                        Object m = seg.metadata();
+                        if (m instanceof java.util.Map<?, ?> mm) {
+                            mm.forEach((k, v) -> md.put(String.valueOf(k), v));
+                        } else if (m != null) {
+                            try {
+                                var clazz = m.getClass();
+                                java.lang.reflect.Method asMap = null;
+                                try { asMap = clazz.getMethod("asMap"); } catch (NoSuchMethodException ignore) {}
+                                if (asMap == null) { try { asMap = clazz.getMethod("map"); } catch (NoSuchMethodException ignore) {} }
+                                if (asMap != null) {
+                                    Object r = asMap.invoke(m);
+                                    if (r instanceof java.util.Map<?, ?> mm2) {
+                                        mm2.forEach((k, v) -> md.put(String.valueOf(k), v));
+                                    }
+                                }
+                            } catch (Exception ignore) {}
+                        }
+                    } catch (Exception ignore) {
+                        // ignore metadata extraction errors
+                    }
+                } else {
+                    text = null;
+                }
+            } catch (Exception e) {
+                text = null;
+            }
+            if (text == null || text.isBlank()) {
+                text = c.toString();
+            }
+            // TextSegment에서 못 얻었으면 Content 메타데이터에서 보충
+            if (md.isEmpty()) {
+                try {
+                    Object m2 = c.metadata();
+                    if (m2 instanceof java.util.Map<?, ?> mm2) {
+                        mm2.forEach((k, v) -> md.put(String.valueOf(k), v));
+                    } else if (m2 != null) {
+                        try {
+                            var clazz = m2.getClass();
+                            java.lang.reflect.Method asMap = null;
+                            try { asMap = clazz.getMethod("asMap"); } catch (NoSuchMethodException ignore) {}
+                            if (asMap == null) { try { asMap = clazz.getMethod("map"); } catch (NoSuchMethodException ignore) {} }
+                            if (asMap != null) {
+                                Object r = asMap.invoke(m2);
+                                if (r instanceof java.util.Map<?, ?> mm3) {
+                                    mm3.forEach((k, v) -> md.put(String.valueOf(k), v));
+                                }
+                            }
+                        } catch (Exception ignore) {}
+                    }
+                } catch (Exception ignore) {}
+            }
+            java.util.List<String> parts = new java.util.ArrayList<>();
+            if (!md.isEmpty()) {
+                Object t = md.get("title");
+                Object p = md.get("provider");
+                Object u = md.get("url");
+                Object ts = md.get("timestamp");
+                if (t != null && !t.toString().isBlank()) parts.add(t.toString());
+                if (p != null && !p.toString().isBlank()) parts.add(p.toString());
+                if (u != null && !u.toString().isBlank()) parts.add(u.toString());
+                if (ts != null && !ts.toString().isBlank()) parts.add(ts.toString());
+            }
+            String header = parts.isEmpty() ? null : "[" + String.join(" | ", parts) + "]";
+            if (sb.length() > 0) sb.append("\n");
+            // Prefix each entry with a dash for readability
+            sb.append("- ");
+            if (header != null) {
+                sb.append(header).append("\n  ");
+            }
+            sb.append(text);
+            count++;
+        }
+        return sb.toString();
     }
 
     // [NEW] 후속질문 간단 감지: 한국어/영어 패턴

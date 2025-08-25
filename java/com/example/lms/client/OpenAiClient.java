@@ -3,7 +3,10 @@ package com.example.lms.client;
 import com.example.lms.client.OpenAiModelDto;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.web.reactive.function.client.WebClient;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.http.*;
 import java.util.List;
 import java.util.Collections;
@@ -14,16 +17,16 @@ import java.util.Collections;
 @Component
 public class OpenAiClient {
 
-    private final RestTemplate restTemplate;
+    private final WebClient openaiWebClient;
     private final String apiKey;
     private final String baseUrl;
 
     public OpenAiClient(
-            RestTemplate restTemplate,
+            @Qualifier("openaiWebClient") WebClient openaiWebClient,
             @Value("${openai.api.key}") String apiKey,
             @Value("${openai.api.base-url:https://api.openai.com}") String baseUrl
     ) {
-        this.restTemplate = restTemplate;
+        this.openaiWebClient = openaiWebClient;
         this.apiKey = apiKey;
         this.baseUrl = baseUrl;
     }
@@ -33,23 +36,35 @@ public class OpenAiClient {
      */
     public List<OpenAiModelDto> listModels() {
         String url = baseUrl + "/v1/models";
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(apiKey);
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        HttpEntity<Void> request = new HttpEntity<>(headers);
         try {
-            ResponseEntity<ModelsResponse> resp = restTemplate.exchange(
-                    url, HttpMethod.GET, request, ModelsResponse.class
-            );
-            if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null) {
-                return resp.getBody().getData();
+            String body = openaiWebClient.get()
+                    .uri(url)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+            if (body == null || body.isBlank()) {
+                return Collections.emptyList();
             }
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(body);
+            JsonNode data = root.path("data");
+            if (data == null || !data.isArray()) {
+                return Collections.emptyList();
+            }
+            java.util.List<OpenAiModelDto> out = new java.util.ArrayList<>();
+            for (JsonNode n : data) {
+                OpenAiModelDto dto = new OpenAiModelDto();
+                dto.setId(n.path("id").asText(""));
+                dto.setOwnedBy(n.path("owned_by").asText(""));
+                dto.setOwnedBy(n.path("owned_by").asText(""));
+                out.add(dto);
+            }
+            return out;
         } catch (Exception e) {
-            // TODO: 로깅 및 에러 처리
-            e.printStackTrace();
+            return Collections.emptyList();
         }
-        return Collections.emptyList();
     }
 
     // 내부 DTO: /v1/models 응답 래핑

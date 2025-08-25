@@ -47,9 +47,19 @@ public class AnalyzeWebSearchRetriever implements ContentRetriever {
         }
 
         // ...
-        // 1) 확장 검색어 생성
+        // 1) 확장 검색어 생성 (GENERAL에서 다양성 확대)
+        String domain;
+        try {
+            // 임시: GameDomainDetector를 직접 생성하여 도메인 추정
+            domain = new com.example.lms.service.rag.detector.GameDomainDetector().detect(originalQuery);
+        } catch (Exception e) {
+            domain = "GENERAL";
+        }
+        boolean isGeneral = "GENERAL".equalsIgnoreCase(domain);
+        int cap = isGeneral ? 6 : 4;
+        double jaccard = isGeneral ? 0.60 : 0.80;
         List<String> queriesToSearch = com.example.lms.search.QueryHygieneFilter
-                .sanitize(createExpandedQueries(originalQuery), /*max*/4, /*minSim*/0.80);
+                .sanitize(createExpandedQueries(originalQuery), cap, jaccard);
 
 // 2. 병렬 스트림으로 모든 검색어를 동시에 실행
         List<String> mergedSnippets = queriesToSearch.parallelStream()

@@ -10,7 +10,8 @@ import java.util.Map;
  * objects to be attached to an event.  A small helper class {@link Payload}
  * provides a fluent API for building a map payload.
  */
-@Component // <-- 이 어노테이션을 추가하세요.
+// NOTE: 인터페이스에는 빈 등록 어노테이션을 두지 않습니다.
+// 구현체에 @Component/@Primary 어노테이션을 부여하여 Spring 빈으로 등록합니다.
 public interface SseEventPublisher {
     /**
      * Emit an SSE with a given type and payload.  The interpretation of
