@@ -15,10 +15,14 @@ import java.util.List;
  * A cross‑encoder reranker backed by a local ONNX runtime.
  * Bean registration is handled centrally in RerankerConfig.
  */
-@RequiredArgsConstructor
+
 public class OnnxCrossEncoderReranker implements CrossEncoderReranker {
 
     private final OnnxRuntimeService onnx;
+
+    public OnnxCrossEncoderReranker(OnnxRuntimeService onnx) {
+        this.onnx = onnx;
+    }
 
     /*
      * ---------------------------- Internal API (AbandonWare) ----------------------------
@@ -30,7 +34,9 @@ public class OnnxCrossEncoderReranker implements CrossEncoderReranker {
             return Collections.emptyList();
         }
         int n = candidates.size();
-        int k = Math.max(1, Math.min(topN, n));
+        // 2차 안전 컷(너무 큰 N 방지; 24~32 추천)
+        int hardCap = 24;
+        int k = Math.max(1, Math.min(Math.min(topN, hardCap), n));
         // Extract plain text from each candidate
         String[] docs = new String[n];
         for (int i = 0; i < n; i++) {
@@ -43,11 +49,21 @@ public class OnnxCrossEncoderReranker implements CrossEncoderReranker {
             }
             docs[i] = (text == null ? "" : text);
         }
-        float[][] scores = onnx.predict(new String[]{query}, docs);
-        float[] row = scores.length > 0 ? scores[0] : new float[n];
+        // Compute similarity score for each candidate using the new scorePair API. When the
+        // ONNX model is unavailable the service will fall back to lexical Jaccard similarity.
+        double[] row = new double[n];
+        boolean parallel = Boolean.getBoolean("abandonware.reranker.onnx.parallel"); // JVM 옵션 토글 전용
+        if (parallel && n >= 16) {
+            java.util.stream.IntStream.range(0, n).parallel().forEach(i -> row[i] = onnx.scorePair(query, docs[i]));
+        } else {
+            for (int i = 0; i < n; i++) {
+                row[i] = onnx.scorePair(query, docs[i]);
+            }
+        }
+        // Sort indices based on descending score
         List<Integer> indices = new ArrayList<>(n);
         for (int i = 0; i < n; i++) indices.add(i);
-        indices.sort((i1, i2) -> Float.compare(row[i2], row[i1]));
+        indices.sort((i1, i2) -> Double.compare(row[i2], row[i1]));
         List<Content> result = new ArrayList<>(k);
         for (int i = 0; i < k; i++) {
             result.add(candidates.get(indices.get(i)));
@@ -76,17 +92,27 @@ public class OnnxCrossEncoderReranker implements CrossEncoderReranker {
             return Collections.emptyList();
         }
         int n = documents.size();
-        int k = Math.max(1, Math.min(topK, n));
+        // 2차 안전 컷(너무 큰 N 방지; 24~32 추천)
+        int hardCap = 24;
+        int k = Math.max(1, Math.min(Math.min(topK, hardCap), n));
         // Build a list of document texts
         String[] docs = new String[n];
         for (int i = 0; i < n; i++) {
             docs[i] = extractText(documents.get(i));
         }
-        float[][] scores = onnx.predict(new String[]{query}, docs);
-        float[] row = scores.length > 0 ? scores[0] : new float[n];
+        // Compute similarity score for each candidate using the scorePair API
+        double[] row = new double[n];
+        boolean parallel = Boolean.getBoolean("abandonware.reranker.onnx.parallel"); // JVM 옵션 토글 전용
+        if (parallel && n >= 16) {
+            java.util.stream.IntStream.range(0, n).parallel().forEach(i -> row[i] = onnx.scorePair(query, docs[i]));
+        } else {
+            for (int i = 0; i < n; i++) {
+                row[i] = onnx.scorePair(query, docs[i]);
+            }
+        }
         List<Integer> indices = new ArrayList<>(n);
         for (int i = 0; i < n; i++) indices.add(i);
-        indices.sort((i1, i2) -> Float.compare(row[i2], row[i1]));
+        indices.sort((i1, i2) -> Double.compare(row[i2], row[i1]));
         List<Document> result = new ArrayList<>(k);
         for (int i = 0; i < k; i++) {
             result.add(documents.get(indices.get(i)));

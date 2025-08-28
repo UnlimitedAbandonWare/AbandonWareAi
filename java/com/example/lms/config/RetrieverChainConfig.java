@@ -14,6 +14,8 @@ import com.example.lms.service.rag.handler.RetrievalHandler;
 import com.example.lms.service.rag.handler.EvidenceRepairHandler;
 import com.example.lms.service.rag.handler.MemoryHandler;
 import com.example.lms.service.rag.handler.DynamicRetrievalHandlerChain;
+import com.example.lms.service.rag.handler.DefaultRetrievalHandlerChain;
+import com.example.lms.location.LocationService;
 import com.example.lms.integration.handlers.AdaptiveWebSearchHandler;
 import com.example.lms.service.rag.QueryComplexityGate;
 import com.example.lms.service.rag.handler.KnowledgeGraphHandler;
@@ -29,28 +31,44 @@ public class RetrieverChainConfig {
             MemoryHandler memoryHandler,
             SelfAskWebSearchRetriever selfAsk,
             AnalyzeWebSearchRetriever analyze,
-            AdaptiveWebSearchHandler adaptiveWeb,
             WebSearchRetriever web,
             LangChainRAGService rag,
             EvidenceRepairHandler evidenceRepairHandler,
             QueryComplexityGate gate,
             KnowledgeGraphHandler kg,
             RetrievalOrderService orderService,
-            SseEventPublisher sse) {
-        // Build a dynamic retrieval chain that decides the order of Web, Vector and KG sources
-        return new DynamicRetrievalHandlerChain(
-                memoryHandler,
-                selfAsk,
-                analyze,
-                adaptiveWeb,
-                web,
-                rag,
-                evidenceRepairHandler,
-                gate,
-                kg,
-                orderService,
-                sse
+            SseEventPublisher sse,
+            LocationService locationService,
+            @Value("${pinecone.index.name:}") String pineconeIndexName,
+            @Value("${router.moe.relief.threshold-tokens:12000}") int thresholdTokens) {
+        /*
+         * Construct a fixed retrieval chain in the required order for MOE evaluation.
+         *
+         * The desired sequence of handlers is:
+         *   SelfAskHandler → AnalyzeHandler → WebHandler → VectorDbHandler
+         * Optionally prefix the chain with a MemoryHandler to load session history
+         * before performing any retrieval.  Each handler is linked via the
+         * responsibility chain pattern using {@link AbstractRetrievalHandler#linkWith}.
+         */
+        // Create individual handlers wrapping the appropriate retrievers.
+        var h1 = new com.example.lms.service.rag.handler.SelfAskHandler(selfAsk);
+        var h2 = new com.example.lms.service.rag.handler.AnalyzeHandler(analyze);
+        var h3 = new com.example.lms.service.rag.handler.WebHandler(web);
+        var h4 = new com.example.lms.service.rag.handler.VectorDbHandler(rag, pineconeIndexName);
+        // Insert a search cost guard between analyze and web to log relief hints when token budget is large.
+        var costGuard = new com.example.lms.service.rag.handler.SearchCostGuardHandler(
+                text -> Math.min(16000, text.length() / 3),
+                thresholdTokens,
+                msg -> org.slf4j.LoggerFactory.getLogger("guard").info(msg)
         );
+
+        // Link handlers: SelfAsk → Analyze → (CostGuard) → Web → Vector.
+        h1.linkWith(h2).linkWith(costGuard).linkWith(h3).linkWith(h4);
+
+
+
+        // Return the head of the chain.  Downstream callers should invoke handle() on this bean.
+        return h1;
     }
 
     /**

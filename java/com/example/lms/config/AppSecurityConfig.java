@@ -78,24 +78,26 @@ public class AppSecurityConfig {
                         .csrfTokenRequestHandler(handler)
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
                 .userDetailsService(customUserDetailsService)
-                .authorizeHttpRequests(auth -> auth
-                        // 필요 시 세부 인가 규칙을 상단에 추가하고, 마지막에 anyRequest().permitAll() 유지
-                        .anyRequest().permitAll())
+                .authorizeHttpRequests(auth -> {
+                    // 필요 시 세부 인가 규칙을 상단에 추가하고, 마지막에 anyRequest().permitAll() 유지
+                    auth.anyRequest().permitAll();
+                })
                 .formLogin(form -> form
                         .loginPage("/login")
                         .loginProcessingUrl("/login")
                         .defaultSuccessUrl("/", true)
                         .permitAll())
                 .rememberMe(rem -> rem
-                        .key("change-this-remember-me-key") // 실제 운영 키로 교체
+                        .key("change-this-remember-me-key") // In production, replace this with a secure remember‑me key
                         .tokenValiditySeconds(24 * 60 * 60)
                         .alwaysRemember(true))
                 .logout(logout -> logout
                         .logoutUrl("/logout")
                         .logoutSuccessUrl("/login?logout")
-                        .permitAll())
-                .requiresChannel(channel -> channel
-                        .anyRequest().requiresSecure()); // 모든 요청 HTTPS 강제
+                        .permitAll());
+                // (dev 전용) HTTP 허용. HTTPS 강제 설정을 비활성화하여 개발 환경에서 http://로 실행될 때 리디렉션이 발생하지 않도록 한다.
+                // .requiresChannel(channel -> channel
+                //         .anyRequest().requiresSecure()); // 모든 요청 HTTPS 강제
 
         return http.build();
     }

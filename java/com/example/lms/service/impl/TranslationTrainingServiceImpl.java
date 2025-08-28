@@ -59,7 +59,7 @@ public class TranslationTrainingServiceImpl implements TranslationTrainingServic
     @Override
     @Transactional
     public int learnFromCorrectedSamples() {
-        // TODO: 사용자가 수정한 번역 샘플을 DB 에서 읽어 규칙화
+        // Implementation placeholder: load user-corrected translation samples from the DB for regularization.
         return 0;
     }
 

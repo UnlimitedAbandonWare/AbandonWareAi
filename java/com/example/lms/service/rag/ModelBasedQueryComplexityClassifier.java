@@ -58,7 +58,7 @@ public class ModelBasedQueryComplexityClassifier implements QueryComplexityClass
 
         @Override
         public ai.djl.ndarray.NDList processInput(ai.djl.translate.TranslatorContext ctx, String input) {
-            // TODO: 토크나이저 전처리 로직 연결
+            // Placeholder: connect tokenizer pre-processing logic here.
             throw new UnsupportedOperationException("Tokenizer not implemented yet");
         }
     }

@@ -10,9 +10,11 @@ import org.springframework.context.annotation.*;
 @Profile("legacy-reranker")
 public class RerankerConfig {
 
-    @Bean
+    @Bean(name = "onnxCrossEncoderRerankerLegacy") // 개선: 혹시 모를 빈 이름 충돌 회피
     @ConditionalOnProperty(name = "abandonware.reranker.backend", havingValue = "onnx-runtime")
-    public CrossEncoderReranker onnxReranker() {
-        return new OnnxCrossEncoderReranker(); // 기존 구현 유지
+    public CrossEncoderReranker onnxReranker(
+            com.example.lms.service.onnx.OnnxRuntimeService onnx // 수정: 필요한 의존성 주입
+    ) {
+        return new com.example.lms.service.onnx.OnnxCrossEncoderReranker(onnx); // 생성자 일치
     }
 }

@@ -17,7 +17,7 @@ public class TavilyProvider extends AbstractWebSearchProvider {
 
     @Override
     protected WebSearchResult doSearch(WebSearchQuery query) {
-        // TODO: Integrate with Tavily API when available
+        // Placeholder: integrate with the Tavily API when available.
         return new WebSearchResult(id().name(), java.util.Collections.emptyList());
     }
 }

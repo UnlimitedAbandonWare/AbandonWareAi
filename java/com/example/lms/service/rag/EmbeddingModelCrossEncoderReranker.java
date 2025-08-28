@@ -90,8 +90,22 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
                 String text = seg.text();
 
                 double sim = cosine(qv, docEmbeddings.get(i).vector()); // ✅ float[] 서명 일치
-                boolean isGeneric = genericClassifier.isGenericText(text);
                 boolean hasSubject = !subject.isBlank() && text.toLowerCase().contains(subject.toLowerCase());
+
+                // 도메인 인식: GENERAL 또는 PRODUCT 는 완화, GENSHIN/EDUCATION 은 기존 유지
+                boolean isGeneral = "GENERAL".equalsIgnoreCase(domain) || "PRODUCT".equalsIgnoreCase(domain);
+                double subjectTerm = isGeneral
+                        ? (hasSubject ? 0.10 : 0.0)      // GENERAL: 미검출 페널티 제거
+                        : (hasSubject ? 0.15 : -0.10);   // 특화 도메인: 완화
+
+                // genericTerm: GENSHIN/EDUCATION 도메인만 페널티 적용
+                double genericTerm;
+                if ("GENSHIN".equalsIgnoreCase(domain) || "EDUCATION".equalsIgnoreCase(domain)) {
+                    boolean isGen = genericClassifier.isGenericText(text, domain);
+                    genericTerm = isGen ? -0.25 : 0.0;
+                } else {
+                    genericTerm = 0.0;
+                }
 
                 // 파트너 추출 → 적응형 궁합 보너스
                 String partner = knowledgeBase.findFirstMentionedEntityExcluding(domain, text, subject).orElse("");
@@ -104,17 +118,13 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
                 if (log.isTraceEnabled()) {
                     log.trace("[Rerank] url={} cred={} decay={}", url, cred, authorityDecayMultiplier);
                 }
-                if (log.isTraceEnabled()) {
-                    log.trace("[Rerank] url={} cred={} decay={}", url, cred, authorityDecayMultiplier);
+
+                double score = (sim + subjectTerm + genericTerm + (synergyBonus * synergyWeight))
+                        * authorityDecayMultiplier;
+
+                if (log.isDebugEnabled()) {
+                    log.debug("[Rerank] domain={} subjectTerm={} genericTerm={} decay={}", domain, subjectTerm, genericTerm, authorityDecayMultiplier);
                 }
-
-                double score = (
-                        sim
-                                + (hasSubject ? 0.15 : -0.20)
-                                + (isGeneric ? -0.25 : 0.0)
-                                + (synergyBonus * synergyWeight)
-                ) * authorityDecayMultiplier;
-
                 scored.add(new ScoredContent(c, score));
             }
 
@@ -183,6 +193,19 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
                 boolean hasSubject = !subject.isBlank() && text.toLowerCase().contains(subject.toLowerCase());
                 double ruleDelta = ruleScorer.deltaForText(text, interactionRules); // 관계 규칙 점수
 
+                // 도메인 인식: GENERAL/PRODUCT 완화
+                boolean isGeneral = "GENERAL".equalsIgnoreCase(domain) || "PRODUCT".equalsIgnoreCase(domain);
+                double subjectTerm = isGeneral
+                        ? (hasSubject ? 0.10 : 0.0)
+                        : (hasSubject ? 0.15 : -0.10);
+                double genericTerm;
+                if ("GENSHIN".equalsIgnoreCase(domain) || "EDUCATION".equalsIgnoreCase(domain)) {
+                    boolean isGen = genericClassifier.isGenericText(text, domain);
+                    genericTerm = isGen ? -0.25 : 0.0;
+                } else {
+                    genericTerm = 0.0;
+                }
+
                 String partner = knowledgeBase.findFirstMentionedEntityExcluding(domain, text, subject).orElse("");
                 double synergyBonus = adaptiveScorer.getSynergyScore(domain, subject, partner);
 
@@ -191,14 +214,12 @@ public class EmbeddingModelCrossEncoderReranker implements CrossEncoderReranker 
                 RerankSourceCredibility cred = authorityScorer.getSourceCredibility(url);
                 double authorityDecayMultiplier = authorityScorer.decayFor(cred);
 
-                double score = (
-                        sim
-                                + (hasSubject ? 0.15 : -0.20)
-                                + (genericClassifier.isGenericText(text) ? -0.25 : 0.0)
-                                + ruleDelta
-                                + (synergyBonus * synergyWeight)
-                ) * authorityDecayMultiplier;
+                double score = (sim + subjectTerm + genericTerm + ruleDelta + (synergyBonus * synergyWeight))
+                        * authorityDecayMultiplier;
 
+                if (log.isDebugEnabled()) {
+                    log.debug("[Rerank] domain={} subjectTerm={} genericTerm={} ruleDelta={} decay={}", domain, subjectTerm, genericTerm, ruleDelta, authorityDecayMultiplier);
+                }
                 scored.add(new SC(c, score));
             }
             scored.sort(Comparator.comparingDouble(SC::s).reversed());

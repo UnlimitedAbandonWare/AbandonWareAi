@@ -16,19 +16,18 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 @Configuration
 public class RerankerConfig {
 
-    /** Embedding 기반 재랭커 (기본값) */
+    /**
+     * Embedding 기반 재랭커 (기본값).  When no other bean of the same name is
+     * defined this bean will be registered.  It does not depend on the
+     * abandonware.reranker.backend property; the backend selection is handled
+     * at runtime by ChatService.
+     */
     @Bean(name = "embeddingCrossEncoderReranker")
-    @Primary
-    @ConditionalOnProperty(
-            prefix = "abandonware.reranker",
-            name = "backend",
-            havingValue = "embedding-model",
-            matchIfMissing = true
-    )
+    @ConditionalOnMissingBean(name = "embeddingCrossEncoderReranker")
     public CrossEncoderReranker embeddingModelCrossEncoderReranker(
             EmbeddingModel embeddingModel,
             KnowledgeBaseService knowledgeBase,
@@ -51,14 +50,20 @@ public class RerankerConfig {
         );
     }
 
-    /** ONNX 기반 재랭커 */
-    @Bean(name = "embeddingCrossEncoderReranker")
-    @ConditionalOnProperty(
-            prefix = "abandonware.reranker",
-            name = "backend",
-            havingValue = "onnx-runtime"
-    )
-    public CrossEncoderReranker onnxCrossEncoderReranker(OnnxRuntimeService onnxRuntimeService) {
-        return new OnnxCrossEncoderReranker(onnxRuntimeService);
+    /**
+     * ONNX 기반 재랭커 빈 정의.  abandonware.reranker.backend 값이
+     * 'onnx-runtime'으로 설정된 경우에만 빈이 등록된다.  실제 사용 여부는
+     * {@link com.example.lms.service.onnx.OnnxRuntimeService#available()} 플래그로 판정하며,
+     * 모델이 준비되지 않은 경우 No‑op 재랭커로 대체된다.
+     */
+    @Bean(name = "onnxCrossEncoderReranker")
+    @ConditionalOnProperty(name = "abandonware.reranker.backend", havingValue = "onnx-runtime")
+    public CrossEncoderReranker onnxCrossEncoderReranker(OnnxRuntimeService onnx) {
+        // When the ONNX runtime reports that no model is available, fall back
+        // to a no‑op implementation.  Otherwise instantiate the ONNX-backed reranker.
+        if (onnx.available()) {
+            return new com.example.lms.service.onnx.OnnxCrossEncoderReranker(onnx);
+        }
+        return new com.example.lms.service.rag.rerank.NoopCrossEncoderReranker();
     }
 }

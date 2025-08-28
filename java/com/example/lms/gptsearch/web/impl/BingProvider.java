@@ -1,6 +1,7 @@
 package com.example.lms.gptsearch.web.impl;
 
 import com.example.lms.gptsearch.web.ProviderId;
+import org.springframework.stereotype.Component;
 import com.example.lms.gptsearch.web.dto.WebSearchQuery;
 import com.example.lms.gptsearch.web.dto.WebSearchResult;
 
@@ -11,6 +12,7 @@ import com.example.lms.gptsearch.web.dto.WebSearchResult;
  * {@link WebSearchResult}.  When no API key is available, the provider
  * should behave like the {@link MockProvider}.
  */
+@Component
 public class BingProvider extends AbstractWebSearchProvider {
     @Override
     public ProviderId id() {
@@ -19,7 +21,7 @@ public class BingProvider extends AbstractWebSearchProvider {
 
     @Override
     protected WebSearchResult doSearch(WebSearchQuery query) {
-        // TODO: Integrate with actual Bing Search API
+        // Placeholder: integrate with the actual Bing Search API.
         return new WebSearchResult(id().name(), java.util.Collections.emptyList());
     }
 }

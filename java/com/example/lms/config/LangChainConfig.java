@@ -1,6 +1,6 @@
 package com.example.lms.config;
 import lombok.extern.slf4j.Slf4j;
-import lombok.extern.slf4j.Slf4j;
+
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -18,7 +18,7 @@ import com.example.lms.service.rag.LangChainRAGService;
 import com.example.lms.service.rag.WebSearchRetriever;
 import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
 import com.example.lms.transform.QueryTransformer;
-import com.example.lms.service.rag.auth.AuthorityScorer;
+
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.chat.ChatModel;
@@ -27,20 +27,28 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.pinecone.PineconeEmbeddingStore;
-import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.ko.KoreanAnalyzer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import com.example.lms.service.rag.extract.PageContentScraper;
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;
+import com.example.lms.config.VectorStoreHealthIndicator;
+// Added for Upstash vector store integration
+import com.example.lms.service.vector.UpstashVectorStoreAdapter;
+import org.springframework.web.reactive.function.client.WebClient;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.store.embedding.EmbeddingSearchResult;
+import java.util.List;
 import java.time.Duration;
+import org.springframework.beans.factory.annotation.Qualifier;
+import com.acme.aicore.adapters.search.CachedWebSearch;
+import com.acme.aicore.domain.ports.WebSearchProvider;
 @Slf4j
 @Configuration
 @EnableConfigurationProperties(PineconeProps.class)
@@ -55,7 +63,10 @@ public class LangChainConfig {
     }
 
     /* ───── OpenAI / Pinecone 공통 ───── */
-    @Value("${openai.api.key}")
+    // Resolve the OpenAI/Groq API key from configuration or environment.  Use
+    // the `openai.api.key` property when provided and fall back to the
+    // OPENAI_API_KEY or GROQ_API_KEY environment variables otherwise.
+    @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String openAiKey;
     @Value("${openai.chat.model:gpt-3.5-turbo}")
     private String chatModelName;
@@ -76,10 +87,21 @@ public class LangChainConfig {
     @Value("${pinecone.embedding-model:text-embedding-3-small}")
     private String embeddingModelName;
 
+    /**
+     * Determines whether the application should fail fast if the vector store
+     * (e.g. Pinecone) cannot be initialized.  When set to {@code true}, any
+     * exception thrown during vector store initialization will be rethrown,
+     * causing the application context to fail to start.  When {@code false},
+     * the application will log an error, register a DOWN health status and
+     * fall back to an in-memory embedding store instead.
+     */
+    @Value("${vector.store.failfast:false}")
+    private boolean vectorStoreFailfast;
+
     /* ───── Self-Ask 검색 튜닝 ───── */
     @Value("${search.selfask.max-depth:2}")
     private int selfAskMaxDepth;
-    @Value("${search.selfask.web-top-k:5}")
+    @Value("${search.selfask.web-top-k:8}")
     private int selfAskWebTopK;
     @Value("${search.selfask.overall-top-k:10}")
     private int selfAskOverallTopK;
@@ -91,6 +113,7 @@ public class LangChainConfig {
 
     /* ═════════ 1. LLM / 임베딩 ═════════ */
     @Bean
+    @ConditionalOnMissingBean(ChatModel.class)
     public ChatModel chatModel(@Value("${lms.use-rag:true}") boolean useRagDefault) {
         return OpenAiChatModel.builder()
                 .apiKey(openAiKey)
@@ -104,8 +127,10 @@ public class LangChainConfig {
      * 추천/조합(RECOMMENDATION) 전용 상위 모델(저온)
      */
     @Bean("moeChatModel")
+    @ConditionalOnMissingBean(ChatModel.class)
     public ChatModel moeChatModel(
-            @Value("${openai.chat.model.moe:gpt-4o}") String moeModel,
+            // Default to gpt‑5‑chat‑latest for the MOE recommender model
+            @Value("${openai.chat.model.moe:gpt-5-chat-latest}") String moeModel,
             @Value("${openai.chat.temperature.recommender:0.2}") double recTemp
     ) {
         return OpenAiChatModel.builder()
@@ -118,6 +143,10 @@ public class LangChainConfig {
 
     @Bean
     public EmbeddingModel embeddingModel() {
+        if (openAiKey == null || openAiKey.isBlank()) {
+            // text-embedding-3-small = 1536 차원 기본값
+            return new com.example.lms.llm.NoopEmbeddingModel(1536);
+        }
         return OpenAiEmbeddingModel.builder()
                 .apiKey(openAiKey)
                 .modelName(embeddingModelName)
@@ -125,9 +154,10 @@ public class LangChainConfig {
                 .build();
     }
 
+    // LangChainConfig.java
     @Bean
-    public QueryTransformer queryTransformer(ChatModel llm) {
-        // ChatModel 타입으로 완화하여 OpenAiChatModel/프록시 모두 수용
+    @ConditionalOnMissingBean(QueryTransformer.class)   // ⬅️ 추가
+    public QueryTransformer queryTransformer(@Qualifier("utilityChatModel") ChatModel llm) {
         return new QueryTransformer(llm);
     }
 
@@ -145,7 +175,12 @@ public class LangChainConfig {
                     .nameSpace(p.getNamespace())
                     .build();
         } catch (Throwable t) {
-            log.warn("Pinecone init failed; falling back to InMemoryEmbeddingStore", t);
+            if (vectorStoreFailfast) {
+                // fail‑fast: propagate the exception to prevent silent fallback in production
+                throw t;
+            }
+            // fail‑soft: log the error and fall back to an in‑memory embedding store
+            log.error("Pinecone init failed; falling back to InMemoryEmbeddingStore", t);
             return new InMemoryEmbeddingStore<>();
         }
     }
@@ -154,6 +189,80 @@ public class LangChainConfig {
     @ConditionalOnMissingBean(EmbeddingStore.class)
     public EmbeddingStore<TextSegment> inMemoryEmbeddingStore() {
         return new InMemoryEmbeddingStore<>();
+    }
+
+    /*
+     * ═════════ 1b. Upstash Vector Store (READ‑ONLY) ═════════
+     *
+     * The Upstash vector store adapter wraps the Upstash REST API and
+     * implements the {@link EmbeddingStore} interface.  It is used as
+     * the read path for vector queries while writing operations are
+     * delegated to the Pinecone store.  When Upstash is not configured
+     * (blank rest URL or API key) the adapter gracefully returns empty
+     * results.
+     */
+    @Bean
+    public UpstashVectorStoreAdapter upstashVectorStoreAdapter(WebClient.Builder builder) {
+        // Use a shared WebClient builder to leverage global timeouts and proxy settings.
+        return new UpstashVectorStoreAdapter(builder.build());
+    }
+
+    /**
+     * Composite embedding store that routes read and write operations to
+     * different backends.  Reads (search) are served from Upstash
+     * Vector DB, while writes (add/insert) are delegated to the
+     * Pinecone store.  When either backend fails the operation
+     * degrades to the other without propagating the exception.
+     */
+    @Bean
+    @Primary
+    public EmbeddingStore<TextSegment> embeddingStore(
+            UpstashVectorStoreAdapter upstash,
+            @Qualifier("pineconeEmbeddingStore") EmbeddingStore<TextSegment> pinecone
+    ) {
+        return new EmbeddingStore<>() {
+            // Delegate single vector additions to the writer (Pinecone).  The
+            // Upstash adapter always operates in read‑only mode when the
+            // API key is omitted, but delegating writes exclusively avoids
+            // accidental upserts when read‑only tokens are used.
+            @Override
+            public String add(Embedding embedding) {
+                return pinecone.add(embedding);
+            }
+            @Override
+            public void add(String id, Embedding embedding) {
+                pinecone.add(id, embedding);
+            }
+            @Override
+            public String add(Embedding embedding, TextSegment embedded) {
+                return pinecone.add(embedding, embedded);
+            }
+            @Override
+            public List<String> addAll(List<Embedding> embeddings) {
+                return pinecone.addAll(embeddings);
+            }
+            @Override
+            public List<String> addAll(List<Embedding> embeddings, List<TextSegment> segments) {
+                try {
+                    return pinecone.addAll(embeddings, segments);
+                } catch (Exception e) {
+                    // Fail-soft: log and ignore vector upsert errors
+                    log.warn("vector upsert degraded: {}", e.toString());
+                    return java.util.List.of();
+                }
+            }
+            @Override
+            public EmbeddingSearchResult<TextSegment> search(dev.langchain4j.store.embedding.EmbeddingSearchRequest request) {
+                try {
+                    EmbeddingSearchResult<TextSegment> result = upstash.search(request);
+                    return result;
+                } catch (Exception e) {
+                    // Fail‑soft: log the error and delegate to Pinecone
+                    log.warn("vector query degraded: {}", e.toString());
+                    return pinecone.search(request);
+                }
+            }
+        };
     }
 
 
@@ -169,15 +278,29 @@ public class LangChainConfig {
     public WebSearchRetriever webSearchRetriever(
             NaverSearchService svc,
             PageContentScraper scraper,
-            AuthorityScorer authorityScorer
+            AuthorityScorer authorityScorer,
+            com.example.lms.service.rag.filter.GenericDocClassifier genericClassifier,
+            com.example.lms.service.rag.detector.GameDomainDetector domainDetector,
+            com.example.lms.service.rag.filter.EducationDocClassifier educationClassifier,
+            // Inject the CachedWebSearch aggregator to enable multi‑provider fan‑out.
+            com.acme.aicore.adapters.search.CachedWebSearch cachedWebSearch
     ) {
         // topK는 WebSearchRetriever 필드에 @Value 로 주입됨
-        return new WebSearchRetriever(svc, scraper, authorityScorer);
+        return new WebSearchRetriever(
+                svc,
+                cachedWebSearch,
+                scraper,
+                authorityScorer,
+                genericClassifier,
+                domainDetector,
+                educationClassifier
+        );
     }
 
     // (선택) 유틸 ChatModel — 기본 chatModel과 함께 존재. 이걸 Primary로 써도 됨.
     @Bean("utilityChatModel")
     @Primary
+    @ConditionalOnMissingBean(ChatModel.class)
     public ChatModel utilityChatModel(@Value("${lms.use-rag:true}") boolean useRagDefault) {
         return OpenAiChatModel.builder()
                 .apiKey(openAiKey)
@@ -191,15 +314,48 @@ public class LangChainConfig {
     public ReciprocalRankFuser reciprocalRankFuser() {
         return new ReciprocalRankFuser();
     }
+    // ── Add: com.acme.aicore.adapters.search.CachedWebSearch bean (out-of-package)
+    @Bean
+    public CachedWebSearch cachedWebSearch(java.util.List<WebSearchProvider> providers) {
+        return new CachedWebSearch(providers); // providers 목록은 없으면 빈 리스트로 주입됨
+    }
 
     @Bean
     public AnalyzeWebSearchRetriever analyzeWebSearchRetriever(
             Analyzer koreanAnalyzer,
             NaverSearchService svc,
             @Value("${search.morph.max-tokens:5}") int maxTokens,
-            QueryContextPreprocessor preprocessor
+            QueryContextPreprocessor preprocessor,
+            com.example.lms.search.SmartQueryPlanner smartQueryPlanner
     ) {
-        return new AnalyzeWebSearchRetriever(koreanAnalyzer, svc, maxTokens, preprocessor);
+        // Inject SmartQueryPlanner to enable proper query generation.  Passing null causes
+        // AnalyzeWebSearchRetriever to fall back to a passthrough plan, which disables
+        // morphological analysis and deduplication and leads to poor search results.
+        return new AnalyzeWebSearchRetriever(koreanAnalyzer, svc, maxTokens, preprocessor, smartQueryPlanner);
+    }
+
+    /**
+     * Health indicator bean that exposes the status of the configured embedding
+     * store.  When the application falls back to an in‑memory store due to a
+     * remote vector store failure, this indicator will report {@code DOWN} to
+     * the health endpoint.  When a proper remote store is in use, it reports
+     * {@code UP} unless an exception occurs when probing the store.
+     */
+    @Bean
+    public VectorStoreHealthIndicator vectorStoreHealthIndicator(EmbeddingStore<TextSegment> embeddingStore) {
+        return new VectorStoreHealthIndicator(embeddingStore);
+    }
+
+    /**
+     * Health indicator for the LLM configuration.  Exposes the configured
+     * provider, base URL (masked) and model name via the Actuator health
+     * endpoint.  Unlike {@link com.example.lms.health.LlmHealth}, this
+     * indicator does not perform a live ping but reports the configuration
+     * status only.
+     */
+    @Bean
+    public com.example.lms.health.LlmHealthIndicator llmHealthIndicator(org.springframework.core.env.Environment env) {
+        return new com.example.lms.health.LlmHealthIndicator(env);
     }
 
     // ⚠️ LangChainRAGService 는 @Service 로 등록됩니다.

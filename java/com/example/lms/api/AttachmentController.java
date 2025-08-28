@@ -25,8 +25,18 @@ public class AttachmentController {
      * @return 업로드된 파일들의 메타 정보
      */
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public List<AttachmentDto> upload(@RequestParam("files") List<MultipartFile> files) {
-        return attachmentService.saveAll(files);
+    public List<AttachmentDto> upload(
+            @RequestParam("files") List<MultipartFile> files,
+            @RequestParam(value = "sessionId", required = false) String sessionId
+    ) {
+        // Delegate to the AttachmentService.  When sessionId is provided cache the
+        // attachments against the session so they can be retrieved later via the
+        // AttachmentContextHandler.  When not provided, simply save the files.
+        if (sessionId == null || sessionId.isBlank()) {
+            return attachmentService.saveAll(files);
+        } else {
+            return attachmentService.saveAll(files, sessionId);
+        }
     }
 
     /**

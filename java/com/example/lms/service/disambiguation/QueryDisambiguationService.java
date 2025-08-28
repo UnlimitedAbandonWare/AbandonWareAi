@@ -14,6 +14,11 @@ public class QueryDisambiguationService {
     private final ObjectMapper om; // spring-boot-starter-json 기본 Bean
     // 도메인 사전: 알려진 고유명사는 재작성 금지
     private final com.example.lms.service.correction.DomainTermDictionary domainTermDictionary;
+    // Prompt builder used to construct the disambiguation prompt.  Delegating
+    // prompt assembly to a dedicated builder ensures uniformity across
+    // services and eases future modifications to the prompt format.
+    private final com.example.lms.prompt.DisambiguationPromptBuilder promptBuilder;
+
     public DisambiguationResult clarify(String query, List<String> history) {
         // + 금지 조합(원신 × 에스코피에 등)은 재작성 금지 → 원문 그대로 반환
         if (NonGameEntityHeuristics.containsForbiddenPair(query)) {
@@ -27,7 +32,7 @@ public class QueryDisambiguationService {
             }
         } catch (Exception ignore) {}
 
-        String prompt = buildPrompt(query, history);
+        String prompt = promptBuilder.build(query, history);
         String raw = "";
         try {
             raw = llmClient.complete(prompt);
@@ -39,27 +44,9 @@ public class QueryDisambiguationService {
         }
     }
 
-    private String buildPrompt(String query, List<String> history) {
-        String hist = (history == null || history.isEmpty()) ? "" : String.join("\n", history);
-        // 존재 여부 가드레일 강화: 보호어는 유지, 추측성 꼬리표 금지
-        return """
-        You are an intent disambiguator. Return ONLY a JSON object with fields:
-        ambiguousTerm, resolvedIntent, rewrittenQuery, confidence, score.
-        If not ambiguous, set rewrittenQuery to the original query and confidence="low".
-
-        RULES:
-        - Do NOT invent characters/items/places that do not exist in the referenced domain (e.g., Genshin Impact).
-                                  - If the user query includes a proper noun that the system already recognizes (in-domain dictionary),
-                                                                                                                                                                                                                                                                                                                                                DO NOT rewrite or append any notes. Keep the original query as rewrittenQuery and set confidence="high".
-                                                                                                                                                                                                                                                                                                                                              - Do not append speculative notes such as "(존재하지 않는 요소 가능성)". Such notes are prohibited.
-
-        [Conversation history, oldest→latest]
-        %s
-
-        [Current query]
-        %s
-        """.formatted(hist, query);
-    }
+    // The buildPrompt method has been removed.  Prompt construction is now
+    // delegated to {@link DisambiguationPromptBuilder} to avoid inlined
+    // multi‑line strings and to centralise prompt management.
 
     private DisambiguationResult fallback(String query) {
         DisambiguationResult r = new DisambiguationResult();

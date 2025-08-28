@@ -45,7 +45,7 @@ public class VectorStoreService {
     @Value("${vectorstore.batch-size:512}")
     private int batchSize;
 
-    /** <sha-256(text) → BufferEntry> : 중복-방지 & 배치버퍼 */
+    /** <sid:sha-256(text) → BufferEntry> : 중복-방지 & 배치버퍼 */ // [HARDENING] include sessionId in dedupe key
     private final ConcurrentHashMap<String, BufferEntry> queue = new ConcurrentHashMap<>();
 
     /** flush 실패 back-off */
@@ -67,9 +67,11 @@ public class VectorStoreService {
                         Map<String, Object> extraMeta) {
 
         if (text == null || text.isBlank()) return;
-        String sid = sessionId == null ? "0" : sessionId;
+        // [HARDENING] normalize session id and include it in dedupe key
+        String sid = (sessionId == null || sessionId.isBlank()) ? "__TRANSIENT__" : sessionId;
         String hash = DigestUtils.sha256Hex(text);
-        queue.putIfAbsent(hash, new BufferEntry(sid, text, extraMeta));
+        String key = sid + ":" + hash;
+        queue.putIfAbsent(key, new BufferEntry(sid, text, extraMeta));
         if (queue.size() >= batchSize) flush();
     }
 
@@ -111,8 +113,12 @@ public class VectorStoreService {
         } catch (Exception e) {
             log.warn("[VectorStore] 🔸 batch insert 실패 – {}", e.toString());
             // 실패한 snapshot 전체를 다시 큐에 되돌림
-            snapshot.forEach(be -> queue.putIfAbsent(
-                    DigestUtils.sha256Hex(be.text()), be));
+            // [HARDENING] restore failed entries with sid-prefixed key
+            snapshot.forEach(be -> {
+                String sid = (be.sessionId() == null || be.sessionId().isBlank()) ? "__TRANSIENT__" : be.sessionId();
+                String key = sid + ":" + DigestUtils.sha256Hex(be.text());
+                queue.putIfAbsent(key, be);
+            });
             // ❶ 1 → 2 → 4 → 8 ‥ 최대 1 분까지 back-off
             backoffMillis = Math.min(backoffMillis == 0 ? 1000 : backoffMillis * 2, 60_000);
         }
@@ -123,8 +129,12 @@ public class VectorStoreService {
     /** 메타데이터 빌더 – 세션 키(sid) 통일 + extra 메타 병합 */
     private Map<String, Object> buildMeta(BufferEntry be) {
         Map<String, Object> md = new HashMap<>();
+        // [HARDENING] merge extra meta first and ensure external sid is not overriding
+        if (be.extraMeta() != null) {
+            md.putAll(be.extraMeta());
+            md.remove(LangChainRAGService.META_SID);
+        }
         md.put(LangChainRAGService.META_SID, be.sessionId());
-        if (be.extraMeta() != null) md.putAll(be.extraMeta());
         // enrich with auto-extracted summary and keywords for improved recall and precision
         String text = be.text();
         if (text != null && !text.isBlank()) {

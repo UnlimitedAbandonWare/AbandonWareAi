@@ -2,7 +2,8 @@
 package com.example.lms.service.rag;
 
 import com.example.lms.service.NaverSearchService;
-
+// SelfAskWebSearchRetriever.java
+import org.springframework.beans.factory.annotation.Qualifier;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Component;
 
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
 import com.example.lms.service.rag.detector.GameDomainDetector;       // + 도메인 감지
+import com.example.lms.search.TypoNormalizer;                         // NEW: typo normalizer
 import org.springframework.util.StringUtils;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -29,12 +31,18 @@ import jakarta.annotation.PreDestroy;
 @Component                          // ➍
 @RequiredArgsConstructor            // ➋ 모든 final 필드 주입
 public class SelfAskWebSearchRetriever implements ContentRetriever {
-
+    @Qualifier("miniModel")
+    private final ChatModel chatModel;
     private final NaverSearchService searchSvc;
+    @Qualifier("mini")
     private final ChatModel chatModel;
     @Qualifier("guardrailQueryPreprocessor")
     private final QueryContextPreprocessor preprocessor;
     private final GameDomainDetector domainDetector; // + GENSHIN 감지용
+
+    // Optional typo normalizer for hygiene. Injected if available.
+    @Autowired(required = false)
+    private TypoNormalizer typoNormalizer;
 
     /* 선택적 Tavily 폴백(존재 시에만 사용) */
     @Autowired(required = false)
@@ -42,7 +50,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     private ContentRetriever tavily;
     /* ---------- 튜닝 가능한 기본값(프로퍼티 주입) ---------- */
     @Value("${selfask.max-depth:2}")                private int maxDepth;                 // Self-Ask 재귀 깊이
-    @Value("${selfask.web-top-k:5}")                private int webTopK;                  // 키워드당 검색 스니펫 수
+    @Value("${selfask.web-top-k:8}")                private int webTopK;                  // 키워드당 검색 스니펫 수
     @Value("${selfask.overall-top-k:10}")           private int overallTopK;              // 최종 반환 상한
     @Value("${selfask.max-api-calls-per-query:8}")  private int maxApiCallsPerQuery;      // 질의당 최대 호출
     @Value("${selfask.followups-per-level:2}")      private int followupsPerLevel;        // 레벨별 추가 키워드
@@ -113,6 +121,10 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
 
         String qText = (query != null) ? query.text() : null;
+        // Apply typo normalization if configured
+        if (typoNormalizer != null && qText != null) {
+            qText = typoNormalizer.normalize(qText);
+        }
         // ① Guardrail: 오타 교정/금칙어/중복 정리 (중복 호출 제거 + NPE 가드)
         qText = (preprocessor != null) ? preprocessor.enrich(qText) : qText;
         if (!StringUtils.hasText(qText)) {
@@ -240,7 +252,18 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         if (snippets.size() < overallTopK && tavily != null) {
             try {
                 int need = Math.max(0, overallTopK - snippets.size());
-                tavily.retrieve(Query.from(qText)).stream()
+                // [HARDENING] Always propagate existing query metadata (e.g. session sid) when
+                // constructing new Query objects for the Tavily fallback.  This ensures that
+                // downstream retrievers enforce per-session isolation and do not pollute
+                // transient or public namespaces.  When the original query has no metadata
+                // attached, the builder will accept a null and Tavily will treat it as
+                // __PRIVATE__ internally.  Avoid the deprecated Query.from API.
+                // [HARDENING] use builder API to propagate metadata and avoid deprecated Query.from
+                Query fallbackQuery = dev.langchain4j.rag.query.Query.builder()
+                        .text(qText)
+                        .metadata((query != null ? query.metadata() : null))
+                        .build();
+                tavily.retrieve(fallbackQuery).stream()
                         .map(Content::toString)
                         .filter(StringUtils::hasText)
                         .limit(need)
@@ -398,5 +421,30 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     }
 
 
+
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = (original.metadata() != null)
+                ? original.metadata()
+                : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        try {
+            return dev.langchain4j.rag.query.Query.builder()
+                    .text(original.text())
+                    .metadata(md)
+                    .build();
+        } catch (Throwable t) {
+            try {
+                // Fallback: 일부 환경에서만 존재할 수 있는 생성자(없으면 원본 반환)
+                var ctor = dev.langchain4j.rag.query.Query.class
+                        .getDeclaredConstructor(String.class, dev.langchain4j.data.document.Metadata.class);
+                ctor.setAccessible(true);
+                return ctor.newInstance(original.text(), md);
+            } catch (Throwable t2) {
+                return original;
+            }
+        }
+    }
 
 }

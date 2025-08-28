@@ -39,7 +39,8 @@ public class GenshinRecommendationSanitizer implements AnswerSanitizer {
 
         String low = answer.toLowerCase();
         if (low.matches(".*(다이루크|호두|향릉|신염|연비|데히야).*")) {
-            return "정보 없음"; // 필요 시 재시도 루트 연결 가능
+            // 정보 소거 금지: 상위 가드/재시도 로직이 처리하도록 원문 유지
+            return answer;
         }
         return answer;
     }
