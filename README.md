@@ -1,12 +1,4 @@
-AbandonWare AI RAG Chatbot
-
-“ImSQL README 스타일로 투영한 운영용 README”
-
-Java 17 · Spring Boot 3.4.x · LangChain4j 1.0.1(단일선 고정)
-Naver/Brave/Tavily + Vector DB 결합 RAG · CoR(Self‑Ask → Analyze → Web → Vector)
-환경변수 기반 비밀 주입 금지 · 버전 순도 가드 · 프롬프트 문자열 연결 금지
-
-한눈에 보기 (TL;DR)
+한눈에 보기
 
 CoR 체인: SelfAsk → Analyze → Web → VectorDb (+ SearchCostGuard, EvidenceRepair).
 
