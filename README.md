@@ -3,10 +3,6 @@ AbandonWareAI LMS - 하이브리드 RAG 시스템
 이 리포지토리는 AbandonWareAI 프로젝트의 핵심 서버 소스 코드입니다. 교육용 대화형 AI를 위한 하이브리드 검색-생성(RAG) 엔진, 체인 오브 리스폰서빌리티(CoR), 전문가 라우팅(MOE), 위치 서비스 등을 제공하는 프로덕션용 백엔드입니다.
 프로젝트는 Java 17, Spring Boot 3.x, Gradle, LangChain4j 1.0.1에 기반하며, 한국어를 지원하도록 특별히 최적화되었습니다.
 
-TL;DR
-
-한 줄 요약: 하이브리드 RAG 검색과 체계적인 책임 체인, 그리고 MOE 라우팅을 적용한 고품질 챗봇 플랫폼입니다.
-이 README는 실제 소스 코드를 기반으로 프로덕션 운영팀과 개발팀이 즉시 사용할 수 있도록 1000줄에 걸쳐 모든 기능을 상세히 설명합니다.
 
 Pre-flight — Version Purity (STOP if mixed)
 
