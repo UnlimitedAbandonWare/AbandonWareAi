@@ -6,7 +6,7 @@
 
 ---
 
-## 한눈에 보기 (TL;DR)
+## 한눈에 보기
 
 * **CoR 체인:** SelfAsk → Analyze → Web → VectorDb (+ SearchCostGuard, EvidenceRepair).
 * **PromptBuilder 규칙:** 항상 `PromptBuilder.build(PromptContext)` 사용. 문자열 직접 concat **금지**.
