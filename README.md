@@ -1,7 +1,5 @@
 AbandonWare AI — Spring Boot RAG + Web Search + Memory
 
-한·영 요약
-
 한국어: 이 프로젝트는 Java 17과 Spring Boot 3.4로 구축된 하이브리드 RAG(검색-생성) 챗봇 서버입니다. 벡터 DB와 웹 검색을 혼합한 검색 파이프라인, LangChain4j 1.0.1 기반 LLM 연결, SSE 스트리밍 응답, 메모리 강화 루프, 사실 검증과 증거 기반 가드를 제공합니다. 모든 프롬프트는 PromptBuilder.build(ctx)를 통해 생성하며, LangChain4j 1.0.1 버전 순도를 강제로 검사합니다.
 
 English caption: A hybrid retrieval‑augmented generation (RAG) backend built with Java 17 and Spring Boot 3.4. It fuses web search and vector DB retrieval, enforces LangChain4j 1.0.1 purity, streams responses via SSE, reinforces memory, and verifies facts with evidence‑aware guards. All prompts are built through a centralized PromptBuilder.
