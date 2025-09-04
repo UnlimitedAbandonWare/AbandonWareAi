@@ -1,0 +1,77 @@
+[
+  {
+    "franchise": "Shakugan no Shana",
+    "aliases": [
+      "shakugan no shana",
+      "작안의 샤나",
+      "shana",
+      "샤나",
+      "flame haze"
+    ],
+    "visual_motifs": [
+      "flame-eye",
+      "school uniform-inspired",
+      "dynamic pose"
+    ],
+    "palette": [
+      "crimson",
+      "black",
+      "gold"
+    ],
+    "wardrobe": [
+      "school uniform-inspired"
+    ],
+    "camera": [
+      "dynamic angle"
+    ],
+    "avoid": [
+      "sci-fi city",
+      "modern vehicles"
+    ],
+    "negative_soft": [
+      "random wildlife",
+      "generic landscape"
+    ],
+    "copyright_sensitive": true,
+    "rewrite_to_inspired": true
+  },
+  {
+    "franchise": "Spice and Wolf",
+    "aliases": [
+      "spice and wolf",
+      "늑대와 향신료",
+      "wolf and spice",
+      "holo",
+      "horo",
+      "늑대"
+    ],
+    "visual_motifs": [
+      "medieval trade",
+      "rural market",
+      "wheat fields",
+      "traveling merchant"
+    ],
+    "palette": [
+      "warm amber",
+      "desaturated green",
+      "brown leather"
+    ],
+    "wardrobe": [
+      "medieval cloak",
+      "simple tunic"
+    ],
+    "camera": [
+      "mid shot",
+      "soft natural light"
+    ],
+    "avoid": [
+      "futuristic tech",
+      "neon city"
+    ],
+    "negative_soft": [
+      "generic landscape"
+    ],
+    "copyright_sensitive": true,
+    "rewrite_to_inspired": true
+  }
+]

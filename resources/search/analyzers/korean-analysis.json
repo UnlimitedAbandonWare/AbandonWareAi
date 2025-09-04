@@ -1,0 +1,30 @@
+{
+  "settings": {
+    "analysis": {
+      "tokenizer": {
+        "nori_user_dict": {
+          "type": "nori_tokenizer",
+          "decompound_mode": "mixed",
+          "user_dictionary": "user_dictionary.txt"
+        }
+      },
+      "filter": {
+        "nori_pos_filter": {
+          "type": "nori_part_of_speech",
+          "stoptags": ["E", "IC", "J", "MAG", "MAJ", "SP", "SSC", "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV", "UNA", "NA", "VSV"]
+        },
+        "synonym_filter_ko": {
+          "type": "synonym_graph",
+          "synonyms_path": "synonyms_ko.txt",
+          "updateable": true
+        }
+      },
+      "analyzer": {
+        "korean_search_analyzer": {
+          "tokenizer": "nori_user_dict",
+          "filter": ["lowercase", "nori_pos_filter", "synonym_filter_ko"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# Development profile configuration
+#
+# The probe endpoint should only be exposed in development environments.
+# Enable the search probe and inherit the noise ratio threshold from
+# application.yml.  Admin token is left blank by default.  Do not enable
+# this profile in production.
+
+spring:
+  autoconfigure:
+    exclude:
+      - dev.langchain4j.spring.AiAutoConfiguration
+      - dev.langchain4j.spring.autoconfigure.LangChain4jAutoConfiguration
+      - dev.langchain4j.service.spring.AiServicesAutoConfiguration
+      - dev.langchain4j.model.openai.spring.autoconfigure.OpenAiAutoConfiguration
+
+probe:
+  search:
+    enabled: true
+  admin-token: ""
+  max-noise-ratio: 0.15

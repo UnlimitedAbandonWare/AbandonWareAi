@@ -1,0 +1,625 @@
+spring:
+  autoconfigure:
+    exclude:
+
+
+abandonware:
+  persona:
+    tutor: >-
+      You are a patient and friendly tutor. Explain concepts step by step using simple
+      language and concrete examples. Encourage the user to ask follow‑up questions
+      when something is unclear. Avoid overly technical jargon unless asked.
+    analyzer: >-
+      You are a critical analyst. Provide thorough reasoning, highlighting pros
+      and cons and exploring multiple perspectives. Focus on evidence and
+      logical argumentation. Maintain a neutral and factual tone.
+    brainstormer: >-
+      You are a creative brainstormer. Generate a variety of ideas without
+      judging them. Encourage divergent thinking and explore unconventional
+      possibilities. Keep responses energetic and inspiring.
+
+  # Reranker configuration for cross-encoder selection
+  reranker:
+    backend: onnx-runtime
+    # Select the backend for document reranking. Supported values are
+    #   - embedding-model : use the existing embedding based cross‑encoder
+    #   - onnx-runtime    : use the local ONNX runtime via OnnxRuntimeService
+    #   - noop            : disable re-ranking entirely
+    # If unspecified this defaults to 'embedding-model'.
+    # Set the default reranker backend to the embedding model.  This avoids
+    # attempting to load a local ONNX model when none is bundled.  To enable
+    # ONNX re‑ranking supply AB_RERANKER_BACKEND=onnx-runtime via the
+    # environment or an external properties file.
+
+    # ONNX runtime settings.  These inform the OnnxRuntimeService where to load
+    # the model and which execution provider to use when
+    # `abandonware.reranker.backend` is set to 'onnx-runtime'.  When unspecified
+    # the service will skip model loading and fall back to lexical scoring.
+    onnx:
+      model-path: classpath:/models/your-cross-encoder.onnx
+      execution-provider: cpu
+      # Optional vocabulary file for the WordPiece tokenizer.  When set the
+      # tokenizer will be initialised with this vocabulary; otherwise tokenisation
+      # is skipped and the service falls back to lexical similarity.  This
+      # mirrors the older `onnx.vocab-path` property but lives under the
+      # abandonware.reranker.onnx namespace.
+      vocab-path: classpath:/models/vocab.txt
+      # Maximum number of tokens fed into the ONNX model.  Longer inputs
+      # are truncated.  Defaults to 256 when unspecified.
+      max-seq-len: 256
+      # Apply a sigmoid transform to the raw model logits.  Enable this to
+      # bound the reranker scores in the range [0,1].
+      normalize: true
+
+      # fail-closed 기본값을 원하면 false 로 두세요.
+      fallback-enabled: false
+
+
+
+
+# -----------------------------------------------------------------------------
+# Path alignment scoring configuration
+# When enabled the ContextualScorer will apply a multiplier based on how well
+# the predicted decision path aligns with previously reinforced paths. The
+# multiplier ranges between 0.5 (mismatch) and 9.0 (perfect match). See
+# com.example.lms.scoring.PathAlignedScorer for details.
+scoring:
+  path-alignment:
+    enabled: true
+
+
+# Search budget configuration for page content scraping
+search:
+  budget:
+    # 페이지 본문 추출 타임박스(ms)
+    per-page-ms: 3500
+
+  # LLM backend configuration for keyword selection.  When set to 'gemini'
+  # and a Gemini client bean is available, the KeywordSelectionService will
+  # delegate to the Gemini model for extracting search tokens.  Override via
+  # the SEARCH_LLM_BACKEND environment variable.  Defaults to 'lc4j'.
+  llm:
+    backend: ${SEARCH_LLM_BACKEND:gemini}
+
+  # Keyword selection settings controlling how many must-have tokens are
+  # returned and how long to cache the selection results.  Override via
+  # environment variables SEARCH_KEYWORD_SELECTED_TERMS_MAX_MUST and
+  # SEARCH_KEYWORD_SELECTED_TERMS_CACHE_TTL_MINUTES respectively.
+  keyword:
+    selected-terms:
+      max-must: ${SEARCH_KEYWORD_SELECTED_TERMS_MAX_MUST:3}
+      cache-ttl-minutes: ${SEARCH_KEYWORD_SELECTED_TERMS_CACHE_TTL_MINUTES:10}
+
+  # -----------------------------------------------------------------------
+  # LLM keyword selection configuration.  When enabled the system invokes a
+  # lightweight LLM to select must-have, should-have and negative search
+  # terms from the conversation.  Selected terms are cached for the
+  # specified TTL to avoid repeated model calls.  The max-must property
+  # limits the number of tokens returned in the 'must' list.
+  llm-terms:
+    enable: true
+    max-must: 3
+    cache-ttl-minutes: 10
+
+  # ↓↓↓ 여기부터 추가 (같은 들여쓰기 유지)
+  brave:
+    # Allow enabling/disabling via either BRAVE_ENABLED or brave.enabled
+    enabled: ${BRAVE_ENABLED:${brave.enabled:true}}
+    # Prefer BRAVE_API_KEY but fall back to brave.api-key.  When unset the
+    # BraveSearchService will short‑circuit.
+    api-key: ${BRAVE_API_KEY:${brave.api-key:}}
+    # Base URL of the Brave API.  Support overriding via BRAVE_BASE_URL or
+    # brave.base-url.  Defaults to the official free API endpoint.
+    base-url: ${BRAVE_BASE_URL:${brave.base-url:https://api.search.brave.com}}
+    # Queries per second limit.  Most free plans allow only 1.
+    qps: ${BRAVE_QPS:${brave.qps:1}}
+
+  wiki:
+    enabled: true
+    lang: ko
+    user-agent: "AbandonWareAI/1.0 (contact: you@example.com)"
+rag:
+  # Search funnel tuning
+  search:
+    top-k: 10        # Increase the default search topK to improve coverage
+  # Precision scanning configuration
+  precision:
+    max-aggregate-chars: 35000   # Reduce aggregate character limit to prevent token blow-ups
+  fuse:
+    candidates: 64     # number of fused documents to consider before reranking
+  guard:
+    # Minimum number of evidence snippets (web + vector) required before a regeneration
+    # is considered.  Defaults to 2 when unspecified.
+    min-evidence-count: 2
+    # Minimum number of distinct sources across all evidence.  Defaults to 1 when
+    # unspecified.  A higher value mitigates regeneration in cases where multiple
+    # snippets all originate from the same page.
+    min-evidence-from-distinct-sources: 1
+
+  # [HARDENING] Session safety and indexing defaults.  Enforce per-session isolation and
+  # guard against transient session pollution.  Disable indexing of web snippets
+  # by default and specify a TTL for snippets.  Enable dimension guard on embeddings.
+  safety:
+    enforceSid: true
+  index:
+    transient-namespace: "__TRANSIENT__"
+  snippet:
+    index-web-default: false
+    ttl-days: 14
+  embedding:
+    dimension-guard: true
+
+# === RAG/MOE/Rerank safety defaults (appended by gpt pro agent) ===
+router:
+  allow-header-override: false      # block client X-Model-Override by default
+  moe:
+    high: gpt-5-chat-latest         # upgraded high-tier model
+    mini: gpt-5-mini                # upgraded mini model
+    # --------------------------------------------------------------------------
+    # Mixture‑of‑Experts (MOE) escalation thresholds.  These values control
+    # when the router should promote a request from the default model to the
+    # high‑tier model.  The token threshold defines the minimum number of
+    # requested tokens that triggers an upgrade, while the complexity and
+    # uncertainty thresholds apply to the heuristic scores computed by the
+    # upstream signal extractor.  The evidence‑mismatch threshold guards
+    # against low‑quality web evidence: if the fused evidence score exceeds
+    # this value the request is escalated.  Setting
+    # `escalate-on-rigid-temp` to false disables automatic escalation when a
+    # rigid‑temperature model refuses non‑default temperature settings.
+    # Tune MOE escalation thresholds.  Increase the token threshold to 3,000
+    # and lower the uncertainty threshold slightly.  The evidence mismatch
+    # threshold has been superseded by web-evidence-threshold; use a higher
+    # value to require stronger web corroboration before escalation.
+    # Mixture‑of‑Experts escalation thresholds tuned for faster promotion on
+    # general queries.  When the requested token budget meets or exceeds
+    # 280 tokens and the detected intent is GENERAL the router will upgrade
+    # to the high‑tier model.  Lower uncertainty and web evidence
+    # thresholds encourage promotion when answers are ambiguous or when
+    # there is abundant corroborating web evidence.
+    tokens-threshold: 280
+    complexity-threshold: 0.55
+    uncertainty-threshold: 0.35
+    web-evidence-threshold: 0.55
+    # When true, the router will promote requests whose underlying model
+    # enforces a rigid temperature and cannot accept the requested value.
+    # Enabling this ensures that rigid temperature constraints trigger
+    # escalation to the MOE model, as recommended by the tuning guidelines.
+    # The default is true.
+    escalate-on-rigid-temp: true
+  threshold: 0.62                   # upgrade threshold
+  margin: 0.08                      # hysteresis margin
+  learning-intents: PAIRING,REASONING
+
+# -----------------------------------------------------------------------------
+# Web search defaults for the Naver provider.  By default the hedge layer is
+# enabled, the DuckDuckGo fallback is disabled and domain filtering uses
+# boost (preferred domains are weighted rather than excluded).  These
+# settings can be overridden via environment variables or external
+# property files.
+naver:
+  hedge:
+    enabled: true
+  fallback:
+    duckduckgo:
+      # [HARDENING] Disable DuckDuckGo fallback by default.  The environment variable
+      # NAV_FALLBACK_DDG can override this value.  A default of 'false'
+      # improves stability by avoiding external sources.  See
+      # NaverSearchService.fallbackDuckDuckGo for the code default.
+      enabled: ${NAV_FALLBACK_DDG:true}
+  filters:
+    # Enable domain filtering by default.  When true, only allowlisted
+    # domains are considered in search results.  See naver.filters.domain-allowlist.
+    enable-domain-filter: true
+    # Preferred domain policy.  Options: off|boost|filter.  When set to
+    # 'boost' preferred domains are weighted higher rather than strictly
+    # filtered.  When 'filter' only allowlisted domains are returned.  We
+    # retain 'boost' to prioritise high trust domains without excluding
+    # others entirely.
+    # Preferred domain policy.  When set to 'filter' only allowlisted
+    # domains are returned.  This value was previously 'boost' but is
+    # updated to 'filter' to enforce stricter whitelisting.
+    domain-policy: boost
+
+    # [PATCH] Enable keyword filtering for all queries.  When true the
+    # NaverSearchService will apply a simple OR filter over the extracted
+    # keywords.  The minimum number of keyword hits required to keep a
+    # snippet can be adjusted via keyword-min-hits.  Setting this to 1
+    # ensures at least one keyword match is required.
+    enable-keyword-filter: true
+    # Minimum keyword hits required to retain a snippet.  Increased
+    # from 1 to 2 to reduce noise when keyword filtering is enabled.
+    keyword-min-hits: 2
+    # Allowed domains for the domain filter.  When enable-domain-filter is true
+    # results outside of these domains are excluded.  Include official education,
+    # governmental and trusted entertainment domains.  Added hoyoverse and hoyolab.
+    domain-allowlist:
+      # Allowed domains used by the domain filter.  Limit to a concise set
+      # of high trust suffixes rather than the expansive list used
+      # previously.  Additional domains can be added via external
+      # configuration files or environment variables.  See
+      # NaverFilterProperties.domainAllowlist for details.
+      - go.kr
+      - ac.kr
+      - lenovo.com
+      - news.naver.com
+    # Allowed domains for the domain filter.  When enable-domain-filter is true
+    # results outside of these domains are excluded.  Include official
+    # education and governmental domains to improve quality for academic
+    # queries.
+  # The following naver.domain-allowlist section was duplicated and could
+  # override the allowlist defined under naver.filters.  It has been removed
+  # to prevent conflicting property bindings.  All allowed domains should be
+  # specified in the naver.filters.domain-allowlist list above.
+  # domain-allowlist: []
+  search:
+    blocked-domains:
+      - ohmygod10.com
+      - messenger1004.com
+      - blog.messenger1004.com
+      - muscle1004.com
+      - hermes10901.com
+    # [HARDENING] Do not append a geographic suffix by default; rely on intent detection
+    query-suffix: ""
+
+
+ranking:
+  rrf:
+    k: 50
+  rerank:
+    ce:
+      topK: 12
+
+authority:
+  tier-weights:
+    official: 1.00
+    guide: 0.85
+    wiki: 0.80
+    # Assign lower weights to community sources and introduce a weight for
+    # mainstream news.  These values influence the AuthorityScorer when
+    # computing final document relevance.  A higher value indicates greater
+    # trustworthiness.
+    news: 0.70
+    community: 0.55
+
+# -----------------------------------------------------------------------------
+# Cross‑encoder reranking gate configuration.  These thresholds control
+# whether the cross‑encoder reranker is invoked.  When the hybrid retriever
+# determines that the retrieved results are uncertain, disagree across
+# modalities or have a small margin between the top candidates, the
+# reranker is used.  Lower values make the gate more permissive.
+rerank:
+  gate:
+    uncertainty-threshold: 0.45
+    disagreement-threshold: 0.25
+    margin-threshold: 0.08
+
+# -----------------------------------------------------------------------------
+# Fusion behaviour.  The `retrieval.fusion.mode` property toggles between
+# Reciprocal Rank Fusion (rrf) and a softmax based fusion.  When using softmax
+# the raw fusion logits must be calibrated; without calibration the softmax
+# pathway is disabled and the system will fall back to RRF.  Supported
+# calibrations are `minmax` and `isotonic`.  Set to `none` to disable
+# calibration entirely.
+retrieval:
+  fusion:
+    # Use a weighted RRF fusion strategy by default.  This enables
+    # per‑source weighting of search modalities (CE/BM25/semantic) via the
+    # HyperparameterService.  Supported values are:
+    #   - rrf          : unweighted reciprocal rank fusion (default)
+    #   - weighted-rrf : weighted reciprocal rank fusion (enabled here)
+    #   - softmax      : softmax fusion calibrated by minmax or isotonic
+    mode: weighted-rrf
+    softmax:
+      temperature: 1.0
+      calibration: minmax
+
+  # -------------------------------------------------------------------------
+  # Ambiguity handling configuration.  These values control the behaviour of
+  # the newly added sense disambiguation and ambiguity guard components.  The
+  # `tau` threshold defines the maximum score difference below which a query
+  # is considered ambiguous and should trigger a clarification.  The
+  # `mixed-cluster-threshold` guards the CE re-ranking phase: when a mix of
+  # clusters exceeds this ratio the cross‑encoder will re-rank each cluster
+  # separately.
+  ambiguity:
+    tau: 0.15
+    mixed-cluster-threshold: 0.35
+
+  # Reciprocal rank fusion weighting factors.  When using the new
+  # WeightedRrfFuser the following weights are applied to the four scoring
+  # components.  Adjust these values to influence the relative importance of
+  # locale, language, authority and recency when ranking web search results.
+  rrf:
+    k: 60
+    weight:
+      locale: 0.40
+      language: 0.25
+      authority: 0.20
+      recency: 0.15
+
+ce:
+  enabled: true
+  ambiguity-threshold: 0.35
+
+prompt:
+  ambiguous-first-ask: true
+  inject-source-tags: true
+
+feature-flags:
+  cluster-majority-gate: true
+  source-agreement:
+    topN: 7
+    minAgree: 5
+
+  # Terminal intents define a set of query categories for which the
+  # retrieval pipeline should short‑circuit and allow a dedicated handler
+  # to produce the answer.  When the user's intent matches any of the
+  # entries in this list the retrieval chain is terminated early.
+  terminal-intents: [LOCATION, AUTH, HEALTHCHECK]
+
+chat:
+  defaults:
+    # When the client does not explicitly specify whether to use RAG, default to false.
+    # This ensures the system does not unexpectedly enable retrieval or web search when
+    # users have not made a deliberate choice.  Clients may still override this by
+    # explicitly setting useRag to true and useWebSearch as desired.
+    useRag: false
+
+  # Configuration for chat run resumption.  When a client reconnects to an active
+  # session the backend will replay the last N events from the buffer so that the
+  # user does not lose context.  Completed or cancelled runs are evicted after
+  # ttl-seconds.  Adjust these values to tune the size of the replay buffer and
+  # the retention period for finished runs.
+  resume:
+    replay-capacity: 512   # number of events to buffer for replay on attach
+    ttl-seconds: 300       # time (in seconds) to retain completed/cancelled runs
+
+## ONNX runtime configuration (single source of truth is abandonware.reranker.onnx)
+# (removed duplicate top-level `onnx` block)
+# -----------------------------------------------------------------------------
+# Location and external API configuration
+#
+# The location section controls whether location-based features are enabled.
+# When disabled the backend will ignore any incoming location events and
+# location-aware queries.  External API keys for Kakao (local search), Google
+# (maps/geocoding) and TMAP (directions) are injected via environment
+# variables.  Clients should configure these variables in their deployment
+# environment to enable full functionality.
+location:
+  enabled: true
+kakao:
+  # Kakao REST API key used for reverse geocoding.  When unset the
+  # application will skip reverse geocoding and fall back to returning
+  # raw latitude/longitude coordinates for "내 위치가 어디야?" queries.
+  rest-key: ${KAKAO_REST_KEY:}
+google:
+  api-key: ${GOOGLE_API_KEY:}
+tmap:
+  app-key: ${TMAP_APP_KEY:}
+
+query-hygiene:
+  typo-map:
+    종운: 중운
+  synonym-map:
+    중운: [Chongyun]
+    달리아: [Dahlia]
+
+## Actuator / Observability (merged)
+management:
+  endpoints:
+    web:
+      exposure:
+      include: [health, info, prometheus, metrics, env, logfile]
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ai-core-src-x-1core
+
+# -----------------------------------------------------------------------------
+# Local LLM configuration
+#
+# The following section enables routing OpenAI compatible requests to a
+# self‑hosted LLM (e.g. via Ollama, llama.cpp or LocalAI).  When enabled the
+# {@code DynamicChatModelFactory} will override the default OpenAI baseUrl with
+# the configured {@code base-url}.  The {@code provider} field is reserved for
+# future selection logic but is not currently used.  The {@code model} and
+# {@code api-key} values propagate to the OpenAI properties below.
+local-llm:
+
+  enabled: false     # OpenAI 직접 호출
+  provider: ollama              # ollama | llamacpp | localai
+  base-url: http://localhost:11434/v1
+  model: llama3:8b-instruct-q4_K_M
+  api-key: ollama
+
+# -----------------------------------------------------------------------------
+# Override sensitive API keys with environment variables.  Define these keys as
+# environment variables rather than checking plain text into version control.
+# When unspecified the value defaults to empty and corresponding services will
+# skip remote calls until a key is provided.
+gemini:
+  api:
+    key: ${GEMINI_API_KEY:}
+
+tavily:
+  api:
+    key: ${TAVILY_API_KEY:}
+
+# -----------------------------------------------------------------------------
+# OpenAI properties (reused for local LLM)
+#
+# Bind the OpenAI API key to the local LLM api-key when using a self hosted
+# server.  The chat model identifiers default to the configured local model
+# ensuring that MOE routing and default chat service use the same model.
+openai:
+  image:
+    api-key: ${openai.api.key}
+    endpoint: https://api.openai.com/v1/images/generations
+    # 선택 옵션(있으면 바인딩됨)
+    model: gpt-image-1
+    timeout: PT60S
+    size: 1024x1024
+
+  # Global OpenAI settings used by chat, stt and tts services.  These values
+  # supplement the image configuration above and are injected into
+  # WebClient-based services via @Value annotations.
+  api:
+    url: https://api.openai.com/v1
+  chat:
+    # Default chat model upgraded to the 5‑series mini model.  The previous gpt-4o-mini
+    # value caused a mixed-model deployment and has been removed to maintain purity.
+    model: gpt-5-mini
+    # Use the configured high‑tier model for escalations.  Remains unchanged.
+    model-high-tier: gpt-5-chat-latest
+    # When true the router will always select the high‑tier model regardless of
+    # signal thresholds.  Leave enabled for mission‑critical calls.
+    force-high-tier: true
+  stt:
+    model: whisper-1
+  tts:
+    # Upgrade the text‑to‑speech model to the 5‑series to align with the chat model.
+    model: gpt-4o-mini-tts
+    voice: alloy
+
+guard:
+  evidence_regen:
+    enabled: true
+    min_web_docs: 1
+    min_total_docs: 2
+    action: REGENERATE_AND_ESCALATE
+
+# -----------------------------------------------------------------------------
+## (moved above)
+# [HARDENING] Disable reactor netty wiretap for both client and server to prevent logging of
+# HTTP request/response content. These values can be overridden in other profiles if needed.
+
+  reactor:
+    netty:
+      http:
+        client:
+          wiretap: false
+        server:
+          wiretap: false
+
+  codec:
+    max-in-memory-size: 16MB
+
+# Image generation plugin configuration.  Specify a separate API key and endpoint
+# for the OpenAI image service.  The key defaults to the OPENAI_API_KEY
+# environment variable when left blank.  The endpoint points at the official
+# OpenAI image generation endpoint by default.
+
+
+# Raise the logging level for the image plugin so prompt hashes and other
+# diagnostic messages are visible in the application logs.
+logging:
+  level:
+    com.example.lms.plugin.image: INFO
+
+# Force the mixture-of-experts router to always select the highest tier chat
+# model for follow‑on prompts.  These settings live under the ai.moe
+# namespace and are consumed by the MOE router.  When force-upper-tier is
+# enabled the router will pick the model specified by upper-tier-chat-model
+# regardless of complexity or uncertainty heuristics.
+
+# ----------------------------------------------------------------------------
+# Accumulation search mode defaults
+#
+# The accumulation feature is controlled via application properties.  When
+# enabled the web search layer will perform a broader crawl using multiple
+# providers, looser relatedness thresholds and longer per-page timeouts.  See
+# the `search.accumulation.*` properties for configuration.  These values
+# are intentionally not defined here to allow a clean override via
+# environment variables or external YAML.
+
+# ----------------------------------------------------------------------------
+# Domain allowlist profiles
+#
+# Named allowlists used by the web search layer.  The default profile will be
+# applied when no profile is specified.  Additional profiles may be loaded
+# from the directory specified by external-dir.  The admin-token may be
+# supplied to restrict reload operations to requests carrying a matching
+# X-Admin-Token header.
+domain:
+  allowlist:
+    default-profile: "official"
+    external-dir: ""         # Optional path to an external profiles directory
+    # admin-token: ""         # Set to enable token-based reload authorisation
+
+# --- Probe (dev only) ---------------------------------------------------------
+# Configure the search probe endpoint.  By default this is disabled in the main
+# application profile and only enabled in the development profile.  When
+# probe.search.enabled is true the /api/probe/search endpoint will be exposed
+# allowing developers to debug search behaviour and noise ratios.  See
+# application-dev.yml for development overrides.
+probe:
+  search:
+    enabled: false        # disable probe by default (enabled in dev profile)
+  admin-token: ""        # optional admin token; leave blank to disable auth
+  max-noise-ratio: 0.15  # upper bound on finance noise ratio
+
+# -----------------------------------------------------------------------------
+# LLM provider configuration.  Select either OpenAI or Groq via the
+# `LLM_PROVIDER` environment variable.  Each provider requires its own
+# API key, base URL and model name.  Additional providers can be added
+# here following the same structure.
+
+
+
+
+# -----------------------------------------------------------------------------
+# Retriever budget settings.  Define per-stage time budgets (ms) for the
+# retrieval chain.  The total budget defines the maximum time spent
+# across all stages, while the per-stage budgets set upper bounds for
+# individual handlers.  Reduce these values to enforce stricter timeouts.
+retriever:
+  budget-ms:
+    total: 6000
+    self-ask: 500
+    analyze: 500
+    web: 3000
+    vector: 2000
+
+# -----------------------------------------------------------------------------
+# Brave search configuration.  A distinct section for the Brave provider used by
+# the lightweight web search integration.  When the API key is not supplied
+# (via the BRAVE_API_KEY environment variable) the provider is effectively
+# disabled.  A small timeout is applied to avoid blocking the chain.
+brave:
+  api:
+    key: ${BRAVE_API_KEY:}
+  timeoutMs: 2500
+
+# -----------------------------------------------------------------------------
+# Groq lightweight model configuration.  Configure API credentials and model
+# identifiers for the small and large Groq hosted models.  The mini model
+# should be used for quick rewrite tasks, while the big model is reserved for
+# more intensive summarisation or planning steps.  The base-url points at
+# Groq's OpenAI compatible endpoint.
+groq:
+  api:
+    key: ${GROQ_API_KEY:}
+  base-url: https://api.groq.com/openai/v1
+  mini-model: llama-3.1-8b-instant
+  big-model:  llama-3.1-70b-versatile
+
+# -----------------------------------------------------------------------------
+# Upstash caching and rate limiting configuration.  The Redis section
+# specifies the REST endpoint and token for Upstash.  When disabled the
+# caching and rate limiter will fall back to local in‑memory behaviour.  The
+# cache TTL applies to web search results stored in Redis.  The rate limit
+# controls the maximum number of web search calls per minute per provider.
+upstash:
+  redis:
+    enabled: true
+    rest-url: ${UPSTASH_REDIS_REST_URL:}
+    rest-token: ${UPSTASH_REDIS_REST_TOKEN:}
+  cache:
+    ttl-seconds: 600
+  ratelimit:
+    per-minute: 30
+
+
+
