@@ -38,6 +38,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     private static final String TRACE_META_PREFIX          = "⎔TRACE⎔";
     private static final String TRACE_META_PREFIX_B64      = "⎔TRACE64⎔";
     private static final String LEGACY_TRACE_META_PREFIX_Q = "?TRACE?";
+    // Prefix for understanding summary meta.
+    private static final String USUM_META_PREFIX = "⎔USUM⎔";
 
     /* =======================================================
      * HTML 차단 정책
@@ -48,7 +50,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (content == null) return false;
         return content.startsWith(TRACE_META_PREFIX)
                 || content.startsWith(TRACE_META_PREFIX_B64)
-                || content.startsWith(LEGACY_TRACE_META_PREFIX_Q);
+                || content.startsWith(LEGACY_TRACE_META_PREFIX_Q)
+                || content.startsWith(USUM_META_PREFIX);
     }
 
     /** 아주 느슨한 생 HTML 감지 (TRACE 메타는 선별에서 이미 제외) */
@@ -132,7 +135,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         // 1) TRACE 메타(system)면 무조건 저장
         if ("system".equals(r) && isTraceMeta(c)) {
             save(sessionId, r, c);
-            log.debug("세션 {}: system TRACE 메타 저장 ({} bytes)", sessionId, c.length());
+            log.debug("세션 {}: system meta 저장 ({} bytes)", sessionId, c.length());
             return;
         }
 

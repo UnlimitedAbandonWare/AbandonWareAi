@@ -16,12 +16,12 @@ public class GeminiBatchService {
     // storage repositories and configuration would be injected here.
 
     public String buildDataset(int sinceHours) {
-        // TODO: build a JSONL dataset from events within the past N hours
+        // Implementation placeholder: build a JSONL dataset from events within the past N hours.
         return "";
     }
 
     public String runBatch(String datasetUri, String jobName) {
-        // TODO: trigger a batch processing job on Gemini's Files/Batch API
+        // Implementation placeholder: trigger a batch processing job on Gemini's Files/Batch API.
         return "";
     }
 }

@@ -1,4 +1,4 @@
-package com.example.lms.client;
+package com.example.lms.learning.gemini;
 
 import com.example.lms.dto.learning.KnowledgeDelta;
 import com.example.lms.dto.learning.LearningEvent;
@@ -59,6 +59,11 @@ public class GeminiClient {
                           "ok"   : false,
                           "error": "%s"
                         }""".formatted(e.getMessage())));
+    }
+
+    // Base hook: Decorator에서 오버라이드, 기본은 no-op
+    public List<String> keywordVariants(String cleaned, String anchor, int cap) {
+        return java.util.Collections.emptyList();
     }
 
     private Mono<GeminiResponse> postToGemini(String prompt) {

@@ -75,4 +75,32 @@ public class ChatStreamEmitter {
             log.warn("[Emitter] Failed to serialize understanding: {}", e.toString());
         }
     }
+
+    public void sendToken(String sessionKey, String text) {
+        send(sessionKey, com.example.lms.dto.ChatStreamEvent.token(text));
+    }
+    public void sendStatus(String sessionKey, String text) {
+        send(sessionKey, com.example.lms.dto.ChatStreamEvent.status(text));
+    }
+
+    /**
+     * Emit a generic event to the registered SSE sink.  If no sink exists for
+     * the given session or either parameter is null the call is a no-op.
+     *
+     * @param sessionKey session identifier to emit to
+     * @param event the stream event to send
+     */
+    private void send(String sessionKey, com.example.lms.dto.ChatStreamEvent event) {
+        if (sessionKey == null || event == null) return;
+        var sink = sinks.get(sessionKey);
+        if (sink == null) return;
+        try {
+            sink.tryEmitNext(ServerSentEvent.<com.example.lms.dto.ChatStreamEvent>builder(event)
+                    .event(event.type())
+                    .build());
+        } catch (Exception e) {
+            log.warn("[Emitter] Failed to send SSE event: {}", e.toString());
+        }
+    }
+    
 }

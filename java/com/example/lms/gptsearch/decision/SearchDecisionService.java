@@ -49,8 +49,19 @@ public class SearchDecisionService {
         }
         if (providers.isEmpty()) {
             // Default provider order when none specified
-            providers.add(ProviderId.BING);
-            providers.add(ProviderId.TAVILY);
+            boolean english = looksEnglish(query);
+            if (english) {
+                // 영어질의: GoogleCSE → Bing → Tavily → Naver
+                providers.add(ProviderId.GOOGLECSE);
+                providers.add(ProviderId.BING);
+                providers.add(ProviderId.TAVILY);
+                providers.add(ProviderId.NAVER);
+            } else {
+                // 한글/기타: NAVER → Bing → Tavily
+                providers.add(ProviderId.NAVER);
+                providers.add(ProviderId.BING);
+                providers.add(ProviderId.TAVILY);
+            }
         }
         switch (mode) {
             case OFF:
@@ -73,5 +84,31 @@ public class SearchDecisionService {
                     return new SearchDecision(false, SearchDecision.Depth.LIGHT, providers, k, "No search needed (heuristic)");
                 }
         }
+    }
+
+    /**
+     * Heuristic to determine if a query appears to be English.  Counts Latin
+     * letters versus Hangul syllables; if at least one Latin letter is present
+     * and no Hangul is detected we consider it English.
+     *
+     * @param s the input query
+     * @return true if the query appears to be English, false otherwise
+     */
+    private static boolean looksEnglish(String s) {
+        if (s == null) return false;
+        int latin = 0, hangul = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+                latin++;
+            }
+            Character.UnicodeBlock b = Character.UnicodeBlock.of(c);
+            if (b == Character.UnicodeBlock.HANGUL_SYLLABLES
+                    || b == Character.UnicodeBlock.HANGUL_JAMO
+                    || b == Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO) {
+                hangul++;
+            }
+        }
+        return latin > 0 && hangul == 0;
     }
 }

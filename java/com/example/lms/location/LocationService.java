@@ -45,6 +45,26 @@ public class LocationService {
     private final java.util.Map<String, com.example.lms.location.geo.ReverseGeocodingClient.Address> lastResolved = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
+     * Granularity thresholds controlling how coarse the returned address should
+     * be depending on the reported GPS accuracy.  These values are
+     * configurable via the {@code location.thresholds.*} properties.  When
+     * the accuracy is less than or equal to {@code roadThreshold} the
+     * service will attempt to return a road level address (when available).
+     * When greater than {@code roadThreshold} but less than or equal to
+     * {@code dongThreshold} a city + dong (neighbourhood) address is
+     * returned.  When greater than {@code dongThreshold} but less than or
+     * equal to {@code districtThreshold} a city + district (gu/군) address
+     * is returned.  Accuracy beyond {@code districtThreshold} results in a
+     * city level address.
+     */
+    @org.springframework.beans.factory.annotation.Value("${location.thresholds.road-m:200}")
+    private float roadThreshold;
+    @org.springframework.beans.factory.annotation.Value("${location.thresholds.dong-m:1000}")
+    private float dongThreshold;
+    @org.springframework.beans.factory.annotation.Value("${location.thresholds.district-m:5000}")
+    private float districtThreshold;
+
+    /**
      * Persist or update the user's consent for location based features.  If
      * a record does not already exist for the user one will be created.
      *
@@ -177,38 +197,45 @@ public class LocationService {
             return Optional.empty();
         }
         LastLocation loc = lastOpt.get();
-        // Accuracy check: if accuracy is too large skip geocoding
-        float acc = loc.getAccuracy();
-        // If accuracy is unreasonably high (> 2km) fall back to coordinate message
-        boolean skipGeocode = acc > 2000.0f;
-        if (!skipGeocode) {
-            try {
-                var addressOpt = reverseGeocodingClient.reverse(loc.getLatitude(), loc.getLongitude());
-                if (addressOpt.isPresent()) {
-                    var a = addressOpt.get();
-                    if (a.road() != null && !a.road().isBlank()) {
-                        String msg = String.format("현재 %s 근처에 계신 것으로 보여요.", a.road());
-                        log.info("answerWhereAmI: resolved road level address for user {}: {}", userId, msg);
-                        return Optional.of(msg);
-                    } else if (a.city() != null && a.district() != null
-                            && !a.city().isBlank() && !a.district().isBlank()) {
-                        String msg = String.format("현재 %s %s 인근에 계신 것으로 보여요.", a.city(), a.district());
-                        log.info("answerWhereAmI: resolved city/district for user {}: {}", userId, msg);
-                        return Optional.of(msg);
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("answerWhereAmI: reverse geocoding threw", e);
+        // Stale check: if the location is older than 24 hours advise refresh
+        try {
+            java.time.Duration age = java.time.Duration.between(loc.getCapturedAt(), java.time.Instant.now());
+            if (age.toHours() >= 24) {
+                log.info("answerWhereAmI: stale location ({}h); advising refresh", age.toHours());
+                return Optional.of("최근 위치 정보가 오래되었습니다(약 " + age.toHours() + "시간 전). 우측 상단의 위치 버튼을 눌러 갱신해 주세요.");
             }
-        } else {
-            log.info("answerWhereAmI: skipping reverse geocoding due to high accuracy {}m", acc);
+        } catch (Exception ignore) {
+            // fail softly when capturedAt is null or invalid
         }
-        // Fallback to raw coordinates if we have them
+        float acc = Math.max(0f, loc.getAccuracy());
         double lat = loc.getLatitude();
         double lng = loc.getLongitude();
-        String fallback = String.format("현재 위치는 위도 %.5f°, 경도 %.5f° 근방입니다.", lat, lng);
-        log.info("answerWhereAmI: falling back to coordinates for user {}", userId);
-        return Optional.of(fallback);
+        // Log low precision cases to aid debugging.  When the uncertainty
+        // exceeds the district threshold the returned address will be very
+        // coarse.
+        if (acc >= districtThreshold) {
+            log.info("answerWhereAmI: low GPS precision (uncertainty={}m) → coarse address", acc);
+        }
+        // 1) Prefer cached address resolved during saveEvent.  This avoids
+        // hitting the geocoding service when the user has already sent a
+        // location event.
+        var cached = getResolvedAddress(userId);
+        if (cached.isPresent()) {
+            return Optional.of(renderCoarse(cached.get(), acc, lat, lng));
+        }
+        // 2) Attempt reverse geocoding regardless of accuracy.  Fail
+        // softly on exceptions.
+        try {
+            var addrOpt = reverseGeocodingClient.reverse(lat, lng);
+            if (addrOpt.isPresent()) {
+                return Optional.of(renderCoarse(addrOpt.get(), acc, lat, lng));
+            }
+        } catch (Exception ignore) {
+            // swallow all exceptions; we will fall back to coordinates
+        }
+        // 3) Fallback to coordinates only message when no address could be
+        // resolved.
+        return Optional.of(renderCoordinates(lat, lng, acc));
     }
 
     /**
@@ -224,5 +251,92 @@ public class LocationService {
             return LocationIntent.NONE;
         }
         return intentDetector.detect(query);
+    }
+
+    /**
+     * Assemble a human friendly message from a resolved address and the
+     * reported accuracy.  The granularity of the displayed address is
+     * determined by the configured thresholds: road, dong and district.
+     * When the accuracy is within the road threshold and a road address
+     * exists it will be displayed.  When the accuracy is between the road
+     * and dong thresholds the service returns a city + dong (neighbourhood)
+     * address when available.  Between the dong and district thresholds the
+     * service returns a city + district address.  Beyond the district
+     * threshold only the city is returned.  A precision hint and a Google
+     * Maps link are always included.
+     *
+     * @param a   the resolved address from the geocoding provider
+     * @param acc the reported accuracy in meters
+     * @param lat the latitude used for the lookup
+     * @param lng the longitude used for the lookup
+     * @return a formatted string for end users
+     */
+    private String renderCoarse(com.example.lms.location.geo.ReverseGeocodingClient.Address a,
+                                float acc, double lat, double lng) {
+        String display;
+        if (acc <= roadThreshold && a.road() != null && !a.road().isBlank()) {
+            display = a.road();
+        } else if (acc <= dongThreshold && a.district() != null && !a.district().isBlank()) {
+            display = (a.city() != null && !a.city().isBlank())
+                    ? (a.city() + " " + a.district())
+                    : a.district();
+        } else if (acc <= districtThreshold && a.district() != null && !a.district().isBlank()) {
+            display = (a.city() != null && !a.city().isBlank())
+                    ? (a.city() + " " + a.district())
+                    : a.district();
+        } else {
+            if (a.city() != null && !a.city().isBlank()) {
+                display = a.city();
+            } else if (a.district() != null && !a.district().isBlank()) {
+                display = a.district();
+            } else {
+                display = "알 수 없는 지역";
+            }
+        }
+        return renderHuman(display, lat, lng, acc);
+    }
+
+    /**
+     * Format a fallback message using only coordinates.  When no address is
+     * available this method produces a generic location hint with a
+     * precision indicator and a Google Maps link.
+     *
+     * @param lat latitude in decimal degrees
+     * @param lng longitude in decimal degrees
+     * @param acc accuracy in meters
+     * @return a human friendly message containing only coordinates
+     */
+    private String renderCoordinates(double lat, double lng, float acc) {
+        return renderHuman(null, lat, lng, acc);
+    }
+
+    /**
+     * Compose the final user facing string given an optional display name
+     * (road, dong, district or city), the raw coordinates and the accuracy.
+     * When the display name is null or blank a generic coordinate hint is
+     * returned.  Otherwise the display name is included along with the
+     * precision hint and a Google Maps link.
+     *
+     * @param display the human readable address fragment (may be null)
+     * @param lat     latitude in decimal degrees
+     * @param lng     longitude in decimal degrees
+     * @param acc     accuracy in meters
+     * @return a formatted string for the chat interface
+     */
+    private String renderHuman(String display, double lat, double lng, float acc) {
+        String prec = (acc >= 1000f)
+                ? String.format("±%.1fkm", acc / 1000f)
+                : String.format("±%.0fm", acc);
+        String map = "https://maps.google.com/?q=" + lat + "," + lng;
+        if (display == null || display.isBlank()) {
+            return String.format(
+                    "📍 좌표 기준 추정 위치 %s (좌표: %.5f°, %.5f° · 지도: %s)",
+                    prec, lat, lng, map
+            );
+        }
+        return String.format(
+                "📍 %s (%s)\n↳ 좌표: %.5f°, %.5f° · 지도: %s",
+                display, prec, lat, lng, map
+        );
     }
 }

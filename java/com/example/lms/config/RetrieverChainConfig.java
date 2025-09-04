@@ -31,7 +31,6 @@ public class RetrieverChainConfig {
             MemoryHandler memoryHandler,
             SelfAskWebSearchRetriever selfAsk,
             AnalyzeWebSearchRetriever analyze,
-            AdaptiveWebSearchHandler adaptiveWeb,
             WebSearchRetriever web,
             LangChainRAGService rag,
             EvidenceRepairHandler evidenceRepairHandler,
@@ -39,26 +38,37 @@ public class RetrieverChainConfig {
             KnowledgeGraphHandler kg,
             RetrievalOrderService orderService,
             SseEventPublisher sse,
-            LocationService locationService) {
+            LocationService locationService,
+            @Value("${pinecone.index.name:}") String pineconeIndexName,
+            @Value("${router.moe.relief.threshold-tokens:12000}") int thresholdTokens) {
         /*
-         * Construct a fixed-order retrieval chain with an additional location-aware
-         * short-circuit stage.  The chain executes the following steps:
-         *   Memory → Self‑Ask → Analyze → Location detection → Adaptive Web → Web → Vector → Repair
-         * When the location service detects a location-related intent the chain returns
-         * immediately without performing any web or vector retrieval.  This allows
-         * downstream chat logic to handle location queries via specialized services.
+         * Construct a fixed retrieval chain in the required order for MOE evaluation.
+         *
+         * The desired sequence of handlers is:
+         *   SelfAskHandler → AnalyzeHandler → WebHandler → VectorDbHandler
+         * Optionally prefix the chain with a MemoryHandler to load session history
+         * before performing any retrieval.  Each handler is linked via the
+         * responsibility chain pattern using {@link AbstractRetrievalHandler#linkWith}.
          */
-        return new DefaultRetrievalHandlerChain(
-                memoryHandler,
-                selfAsk,
-                analyze,
-                adaptiveWeb,
-                web,
-                rag,
-                evidenceRepairHandler,
-                gate,
-                locationService
+        // Create individual handlers wrapping the appropriate retrievers.
+        var h1 = new com.example.lms.service.rag.handler.SelfAskHandler(selfAsk);
+        var h2 = new com.example.lms.service.rag.handler.AnalyzeHandler(analyze);
+        var h3 = new com.example.lms.service.rag.handler.WebHandler(web);
+        var h4 = new com.example.lms.service.rag.handler.VectorDbHandler(rag, pineconeIndexName);
+        // Insert a search cost guard between analyze and web to log relief hints when token budget is large.
+        var costGuard = new com.example.lms.service.rag.handler.SearchCostGuardHandler(
+                text -> Math.min(16000, text.length() / 3),
+                thresholdTokens,
+                msg -> org.slf4j.LoggerFactory.getLogger("guard").info(msg)
         );
+
+        // Link handlers: SelfAsk → Analyze → (CostGuard) → Web → Vector.
+        h1.linkWith(h2).linkWith(costGuard).linkWith(h3).linkWith(h4);
+
+
+
+        // Return the head of the chain.  Downstream callers should invoke handle() on this bean.
+        return h1;
     }
 
     /**

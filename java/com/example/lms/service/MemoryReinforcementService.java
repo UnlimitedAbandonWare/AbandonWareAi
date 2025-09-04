@@ -103,12 +103,16 @@ public class MemoryReinforcementService {
                                      double score,
                                      String hash) {
 
+        // When no existing record is found, construct a new TranslationMemory with the
+        // computed source hash.  Using a lambda avoids relying on a Lombok-generated
+        // no‑arg constructor that may not be present if annotation processing fails.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
-                .orElseGet(TranslationMemory::new);
+                .orElseGet(() -> new TranslationMemory(hash));
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
-            tm.setSessionId((sid == null || sid.isBlank()) ? "*" : sid);
+            // [HARDENING] use __TRANSIENT__ instead of wildcard for unknown session
+            tm.setSessionId((sid == null || sid.isBlank()) ? "__TRANSIENT__" : sid);
             // 존재하는 수치 필드만 안전하게 초기화
             tm.setHitCount(0);
             tm.setSuccessCount(0);
@@ -381,12 +385,14 @@ public class MemoryReinforcementService {
             log.debug("[Reinforce] skip store (score < cutoff or bad snippet). score={}, cutoff={}", score, lowScoreCutoff);
             return;
         }
-        String sid  = StringUtils.hasText(sessionId) ? sessionId : "*";
+        // [HARDENING] normalize null/blank to __TRANSIENT__
+        String sid  = StringUtils.hasText(sessionId) ? sessionId : "__TRANSIENT__";
         String hash = sha1(snippet);
 
         // 기존 레코드 조회 or 새로 생성
+        // When no record exists, construct a new TranslationMemory with the current snippet's hash.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
-                .orElseGet(TranslationMemory::new);
+                .orElseGet(() -> new TranslationMemory(hash));
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
@@ -439,7 +445,7 @@ public class MemoryReinforcementService {
             }
         } catch (Exception ignore) {}
         // + 벡터 색인 큐에 적재(예외 무시)
-        try { vectorStoreService.enqueue(sessionId != null ? sessionId : "*", snippet); } catch (Exception ignore) {}
+        try { vectorStoreService.enqueue(sessionId != null ? sessionId : "__TRANSIENT__", snippet); } catch (Exception ignore) {}
     }
 
     /**
@@ -474,8 +480,9 @@ public class MemoryReinforcementService {
      */
     public void reinforceMemoryWithText(String text) {
         if (!StringUtils.hasText(text)) return;
-        // 세션 미상 → 공용("*")으로 적재, 보수적 점수 0.5
-        reinforceWithSnippet("*", "", text, "TEXT", 0.5);
+        // 세션 미상 → 공용(__TRANSIENT__)으로 적재, 보수적 점수 0.5 [HARDENING]
+        // [HARDENING] unknown session -> __TRANSIENT__
+        reinforceWithSnippet("__TRANSIENT__", "", text, "TEXT", 0.5);
     }
 
     /* ────────────── 호환 유틸 ────────────── */
@@ -536,19 +543,21 @@ public class MemoryReinforcementService {
     }
     /* ====================== Missing helpers (added) ====================== */
 
-    /** 세션키 정규화: 숫자면 chat- 접두, 없으면 "*" */
+    /** 세션키 정규화: 숫자면 chat- 접두, 없으면 "__TRANSIENT__" */ // [HARDENING]
     private static String normalizeSessionId(String sessionId) {
-        if (!StringUtils.hasText(sessionId)) return "*";
+        // [HARDENING] return __TRANSIENT__ when no session id
+        if (!StringUtils.hasText(sessionId)) return "__TRANSIENT__";
         String s = sessionId.trim();
         if (s.startsWith("chat-")) return s;
         if (s.matches("\\d+")) return "chat-" + s;
         return s;
     }
 
-    /** “안정적인” 세션키 판단: 공용(*) | chat- 접두 | 6자 이상 영숫자/대시 */
+    /** “안정적인” 세션키 판단: chat- 접두 또는 6자 이상 영숫자/대시; '*' 및 __TRANSIENT__ are unstable */ // [HARDENING]
     private static boolean isStableSid(String sid) {
         if (!StringUtils.hasText(sid)) return false;
-        if ("*".equals(sid)) return true;
+        // [HARDENING] __TRANSIENT__ is not considered stable; we avoid wildcard '*'
+        if ("__TRANSIENT__".equals(sid)) return false;
         if (sid.startsWith("chat-")) return true;
         return Pattern.compile("^[A-Za-z0-9\\-]{6,}$").matcher(sid).matches();
     }

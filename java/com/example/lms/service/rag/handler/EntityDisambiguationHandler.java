@@ -56,7 +56,7 @@ public class EntityDisambiguationHandler {
             if (confidence != null) {
                 // Attempt to parse numeric confidence first
                 try {
-                    double cf = Double.parseDouble(confidence);
+                    double cf = Double.parseDouble(confidence.trim().replace(",", "."));
                     goodConfidence = cf >= confidenceThreshold;
                 } catch (NumberFormatException nfe) {
                     // Fallback to high/low semantics
@@ -64,42 +64,21 @@ public class EntityDisambiguationHandler {
                 }
             }
             if (rewritten != null && !rewritten.isBlank() && goodConfidence) {
-                // Try to construct a new Query instance with rewritten text.
+                log.debug("[EntityDisambiguation] rewrite accepted: '{}' -> '{}'", query.text(), rewritten);
                 try {
-                    // The Query API may provide a static factory or builder. Attempt common patterns.
-                    // 1. Query.from(String)
-                    var fromMethod = query.getClass().getMethod("from", String.class);
-                    return (Query) fromMethod.invoke(null, rewritten);
-                } catch (Exception ignore) {
-                    // 2. Query.of(String)
-                    try {
-                        var ofMethod = query.getClass().getMethod("of", String.class);
-                        return (Query) ofMethod.invoke(null, rewritten);
-                    } catch (Exception ignore2) {
-                        // 3. Builder pattern: Query.builder().text(...).metadata(...)
-                        try {
-                            var builderMethod = query.getClass().getMethod("builder");
-                            Object builder = builderMethod.invoke(null);
-                            var textMethod = builder.getClass().getMethod("text", String.class);
-                            textMethod.invoke(builder, rewritten);
-                            // attempt to copy metadata if method exists
-                            try {
-                                var md = query.metadata();
-                                if (md != null) {
-                                    var metaMethod = builder.getClass().getMethod("metadata", md.getClass());
-                                    metaMethod.invoke(builder, md);
-                                }
-                            } catch (Exception ignore3) {
-                                // metadata copy not supported
-                            }
-                            var buildMethod = builder.getClass().getMethod("build");
-                            return (Query) buildMethod.invoke(builder);
-                        } catch (Exception ignore3) {
-                            // fallback: unable to instantiate, return original
-                        }
-                    }
+                    return Query.builder()
+                            .text(rewritten)
+                            .metadata(query != null ? query.metadata() : null)
+                            .build();
+                } catch (Exception e) {
+                    log.debug("[EntityDisambiguation] rebuild failed, keep original: {}", e.toString());
                 }
             }
+            else {
+                log.debug("[EntityDisambiguation] rewrite skipped (confidence or empty): conf='{}', rewritten='{}'",
+                        confidence, rewritten);
+            }
+
         } catch (Exception e) {
             log.debug("[EntityDisambiguation] disambiguate failed: {}", e.toString());
         }

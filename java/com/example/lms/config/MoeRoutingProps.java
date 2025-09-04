@@ -18,7 +18,10 @@ public class MoeRoutingProps {
      * Minimum number of tokens required to trigger a promotion to the MOE
      * model.  Defaults to 1200 when unspecified.
      */
-    private int tokensThreshold = 1200;
+    // Set a lower default token threshold.  When the requested token count exceeds
+    // this value the router will promote to the high‑tier model.  The default is
+    // 280, tuned to allow more general queries to trigger MOE escalation.
+    private int tokensThreshold = 280;
 
     /**
      * Complexity score threshold.  Complexity values in the range [0,1]
@@ -30,13 +33,19 @@ public class MoeRoutingProps {
      * Uncertainty score threshold.  Values in the range [0,1] exceeding this
      * threshold will cause an upgrade.  Defaults to 0.40.
      */
-    private double uncertaintyThreshold = 0.40;
+    // Lower uncertainty threshold: when the uncertainty score exceeds 0.35 an
+    // upgrade is triggered.  This increases the likelihood of escalation on
+    // ambiguous or low‑confidence inputs.
+    private double uncertaintyThreshold = 0.35;
 
     /**
      * Web evidence score threshold.  Values in the range [0,1] exceeding this
      * threshold will cause an upgrade.  Defaults to 0.60.
      */
-    private double webEvidenceThreshold = 0.60;
+    // Lower web evidence threshold: when the fused web evidence score exceeds
+    // 0.55 an upgrade is triggered.  This encourages MOE promotion when
+    // credible web evidence is abundant.
+    private double webEvidenceThreshold = 0.55;
 
     public int getTokensThreshold() {
         return tokensThreshold;

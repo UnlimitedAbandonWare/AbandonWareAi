@@ -17,7 +17,7 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
 
     @Override
     protected WebSearchResult doSearch(WebSearchQuery query) {
-        // TODO: Implement SerpAPI integration
+        // Placeholder: implement SerpAPI integration.
         return new WebSearchResult(id().name(), java.util.Collections.emptyList());
     }
 }

@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -61,8 +62,15 @@ public class KakaoReverseGeocodingClient implements ReverseGeocodingClient {
                     .header(HttpHeaders.AUTHORIZATION, "KakaoAK " + apiKey)
                     .retrieve()
                     .bodyToMono(String.class)
-                    .timeout(Duration.ofSeconds(3));
+                    .timeout(Duration.ofSeconds(3))
+                    // Offload the HTTP call to a dedicated I/O scheduler so that
+                    // any downstream blocking does not tie up the event loop.
+                    .subscribeOn(Schedulers.boundedElastic());
 
+            // Blocking here is acceptable as this API returns a synchronous
+            // Optional.  Because the upstream Mono subscribes on an
+            // elastic scheduler, the network I/O will not block reactive
+            // event loops.
             String json = call.block();
             if (json == null || json.isEmpty()) {
                 return Optional.empty();

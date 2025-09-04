@@ -191,4 +191,17 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
             return java.util.Map.of();
         }
     }
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = original.metadata() != null
+            ? original.metadata()
+            : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        // Directly construct a new Query with the updated metadata.  LangChain4j 1.0.x
+        // exposes a public constructor taking text and metadata, so we avoid the deprecated
+        // builder API and any reflective fallback.
+        return new dev.langchain4j.rag.query.Query(original.text(), md);
+    }
+
 }

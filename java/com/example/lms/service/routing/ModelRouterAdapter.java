@@ -2,8 +2,7 @@ package com.example.lms.service.routing;
 
 import dev.langchain4j.model.chat.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Component;
+// Removed Profile and Component imports since this adapter is no longer a Spring bean
 
 /**
  * Thin adapter bean that exposes the core {@link ModelRouter} under the
@@ -13,8 +12,15 @@ import org.springframework.stereotype.Component;
  * the {@code legacy-router} profile is enabled this bean can be replaced
  * with an alternative implementation.
  */
-@Component("modelRouter")
-@Profile("!legacy-router")
+// Adapter bean is disabled to eliminate duplicate ModelRouter beans.  The
+// {@link ModelRouterCore} is marked as @Primary and will be injected
+// directly wherever a ModelRouter is required.
+//
+// Note: this adapter is intentionally **not** registered as a Spring bean.  By
+// removing the @Component and @Profile annotations the class becomes a
+// simple delegate that can be instantiated manually if needed.  This
+// prevents the creation of a second ModelRouter bean in the default
+// profile, ensuring that only the core router is active.
 public class ModelRouterAdapter implements ModelRouter {
 
     private final ModelRouter delegate;

@@ -43,6 +43,34 @@ public class QueryRouteHandler implements RetrievalHandler {
         // Defensive: ensure a text value exists
         String text = query.text() != null ? query.text() : "";
         try {
+            // If routing hints already exist in the metadata, respect them and do not override.
+            boolean hasHints = false;
+            try {
+                Object m = query.metadata();
+                if (m != null) {
+                    java.lang.reflect.Method asMap = null;
+                    try {
+                        asMap = m.getClass().getMethod("map");
+                    } catch (NoSuchMethodException ex) {
+                        try {
+                            asMap = m.getClass().getMethod("asMap");
+                        } catch (NoSuchMethodException ignore) {
+                            asMap = null;
+                        }
+                    }
+                    if (asMap != null) {
+                        asMap.setAccessible(true);
+                        Object raw = asMap.invoke(m);
+                        if (raw instanceof java.util.Map<?,?> mm) {
+                            hasHints = mm.containsKey("precision") || mm.containsKey("depth") || mm.containsKey("route");
+                        }
+                    }
+                }
+            } catch (Exception ignore) {}
+            if (hasHints) {
+                // Do not override existing routing hints
+                return;
+            }
             // Invoke the decision engine with default AUTO mode and no provider hints
             SearchDecision decision = decisionService.decide(text, SearchMode.AUTO, null, null);
             // Build a metadata map capturing useful routing hints

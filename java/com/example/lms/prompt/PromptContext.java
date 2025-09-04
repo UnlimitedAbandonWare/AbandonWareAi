@@ -2,6 +2,7 @@ package com.example.lms.prompt;
 
 import com.example.lms.service.rag.pre.CognitiveState;
 import dev.langchain4j.rag.content.Content;
+import dev.langchain4j.data.document.Document;
 
 import java.util.*;
 
@@ -57,6 +58,10 @@ public record PromptContext(
         String citationStyle,         // 출처 표기 스타일 (예: "inline", "footnote")
         List<String> unsupportedClaims,   // 🆕 치유 단계에서 전달될 '미지원 주장' 목록
         String systemInstruction          // 🆕 특수 지시(예: "CORRECTIVE_REGENERATION")
+        , java.util.List<Document> localDocs
+        , java.util.List<Document> ragDocs
+        , Boolean ragEnabled
+        , Boolean webEnabled
 ) {
 
     /**
@@ -105,6 +110,24 @@ public record PromptContext(
          * there is no recent location on record.
          */
         private LocationSection location;
+
+        // ───── 추가: 첨부 및 벡터 문서 ─────
+        /** Documents extracted from uploaded attachments.  These are injected
+         * into the prompt before any other evidence sources and treated as
+         * ground truth.  Defaults to an empty list when no attachments are
+         * provided. */
+        private java.util.List<Document> localDocs = java.util.Collections.emptyList();
+        /** Documents retrieved from the vector database when RAG is enabled.
+         * Defaults to an empty list. */
+        private java.util.List<Document> ragDocs = java.util.Collections.emptyList();
+        /** Toggle indicating whether RAG retrieval should be executed.  When
+         * true the retriever may be invoked; when false no vector search
+         * should occur. */
+        private Boolean ragEnabled;
+        /** Toggle indicating whether live/hybrid web search should be
+         * executed.  This flag is independent of RAG and can be enabled
+         * explicitly by the client. */
+        private Boolean webEnabled;
         public Builder userQuery(String v) { this.userQuery = v; return this; }
         public Builder lastAssistantAnswer(String v) { this.lastAssistantAnswer = v; return this; }
         public Builder history(String v) { this.history = v; return this; }
@@ -168,6 +191,50 @@ public record PromptContext(
             return this;
         }
 
+        /** Assign the list of documents derived from uploaded attachments.  When
+         * null or empty the list is set to an empty list to avoid null checks.
+         *
+         * @param v documents representing attachment content
+         * @return this builder for chaining
+         */
+        public Builder localDocs(java.util.List<Document> v) {
+            this.localDocs = (v == null ? java.util.Collections.emptyList() : v);
+            return this;
+        }
+
+        /** Assign the list of documents retrieved from the vector database.  When
+         * null or empty the list is set to an empty list.
+         *
+         * @param v documents from vector retrieval
+         * @return this builder for chaining
+         */
+        public Builder ragDocs(java.util.List<Document> v) {
+            this.ragDocs = (v == null ? java.util.Collections.emptyList() : v);
+            return this;
+        }
+
+        /** Enable or disable RAG retrieval for this context.  When null the
+         * downstream handler may fall back to a configured default.
+         *
+         * @param v true to enable vector retrieval, false to disable
+         * @return this builder for chaining
+         */
+        public Builder ragEnabled(Boolean v) {
+            this.ragEnabled = v;
+            return this;
+        }
+
+        /** Enable or disable web search for this context.  When null the
+         * downstream handler may fall back to a configured default.
+         *
+         * @param v true to enable web search, false to disable
+         * @return this builder for chaining
+         */
+        public Builder webEnabled(Boolean v) {
+            this.webEnabled = v;
+            return this;
+        }
+
         public Builder unsupportedClaims(List<String> v) { this.unsupportedClaims = (v == null ? Collections.emptyList() : v); return this; } // 🆕
         public Builder systemInstruction(String v) { this.systemInstruction = (v == null ? "" : v.trim()); return this; }                     // 🆕
         /**
@@ -198,7 +265,11 @@ public record PromptContext(
                     audience,
                     citationStyle,
                     unsupportedClaims,
-                    systemInstruction
+                    systemInstruction,
+                    localDocs,
+                    ragDocs,
+                    ragEnabled,
+                    webEnabled
             );
         }
     }

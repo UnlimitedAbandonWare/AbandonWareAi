@@ -48,10 +48,11 @@ public class LangChainRAGService {
 
     /** Unified metadata key – 모든 서비스가 동일 키 사용 */
     public static final String META_SID = "sid";   // ← ChatService & NaverSearchService 와 통일
-    /** sid 필터: null 또는 "*"는 공용으로 간주하여 통과 */
+    /** sid 필터: null 또는 "__PRIVATE__"는 공용으로 간주하여 통과; wildcard removed */ // [HARDENING]
     private boolean passesSid(Map<String, Object> md, String currentSid) {
         String sid = Optional.ofNullable(md.get(META_SID)).map(String::valueOf).orElse(null);
-        if (sid == null || "*".equals(sid)) return true;                // 공용 허용
+        // [HARDENING] treat null or __PRIVATE__ as public; do not allow '*' wildcard
+        if (sid == null || "__PRIVATE__".equals(sid)) return true;
         return currentSid != null && currentSid.equals(sid);            // 동일 세션만 허용
     }
 
@@ -74,7 +75,8 @@ public class LangChainRAGService {
     }
 
 
-    private final com.example.lms.model.ModelRouter modelRouter; // 라우팅은 이걸로만
+    // 단일 진실원(Single Source of Truth)으로 통일: service.routing.ModelRouter 사용
+    private final com.example.lms.service.routing.ModelRouter modelRouter; // 라우팅은 이걸로만
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final MemoryReinforcementService  memorySvc;
@@ -104,7 +106,14 @@ public class LangChainRAGService {
 
     /** 벡터스토어에서 RAG 컨텍스트 검색 */
     private List<String> retrieveRagContext(String query, String sessionId) {
-        Embedding queryEmbedding = embeddingModel.embed(query).content();
+        Embedding queryEmbedding;
+        try {
+            queryEmbedding = embeddingModel.embed(query).content();
+        } catch (Exception e) {
+            log.warn("[RAG] embedding failed, degrade to lexical/web-only: {}", e.toString());
+            // When embedding fails, return no vector matches to allow fallback behaviour.
+            return java.util.Collections.emptyList();
+        }
         EmbeddingSearchRequest req = EmbeddingSearchRequest.builder()
                 .queryEmbedding(queryEmbedding)
                 .maxResults(topK)
@@ -126,8 +135,17 @@ public class LangChainRAGService {
                     .map(Object::toString)
                     .orElse(null);
 
+            Embedding queryEmbedding;
+            try {
+                queryEmbedding = embeddingModel.embed(q.text()).content();
+            } catch (Exception e) {
+                log.warn("[RAG] embedding failed, degrade to lexical/web-only: {}", e.toString());
+                // When embedding fails return an empty list so web search may still run.
+                return java.util.Collections.emptyList();
+            }
+
             EmbeddingSearchRequest req = EmbeddingSearchRequest.builder()
-                    .queryEmbedding(embeddingModel.embed(q.text()).content())
+                    .queryEmbedding(queryEmbedding)
                     .maxResults(topK)
                     .minScore(minScore)
                     .build();
@@ -175,10 +193,16 @@ public class LangChainRAGService {
         // ── 모델 라우팅(override 우선)
 
 
-        // ── 의도 추정 (한 번만 선언)
         final String intent = (preprocessor != null) ? preprocessor.inferIntent(query) : "GENERAL";
-        // ── 모델 라우팅(override 우선)
-        ChatModel use = (override != null) ? override : modelRouter.route(intent);
+
+// 간단 위험도/상세도/출력예산 기본값
+        final String risk = null;          // 필요하면 간단 휴리스틱으로 "HIGH"/"LOW" 넣어도 됨
+        final String verbosity = "standard";
+        final int targetOutTokens = 1024;
+
+        ChatModel use = (override != null)
+                ? override
+                : modelRouter.route(intent, risk, verbosity, targetOutTokens);
         log.debug("▶ RAG 시작 session={}, query={}", sessionId, query);
 
         // 1) 자료 수집

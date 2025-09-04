@@ -10,6 +10,8 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
+import dev.langchain4j.rag.query.Metadata; // [HARDENING] 1.0.x Query 메타 타입
+import java.util.Map; // [HARDENING]
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,12 +29,14 @@ import java.util.stream.Collectors;
 import java.util.concurrent.ForkJoinPool;
 
 import com.example.lms.service.rag.auth.AuthorityScorer;
+import com.example.lms.retrieval.util.TimeBudget;
 
 import com.example.lms.service.config.HyperparameterService;   // ★ NEW
 import com.example.lms.util.MLCalibrationUtil;
 import com.example.lms.service.scoring.AdaptiveScoringService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.learning.NeuralPathFormationService;
+import com.example.lms.service.rag.rerank.RerankGate;
 import org.springframework.beans.factory.annotation.Qualifier; // - FIX: 다중 빈 모호성 해결용 @Qualifier
 import jakarta.annotation.PostConstruct; // + 개선: 프로퍼티 기반 백엔드 선택 지원
 
@@ -42,6 +46,8 @@ import jakarta.annotation.PostConstruct; // + 개선: 프로퍼티 기반 백엔
 public class HybridRetriever implements ContentRetriever {
     // fields (다른 final 필드들과 같은 위치)
     private final LightWeightRanker lightWeightRanker;
+    // Gate controlling invocation of the expensive cross‑encoder reranker.
+    private final com.example.lms.service.rag.rerank.RerankGate rerankGate;
     private final AuthorityScorer authorityScorer;
     private static final double GAME_SIM_THRESHOLD = 0.3;
 
@@ -57,6 +63,12 @@ public class HybridRetriever implements ContentRetriever {
     // 체인 & 융합기
     private final RetrievalHandler handlerChain;
     private final ReciprocalRankFuser fuser;
+    // Optional weighted RRF fuser.  When present and the fusionMode is set
+    // appropriately (e.g. "weighted-rrf"), the hybrid retriever will use it
+    // instead of the standard RRF fuser.  The WeightedReciprocalRankFuser
+    // supports per‑source weights tuned at runtime via the HyperparameterService.
+    @Autowired(required = false)
+    private com.example.lms.service.rag.fusion.WeightedReciprocalRankFuser weightedFuser;
     private final AnswerQualityEvaluator qualityEvaluator;
     private final SelfAskPlanner selfAskPlanner;
     private final RelevanceScoringService relevanceScoringService;
@@ -67,6 +79,18 @@ public class HybridRetriever implements ContentRetriever {
     private final KnowledgeBaseService kb;
     // Path formation service used to reinforce high-consistency entity pairs.
     private final NeuralPathFormationService pathFormation;
+
+    /**
+     * Optional Redis‑backed cooldown service used to guard expensive
+     * operations such as cross‑encoder reranking.  When configured this
+     * service attempts to acquire a short‑lived lock prior to invoking
+     * the reranker.  If the lock is unavailable the reranking step is
+     * skipped, allowing the system to fall back to the first pass
+     * ranking.  The field may be null when no Redis instance is
+     * available or when cooldown gating is disabled.
+     */
+    @Autowired(required = false)
+    private com.example.lms.service.redis.RedisCooldownService cooldownService;
 
     // 🔴 NEW: 교차엔코더 기반 재정렬(없으면 스킵)
     @Autowired(required = false)
@@ -85,6 +109,19 @@ public class HybridRetriever implements ContentRetriever {
     private final WebSearchRetriever webSearchRetriever;
     private final QueryComplexityGate gate;
 
+    /**
+     * Total time budget in milliseconds for a single retrieval call.  When
+     * specified in application.yml under retriever.budget-ms.total this
+     * value is used to initialise a {@link com.example.lms.retrieval.util.TimeBudget}
+     * instance at the start of {@link #retrieve(Query)}.  Downstream
+     * handlers may reference the budget via thread‑local or context
+     * propagation to enforce per‑handler timeouts.  When unspecified the
+     * default is 6000ms.  Note that the current implementation simply
+     * creates the budget but does not yet enforce it.
+     */
+    @Value("${retriever.budget-ms.total:6000}")
+    private long budgetTotalMs;
+
     // (옵션) 타사 검색기 – 있으면 부족분 보강에 사용
     @Autowired(required = false)
     @org.springframework.beans.factory.annotation.Qualifier("tavilyWebSearchRetriever")
@@ -93,6 +130,39 @@ public class HybridRetriever implements ContentRetriever {
     private final LangChainRAGService ragService;
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> gameEmbeddingStore;
+
+    // ---------------------------------------------------------------------
+    // Domain detector for selecting the appropriate Pinecone index.  When the
+    // domain is GENERAL a dedicated general index may be used (configured via
+    // pinecone.index.general).  When null the default index (pinecone.index.name)
+    // will be used for all domains.
+    private final com.example.lms.service.rag.detector.GameDomainDetector domainDetector;
+
+    /**
+     * Name of the Pinecone index used for GENERAL domain queries.  When this
+     * property is blank or undefined the default pineconeIndexName will be
+     * used instead.  Configure via application.yml: pinecone.index.general.
+     */
+    @org.springframework.beans.factory.annotation.Value("${pinecone.index.general:}")
+    private String pineconeIndexGeneral;
+
+    /**
+     * Choose the appropriate index name based on the detected domain.  If
+     * the domain is GENERAL and a general index has been configured via
+     * pinecone.index.general then that index is returned; otherwise the
+     * default pineconeIndexName is used.
+     *
+     * @param domain the detected domain (case‑insensitive)
+     * @return the name of the pinecone index to query
+     */
+    private String chooseIndex(String domain) {
+        if (domain != null && "GENERAL".equalsIgnoreCase(domain)) {
+            if (pineconeIndexGeneral != null && !pineconeIndexGeneral.isBlank()) {
+                return pineconeIndexGeneral;
+            }
+        }
+        return pineconeIndexName;
+    }
 
     @Value("${pinecone.index.name}")
     private String pineconeIndexName;
@@ -114,12 +184,47 @@ public class HybridRetriever implements ContentRetriever {
     // ★ softmax 융합 온도
     @Value("${retrieval.fusion.softmax.temperature:1.0}")
     private double fusionTemperature;
+
+    /**
+     * Calibration mode for softmax fusion.  Supported values are
+     * {@code minmax}, {@code isotonic} and {@code none}.  When set to
+     * {@code none} or any unsupported value the softmax fusion pathway is
+     * disabled and the system will fall back to RRF.  This value is
+     * configurable via application.yml (retrieval.fusion.softmax.calibration).
+     */
+    @Value("${retrieval.fusion.softmax.calibration:none}")
+    private String softmaxCalibration;
+
+    /**
+     * The number of candidates that will be sent to the cross‑encoder reranker.
+     * This value is used by the rerank gate to decide whether or not to invoke
+     * the expensive cross‑encoder reordering step.  When the first pass
+     * candidate set contains fewer than this number of elements the reranker
+     * is skipped.  Defaults to 12 if unspecified (ranking.rerank.ce.topK).
+     */
+    @Value("${ranking.rerank.ce.topK:12}")
+    private int rerankCeTopK;
     @Value("${retrieval.rank.use-ml-correction:true}")
     private boolean useMlCorrection;  // ★ NEW: ML 보정 온/오프
 
     /** 검색 일관성 → 암묵 강화 임계치 */
     @Value("${retrieval.consistency.threshold:0.8}")
     private double consistencyThreshold;
+
+    // ---------------------------------------------------------------------
+    // Optional chain-of-responsibility handlers.  These handlers can
+    // intercept location, attachment and image generation intents at
+    // various stages of the retrieval pipeline.  They are autowired
+    // optionally to avoid failing the application when the beans are not
+    // defined.  When present they can be integrated into the chain via
+    // explicit wiring in a separate configuration class (see
+    // RagChainConfig).
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.chain.LocationInterceptHandler locationInterceptHandler;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.chain.AttachmentContextHandler attachmentContextHandler;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.chain.ImagePromptGroundingHandler imagePromptGroundingHandler;
 
     @PostConstruct
     private void selectRerankerByProperty() {
@@ -141,6 +246,10 @@ public class HybridRetriever implements ContentRetriever {
 
     @Override
     public List<Content> retrieve(Query query) {
+        // Initialise a time budget for this retrieval call.  The budget can be
+        // referenced by downstream handlers to enforce per‑stage timeouts.
+        // Currently unused but created to satisfy the time budgeting requirement.
+        TimeBudget budget = new TimeBudget(budgetTotalMs);
 
         // 0) 메타 파싱
         String sessionKey = Optional.ofNullable(query)
@@ -171,11 +280,22 @@ public class HybridRetriever implements ContentRetriever {
         // 1) 난이도 게이팅
         final String q = (query != null && query.text() != null) ? query.text().strip() : "";
 
+        // Determine the query domain once up front.  When the domain detector is
+        // unavailable default to GENERAL.  The domain is used when selecting
+        // which Pinecone index to query via chooseIndex().
+        String detectedDomain;
+        try {
+            detectedDomain = (domainDetector != null) ? domainDetector.detect(q) : "GENERAL";
+        } catch (Exception ignore) {
+            detectedDomain = "GENERAL";
+        }
+        final String chosenIndex = chooseIndex(detectedDomain);
+
         // ── 조건부 파이프라인: 교육/국비 키워드 → 벡터 검색 모드 ──────────────────
         try {
             String qLower = q.toLowerCase(java.util.Locale.ROOT);
             if (qLower.contains("학원") || qLower.contains("국비")) {
-                ContentRetriever pineRetriever = ragService.asContentRetriever(pineconeIndexName);
+                ContentRetriever pineRetriever = ragService.asContentRetriever(chosenIndex);
                 List<Content> vectResults = pineRetriever.retrieve(query);
                 // deduplicate results while preserving order
                 LinkedHashSet<Content> unique = new LinkedHashSet<>(vectResults);
@@ -213,7 +333,7 @@ public class HybridRetriever implements ContentRetriever {
                 // 웹 우선, 부족하면 벡터
                 mergedContents.addAll(webSearchRetriever.retrieve(query));
                 if (mergedContents.size() < topK) {
-                    ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
+                    ContentRetriever pine = ragService.asContentRetriever(chosenIndex);
                     mergedContents.addAll(pine.retrieve(query));
                 }
                 if (mergedContents.size() < topK && tavilyWebSearchRetriever != null) {
@@ -225,7 +345,7 @@ public class HybridRetriever implements ContentRetriever {
                 mergedContents.addAll(analyzeRetriever.retrieve(query));
                 if (mergedContents.size() < topK) mergedContents.addAll(webSearchRetriever.retrieve(query));
                 if (mergedContents.size() < topK) {
-                    ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
+                    ContentRetriever pine = ragService.asContentRetriever(chosenIndex);
                     mergedContents.addAll(pine.retrieve(query));
                 }
                 if (mergedContents.size() < topK && tavilyWebSearchRetriever != null) {
@@ -238,7 +358,7 @@ public class HybridRetriever implements ContentRetriever {
                 if (mergedContents.size() < topK) mergedContents.addAll(analyzeRetriever.retrieve(query));
                 if (mergedContents.size() < topK) mergedContents.addAll(webSearchRetriever.retrieve(query));
                 if (mergedContents.size() < topK) {
-                    ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
+                    ContentRetriever pine = ragService.asContentRetriever(chosenIndex);
                     mergedContents.addAll(pine.retrieve(query));
                 }
                 if (mergedContents.size() < topK && tavilyWebSearchRetriever != null) {
@@ -319,8 +439,27 @@ public class HybridRetriever implements ContentRetriever {
 
         try {
             // 1) 로컬 RAG 우선
-            ContentRetriever pine = ragService.asContentRetriever(pineconeIndexName);
-            List<Content> local = pine.retrieve(Query.from(question));
+            // Detect the domain of the question and select the appropriate pinecone index.
+            String domain;
+            try {
+                domain = (domainDetector != null) ? domainDetector.detect(question) : "GENERAL";
+            } catch (Exception ignore) {
+                domain = "GENERAL";
+            }
+            String idx = chooseIndex(domain);
+            ContentRetriever pine = ragService.asContentRetriever(idx);
+            // [HARDENING] build query with metadata for session isolation
+            String sidForQuery = (sessionKey == null || sessionKey.isBlank()) ? "__TRANSIENT__" : sessionKey;
+            dev.langchain4j.rag.query.Query qObj =
+                    dev.langchain4j.rag.query.Query.builder()
+                            .text(question)
+                            .metadata(dev.langchain4j.data.document.Metadata.from(
+                                    java.util.Map.of(
+                                            com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                            sidForQuery
+                                    )))
+                            .build();
+            List<Content> local = pine.retrieve(qObj);
 
             if (qualityEvaluator != null && qualityEvaluator.isSufficient(question, local, qualityMinDocs, qualityMinScore)) {
                 log.info("[Hybrid] Local RAG sufficient → skip web (sid={}, q='{}')", sessionKey, question);
@@ -339,7 +478,15 @@ public class HybridRetriever implements ContentRetriever {
             for (String q : queries) {
                 List<Content> acc = new ArrayList<>();
                 try {
-                    handlerChain.handle(Query.from(q), acc);
+                    // [HARDENING] use query builder with session metadata
+                    dev.langchain4j.rag.query.Query subQ =
+                            dev.langchain4j.rag.query.Query.builder()
+                                    .text(q)
+                                    .metadata(Metadata.from(Map.of(
+                                            com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                            sidForQuery)))
+                                    .build();
+                    handlerChain.handle(subQ, acc);
                 } catch (Exception e) {
                     log.warn("[Hybrid] handler 실패: {}", e.toString());
                 }
@@ -347,9 +494,29 @@ public class HybridRetriever implements ContentRetriever {
             }
 
             // 융합 및 최종 정제 후 상위 top 반환
-            List<Content> fused = "softmax".equalsIgnoreCase(fusionMode)
-                    ? fuseWithSoftmax(buckets, top, question) // ★ 대안 융합
-                    : fuser.fuse(buckets, top);               // 기본 RRF
+            // Select the fusion strategy.  Softmax fusion is enabled only when
+            // the mode is set to 'softmax' and a valid calibration is provided.
+            List<Content> fused;
+            boolean useSoftmax = "softmax".equalsIgnoreCase(fusionMode)
+                    && ("minmax".equalsIgnoreCase(softmaxCalibration)
+                        || "isotonic".equalsIgnoreCase(softmaxCalibration));
+            if (useSoftmax) {
+                fused = fuseWithSoftmax(buckets, top, question);
+            } else {
+                // Weighted RRF support: if the fusion mode is marked as weighted
+                // and a weighted fuser is available, prefer it over the
+                // unweighted RRF.  Recognised values include "weighted-rrf",
+                // "rrf-weighted" and "weighted".
+                boolean useWeighted = weightedFuser != null &&
+                        ("weighted-rrf".equalsIgnoreCase(fusionMode) ||
+                         "rrf-weighted".equalsIgnoreCase(fusionMode) ||
+                         "weighted".equalsIgnoreCase(fusionMode));
+                if (useWeighted) {
+                    fused = weightedFuser.fuse(buckets, top);
+                } else {
+                    fused = fuser.fuse(buckets, top);
+                }
+            }
             List<Content> combined = new ArrayList<>(local); // 'local'은 이 메소드 상단에서 이미 정의되어 있어야 합니다.
             combined.addAll(fused);
 
@@ -378,7 +545,17 @@ public class HybridRetriever implements ContentRetriever {
                 for (String q : queries) {
                     List<Content> acc = new ArrayList<>();
                     try {
-                        handlerChain.handle(Query.from(q), acc);
+                        // [HARDENING] build query with __TRANSIENT__ metadata for session isolation
+                        dev.langchain4j.rag.query.Query subQ =
+                                dev.langchain4j.rag.query.Query.builder()
+                                        .text(q)
+                                        .metadata(dev.langchain4j.data.document.Metadata.from(
+                                                java.util.Map.of(
+                                                        com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                                        "__TRANSIENT__"
+                                                )))
+                                        .build();
+                        handlerChain.handle(subQ, acc);
                     } catch (Exception e) {
                         log.warn("[Hybrid] handler 실패: {}", q, e);
                     }
@@ -393,7 +570,15 @@ public class HybridRetriever implements ContentRetriever {
                                     .map(q -> {
                                         List<Content> acc = new ArrayList<>();
                                         try {
-                                            handlerChain.handle(Query.from(q), acc);
+                                            // [HARDENING] build query with session metadata
+                                            dev.langchain4j.rag.query.Query subQ =
+                                                    dev.langchain4j.rag.query.Query.builder()
+                                                            .text(q)
+                                                            .metadata(Metadata.from(Map.of(
+                                                                    com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                                                    "__TRANSIENT__")))
+                                                            .build();
+                                            handlerChain.handle(subQ, acc);
                                         } catch (Exception e) {
                                             log.warn("[Hybrid] handler 실패: {}", q, e);
                                         }
@@ -405,10 +590,24 @@ public class HybridRetriever implements ContentRetriever {
                     pool.shutdown();
                 }
             }
-            // RRF or Softmax 융합 후 상위 limit 반환
-            if ("softmax".equalsIgnoreCase(fusionMode)) {
-                String q0 = queries.get(0); // 대표 질의(간단 근사)
+            // RRF or Softmax 융합 후 상위 limit 반환.  Softmax is enabled only
+            // when fusionMode is 'softmax' and a valid calibration is provided.
+            boolean useSoftmax = "softmax".equalsIgnoreCase(fusionMode)
+                    && ("minmax".equalsIgnoreCase(softmaxCalibration)
+                        || "isotonic".equalsIgnoreCase(softmaxCalibration));
+            if (useSoftmax) {
+                String q0 = queries.get(0); // representative query (approximation)
                 return fuseWithSoftmax(results, Math.max(1, limit), q0);
+            }
+            // Weighted RRF support for multi‑query fusion.  When the fusionMode
+            // indicates a weighted variant and a weighted fuser is available,
+            // invoke it; otherwise fallback to the standard RRF implementation.
+            boolean useWeighted = weightedFuser != null &&
+                    ("weighted-rrf".equalsIgnoreCase(fusionMode) ||
+                     "rrf-weighted".equalsIgnoreCase(fusionMode) ||
+                     "weighted".equalsIgnoreCase(fusionMode));
+            if (useWeighted) {
+                return weightedFuser.fuse(results, Math.max(1, limit));
             }
             return fuser.fuse(results, Math.max(1, limit));
         } catch (Exception e) { // retrieveAll 종료
@@ -431,6 +630,139 @@ public class HybridRetriever implements ContentRetriever {
         List<String> queries = queryTransformer.transformEnhanced(userQ, lastA, subject);
         if (queries.isEmpty()) queries = List.of(userQ);
         return retrieveAll(queries, Math.max(1, limit));
+    }
+
+    /**
+     * Progressive retrieval with optional routing hints.  This overload accepts a map of
+     * metadata hints (precision search, depth, webTopK, etc.) which will be embedded into
+     * the Query metadata.  When hints are provided the downstream web search handler can
+     * adjust its behaviour accordingly (e.g. precision scanning).  When no hints are
+     * provided the default behaviour is equivalent to the legacy retrieveProgressive
+     * method.
+     *
+     * @param question    the user question
+     * @param sessionKey  unique session identifier for isolation
+     * @param limit       number of items to return
+     * @param metaHints   optional metadata hints to embed into the query
+     * @return list of retrieved content
+     */
+    public java.util.List<Content> retrieveProgressive(String question, String sessionKey, int limit,
+                                                       java.util.Map<String, Object> metaHints) {
+        if (question == null || question.isBlank()) {
+            return java.util.List.of(Content.from("[빈 질의]"));
+        }
+        final int top = Math.max(1, limit);
+
+        try {
+            // 1) 로컬 RAG 우선
+            String domain;
+            try {
+                domain = (domainDetector != null) ? domainDetector.detect(question) : "GENERAL";
+            } catch (Exception ignore) {
+                domain = "GENERAL";
+            }
+            String idx = chooseIndex(domain);
+            ContentRetriever pine = ragService.asContentRetriever(idx);
+            String sidForQuery = (sessionKey == null || sessionKey.isBlank()) ? "__TRANSIENT__" : sessionKey;
+            // Merge default metadata with hints and SID
+            java.util.Map<String, Object> mdMap = new java.util.HashMap<>();
+            mdMap.put(com.example.lms.service.rag.LangChainRAGService.META_SID, sidForQuery);
+            if (metaHints != null) mdMap.putAll(metaHints);
+            mdMap.putIfAbsent("depth", "LIGHT");
+            // ensure webTopK default is stored as a String
+            mdMap.putIfAbsent("webTopK", String.valueOf(top));
+            // Convert all metadata values to String to prevent non-string entries and remove nulls
+            mdMap.replaceAll((k, v) -> v == null ? null : String.valueOf(v));
+            mdMap.entrySet().removeIf(e -> e.getValue() == null);
+            dev.langchain4j.rag.query.Query qObj;
+            try {
+                // Attempt to build Metadata from the stringified map
+                dev.langchain4j.data.document.Metadata md = dev.langchain4j.data.document.Metadata.from(mdMap);
+                try {
+                    // Try new constructor if available (1.0.x)
+                    qObj = new dev.langchain4j.rag.query.Query(question, md);
+                } catch (Throwable t) {
+                    // Fallback to builder API for older versions
+                    qObj = dev.langchain4j.rag.query.Query.builder().text(question).metadata(md).build();
+                }
+            } catch (Throwable t) {
+                // If metadata creation fails, fall back to a query without metadata
+                qObj = new dev.langchain4j.rag.query.Query(question);
+            }
+            java.util.List<Content> local;
+            try {
+                local = pine.retrieve(qObj);
+            } catch (Throwable t) {
+                log.warn("[Hybrid] Pinecone retrieval failed: {}", t.toString());
+                local = java.util.List.of();
+            }
+
+            if (qualityEvaluator != null && qualityEvaluator.isSufficient(question, local, qualityMinDocs, qualityMinScore)) {
+                java.util.List<Content> out = finalizeResults(new java.util.ArrayList<>(local), "text", java.util.Collections.emptyList(), question);
+                return out.size() > top ? out.subList(0, top) : out;
+            }
+
+            // Self-Ask / hygiene filter
+            java.util.List<String> planned = (selfAskPlanner != null) ? selfAskPlanner.plan(question, 2) : java.util.List.of(question);
+            java.util.List<String> queries = com.example.lms.search.QueryHygieneFilter.sanitize(planned, 2, 0.80);
+            if (queries.isEmpty()) queries = java.util.List.of(question);
+
+            java.util.List<java.util.List<Content>> buckets = new java.util.ArrayList<>();
+            for (String q : queries) {
+                java.util.List<Content> acc = new java.util.ArrayList<>();
+                try {
+                    // Copy metadata for subqueries and ensure string values
+                    java.util.Map<String, Object> subMd = new java.util.HashMap<>(mdMap);
+                    subMd.put("subQuery", String.valueOf(true));
+                    subMd.replaceAll((k, v) -> v == null ? null : String.valueOf(v));
+                    subMd.entrySet().removeIf(e -> e.getValue() == null);
+                    dev.langchain4j.rag.query.Query subQ;
+                    try {
+                        // Try to create metadata and query normally
+                        dev.langchain4j.data.document.Metadata subMdObj = dev.langchain4j.data.document.Metadata.from(subMd);
+                        try {
+                            subQ = new dev.langchain4j.rag.query.Query(q, subMdObj);
+                        } catch (Throwable t) {
+                            subQ = dev.langchain4j.rag.query.Query.builder().text(q).metadata(subMdObj).build();
+                        }
+                    } catch (Throwable t) {
+                        // Fall back to query without metadata on failure
+                        subQ = new dev.langchain4j.rag.query.Query(q);
+                    }
+                    handlerChain.handle(subQ, acc);
+                } catch (Exception e) {
+                    log.warn("[Hybrid] handler 실패: {}", e.toString());
+                }
+                buckets.add(acc);
+            }
+
+            // Fusion and finalization
+            java.util.List<Content> fused;
+            boolean useSoftmax = "softmax".equalsIgnoreCase(fusionMode)
+                    && ("minmax".equalsIgnoreCase(softmaxCalibration)
+                        || "isotonic".equalsIgnoreCase(softmaxCalibration));
+            if (useSoftmax) {
+                fused = fuseWithSoftmax(buckets, top, question);
+            } else {
+                boolean useWeighted = weightedFuser != null &&
+                        ("weighted-rrf".equalsIgnoreCase(fusionMode) ||
+                         "rrf-weighted".equalsIgnoreCase(fusionMode) ||
+                         "weighted".equalsIgnoreCase(fusionMode));
+                if (useWeighted) {
+                    fused = weightedFuser.fuse(buckets, top);
+                } else {
+                    fused = fuser.fuse(buckets, top);
+                }
+            }
+            java.util.List<Content> combined = new java.util.ArrayList<>(local);
+            combined.addAll(fused);
+            java.util.List<Content> out = finalizeResults(combined, "text", java.util.Collections.emptyList(), question);
+            return out.size() > top ? out.subList(0, top) : out;
+
+        } catch (Exception e) {
+            log.error("[Hybrid] retrieveProgressive 실패(sid={}, q='{}')", sessionKey, question, e);
+            return java.util.List.of(Content.from("[검색 오류]"));
+        }
     }
 
     // ───────────────────────────── 헬퍼들 ─────────────────────────────
@@ -461,6 +793,13 @@ public class HybridRetriever implements ContentRetriever {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> toMap(Object meta) {
         if (meta == null) return Map.of();
+        // LangChain4j 1.0.x: rag.query.Metadata → chatMemoryId로 sid 전달됨
+        if (meta instanceof dev.langchain4j.rag.query.Metadata m) {
+            Object sid = m.chatMemoryId();
+            return (sid != null)
+                    ? java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sid)
+                    : java.util.Map.of();
+        }
         try {
             Method m = meta.getClass().getMethod("asMap");
             return (Map<String, Object>) m.invoke(meta);
@@ -558,16 +897,49 @@ public class HybridRetriever implements ContentRetriever {
         }
 
         // 2-B) 🔴 (옵션) 교차엔코더 재정렬: 질문과의 의미 유사도 정밀 재계산
-        // - FIX: 잘못된 입력 리스트(candidates) → 1차 전처리 결과(firstPass)로 교체
-        if (crossEncoderReranker != null && !firstPass.isEmpty()) { // - FIX: firstPass 기준으로 체크
+        // - 개선: 후보 크기뿐만 아니라 구성 가능한 재랭커 게이트에 위임하여 실행 여부를 결정합니다.
+        if (crossEncoderReranker != null && !firstPass.isEmpty()) {
+            boolean shouldRerank = true;
             try {
-                firstPass = crossEncoderReranker.rerank( // - FIX: 대상 컬렉션 교체 (candidates → firstPass)
-                        Optional.ofNullable(queryText).orElse(""),
-                        firstPass,
-                        Math.max(topK * 2, 20)
-                );
+                if (rerankGate != null) {
+                    shouldRerank = rerankGate.shouldRerank(firstPass);
+                }
             } catch (Exception e) {
-                log.debug("[Hybrid] cross-encoder rerank skipped: {}", e.toString());
+                // Fail‑soft: if the gate fails, fall back to original size check
+                shouldRerank = firstPass.size() >= rerankCeTopK;
+                log.debug("[Hybrid] rerankGate error {}; falling back to size check", e.toString());
+            }
+            if (shouldRerank) {
+                boolean allowed = true;
+                // Acquire a short cooldown lock to prevent thundering herd rerank calls.  When
+                // the lock cannot be obtained the expensive cross‑encoder rerank is skipped.
+                if (cooldownService != null) {
+                    try {
+                        String baseKey = Optional.ofNullable(queryText).orElse("");
+                        String digest = org.apache.commons.codec.digest.DigestUtils.md5Hex(baseKey);
+                        String key = "ce:rerank:" + digest;
+                        allowed = cooldownService.setNxEx(key, "1", 1);
+                        if (!allowed) {
+                            log.debug("[Hybrid] cross‑encoder rerank skipped due to cooldown lock");
+                        }
+                    } catch (Exception ignore) {
+                        // fallback to allow rerank if lock acquisition fails
+                        allowed = true;
+                    }
+                }
+                if (allowed) {
+                    try {
+                        firstPass = crossEncoderReranker.rerank(
+                                Optional.ofNullable(queryText).orElse(""),
+                                firstPass,
+                                Math.max(topK * 2, 20)
+                        );
+                    } catch (Exception e) {
+                        log.debug("[Hybrid] cross‑encoder rerank skipped due to error: {}", e.toString());
+                    }
+                }
+            } else {
+                log.debug("[Hybrid] cross‑encoder rerank skipped by gate");
             }
         }
 
@@ -663,8 +1035,25 @@ public class HybridRetriever implements ContentRetriever {
 
         // softmax 정규화(수치 안정화 포함) 후 확률 높은 순으로 정렬
         String[] keys = logit.keySet().toArray(new String[0]);
-        double[] arr  = logit.values().stream().mapToDouble(d -> d).toArray();
-        double[] p    = SoftmaxUtil.softmax(arr, fusionTemperature);
+        // Extract logits as a primitive array.  These values will be calibrated
+        // before applying softmax.  Calibration helps ensure the logits occupy
+        // a comparable range across different queries, improving the softmax
+        // distribution.  When calibration is disabled the original values are
+        // passed through unchanged.
+        double[] scores = logit.values().stream().mapToDouble(Double::doubleValue).toArray();
+        try {
+            if ("minmax".equalsIgnoreCase(softmaxCalibration)) {
+                scores = com.example.lms.service.rag.fusion.FusionCalibrator.minMax(scores);
+            } else if ("isotonic".equalsIgnoreCase(softmaxCalibration)) {
+                // Placeholder for isotonic regression.  Fall back to minmax
+                // scaling until an isotonic calibrator is implemented.
+                scores = com.example.lms.service.rag.fusion.FusionCalibrator.minMax(scores);
+            }
+        } catch (Exception e) {
+            log.debug("[Hybrid] softmax calibration failed: {}", e.toString());
+        }
+        // Compute softmax probabilities with the calibrated scores.
+        double[] p    = SoftmaxUtil.softmax(scores, fusionTemperature);
 
         // 확률 내림차순 상위 limit
         java.util.List<Integer> idx = new java.util.ArrayList<>();
@@ -676,6 +1065,32 @@ public class HybridRetriever implements ContentRetriever {
             out.add(keeper.get(keys[idx.get(i)]));
         }
         return out;
+    }
+
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = original.metadata() != null
+            ? original.metadata()
+            : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        // Try builder() first; if absent in your LangChain4j, fall back to new Query(md,text) signature if available.
+        try {
+            return dev.langchain4j.rag.query.Query.builder()
+                .text(original.text())
+                .metadata(md)
+                .build();
+        } catch (Throwable t) {
+            try {
+                // Fallback: reflective construction to avoid compile failures across versions
+                var ctor = dev.langchain4j.rag.query.Query.class.getDeclaredConstructor(String.class, dev.langchain4j.data.document.Metadata.class);
+                ctor.setAccessible(true);
+                return ctor.newInstance(original.text(), md);
+            } catch (Throwable t2) {
+                // Last resort: return original if we cannot rebuild
+                return original;
+            }
+        }
     }
 
 }

@@ -1,5 +1,5 @@
 package com.example.lms.agent;
-
+import com.example.lms.agent.KnowledgeGapLogger.GapEvent;
 import com.example.lms.dto.learning.EvidenceSnippet;
 import com.example.lms.dto.learning.LearningEvent;
 import com.example.lms.learning.gemini.GeminiCurationService;

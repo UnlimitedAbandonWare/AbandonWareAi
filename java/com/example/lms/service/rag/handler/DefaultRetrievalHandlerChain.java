@@ -43,7 +43,8 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
      */
     private final LocationService locationService;
 
-    @Value("${pinecone.index.name}")
+    // 미설정 시 안전하게 비우고 핸들러 내부에서 가드
+    @Value("${pinecone.index.name:}")
     private String pineconeIndexName;
 
     @Value("${rag.search.top-k:5}")
@@ -115,21 +116,41 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
         } catch (Exception ignore) {
             // fail-soft: ignore any errors during location detection
         }
-        // 4. Adaptive Web Search (new stage before normal web)
+        // 4. Adaptive Web Search (조건 실행)
+        // Determine whether to perform web retrieval based on metadata.
+        // The 'useWebSearch' flag must be true and 'searchMode' must not be OFF.
+        boolean allowWeb = mdBool(query.metadata(), "useWebSearch", false);
+        String modeStr   = mdString(query.metadata(), "searchMode", "AUTO");
+        if ("OFF".equalsIgnoreCase(String.valueOf(modeStr))) {
+            allowWeb = false;
+        }
         try {
-            if (adaptiveWeb != null) {
+            if (allowWeb && adaptiveWeb != null) {
                 adaptiveWeb.handle(query, accumulator);
                 // Early‑cut removed: do not return here; allow subsequent stages
             }
         } catch (Exception ignore) {
             // Swallow exceptions to maintain chain robustness
         }
-        // 5. Fallback Web Search
-        add(accumulator, web.retrieve(query));
+        // 5. Web search – explicitly invoke the legacy WebSearchRetriever after the adaptive stage
+        // to make the chain order clear (Self‑Ask → Analyze → Web → Vector → Repair).  The
+        // evidence returned by the adaptiveWeb stage may overlap with this call, but
+        // invoking web.retrieve() here satisfies the MOE requirement to explicitly
+        // sequence retrieval stages.  Failures are swallowed to maintain chain
+        // robustness.
+        try {
+            add(accumulator, web.retrieve(query));
+        } catch (Exception ignore) {
+            // ignore web retrieval failures
+        }
         // Early‑cut removed: continue to vector and repair stages regardless of accumulator size
-        // 6. Vector
-        ContentRetriever vector = rag.asContentRetriever(pineconeIndexName);
-        add(accumulator, vector.retrieve(query));
+        // 6. Vector (조건 실행)
+        // Only perform vector (RAG) retrieval when the 'useRag' metadata flag is true.
+        boolean allowRag = mdBool(query.metadata(), "useRag", false);
+        if (allowRag) {
+            ContentRetriever vector = rag.asContentRetriever(pineconeIndexName);
+            add(accumulator, vector.retrieve(query));
+        }
         // Early‑cut removed: continue to repair stage
         // 7. Repair
         try {
@@ -164,4 +185,53 @@ public class DefaultRetrievalHandlerChain implements RetrievalHandler {
             return java.util.Map.of();
         }
     }
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = original.metadata() != null
+            ? original.metadata()
+            : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        // Directly construct a new Query with the updated metadata.  LangChain4j 1.0.x
+        // provides a public constructor for Query that accepts text and metadata,
+        // eliminating the need for the deprecated builder API and reflection.
+        return new dev.langchain4j.rag.query.Query(original.text(), md);
+    }
+
+    /**
+     * Safely read a boolean value from metadata.  When the key is absent
+     * or the value cannot be parsed, the provided default is returned.
+     *
+     * @param md     metadata object, may be null
+     * @param k      key name
+     * @param defVal default value when parsing fails
+     * @return the parsed boolean or defVal when missing/invalid
+     */
+    private static boolean mdBool(Object meta, String k, boolean defVal) {
+        try {
+            var map = toMap(meta);
+            Object v = map.get(k);
+            if (v instanceof Boolean b) return b;
+            if (v != null)          return Boolean.parseBoolean(String.valueOf(v));
+            return defVal;
+        } catch (Exception e) { return defVal; }
+    }
+
+    /**
+     * Safely read a string value from metadata.  When the key is absent
+     * or the value is null, the provided default is returned.
+     *
+     * @param md     metadata object, may be null
+     * @param k      key name
+     * @param defVal default value when missing
+     * @return the string representation of the value or defVal when missing/invalid
+     */
+    private static String mdString(Object meta, String k, String defVal) {
+        try {
+            var map = toMap(meta);
+            Object v = map.get(k);
+            return (v != null) ? String.valueOf(v) : defVal;
+        } catch (Exception e) { return defVal; }
+    }
+
 }

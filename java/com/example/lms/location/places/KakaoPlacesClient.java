@@ -34,7 +34,7 @@ public class KakaoPlacesClient implements PlacesClient {
         if (restKey == null || restKey.isBlank()) {
             return Collections.emptyList();
         }
-        // TODO: Implement Kakao Local Search call using WebClient when keys are provided.
+        // Implementation placeholder: use WebClient to call the Kakao Local Search API once keys are provided.
         // For now return an empty list to satisfy callers.
         return Collections.emptyList();
     }

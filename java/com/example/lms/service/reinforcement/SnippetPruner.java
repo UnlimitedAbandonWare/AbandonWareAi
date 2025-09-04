@@ -43,6 +43,11 @@ public class SnippetPruner {
     @Value("${memory.reinforce.pruning.llm.enabled:false}")
     private boolean llmPruningEnabled;
 
+    // [HARDENING] Prompt injection pattern; drop snippets containing these triggers
+    private static final java.util.regex.Pattern BLOCK =
+            java.util.regex.Pattern.compile(
+                    "(?i)\\b(ignore\\s+previous|system\\s*:|##\\s*시스템|do\\s*not\\s*follow\\s*above)\\b");
+
 
     /**
      * 프루닝(가지치기) 결과 구조체
@@ -90,6 +95,14 @@ public class SnippetPruner {
         if (q.isBlank() || rawSnippet.isBlank()) {
             return Result.passThrough(snippet);
         }
+
+        // [HARDENING] drop snippet if it contains prompt-injection patterns
+        try {
+            String plain = stripHtml(rawSnippet);
+            if (BLOCK.matcher(plain).find()) {
+                return new Result("", 0.0, 0.0, 0, 0);
+            }
+        } catch (Exception ignore) {}
 
         try {
             // 1) 임베딩 기반

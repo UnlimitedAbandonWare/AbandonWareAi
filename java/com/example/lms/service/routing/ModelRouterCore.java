@@ -3,6 +3,7 @@ package com.example.lms.service.routing;
 import com.example.lms.config.ModelProperties;
 import com.example.lms.config.MoeRoutingProps;
 import com.example.lms.llm.DynamicChatModelFactory;
+import com.example.lms.service.routing.RouterPolicy;
 import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,7 @@ import org.springframework.stereotype.Component;
  */
 @Component("modelRouterCore")
 @Profile("!legacy-router")
+@org.springframework.context.annotation.Primary
 public class ModelRouterCore implements ModelRouter {
 
     private static final Logger log = LoggerFactory.getLogger(ModelRouterCore.class);
@@ -34,12 +36,23 @@ public class ModelRouterCore implements ModelRouter {
     private final MoeRoutingProps props;
     private final DynamicChatModelFactory factory;
 
+    /**
+     * Policy encapsulating multi‑criteria promotion logic.  When present the
+     * router will defer to this policy instead of directly comparing
+     * threshold values from {@link MoeRoutingProps}.  This enables
+     * sophisticated escalation strategies including hysteresis and
+     * evidence mismatch detection.
+     */
+    private final RouterPolicy routerPolicy;
+
     public ModelRouterCore(ModelProperties modelProps,
                            MoeRoutingProps props,
-                           @Qualifier("dynamicChatModelFactory") DynamicChatModelFactory factory) {
+                           @Qualifier("dynamicChatModelFactory") DynamicChatModelFactory factory,
+                           RouterPolicy routerPolicy) {
         this.modelProps = modelProps;
         this.props = props;
         this.factory = factory;
+        this.routerPolicy = routerPolicy;
     }
 
     /**
@@ -56,15 +69,45 @@ public class ModelRouterCore implements ModelRouter {
         if (s == null) {
             return createModel(modelProps.getaDefault());
         }
-        boolean promote =
-                (s.maxTokens() >= props.getTokensThreshold()) ||
-                (s.complexity() >= props.getComplexityThreshold()) ||
-                (s.uncertainty() >= props.getUncertaintyThreshold()) ||
-                (s.theta() >= props.getWebEvidenceThreshold()) ||
-                // When the preferred mode is QUALITY we always upgrade.
-                (s.preferred() != null && "QUALITY".equalsIgnoreCase(s.preferred().name()));
+        boolean promote;
+        if (routerPolicy != null) {
+            // Delegate escalation logic to the injected policy.  The policy
+            // aggregates multiple heuristics and global thresholds and may
+            // implement hysteresis and evidence mismatch detection.  When
+            // undefined fall back to the direct comparison against
+            // MoeRoutingProps thresholds.
+            promote = routerPolicy.shouldPromote(s);
+        } else {
+            // Determine the intent/domain for the purpose of token‑based promotion.
+            // Only when the intent is GENERAL do we apply the token threshold.
+            boolean isGeneralIntent = false;
+            try {
+                isGeneralIntent = (s.intent() != null && "GENERAL".equalsIgnoreCase(s.intent().name()));
+            } catch (Exception ignore) {
+                isGeneralIntent = false;
+            }
+            // Promote to the high tier when ANY of the following hold:
+            //   • The query is in the GENERAL domain and the requested token budget
+            //     meets or exceeds the configured tokens threshold.
+            //   • The uncertainty score exceeds the configured uncertainty threshold.
+            //   • The fused web evidence score (theta) exceeds the configured web evidence threshold.
+            //   • The preferred model is QUALITY, in which case we always upgrade.
+            promote =
+                    (isGeneralIntent && s.maxTokens() >= props.getTokensThreshold()) ||
+                    (s.uncertainty() >= props.getUncertaintyThreshold()) ||
+                    (s.theta() >= props.getWebEvidenceThreshold()) ||
+                    (s.preferred() != null && "QUALITY".equalsIgnoreCase(s.preferred().name()));
+        }
 
         String modelName = promote ? modelProps.getMoe() : modelProps.getaDefault();
+        if (promote) {
+            // Emit a structured promotion log entry when an upgrade occurs.  This
+            // helps downstream analysis understand why a request was routed to
+            // the high‑tier model.  Include the domain (intent) where
+            // available along with the key heuristics.
+            String domain = (s.intent() != null ? s.intent().name() : "UNKNOWN");
+            log.info("ROUTER_PROMOTION domain={} tokens={} webEvidence={} uncertainty={} chosen=HIGH_TIER", domain, s.maxTokens(), s.theta(), s.uncertainty());
+        }
         if (log.isInfoEnabled()) {
             log.info("route: model={}, signal={}", modelName, s.toSignalMap());
         }
