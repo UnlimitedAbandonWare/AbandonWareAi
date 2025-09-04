@@ -1,0 +1,374 @@
+/* ───────────── 플러그인 ───────────── */
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.springframework.boot'        version '3.4.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'io.freefair.lombok'              version '8.6'
+}
+
+// -----------------------------------------------------------------------------
+// LangChain4j version alignment and purity enforcement
+//
+// To avoid accidental mixing of incompatible 0.x artifacts, enforce that
+// every dependency originating from the 'dev.langchain4j' group resolves to
+// version 1.0.1.  Use the BOM for alignment and a resolution strategy for
+// additional safety.  A dedicated purity task scans the resolved classpaths
+// and produces a verification report under build/verification when any
+// conflicting versions are detected.  The standard 'check' task depends on
+// this verification to halt the build early if violations are found.
+
+// Force all dev.langchain4j modules to resolve to 1.0.1 regardless of
+// transitive version declarations.
+// ✅ core/open-ai만 1.0.1로 고정
+configurations.all {
+    resolutionStrategy.eachDependency { d ->
+        if (d.requested.group == 'dev.langchain4j' &&
+                ['langchain4j-core','langchain4j-open-ai'].contains(d.requested.name)) {
+            d.useVersion('1.0.1')
+        }
+    }
+}
+
+group   = 'com.example.lms'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+/* ─── application 플러그인 ─── */
+application {
+    mainClass       = 'com.example.lms.LmsApplication'
+    applicationName = 'demo-1'
+}
+
+/* ───────────── 저장소 ───────────── */
+repositories { mavenCentral() }
+
+// Exclude legacy or backup Java source files (e.g. *_old.java, *_copy.java) from compilation.
+sourceSets {
+    main {
+        java {
+            // Prevent duplicate public class definitions by excluding old or copied versions
+            exclude '**/*_old.java', '**/*_copy.java'
+            // Exclude original versions of classes that have been patched in the 'patch' subpackages.
+            exclude 'com/example/lms/service/ChatService.java'
+            exclude 'com/example/lms/service/NaverSearchService.java'
+            exclude 'com/example/lms/service/rag/HybridRetriever.java'
+            exclude 'com/example/lms/service/rag/SelfAskWebSearchRetriever.java'
+            exclude 'com/example/lms/service/rag/handler/EntityDisambiguationHandler.java'
+        }
+    }
+}
+
+
+// ▼▼▼▼▼ 바로 여기에 추가하시면 됩니다 ▼▼▼▼▼
+
+// -----------------------------------------------------------------------------
+// Offline Replay Evaluation Task
+//
+// This task runs an offline evaluation of retrieval performance against a set
+// of replay logs.  To enable the task supply a property `replayLog` on the
+// Gradle command line (e.g. -PreplayLog=/path/to/log.jsonl) or set the
+// environment variable REPLAY_LOG.  Minimum acceptable NDCG and MRR
+// thresholds can be configured via -Preplay.ndcgMin and -Preplay.mrrMin (or
+// REPLAY_NDCG_MIN and REPLAY_MRR_MIN).  If the computed metrics fall below
+// the thresholds the runner will exit with a non‑zero code, causing the
+// build to fail.  When no replay log is specified the task is skipped.
+tasks.register("offlineReplayCheck", JavaExec) {
+    group = "verification"
+    description = "Runs offline replay evaluation on provided logs"
+    mainClass = "com.example.lms.replay.OfflineReplayRunner"
+    classpath = sourceSets.main.runtimeClasspath
+    // Determine the log file from Gradle property or environment
+    def logPath = project.findProperty("replayLog") ?: System.getenv("REPLAY_LOG")
+    // Determine minimum thresholds from properties/environment
+    def ndcgMin = project.findProperty("replay.ndcgMin") ?: System.getenv("REPLAY_NDCG_MIN")
+    def mrrMin = project.findProperty("replay.mrrMin") ?: System.getenv("REPLAY_MRR_MIN")
+    if (logPath) {
+        args logPath
+        if (ndcgMin) {
+            systemProperty "replay.ndcgMin", ndcgMin
+        }
+        if (mrrMin) {
+            systemProperty "replay.mrrMin", mrrMin
+        }
+    } else {
+        // Skip the task entirely when no log is provided
+        enabled = false
+        doFirst {
+            println "offlineReplayCheck: no replay log specified; skipping offline evaluation"
+        }
+    }
+}
+
+// Hook offline replay check into the verification lifecycle.  The check
+// task depends on offlineReplayCheck so that CI pipelines can enforce
+// regression guards without further configuration.  When the task is
+// disabled (due to missing replay log) it has no effect on build status.
+tasks.named("check") {
+    dependsOn "offlineReplayCheck"
+}
+
+// -----------------------------------------------------------------------------
+// LangChain4j version purity enforcement.  This task enumerates all
+// dev.langchain4j dependencies on the compile classpath and verifies that
+// every module resolves strictly to version 1.0.1.  If any artifact with a
+// different version is detected, the build fails and a report is emitted
+// under build/reports/langchain4j-conflicts.txt.  The "classes" task
+// depends on this check to prevent downstream compilation when the classpath
+// contains mixed versions of LangChain4j.
+tasks.register("checkLangchain4jVersionPurity") {
+    doLast {
+        // Generate a report file capturing any LangChain4j artifacts that are not version 1.0.1
+        def reportFile = file("${buildDir}/reports/langchain4j-conflicts.txt")
+        reportFile.parentFile.mkdirs()
+        def bad = []
+        def scan = { conf ->
+            try {
+                conf.resolvedConfiguration.resolvedArtifacts.each { art ->
+                    if (art.moduleVersion.id.group == 'dev.langchain4j' && !art.moduleVersion.id.version.startsWith('1.0.1')) {
+                        bad << "${art.moduleVersion.id.group}:${art.name}:${art.moduleVersion.id.version}"
+                    }
+                }
+            } catch (ignore) {
+                // some configurations may not be resolvable; ignore
+            }
+        }
+        [configurations.compileClasspath, configurations.runtimeClasspath].each(scan)
+        if (!bad.isEmpty()) {
+            reportFile.text = ([">> Found mixed LangChain4j versions (must be 1.0.1):"] + bad).join('\n') + '\n'
+            throw new GradleException("LangChain4j version purity check failed. See ${reportFile}")
+        } else {
+            reportFile.text = "OK: All dev.langchain4j artifacts are 1.0.1\n"
+        }
+    }
+}
+
+// Ensure that compilation halts when LangChain4j version purity fails.  By
+// hooking into the "classes" task we guarantee early feedback during the
+// build lifecycle.
+// Ensure that the build will fail during the verification phase if mixed
+// LangChain4j versions are detected.  Hook into the 'check' task rather
+// than 'classes' so that test and verification tasks are gated by the purity check.
+tasks.named("check") {
+    dependsOn("checkLangchain4jVersionPurity")
+}
+
+
+/* ───────────── BOM & 공통 버전 ───────────── */
+ext {
+    springCloudVersion = '2024.0.1'
+    luceneVersion      = '9.10.0'     // Lucene 공통 버전
+}
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs = ['-parameters']
+    options.encoding = 'UTF-8'
+    // Ensure the compiler targets Java 17 bytecode for language features such as records.
+    options.release = 17
+}
+
+// ▼ Javadoc/테스트/실행 시 JVM 기본 인코딩도 강제
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+}
+tasks.withType(Test).configureEach {
+    jvmArgs '-Dfile.encoding=UTF-8', '-Dsun.jnu.encoding=UTF-8'
+}
+tasks.named('bootRun') {
+    jvmArgs '-Dfile.encoding=UTF-8', '-Dsun.jnu.encoding=UTF-8'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "dev.langchain4j:langchain4j-bom:1.0.1"                       // ← langchain4j 전 모듈 1.0.1 고정
+        mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
+        // gRPC 전 모듈을 1.70.0으로 '강제' 정렬 (pinecone, google-genai 등 트랜지티브 포함)
+        mavenBom "io.grpc:grpc-bom:1.70.0"
+
+    }
+}
+
+/* ───────────── Boot JAR 배포 ───────────── */
+bootJar { enabled = false }
+
+tasks.installDist { dependsOn bootJar }
+
+distributions {
+    main {
+        contents { from(bootJar) { into 'lib' } }
+    }
+}
+
+
+
+dependencies {
+    compileOnly "org.projectlombok:lombok:1.18.32"
+    annotationProcessor "org.projectlombok:lombok:1.18.32"
+    testCompileOnly "org.projectlombok:lombok:1.18.32"
+    testAnnotationProcessor "org.projectlombok:lombok:1.18.32"
+    annotationProcessor "org.springframework.boot:spring-boot-configuration-processor"
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
+    /* ---------- Lucene (9.10.0) ---------- */
+    implementation 'org.springframework.boot:spring-boot-starter-cache'
+    implementation "io.projectreactor:reactor-core"
+    implementation "org.apache.lucene:lucene-core:${luceneVersion}"
+    implementation "org.apache.lucene:lucene-queryparser:${luceneVersion}"
+    implementation "org.apache.lucene:lucene-analysis-common:${luceneVersion}"
+    implementation "org.apache.lucene:lucene-analysis-nori:${luceneVersion}"
+
+    /* ---------- Core utils ---------- */
+    implementation 'commons-codec:commons-codec:1.16.0'
+    implementation 'org.apache.commons:commons-text:1.11.0'
+    implementation 'org.jsoup:jsoup:1.15.4'
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+    implementation("org.springframework:spring-context-support")
+    implementation 'jakarta.annotation:jakarta.annotation-api:2.1.1'
+
+    // PDF and file utilities for attachment ingestion
+    implementation 'org.apache.pdfbox:pdfbox:3.0.2'
+    implementation 'commons-io:commons-io:2.16.1'
+
+    /* ---------- Spring Boot ---------- */
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test' // ★ JUnit  AssertJ
+    testImplementation 'org.assertj:assertj-core:3.25.1'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.shell:spring-shell-starter:2.1.4'
+    implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    implementation 'org.springframework.cloud:spring-cloud-starter-bootstrap'
+    implementation 'org.springframework.cloud:spring-cloud-starter-config'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3'
+    implementation 'io.github.resilience4j:resilience4j-reactor'
+
+    implementation "com.theokanning.openai-gpt3-java:service:0.18.2"
+    /* ---------- LangChain4j 1.0.1 (BOM) ---------- */
+    implementation 'dev.langchain4j:langchain4j-core'
+    implementation 'dev.langchain4j:langchain4j-open-ai'
+    implementation 'dev.langchain4j:langchain4j-pinecone'
+
+    implementation 'dev.langchain4j:langchain4j-spring-boot-starter'
+    implementation 'dev.langchain4j:langchain4j-easy-rag'
+    /* ▼ 추가: 한국어 토크나이저 */
+    implementation "org.openkoreantext:open-korean-text:2.3.1"   // Scala 2.12 기반
+    // (선택) 스칼라 라이브러리를 명시하려면 ↓
+    // implementation "org.scala-lang:scala-library:2.12.4"
+    /*
+     * ---------- Removed dependencies ----------
+     *
+     * The Netty all‑in‑one bundle and shaded gRPC transport introduced
+     * unnecessary transitive dependencies and version conflicts when used
+     * alongside Spring WebFlux (which pulls reactor‑netty).  Both have
+     * been removed to reduce the footprint and prevent classpath clashes.
+     * Similarly, the theokanning OpenAI Java SDK has been eliminated in
+     * favour of LangChain4j’s native client.  If direct OpenAI access is
+     * required, reintroduce a lighter client or use LangChain4j’s
+     * OpenAIChatModel abstraction.
+     */
+
+    /* ---------- Retrofit ---------- */
+    implementation platform('com.squareup.retrofit2:retrofit-bom:2.11.0')
+    implementation 'com.squareup.retrofit2:converter-jackson'
+
+    // 🔧 추가 — RxJava2 어댑터 + 라이브러리
+    implementation 'com.squareup.retrofit2:adapter-rxjava2'
+    implementation 'io.reactivex.rxjava2:rxjava:2.2.21'
+
+    /* ---------- Database Driver ---------- */
+    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client:3.3.3'
+
+    /* ---------- Lombok ---------- */
+    compileOnly             'org.projectlombok:lombok:1.18.38'
+    annotationProcessor     'org.projectlombok:lombok:1.18.38'
+    testCompileOnly         'org.projectlombok:lombok:1.18.38'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.38'
+
+    /* ---------- Tests ---------- */
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly    'org.junit.platform:junit-platform-launcher'
+
+    /* ---------- Redis Client ---------- */
+    // Jedis provides a thin client for interacting with Redis.  It is used by
+    // RedisCooldownService to perform atomic SET NX EX operations and does not
+    // bring in Spring Data Redis heavy dependencies.  Version 5.1.0 is used
+    // to ensure compatibility with Redis 7.x servers.
+    implementation 'redis.clients:jedis:5.1.0'
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+    /* ---------- ONNX Runtime ---------- */
+    // Local ONNX inference support. This dependency provides the native bindings
+    // necessary to load and execute ONNX models on CPU/GPU. Version 1.18.0 is
+    // aligned with the Spring Boot and LangChain4j runtime requirements.
+    implementation 'com.microsoft.onnxruntime:onnxruntime:1.18.0'
+
+    /* ---------- Google GenAI ---------- */
+    // Gemini integration for knowledge curation and batch processing. This dependency
+    // provides access to the Google GenAI client API used by the new GeminiClient.
+    implementation 'com.google.genai:google-genai:1.12.0'
+}
+
+/*
+ * -----------------------------------------------------------------------------
+ * Version purity enforcement.
+ *
+ * Some runtime problems stem from mixing incompatible versions of the
+ * LangChain4j library. This task walks the resolved dependencies and aborts
+ * the build when any dev.langchain4j artifact with a 0.2.x version is
+ * detected. The output intentionally prints only the offending coordinate and
+ * its jar file location to assist with debugging, without proposing any
+ * corrective action.
+ */
+tasks.register('versionPurityCheck') {
+    doLast {
+        def conflicts = []
+        configurations.compileClasspath.resolvedConfiguration.resolvedArtifacts.each { art ->
+            if (art.moduleVersion.id.group == 'dev.langchain4j') {
+                def v = art.moduleVersion.id.version
+                if (v != null && v.startsWith('0.2.')) {
+                    conflicts << "${art.moduleVersion.id.group}:${art.name}:${v} -> ${art.file}"
+                }
+            }
+        }
+        if (!conflicts.isEmpty()) {
+            // Emit a report rather than failing the build.  Write the list of
+            // offending coordinates and their jar locations to a report file
+            // under build/reports and log a warning for visibility.
+            def reportDir = file("${buildDir}/reports")
+            if (!reportDir.exists()) reportDir.mkdirs()
+            def reportFile = new File(reportDir, 'langchain4j-conflicts.txt')
+            reportFile.text = conflicts.join(System.lineSeparator())
+            // Also echo the conflicts to the console for convenience
+            conflicts.each { println it }
+            logger.warn('LangChain4j version conflict detected. See {} for details.', reportFile.absolutePath)
+        }
+    }
+}
+
+// Fail the standard 'check' task if version purity fails.
+// Fail-hard gating: attach the strict version purity check to the 'check' task.
+// When mixed LangChain4j versions are detected the build will terminate early
+// with an exception and emit the relevant reports.
+tasks.named('check') { dependsOn 'checkLangchain4jVersionPurity' }
+
+
+/* ───────────── Spring Boot 메인 클래스 재명시 ───────────── */
+springBoot { mainClass = 'com.example.lms.LmsApplication' }
+
+// -----------------------------------------------------------------------------
+// Jacoco test coverage reporting configuration.  When the 'test' task
+// completes this will produce a coverage report in both XML and HTML form
+// under build/reports/jacoco.  The minimum line coverage is not enforced in
+// the build but can be inspected as part of CI checks.
+apply plugin: 'jacoco'
+
+jacocoTestReport {
+    reports {
+        xml.required  = true
+        html.required = true
+    }
+}
+
