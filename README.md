@@ -1,476 +1,359 @@
-AbandonWareAI LMS - 하이브리드 RAG 시스템
+AbandonWare AI — Spring Boot RAG + Web Search + Memory
 
-이 리포지토리는 AbandonWareAI 프로젝트의 핵심 서버 소스 코드입니다. 교육용 대화형 AI를 위한 하이브리드 검색-생성(RAG) 엔진, 체인 오브 리스폰서빌리티(CoR), 전문가 라우팅(MOE), 위치 서비스 등을 제공하는 프로덕션용 백엔드입니다.
-프로젝트는 Java 17, Spring Boot 3.x, Gradle, LangChain4j 1.0.1에 기반하며, 한국어를 지원하도록 특별히 최적화되었습니다.
+한·영 요약
 
-TL;DR
+한국어: 이 프로젝트는 Java 17과 Spring Boot 3.4로 구축된 하이브리드 RAG(검색-생성) 챗봇 서버입니다. 벡터 DB와 웹 검색을 혼합한 검색 파이프라인, LangChain4j 1.0.1 기반 LLM 연결, SSE 스트리밍 응답, 메모리 강화 루프, 사실 검증과 증거 기반 가드를 제공합니다. 모든 프롬프트는 PromptBuilder.build(ctx)를 통해 생성하며, LangChain4j 1.0.1 버전 순도를 강제로 검사합니다.
 
-한 줄 요약: 하이브리드 RAG 검색과 체계적인 책임 체인, 그리고 MOE 라우팅을 적용한 고품질 챗봇 플랫폼입니다.
-이 README는 실제 소스 코드를 기반으로 프로덕션 운영팀과 개발팀이 즉시 사용할 수 있도록 1000줄에 걸쳐 모든 기능을 상세히 설명합니다.
+English caption: A hybrid retrieval‑augmented generation (RAG) backend built with Java 17 and Spring Boot 3.4. It fuses web search and vector DB retrieval, enforces LangChain4j 1.0.1 purity, streams responses via SSE, reinforces memory, and verifies facts with evidence‑aware guards. All prompts are built through a centralized PromptBuilder.
 
-Pre-flight — Version Purity (STOP if mixed)
+주요 기능 (Features)
+하이브리드 검색 파이프라인 (Hybrid Retrieval)
 
-본 프로젝트에서 가장 중요한 게이트는 LangChain4j 버전 순도 검사입니다. 모든 dev.langchain4j:* 모듈이 1.0.1로 고정되어야 하며, 혼합 버전(예: 0.2.x)이 발견되면 빌드 및 배포를 즉시 중단해야 합니다.
-다음 명령으로 의존성을 확인할 수 있습니다:
+Self‑Ask & Query Hygiene: HybridRetriever는 자가 질문 변환(Self‑Ask)과 질의 위생 검사를 통해 모호한 질문을 보충합니다.
 
-./gradlew dependencies -q | grep dev.langchain4j
+웹 검색 & 벡터 RAG: Naver API(선택적으로 DuckDuckGo)를 이용한 웹 검색 후, Pinecone/Upstash 백엔드에서 벡터 세그먼트를 검색합니다. 검색 결과는 RRF(Reciprocal Rank Fusion)로 융합되며, ONNX 크로스 인코더 또는 임베딩 재랭커로 재정렬합니다.
 
+Fail‑Soft: 벡터 인덱스가 비어 있거나 ONNX 모델이 없으면 웹 검색만 사용하거나 임베딩 재랭킹으로 폴백하는 등, 각 단계가 실패해도 다음 단계가 계속 실행됩니다.
 
-모든 항목이 1.0.1을 가리키면 순도 검사를 통과한 것입니다. 만약 다른 버전이 나타난다면, 시스템은 자동으로 실패 상태로 전환하고 아래 세 가지 산출물만 생성해야 합니다.
+프롬프트 규율 (Prompt Discipline)
 
-build/reports/langchain4j-conflicts.txt – 혼합 버전 목록을 포함한 보고서
+중앙 프롬프트 빌더: 프롬프트는 PromptBuilder.build(PromptContext) 를 통해서만 생성합니다. 문자열을 직접 이어붙이는 행위는 금지되며, ctx.web/ctx.rag/ctx.memory 등 필드를 null‑safe로 주입합니다. 섹션별로 ### WEB EVIDENCE, ### VECTOR RAG, ### LONG‑TERM MEMORY 등이 자동 삽입되며, 시스템 지시문은 별도로 promptBuilder.buildInstructions(ctx)를 통해 추가합니다.
 
-dependency-graph.txt – 간단한 의존성 그래프
+System Prompt 주입: 시스템 프롬프트는 gpt.system.prompt 속성으로 정의되며, 사용자가 모델을 변경해도 반드시 설정해야 합니다.
 
-gradle-fix.txt – BOM 또는 constraints를 이용한 수정 제안
-순도 체크는 Gradle 태스크 checkLangchain4jVersionPurity에 의해 강제됩니다. classes 태스크가 실행되기 전에 순도 검사가 수행되므로, 버전이 섞여 있으면 컴파일조차 진행되지 않습니다.
-이 README를 포함한 문서 생성은 순도 검사에 통과한 경우에만 수행됩니다. 혼합 버전이 발견되었다면 README를 수정하거나 추가하지 않습니다.
+사실 검증·가드 (Fact Verification & Evidence‑Aware Guard)
 
-Architecture Overview
-CoR 흐름 및 엔트리 포인트
+EvidenceAwareGuard: 칩셋 주장과 같이 신뢰성이 요구되는 응답에서 뉴스나 공식 자료가 포함되어야 하며, 근거 없는 추측은 차단됩니다. Guard는 예외 규칙을 명시적으로 정의하고, 적절한 출처가 없으면 오류를 반환합니다.
 
-이 시스템의 핵심은 Chain of Responsibility(CoR) 패턴입니다. 각 핸들러는 질의 처리 파이프라인의 한 단계를 담당하며, 실패하더라도 다음 단계로 넘어가 전체적인 부분 성공을 보장합니다. 조기 종료는 금지되어 있습니다.
-엔트리 포인트는 HybridRetriever 클래스로, 이 클래스는 여러 핸들러를 연결하여 하이브리드 RAG 검색을 수행합니다. 기본 핸들러 체인은 다음과 같습니다:
+FactVerifierService: 답변 생성 단계에서 LLM으로 사실 검증, 증거 매핑, 메타 질문 생성 등을 수행하여 거짓 정보를 제거합니다.
 
-HybridRetriever
-  └─ SelfAskHandler
-      └─ AnalyzeHandler (Query Hygiene)
-          └─ WebSearchHandler
-              └─ VectorDbHandler
+세션·스트리밍 (Sessions & Streaming)
 
+SSE 스트리밍: /api/chat/stream 엔드포인트는 Server‑Sent Events를 통해 메시지를 스트리밍합니다. 요청에는 sid(세션 ID)와 message(사용자 질문)을 포함하며, 필요 시 attach 파라미터로 클라이언트 reconnect를 지원합니다.
 
-각 단계는 질의의 성격에 따라 실행 여부가 달라집니다. SelfAskHandler는 질문이 모호할 때 추가 질문을 생성하고, AnalyzeHandler는 질의 위생을 검사합니다. WebSearchHandler는 웹 문서를 가져오며 VectorDbHandler는 벡터 데이터베이스에서 세그먼트를 검색합니다.
+세션 관리: /api/chat/sessions는 기존 세션을 목록화하며, 세션 ID로 조회/삭제가 가능합니다. /api/chat/state는 현재 실행 중인 세션 상태와 마지막 assistant 메시지, 사용 모델 등의 정보를 반환합니다.
 
-Fail-soft 정책과 핸들러 확장
+메모리 강화 루프 (Memory Reinforcement)
 
-본 프로젝트는 fail-soft를 원칙으로 합니다. 특정 핸들러가 실패하거나 결과가 없어도 이후 핸들러들이 계속 실행되며, 가능한 한 많은 정보를 누적합니다. 부분 성공을 통해 사용자에게 의미 있는 응답을 제공하되, 중간에 조기 반환하지 않습니다.
-새로운 전략이나 데이터 소스를 도입하려면 com.example.lms.service.rag.handler 패키지에 새 핸들러 클래스를 추가하고, DefaultRetrievalHandlerChain 또는 DynamicRetrievalHandlerChain에 적절히 연결해야 합니다. 핸들러는 RetrievalHandler 인터페이스를 구현하며, handle 메서드에서 accumulator에 결과를 추가한 후 true를 반환하여 체인을 계속 진행합니다.
+Reward Scoring & Snippet Pruning: MemoryReinforcementService는 Reward Scoring Engine과 Snippet Pruner를 통해 저장된 대화 스니펫을 보상‑점수 기반으로 강화하고, 품질이 낮은 스니펫을 제거합니다. 프루닝 관련 속성으로 memory.reinforce.pruning.enabled, memory.reinforce.pruning.sentence-sim-threshold, memory.reinforce.pruning.min-sentences 등이 있습니다.
 
-Retrieval 핸들러 목록
+Boltzmann Energy: 강화 점수는 볼츠만 에너지 기반으로 계산되어 기억을 점진적으로 업데이트합니다.
 
-AbstractRetrievalHandler – AbstractRetrievalHandler 핸들러는 고유한 책임을 갖고 있습니다.
+한국어 최적화 (Korean Optimisations)
 
-AnalyzeHandler – AnalyzeHandler 핸들러는 고유한 책임을 갖고 있습니다.
+Lucene Nori Tokenizer: 웹/벡터 검색 시 Nori 토크나이저를 사용하여 한국어 품질을 향상합니다.
 
-DefaultRetrievalHandlerChain – DefaultRetrievalHandlerChain 핸들러는 고유한 책임을 갖고 있습니다.
+도메인·별칭 필터: 네이버 검색에서 특정 도메인 차단, 제품/폴드/반전 키워드 확장 등 한국어 검색 품질을 높이는 다양한 속성을 제공합니다.
 
-DynamicRetrievalHandlerChain – DynamicRetrievalHandlerChain 핸들러는 고유한 책임을 갖고 있습니다.
+Fail‑Soft 및 폴백 정책 (Fail‑Soft & Fallbacks)
 
-EntityDisambiguationHandler – EntityDisambiguationHandler 핸들러는 고유한 책임을 갖고 있습니다.
+벡터 인덱스가 비어 있을 때는 웹 검색만으로 응답을 생성하며, ONNX Reranker 미설정 시 임베딩 기반 재랭커로 자동 폴백됩니다.
 
-EvidenceRepairHandler – EvidenceRepairHandler 핸들러는 고유한 책임을 갖고 있습니다.
+기본 모델 또는 프로바이더를 누락하면 OpenAI로 묵시적 폴백하지 않고 즉시 실패하도록 구현되어 있습니다. 운영 환경에서는 반드시 llm.provider, llm.base-url, llm.api-key, llm.chat-model을 명시해야 합니다.
 
-FileHandler – FileHandler 핸들러는 고유한 책임을 갖고 있습니다.
+버전 순도 게이트 (Version Purity Gate)
 
-KnowledgeGraphHandler – KnowledgeGraphHandler 핸들러는 고유한 책임을 갖고 있습니다.
+Gradle checkLangchain4jVersionPurity 태스크는 모든 dev.langchain4j 모듈이 1.0.1인지 검증하며, 혼합 버전이 발견되면 컴파일을 중단합니다. 충돌 목록은 build/reports/langchain4j-conflicts.txt에 기록됩니다.
 
-LocationAnswerHandler – LocationAnswerHandler 핸들러는 고유한 책임을 갖고 있습니다.
+아키텍처 다이어그램 (Architecture Diagram)
 
-LocationAwareHandler – LocationAwareHandler 핸들러는 고유한 책임을 갖고 있습니다.
+아래 ASCII 다이어그램은 요청 흐름과 주요 컴포넌트를 나타냅니다. 영어 캡션은 간략한 해설입니다.
 
-MemoryHandler – MemoryHandler 핸들러는 고유한 책임을 갖고 있습니다.
+User(Web)
+   │  (SSE)
+   ▼
+ChatApiController (/api/chat/*)
+   ▼
+ChatService
+   ├─ PromptBuilder.build(ctx)  ← {web|rag|memory} null‑safe
+   ├─ ContextOrchestrator
+   ├─ HybridRetriever
+   │   ├─ QueryTransformer (Self‑Ask)
+   │   ├─ Web Providers (Naver, optional DuckDuckGo)
+   │   ├─ VectorDbHandler (Pinecone / Upstash)
+   │   ├─ RRF (Fusion) → Reranker (ONNX | Embedding)
+   │   └─ TopK + Deduplication
+   ├─ FactVerifierService + EvidenceAwareGuard
+   ├─ LangChain4j ChatModel (Provider‑guarded)
+   └─ MemoryReinforcementService (reinforceWithSnippet)
+   ▼
+SSE Stream → Front‑end (chat.js)
 
-MemoryWriteInterceptor – MemoryWriteInterceptor 핸들러는 고유한 책임을 갖고 있습니다.
 
-PairingGuardHandler – PairingGuardHandler 핸들러는 고유한 책임을 갖고 있습니다.
+English caption: Requests flow from the web client to the ChatApiController, pass through the ChatService where prompts are built, retrieval happens, facts are verified and memory reinforced, and responses are streamed back via SSE.
 
-QueryRouteHandler – QueryRouteHandler 핸들러는 고유한 책임을 갖고 있습니다.
+빠른 시작 (Quickstart)
+요구사항 (Requirements)
 
-RetrievalHandler – RetrievalHandler 핸들러는 고유한 책임을 갖고 있습니다.
+JDK 17 및 Gradle 8.x
 
-SelfAskHandler – SelfAskHandler 핸들러는 고유한 책임을 갖고 있습니다.
+데이터베이스: 기본 DB는 MariaDB이며, 개발 환경에서는 H2를 선택할 수 있습니다. 데이터베이스 스키마는 JPA 엔티티에 따라 자동 생성됩니다.
 
-VectorDbHandler – VectorDbHandler 핸들러는 고유한 책임을 갖고 있습니다.
+Redis (선택): 캐시와 토큰 버킷(rate limiter)에 사용됩니다.
 
-WebSearchHandler – WebSearchHandler 핸들러는 고유한 책임을 갖고 있습니다.
-위 목록은 실제 com.example.lms.service.rag.handler 패키지에 포함된 클래스 명칭이며, 새로운 기능을 추가할 때는 이 목록을 참고하여 체인에 삽입합니다.
+빌드 및 실행 (Build & Run)
+# (wrapper가 없으면 'gradle' 사용)
+./gradlew check           # LangChain4j 순도 검사와 플레이스홀더/오프라인 가드 포함
+./gradlew bootRun         # Spring Boot(WebFlux + SSE) 실행
+# 또는
+./gradlew run             # application plugin 엔트리 포인트
 
-기본 체인 vs. 동적 체인
-
-DefaultRetrievalHandlerChain은 고정된 순서로 핸들러를 호출합니다. 반면 DynamicRetrievalHandlerChain은 RetrievalOrderService를 통해 질의 유형을 분석하고 웹 검색, 벡터 검색, 지식 그래프 검색의 순서를 동적으로 결정합니다. 테스트 클래스 DynamicRetrievalHandlerChainOrderTest는 동적 체인의 순서가 설정 값에 따라 올바르게 결정되는지 검증합니다.
-
-Reciprocal Rank Fusion(RRF)와 재랭킹
-
-핸들러들이 반환한 결과는 ReciprocalRankFuser를 통해 Reciprocal Rank Fusion(RRF) 알고리즘으로 합쳐집니다. RRF는 여러 소스의 랭크를 조합하여 전반적인 순위를 계산합니다. 기본 공식은 다음과 같습니다:
-
-각 소스에서의 순위를 rank_i라고 할 때, 점수는 Σ 1 / (k + rank_i)로 계산합니다.
-
-k 값은 설정(ranking.rrf.k)을 통해 조정할 수 있으며 기본값은 50입니다.
-합성된 결과는 선택적으로 Cross-Encoder Re-ranking 과정을 거쳐 재정렬됩니다. abandonware.reranker.backend 속성을 통해 아래 중 하나를 선택할 수 있습니다:
-
-onnx-runtime: 로컬 ONNX 런타임을 사용하여 크로스 인코더 모델로 재랭킹
-
-embedding-model: 임베딩 기반 크로스 인코더(기본값)
-
-noop: 재랭킹을 비활성화
-
-Routing (MOE)
-ModelRouterCore 및 Escalation 로직
-
-ModelRouterCore는 사용자의 질문과 현재 세션 상태를 기반으로 Mixture-of-Experts(MOE) 라우팅을 수행합니다. 기본 모델(gpt-5-mini)과 고품질 모델(gpt-5-chat-latest) 사이를 동적으로 선택합니다.
-라우팅 결정은 MoeRoutingProps에서 정의된 임계값에 의해 좌우됩니다:
-
-tokensThreshold: 질문의 토큰 수가 1200을 초과하면 승격됩니다.
-
-complexityThreshold: 질의 복잡도 점수(0~1)가 0.55를 넘으면 승격됩니다.
-
-uncertaintyThreshold: 불확실성 점수(0~1)가 0.40을 넘으면 승격됩니다.
-
-webEvidenceThreshold: 웹 증거 강도(0~1)가 0.60을 넘으면 승격됩니다.
-
-escalateOnRigidTemp: 강제 온도 조절을 사용했을 때 MOE로 승격할지 여부. 기본값은 true입니다.
-또한 router.moe.learning-intents 속성을 통해 학습 의도가 설정되어 있으면 자동으로 MOE로 승격됩니다. 예: CURATION, RULE_INDUCTION, KB_UPDATE, ANALYSIS 등.
-
-모델 및 프로퍼티 키
-
-모델 식별자는 ModelProperties에서 정의됩니다. 기본 모델은 gpt-5-mini, MOE 모델은 gpt-5-chat-latest입니다. 운영 환경에서는 openai.chat.model.a-default와 openai.chat.model.moe 속성을 통해 다른 모델로 교체할 수 있습니다.
-아래 표는 주요 라우팅 관련 프로퍼티와 간단한 의미를 요약한 것입니다. 자세한 설명은 본문을 참고하십시오:
-
-키	의미
-router.moe.tokens-threshold	토큰 임계값
-router.moe.complexity-threshold	복잡도 임계값
-router.moe.uncertainty-threshold	불확실성 임계값
-router.moe.web-evidence-threshold	웹 증거 임계값
-router.moe.escalate-on-rigid-temp	강제 온도 승격 여부
-router.moe.learning-intents	MOE 학습 의도
-openai.chat.model.a-default	기본 모델 이름
-openai.chat.model.moe	MOE 모델 이름
-abandonware.reranker.backend	재랭커 백엔드
-ranking.rrf.k	RRF 융합 k 값
-ranking.rerank.ce.topK	크로스 엔코더 상위 K
-rag.search.top-k	검색 top-k
-
-위 프로퍼티들은 application.yml 또는 application.properties에서 정의되며 필요에 따라 오버라이드할 수 있습니다.
-
-Prompting Policy
-중앙화된 프롬프트 구성과 금지 규칙
-
-이 프로젝트는 프롬프트 중앙화를 핵심 원칙으로 합니다. 모든 프롬프트는 PromptBuilder.build(PromptContext)와 PromptBuilder.buildInstructions(PromptContext)를 통해 생성되며, 서비스 로직에서 문자열을 직접 이어붙이는 행위는 금지됩니다.
-ChatService 또는 다른 서비스에서 "\n" 문자열이나 + 연산자로 프롬프트를 조립하는 흔적이 발견되면 정적 검사에 의해 실패합니다. 이를 방지하기 위해 다음 규칙을 따르십시오:
-
-질문과 시스템 인스트럭션, 웹 증거, 벡터 RAG, 긴 기억, 위치 정보 등 모든 컨텍스트는 PromptContext 레코드에 필드로 채워 넣습니다.
-
-PromptBuilder는 각 섹션을 ### WEB EVIDENCE, ### VECTOR RAG, ### LONG-TERM MEMORY, ### HISTORY, ### UPLOADED FILE CONTEXT, ### PREVIOUS_ANSWER, ### DRAFT_ANSWER, ### LOCATION CONTEXT, ### MUST_INCLUDE 와 같이 레이블을 붙여 포맷합니다.
-
-페르소나(튜터, 분석자, 브레인스토머 등)는 abandonware.persona.* 속성을 통해 구성되며, 지시 문구는 buildInstructions에서 자동 삽입됩니다.
-
-PromptBuilder 예시 코드
-
-아래는 PromptContext를 구성하고 PromptBuilder로 프롬프트를 생성하는 간단한 예입니다:
-
-PromptContext ctx = PromptContext.builder()
-    .userQuery("무엇이 빅뱅이론을 지지하나요?")
-    .web(List.of(webContent1, webContent2))
-    .rag(List.of(vectorSegment1, vectorSegment2))
-    .memory("과거 대화 요약...")
-    .history("전 세션에서의 질문과 답변...")
-    .location(new Location(lat, lng, accuracy, capturedAt))
-    .locationAddress("대전광역시 서구")
-    .cognitiveState(new CognitiveState("tutor"))
-    .build();
-
-String promptBody = promptBuilder.build(ctx);
-String instructions = promptBuilder.buildInstructions(ctx);
-String finalPrompt = instructions + "
-" + promptBody;
-
-
-프롬프트 빌더는 모든 섹션을 자동으로 정렬하며, 최대 4개의 중요한 키워드를 ### MUST_INCLUDE 섹션에 추출하여 모델에게 반드시 포함하도록 지시합니다. 위치 컨텍스트가 포함되면 lat, lng, accuracy(m), capturedAt, address 필드를 표시합니다.
-
-프롬프트 정책 테스트
-
-프롬프트 정책 준수 여부는 테스트 클래스로 검증됩니다. 예를 들어 PromptBuilderNoConcatTest는 ChatService에 문자열 직접 연결이 없는지 확인합니다. EvidencePromptBuilderTest와 PromptGuardTest는 증거 섹션과 가드 정책이 프롬프트에 제대로 반영되는지 검증합니다.
-
-Retrieval, Fusion & Re-ranking
-SelfAsk, Analyze, Web, Vector 단계
-
-Retrieval 과정은 여러 하위 단계로 구성됩니다. SelfAskHandler는 질문이 두루뭉술할 때 명확화 질문을 생성합니다. 예를 들어, 사용자가 ‘그는 언제 태어났나요?’라고 묻는다면 SelfAsk는 그가 누구인지 알아내기 위한 추가 질문을 던질 수 있습니다.
-AnalyzeHandler는 질의의 품질을 평가하고 오타나 비상식적 표현을 수정합니다. QueryComplexityClassifier와 QueryComplexityGate를 통해 질의의 복잡도를 분류하며, 필요 시 SelfAsk 단계를 우선 활성화합니다.
-WebSearchHandler는 SerpAPI, Bing API, Google CSE 등 여러 프로바이더를 통해 웹 문서를 수집합니다. 검색 결과는 신뢰도 점수와 함께 WebDocument로 래핑됩니다.
-VectorDbHandler는 Pinecone와 같은 백엔드에서 임베딩 세그먼트를 검색합니다. rag.search.top-k 속성에 설정된 개수만큼의 벡터 세그먼트를 반환하며, 언어 전처리를 위해 open-korean-text 토크나이저를 사용할 수 있습니다.
-MemoryHandler는 장기 기억에서 이전 대화나 세션 정보를 검색합니다. memory.read.max-turns와 memory.evidence.max-turns 속성을 통해 검색 범위를 조절할 수 있습니다.
-LocationAwareHandler와 LocationAnswerHandler는 질문이 위치와 관련된지 판별하고, 해당하는 경우 웹/벡터 검색을 건너뛰고 위치 서비스로 종료합니다.
-
-Fusion – Reciprocal Rank Fusion(RRF)
-
-웹, 벡터, 메모리 결과가 수집된 후 ReciprocalRankFuser가 RRF 알고리즘을 적용합니다. 융합 파라미터는 ranking.rrf.k로 조정할 수 있습니다. 여러 소스에서 등장하는 동일한 문서는 높은 점수를 얻습니다.
-
-Cross-Encoder Re-ranking
-
-RRF 이후에는 크로스 인코더 재랭킹이 선택적으로 수행됩니다. abandonware.reranker.backend는 다음 세 가지 값 중 하나를 취할 수 있습니다:
-
-onnx-runtime: 로컬 ONNX 런타임을 사용하여 BERT 기반 크로스 인코더로 정확한 재랭킹을 수행합니다. abandonware.reranker.onnx.model-path 및 execution-provider 속성을 사용하여 모델 위치와 CPU/GPU 실행을 지정합니다.
-
-embedding-model: 기존 임베딩 기반 간단한 재랭커를 사용합니다. 정확도는 낮지만 속도가 빠릅니다.
-
-noop: 재랭킹을 생략하고 RRF 결과 그대로 사용합니다.
-재랭킹 후 상위 ranking.rerank.ce.topK 개 문서만 남겨 프롬프트에 전달합니다.
-
-Fusion 모드와 온도
-
-HybridRetriever는 벡터 및 웹 결과를 결합하는 방식을 retrieval.fusion.mode 속성을 통해 제어합니다. weightedSoftmax 모드는 RRF 점수를 소프트맥스 온도로 변환하여 가중 평균을 계산합니다. retrieval.fusion.softmax.temperature는 이때 사용되는 온도로, 값이 낮을수록 상위 결과에 더 많은 가중치가 부여됩니다.
-
-Location Features
-위치 의도 감지 및 흐름
-
-사용자의 질문에 위치 의도가 포함되어 있으면, 검색 대신 LocationService가 질의에 응답합니다. 예를 들어 ‘나 지금 어디야?’, ‘주변 약국 알려줘’, ‘대전 시청까지 걸리는 시간’ 등의 질문은 위치 기능으로 분기됩니다.
-LocationAnswerHandler는 위치 의도를 감지하여 검색 체인을 중단하고 위치 서비스로 전달합니다. 이때 최근 위치 이벤트(LocationEvent)가 존재해야 정확한 주소를 반환할 수 있습니다.
-
-주요 클래스
-
-LocationController: REST API 엔드포인트를 정의합니다. /api/location/consent/on으로 위치 수집 동의를 설정하고, /api/location/events로 사용자의 위치 이벤트를 수신합니다.
-
-LocationService: 위치 데이터 저장 및 검색, 위치 의도 감지 로직을 구현합니다.
-
-ReverseGeocodingClient: 위도/경도를 주소로 변환하는 인터페이스입니다. 기본 구현은 KakaoReverseGeocodingClient로, Kakao REST 키가 필요합니다.
-
-KakaoPlacesClient: 주변 장소(약국, 병원, 카페 등)를 찾기 위해 Kakao Places API를 호출합니다. kakao.rest-key 환경 변수가 필요합니다.
-
-TmapDirectionsClient: 출발지에서 목적지까지의 최단 경로와 예상 시간을 조회합니다. tmap.app-key가 필요합니다.
-
-API 엔드포인트 및 예제
-
-위치 기능을 테스트하려면 다음과 같은 cURL 명령을 사용할 수 있습니다:
-
-# 동의 켜기
-curl -X POST http://localhost:8080/api/location/consent/on -H "X-User-Id: alice"
-# 좌표 적재
-curl -X POST http://localhost:8080/api/location/events -H "Content-Type: application/json" -H "X-User-Id: alice" -d '{"lat":36.35,"lng":127.33,"ts":"2025-08-21T09:00:00Z"}'
-# 질의 예: 나 지금 어디야?
-
-
-위 API를 통해 사용자의 현재 위치를 설정하고, 이후 Chat API에 ‘나 지금 어디야?’를 보내면 LocationService가 최근 좌표를 역지오코딩하여 주소를 응답합니다. 주변 장소나 이동 시간에 대한 질문도 비슷한 흐름으로 처리됩니다.
-
-환경 변수와 설정
-
-위치 기능을 활성화하려면 다음 환경 변수가 설정되어 있어야 합니다:
-
-KAKAO_REST_KEY: Kakao Reverse Geocoding 및 Places API 키
-
-GOOGLE_API_KEY: Google Maps/Geocoding 키 (선택적으로 Tmap 대체 시 사용)
-
-TMAP_APP_KEY: Tmap Directions API 키
-또한 location.enabled=true 속성이 켜져 있어야 하며, 기본적으로 application.yml에서 활성화되어 있습니다.
-
-Configuration
-주요 설정 요약
-
-프로젝트의 동작은 application.yml과 application.properties에 정의된 수많은 설정 값에 의해 제어됩니다. 여기서는 운영에 필수적인 주요 키를 요약합니다. 값은 기본값이며 환경에 맞게 조정할 수 있습니다:
-
-키	기본값	설명
-rag.search.top-k	10	벡터 및 웹 검색 시 가져올 문서 수
-ranking.rrf.k	50	RRF 융합에서 고려할 순위 k
-ranking.rerank.ce.topK	12	크로스 엔코더 재랭킹 후 유지할 문서 수
-router.moe.tokens-threshold	1200	MOE 승격을 트리거하는 토큰 수
-router.moe.complexity-threshold	0.55	복잡도 승격 임계값 (0~1)
-router.moe.uncertainty-threshold	0.40	불확실성 승격 임계값
-router.moe.web-evidence-threshold	0.60	웹 증거 승격 임계값
-router.moe.escalate-on-rigid-temp	true	비정상 온도 사용 시 승격 여부
-router.moe.learning-intents	CURATION,RULE_INDUCTION,KB_UPDATE,ANALYSIS	MOE 적용 의도
-abandonware.reranker.backend	onnx-runtime	재랭킹 백엔드 선택
-selfask.timeout-seconds	10	SelfAsk 단계 전체 타임아웃(초)
-selfask.per-request-timeout-ms	5000	SelfAsk API 호출 타임아웃(ms)
-tavily.enabled	true	Tavily 웹 검색 사용 여부
-tavily.api.url	https://api.tavily.com/search
-	Tavily API URL
-tavily.max-results	5	Tavily 검색 결과 수
-tavily.timeout-ms	3000	Tavily 호출 타임아웃(ms)
-authority.tier-weights.official	1.00	공식 출처 가중치
-authority.tier-weights.guide	0.85	가이드 출처 가중치
-authority.tier-weights.wiki	0.80	위키 출처 가중치
-authority.tier-weights.community	0.65	커뮤니티 출처 가중치
-memory.read.max-turns	8	메모리에서 읽어올 과거 턴 수
-memory.evidence.max-turns	6	메모리 증거 최대 턴 수
-guard.evidence_regen.enabled	true	증거 부족 시 재생성/승격 기능
-guard.evidence_regen.min_web_docs	1	재생성 트리거 웹 문서 최소 수
-guard.evidence_regen.min_total_docs	2	재생성 트리거 전체 문서 최소 수
-
-이 외에도 매우 많은 세부 설정이 존재합니다. 테스트 환경에서는 기본값을 유지하되, 운영 환경에서는 API 키, 모델 이름, 온도, 토큰 제한, 시간 제한 등을 반드시 환경 변수나 application-*.yml 파일로 재정의하십시오.
-
-외부 API 키 설정
-
-외부 서비스와 통신하기 위해 다음 환경 변수를 설정해야 합니다:
-
-KAKAO_REST_KEY – Kakao Reverse Geocoding 및 Places API 키
-
-GOOGLE_API_KEY – Google Maps 및 Geocoding API 키 (선택 사항)
-
-TMAP_APP_KEY – Tmap Directions API 키
-
-OPENAI_API_KEY – OpenAI Chat API 키 (LangChain4j OpenAI 클라이언트 사용 시 필요)
-API 키는 소스 코드에 하드코딩하지 않고 반드시 환경 변수나 외부 비밀 저장소를 통해 주입해야 합니다.
-
-Run & Build
-로컬 실행
-
-프로젝트를 로컬에서 실행하려면 다음 명령을 사용하십시오. Java 17이 설치되어 있어야 하며, Gradle Wrapper를 통해 필요한 종속성이 자동으로 다운로드됩니다:
-
-cd src
-./gradlew clean bootRun
-
-
-bootRun 태스크는 내장 Tomcat 서버에서 애플리케이션을 실행합니다. 기본 포트는 8080이며 server.port 속성으로 변경할 수 있습니다.
-
-패키징 및 배포
-
-배포용 JAR 파일을 빌드하려면 다음 명령을 실행하십시오:
-
-cd src
-./gradlew build
-java -jar build/libs/*.jar
-
-
-bootJar 태스크가 비활성화되어 있으므로, 실행 가능한 JAR는 Spring Boot의 레이어드 아카이브로 생성됩니다. 운영 환경에서 java -jar로 실행하거나 Docker 이미지로 패키징할 수 있습니다.
-
-Java 및 Gradle 버전
-
-Java 17 이상이 요구됩니다. 다른 버전에서는 레코드(record) 기능 등 최신 문법을 사용할 수 없습니다.
-
-Gradle Wrapper(./gradlew)는 프로젝트 내에서 관리되며 버전 8.x가 권장됩니다. 수동으로 설치된 Gradle을 사용할 필요가 없습니다.
-
-Quality Gates (Static Rules)
-
-코드 품질을 유지하기 위해 여러 정적 규칙이 설정되어 있습니다. 개발 중 아래와 같은 패턴을 발견하면 수정해야 합니다. 규칙 위반은 CI 단계에서 실패 원인이 됩니다.
-
-조기 컷 방지
-
-핸들러에서 accumulator.size() >= topK와 같이 결과 수가 일정 이상이면 false를 반환하여 체인을 종료하는 코드가 발견되면 안 됩니다. fail-soft 정책에 따라 마지막까지 결과를 누적해야 합니다.
-정규식으로 검출되는 패턴:
-
-accumulator\.size\(\)\s*>?=\s*topK
-return\s+false;
-
-임베딩 배치 누락
-
-벡터 생성 시 embedAll()을 사용하여 배치 임베딩을 수행해야 합니다. 단일 문서에 embed()를 반복 호출하는 패턴은 성능 저하를 유발합니다.
-검출 패턴:
-
-\bembed\(
-\bembedAll\(
-
-
-embedAll() 사용이 없는 경우 성능 문제를 야기할 수 있으므로 점검이 필요합니다.
-
-프롬프트 직접 연결 금지
-
-프롬프트를 문자열로 직접 이어붙이는 코드는 금지되어 있습니다. ChatService 등에서 "\n" 또는 "+" 연산으로 프롬프트를 만들면 정책 위반입니다. 항상 PromptBuilder를 사용하십시오.
-정규식 예시:
-
-"\n"\s*\+\s*
-\+\s*"\n"
-
-혼합 LangChain4j 버전 탐지
-
-모든 의존성은 LangChain4j 1.0.1을 사용해야 합니다. dev.langchain4j:.*:0.2. 버전이 발견되면 빌드 실패입니다.
-검색 패턴:
-
-dev\.langchain4j:.*:0\.2\.
-
-
-정적 도구(rg -n, grep -RInE)를 사용하여 코드베이스 전반에서 이러한 패턴을 검색하고 조기에 수정하십시오.
-
-Testing
-자동화된 테스트 클래스
-
-PipelineIntegrationTest
-
-PromptGuardTest
-
-EvidencePromptBuilderTest
-
-PromptBuilderNoConcatTest
-
-ContextualScorerTest
-
-SuperBuilderWiringTest
-
-ModelRouterCoreTest
-
-ModelRouterBeanTest
-
-RouteSignalVisibilityTest
-
-ModelRouterRoutingTest
-
-ModelEscalationTest
-
-EvidenceAwareGuardTest
-
-EvidenceAwareGuardRegenerateTest
-
-DynamicRetrievalHandlerChainOrderTest
-
-MatrixTransformerTest
-
-ChatApiControllerLocationTest
-
-ChatApiControllerNearbyTest
-
-ChatApiControllerTravelTimeTest
-
-LlmCallBudgetTest
-
-NeuralPathFormationServiceTest
-
-LangchainVersionTest
-
-NearbyPharmaciesTest
-
-FormattersEtaTest
-
-LocationServicePersonalisationTest
-
-TravelTimeToOfficeTest
-
-ConfigKeysRetentionTest
-이러한 테스트는 라우팅, 프롬프트 구성, 위치 기능, 체인 순서, 모형 승격, 증거 가드 등을 자동으로 검증합니다. 새 기능을 추가할 때는 반드시 관련 테스트를 작성하여 품질 게이트를 통과해야 합니다.
-
-수동 시나리오
-
-아래는 수동으로 시스템을 검증할 수 있는 시나리오입니다. 실제 서버를 실행한 후 Chat API 또는 위치 API를 호출하여 예상대로 동작하는지 확인하십시오:
-
-현재 위치 질의 – /api/location/consent/on과 /api/location/events로 좌표를 전송한 뒤, Chat API에 ‘나 지금 어디야?’를 보내면 최근 좌표가 역지오코딩되어 주소가 반환되어야 합니다.
-
-주변 약국 검색 – 위치 이벤트 후 Chat API에 ‘근처 약국 알려줘’ 를 보내면 KakaoPlacesClient가 호출되어 약국 리스트와 거리 정보가 제공됩니다.
-
-이동 시간 요청 – /api/location/events로 현재 좌표를 제공한 뒤 ‘시청까지 소요시간’을 요청하면 TmapDirectionsClient를 통해 예상 시간과 경로가 반환되어야 합니다.
-
-복잡한 질문으로 MOE 승격 – 긴 질문(예: ‘빅뱅 이론과 양자 중력의 차이점을 비교하고 역사적 맥락을 설명해줘’)을 보내면 토큰 수와 복잡도 임계값을 넘어서므로 모델이 자동으로 MOE로 승격되는지 확인합니다.
-
-핸들러 부분 실패 유지 – 인터넷 연결을 끊어 웹 검색이 실패하도록 한 후 간단한 질문을 보내면 벡터 검색과 메모리 검색만으로 답변을 생성해야 합니다. fail-soft 정책이 동작하는지 확인하십시오.
-
-Troubleshooting
-
-시스템을 운영하면서 발생할 수 있는 일반적인 문제와 해결 방법을 정리합니다:
-
-PDF 파일 읽기 실패 – 로그에 PDFBox PDDocument.load(InputStream) 관련 서명 오류가 발생하면 PDF의 디지털 서명을 해제하거나 최신 pdfbox 버전과 호환되는 문서인지 확인하십시오.
-
-DirectionsClient 심볼 누락 – NoSuchMethodError: DirectionsClient와 같은 오류가 발생하면 Tmap/Google API 클라이언트 라이브러리 버전 불일치일 수 있습니다. build.gradle의 BOM을 확인하여 버전을 일치시킵니다.
-
-웹 검색만 호출되는 현상 – 벡터 검색이 실행되지 않고 웹 검색만 동작한다면 질의가 위치 의도로 분류되었거나 RetrievalOrderService의 동적 판별 로직이 우선 순위를 조정했을 가능성이 있습니다. 로그의 RetrievalOrderService 메시지를 확인하십시오.
-
-Rigid-temp 온도 오류 – 강제 온도를 사용한 프롬프트에서 모델이 비정상적인 답변을 내놓는다면 router.moe.escalate-on-rigid-temp를 활성화하여 MOE로 승격하거나 기본 temperature를 사용하십시오.
-
-API 키 미설정 – Kakao/Google/Tmap 키가 설정되지 않은 경우 위치 기능이 제한됩니다. 환경 변수를 설정한 후 애플리케이션을 재시작하십시오.
-
-메모리 누수 – 메모리 핸들러가 너무 많은 과거 턴을 로딩하면 Out-Of-Memory 문제가 발생할 수 있습니다. memory.read.max-turns와 memory.evidence.max-turns 값을 줄이고, 메모리 저장소의 만료 정책을 점검하십시오.
-
-Contributing & Coding Standards
-
-본 프로젝트는 팀 내외의 기여를 환영합니다. 하지만 일관된 품질을 유지하기 위해 다음 표준을 준수해야 합니다:
-
-핸들러 추가 가이드 – 새 데이터 소스나 기능을 추가하려면 com.example.lms.service.rag.handler 패키지에 새로운 핸들러를 구현하고, DefaultRetrievalHandlerChain 또는 DynamicRetrievalHandlerChain에 등록하십시오. 핸들러는 상태를 가지지 않아야 하며, 실패하더라도 체인을 중단하지 않고 빈 결과를 반환해야 합니다.
-
-설정 우선 원칙 – 하드코딩된 값 대신 application.yml/application.properties 또는 환경 변수로 모든 매직 넘버를 노출해야 합니다. 예: 토큰 임계값, 검색 결과 수, 온도, API 키 등.
-
-세션 격리 – ChatSessionScope와 관련된 객체는 세션 간 공유되지 않아야 합니다. 싱글톤 빈에 상태를 저장하지 말고, 필요한 경우 @Scope(value = WebApplicationContext.SCOPE_SESSION)를 사용합니다.
-
-테스트 우선 – 새 기능을 구현할 때는 반드시 단위/통합 테스트를 작성하십시오. 기존 테스트 스위트에 통합되도록 src/test/java 경로에 배치합니다.
-
-코드 스타일 – Java 코드에서 @Override를 명시적으로 선언하고, 메서드 매개변수와 지역 변수는 명확한 이름을 사용합니다. Lombok 애너테이션(@Getter, @Setter, @Builder)을 적절히 활용하되, 코드 가독성을 해치지 않도록 주석과 Javadoc을 추가합니다.
-
-문서화 – 새 핸들러나 서비스, 설정 키를 추가할 때는 반드시 README와 RUNBOOK.md에 해당 내용을 반영합니다. 운영팀이 변경점을 쉽게 파악할 수 있도록 변경 사항을 명시하십시오.
-
-License (선택)
-
-본 리포지토리는 내부용으로 제공되며, 오픈소스 라이선스가 명시되지 않았습니다. 외부 공개 시에는 적절한 라이선스를 추가해야 합니다.
+환경/프로퍼티 설정 예시 (Property Examples)
+
+다음 설정은 application.yml/application.properties에서 정의할 수 있는 키들입니다. 실제 키나 토큰 값을 코드/문서에 넣지 마십시오; 아래는 키 이름만 표시한 예시입니다.
+
+# LLM
+llm.provider=groq|openai|vertex|anthropic
+llm.base-url=https://api.groq.com/openai/v1
+llm.api-key=<YOUR_LLM_API_KEY>
+llm.chat-model=llama-3.1-8b-instant
+llm.chat.temperature=0.2
+llm.high.model=gpt-5-chat-latest  # MOE용 고품질 모델
+
+# System Prompt
+gpt.system.prompt=### INSTRUCTIONS: Synthesize answers from sources (higher authority first)...
+
+# Web Search (Naver)
+naver.search.client-id=<YOUR_NAVER_ID>
+naver.search.client-secret=<YOUR_NAVER_SECRET>
+naver.search.display=20
+naver.search.web-top-k=10
+naver.search.rag-top-k=5
+naver.search.query-suffix=뉴스
+naver.search.query-sim-threshold=0.7
+naver.search.blocked-domains=example.com,bad.co
+naver.search.timeout-ms=5000
+naver.search.expansion-policy=auto
+naver.search.product-keywords=…
+naver.search.fold-keywords=…
+naver.search.flip-keywords=…
+naver.search.fusion=rrf  # none|rrf
+naver.search.similar-threshold=0.8
+naver.hedge.enabled=true
+naver.hedge.timeout-ms=2000
+naver.hedge.delay-ms=800
+naver.fallback.duckduckgo.enabled=true
+
+# Vector Store (Pinecone)
+pinecone.api.key=<YOUR_PINECONE_KEY>
+pinecone.environment=<YOUR_ENV>
+pinecone.project.id=<YOUR_PROJECT>
+pinecone.index.name=<YOUR_INDEX>
+pinecone.namespace=<OPTIONAL_NAMESPACE>
+
+# Vector Store (Upstash)
+upstash.vector.rest-url=<YOUR_UPSTASH_VECTOR_URL>
+upstash.vector.api-key=<YOUR_UPSTASH_VECTOR_KEY>
+upstash.vector.namespace=<OPTIONAL_NAMESPACE>
+upstash.redis.rest-url=<YOUR_UPSTASH_REDIS_URL>
+upstash.redis.rest-token=<YOUR_UPSTASH_REDIS_TOKEN>
+upstash.ratelimit.per-minute=60
+
+# Reranker (ONNX)
+abandonware.reranker.backend=embedding-model|onnx-runtime|noop
+abandonware.reranker.onnx.model-path=classpath:/models/your-cross-encoder.onnx
+abandonware.reranker.onnx.execution-provider=cpu|cuda
+abandonware.reranker.onnx.vocab-path=classpath:/models/vocab.txt
+abandonware.reranker.onnx.max-seq-len=384
+abandonware.reranker.onnx.max-chars=3500
+abandonware.reranker.onnx.normalize=true
+abandonware.reranker.onnx.fallback-enabled=true
+
+# Memory Reinforcement
+memory.reinforce.score.low-quality-threshold=0.2
+memory.snippet.min-length=30
+memory.snippet.max-length=500
+memory.reinforce.pruning.enabled=true
+memory.reinforce.pruning.sentence-sim-threshold=0.8
+memory.reinforce.pruning.min-sentences=3
+memory.reinforce.pruning.llm.enabled=false
+
+# Ranking & Fusion
+retrieval.fusion.rrf.weights.w_ce=0.6
+retrieval.fusion.rrf.weights.w_bm25=0.3
+retrieval.fusion.rrf.weights.w_sem=0.1
+ranking.rrf.k=60
+ranking.rerank.ce.topK=20
+
+# Router (MOE)
+router.moe.tokens-threshold=1200
+router.moe.complexity-threshold=0.55
+router.moe.uncertainty-threshold=0.40
+router.moe.web-evidence-threshold=0.60
+router.moe.escalate-on-rigid-temp=true
+router.moe.learning-intents=CURATION,RULE_INDUCTION,KB_UPDATE,ANALYSIS
+openai.chat.model.a-default=gpt-5-mini
+openai.chat.model.moe=gpt-5-chat-latest
+
+# Miscellaneous
+abandonware.web.trace.expose=true
+memory.read.max-turns=15
+memory.evidence.max-turns=10
+
+
+
+⚠️ 실제 키·토큰 값은 코드에 커밋하지 마십시오. 모든 프라이빗 키는 별도의 환경 변수나 시크릿 매니저에 설정해야 합니다.
+
+API 개요 (API Overview)
+
+아래 표는 주요 엔드포인트와 기능을 요약합니다. 각 API는 JSON 요청/응답을 처리하며, SSE 스트리밍은 웹 클라이언트(EventSource)에서 메시지를 실시간으로 수신합니다.
+
+엔드포인트	메서드	요약
+/api/chat/stream	POST	SSE 스트리밍 응답. sid(세션 ID)와 message를 보내면, 챗봇이 단계적으로 답변을 전송합니다. attach=true로 재연결 시 기존 세션에 추가로 연결할 수 있습니다.
+/api/chat/sync	POST	동기식 완결 응답. 한 번에 모든 응답을 받고, 응답 헤더에 X-Model-Used와 X-RAG-Used가 포함됩니다.
+/api/chat	POST	비동기식 채팅 요청. 요청이 바로 반환되고, 백그라운드에서 세션이 생성됩니다.
+/api/chat/state	GET	현재 실행 중인 세션의 상태, 마지막 assistant 메시지, 사용 모델, RAG 사용 여부를 확인합니다.
+/api/chat/sessions	GET	기존 세션 ID 목록을 반환합니다.
+/api/chat/sessions/{id}	GET	특정 세션의 대화 기록과 메타데이터를 조회합니다.
+/api/chat/sessions/{id}	DELETE	세션을 제거하여 메모리에서 삭제합니다.
+/api/image-plugin/generate	POST	텍스트 프롬프트로 이미지를 생성합니다. 이미지 API 키가 없으면 500 오류를 반환합니다.
+/api/image-plugin/jobs	POST	이미지 생성 비동기 작업을 큐에 넣고 ETA를 반환합니다.
+/api/image-plugin/jobs	GET	최근 이미지 생성 작업 목록을 조회합니다.
+/api/image-plugin/jobs/{id}	GET	특정 작업의 상태를 조회합니다.
+/api/probe/search	POST	검색 파이프라인을 디버깅하기 위한 프로브. admin token이 필요하며, query와 옵션을 받아 웹+벡터 검색 결과와 메타데이터를 반환합니다.
+/api/location/consent/{onOff}	POST	사용자 위치 동의 상태를 켜거나 끕니다. X-User-Id를 통해 사용자 식별자가 전달됩니다.
+/api/location/events	POST	GPS 좌표와 타임스탬프를 포함하는 위치 이벤트를 전송합니다. 사전에 동의가 되어 있어야 합니다.
+/api/audio/tts	POST	plain text를 받아 MP3 음성 파일을 반환합니다.
+/api/audio/stt	POST	음성 파일을 업로드하면 텍스트로 변환하여 반환합니다.
+기타		/api/chat/cancel(채팅 취소), /api/image-plugin/jobs 리스트 외에도 다양한 관리 엔드포인트가 존재합니다.
+SSE 응답 예시 (Chat Stream)
+
+클라이언트는 다음과 같이 SSE를 구독할 수 있습니다. JavaScript EventSource를 이용하면 스트림을 수신할 수 있습니다.
+
+const source = new EventSource('/api/chat/stream');
+source.addEventListener('message', (e) => {
+  const event = JSON.parse(e.data);
+  console.log(event.role, event.content);
+});
+source.addEventListener('error', () => {
+  source.close();
+});
+
+// 메시지 전송은 별도의 fetch 호출로 수행
+await fetch('/api/chat/stream', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sid: 'demo-1', message: '안녕!' })
+});
+
+
+서버는 Assistant 메시지, 내부 진행 상황, 오류 등을 이벤트 스트림으로 전송합니다. 클라이언트는 SSE 연결을 유지하며, data: 필드에 JSON payload가 전달됩니다.
+
+설정 키 목록 (Configuration Keys)
+
+이 섹션은 코드에 등장하는 주요 환경 변수/프로퍼티 이름들을 정리한 표입니다. 값은 절대 포함하지 않습니다.
+
+카테고리	키 이름들 (비포괄)
+LLM	llm.provider, llm.base-url, llm.api-key, llm.chat-model, llm.high.model, llm.chat.temperature, gpt.system.prompt
+웹 검색(Naver)	naver.search.client-id, naver.search.client-secret, naver.search.display, naver.search.web-top-k, naver.search.rag-top-k, naver.search.query-suffix, naver.search.query-sim-threshold, naver.search.blocked-domains, naver.search.timeout-ms, naver.search.expansion-policy, naver.search.product-keywords, naver.search.fold-keywords, naver.search.flip-keywords, naver.search.fusion, naver.search.similar-threshold, naver.hedge.enabled, naver.hedge.timeout-ms, naver.hedge.delay-ms, naver.fallback.duckduckgo.enabled
+벡터 저장소	pinecone.api.key, pinecone.environment, pinecone.project.id, pinecone.index.name, pinecone.namespace; upstash.vector.rest-url, upstash.vector.api-key, upstash.vector.namespace; upstash.redis.rest-url, upstash.redis.rest-token, upstash.ratelimit.per-minute
+Reranker / Fusion	abandonware.reranker.backend, abandonware.reranker.onnx.model-path, abandonware.reranker.onnx.execution-provider, abandonware.reranker.onnx.vocab-path, abandonware.reranker.onnx.max-seq-len, abandonware.reranker.onnx.max-chars, abandonware.reranker.onnx.normalize, abandonware.reranker.onnx.fallback-enabled, retrieval.fusion.rrf.weights.w_ce, retrieval.fusion.rrf.weights.w_bm25, retrieval.fusion.rrf.weights.w_sem, ranking.rrf.k, ranking.rerank.ce.topK
+메모리	memory.reinforce.score.low-quality-threshold, memory.snippet.min-length, memory.snippet.max-length, memory.reinforce.pruning.enabled, memory.reinforce.pruning.sentence-sim-threshold, memory.reinforce.pruning.min-sentences, memory.reinforce.pruning.llm.enabled, memory.read.max-turns, memory.evidence.max-turns
+라우터 & 모델	router.moe.tokens-threshold, router.moe.complexity-threshold, router.moe.uncertainty-threshold, router.moe.web-evidence-threshold, router.moe.escalate-on-rigid-temp, router.moe.learning-intents, openai.chat.model.a-default, openai.chat.model.moe
+기타	abandonware.web.trace.expose, naver.search.debug, probe.search.enabled, ranking.rerank.ce.weight, ranking.rerank.ce.use-semantic, 등
+설계 원칙 & 가드레일 (Design Principles & Guardrails)
+프롬프트 생성 규칙 (Prompting Policy)
+
+PromptBuilder 전용: 프롬프트는 PromptBuilder.build(ctx) 및 buildInstructions(ctx)로만 생성합니다. 문자열 결합(+, \n)을 통한 즉흥적인 프롬프트 조립은 금지됩니다.
+
+컨텍스트 주입: RAG, 웹 증거, 메모리, 위치, 이전 응답 등 모든 컨텍스트를 PromptContext에 필드로 담아 프롬프트 빌더에 전달합니다. 빌더는 순서를 보존하며 ### MUST_INCLUDE 섹션에 중요한 키워드를 추출합니다.
+
+System Prompt 관리: 시스템 프롬프트는 gpt.system.prompt 속성에서 불러오며, 코드에 하드코딩하지 않습니다.
+
+프로바이더 가드 (Provider Guard)
+
+모델·프로바이더 명시: llm.provider, llm.base-url, llm.api-key, llm.chat-model을 반드시 설정해야 합니다. 기본값이 없으며, 누락 시 서비스는 즉시 실패하여 OpenAI로 자동 폴백하지 않습니다.
+
+Reranker 백엔드: abandonware.reranker.backend 값이 onnx-runtime인데 모델 파일이 없으면 임베딩 기반 재랭킹으로 자동 폴백합니다. noop 설정 시 재랭킹을 비활성화합니다.
+
+Fail‑Soft: 벡터 인덱스가 비어 있거나 외부 API 오류가 발생해도 웹 검색 등 다른 수단으로 최대한 응답을 생성합니다.
+
+세션 및 트레이스 (Session & Trace)
+
+상관관계 로깅: sid와 x-request-id 헤더를 전파하여 로그에서 요청을 추적할 수 있도록 합니다. SSE 스트림에는 세션 ID가 유지됩니다.
+
+Security: 기본 admin 계정/비밀번호는 환경 배포 전에 반드시 교체하십시오. 설정 파일에 기본 자격 증명이나 시크릿을 커밋하지 마십시오.
+
+검증 기반 응답: FactVerifierService와 EvidenceAwareGuard를 통해 검증된 정보만 반환하도록 합니다.
+
+버전 순도 및 품질 체크 (Purity & Quality Checks)
+
+LangChain4j 순도: 모든 dev.langchain4j:* 모듈이 1.0.1인지 확인하는 checkLangchain4jVersionPurity 태스크를 사용합니다.
+
+플레이스홀더 탐지: failOnPlaceholders 태스크는 TODO/STUB 미완성 코드를 탐지하여 빌드 실패를 유도합니다.
+
+오프라인 리플레이 가드: offlineReplayCheck 태스크는 로그 리플레이 공격과 캐시 오염에 대한 방어 기능을 점검합니다.
+
+의존성/클래스패스 덤프: emitDependencyReport와 emitClasspathJars를 통해 빌드의 의존성 그래프와 클래스패스를 분석할 수 있습니다.
+
+트러블슈팅 (Troubleshooting)
+
+Forbidden dependency detected: com.theokanning… → 레거시 OpenAI 클라이언트가 혼입되었습니다. Gradle 의존성에서 제거하십시오.
+
+ONNX 미설정 → abandonware.reranker.backend=embedding-model로 설정하여 임베딩 기반 재랭커로 폴백합니다.
+
+Vector 인덱스 비어있음 → 벡터 DB에 세그먼트가 없을 때는 웹 검색만으로 진행합니다. 로그에서 Fail‑soft 동작을 확인하십시오.
+
+프로브 미사용 → /api/probe/search 엔드포인트는 기본적으로 비활성화되어 있으며, probe.search.enabled를 true로 설정해야 사용 가능합니다.
+
+모델 오류 → llm.chat-model 또는 openai.chat.model.* 값이 맞는지 확인하고, llm.api-key를 올바르게 설정했는지 점검합니다.
+
+데모 & 스모크 테스트 (Demo & Smoke Test)
+
+다음 예제는 로컬 서버에서 기본 기능을 검증하는 간단한 테스트입니다.
+
+SSE 채팅 테스트
+curl -N -H "Content-Type: application/json" \
+     -X POST http://localhost:8080/api/chat/stream \
+     -d '{"sid":"demo-1","message":"안녕!"}'
+
+이미지 생성 테스트
+curl -X POST http://localhost:8080/api/image-plugin/generate \
+     -H "Content-Type: application/json" \
+     -d '{"prompt":"A cute fox reading a book"}'
+
+검색 프로브 테스트
+curl -X POST http://localhost:8080/api/probe/search \
+     -H "Content-Type: application/json" \
+     -H "X-Admin-Token: <ADMIN_TOKEN>" \
+     -d '{"q":"원신 스커크 최신 패치 노트"}'
+
+
+각 테스트는 성공적인 응답을 반환해야 합니다. 실패할 경우 로그와 환경 설정을 확인하십시오.
+
+저장소 구조 (Repository Structure)
+
+프로젝트는 모듈화된 패키지 구조를 따릅니다. 아래는 주요 디렉터리의 요약입니다.
+
+src/
+├─ build.gradle            # 프로젝트 빌드 스크립트, LangChain4j BOM 및 purity 태스크 정의
+├─ docs/                   # 의존성 트리 등 문서
+└─ main/
+   ├─ java/com/example/lms/
+   │   ├─ api/                 # REST 컨트롤러 (ChatApiController, ImageGenerationPluginController 등)
+   │   ├─ service/rag/         # HybridRetriever, 핸들러 체인, RRF fuser, reranker
+   │   ├─ service/reinforcement/  # MemoryReinforcementService, RewardScoringEngine
+   │   ├─ service/vector/      # Pinecone 및 Upstash 어댑터
+   │   ├─ service/guard/       # EvidenceAwareGuard
+   │   ├─ service/answer/      # AnswerExpanderService, FactVerifierService
+   │   ├─ prompt/              # PromptBuilder, PromptContext, SystemPrompt
+   │   ├─ config/              # AppSecurityConfig, WebClientConfig, PineconeProps, MoeRoutingProps
+   │   ├─ search/              # NaverSearchService 등 검색 구현
+   │   └─ ...                  # 기타 서비스 및 도메인 로직
+   └─ resources/
+       ├─ application.yml      # 기본 설정 예제 (키 이름만 포함)
+       └─ static/              # 프론트엔드 자산
+
+라이선스 / 기여 (License & Contributing)
+
+라이선스가 아직 명시되지 않았다면 MIT 라이선스를 채택하는 것을 권장합니다. PR을 제출할 때는 다음 규칙을 준수하십시오:
+
+시크릿 금지: API 키, 토큰, 비밀번호 등 민감 정보는 커밋하지 마십시오.
+
+프롬프트 규칙 유지: PromptBuilder.build(ctx)를 사용하며 문자열 직접 결합을 피합니다.
+
+LangChain4j 버전 고정: 모든 dev.langchain4j 모듈은 1.0.1을 유지합니다. 버전 변경이 필요한 경우 먼저 BOM을 업데이트하고 checkLangchain4jVersionPurity 태스크를 수정하십시오.
+
+안전 검증: FactVerifierService와 EvidenceAwareGuard를 우회하는 코드는 허용되지 않습니다. 증거 기반 응답 원칙을 준수하십시오.
+
+본 README는 실제 소스 코드와 빌드 스크립트를 분석하여 작성되었습니다. 설명된 설정과 가이드라인을 따르면 하이브리드 RAG 챗봇을 빠르게 실행하고 안정적으로 운영할 수 있습니다.
