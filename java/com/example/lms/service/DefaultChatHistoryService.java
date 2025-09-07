@@ -16,7 +16,7 @@ import java.util.Optional;
 public class DefaultChatHistoryService implements ChatHistoryService {
 
     @Override
-    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail) {
+    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail, String clientIp) {
         log.debug("[ChatHistory] startNewSession user={} (stub)", userEmail);
         return Optional.empty();
     }

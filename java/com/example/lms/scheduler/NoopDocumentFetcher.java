@@ -17,7 +17,7 @@ public class NoopDocumentFetcher implements DocumentFetcher {
 
     @Override
     public List<Document> fetchNewDocumentsSince(LocalDateTime lastFetchTime) {
-        // TODO: 이후 DB·크롤러 로직으로 교체
+        // Placeholder: replace with DB or crawler logic in the future.
         return Collections.emptyList();
     }
 }

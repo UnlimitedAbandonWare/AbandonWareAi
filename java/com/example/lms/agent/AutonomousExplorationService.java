@@ -1,5 +1,7 @@
 package com.example.lms.agent;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.example.lms.agent.KnowledgeGapLogger.GapEvent;
 import com.example.lms.dto.learning.EvidenceSnippet;
 import com.example.lms.dto.learning.LearningEvent;
 import com.example.lms.learning.gemini.GeminiCurationService;

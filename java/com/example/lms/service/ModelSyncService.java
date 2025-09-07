@@ -35,7 +35,11 @@ public class ModelSyncService {
     @Value("${openai.api.url:https://api.openai.com/v1}")
     private String apiUrl;
 
-    @Value("${openai.api.key}")
+    // Resolve the API key from configuration or environment.  Prefer
+    // `openai.api.key` and fall back to OPENAI_API_KEY only. Do not fall
+    // back to other vendor keys (e.g. GROQ_API_KEY) to prevent mismatched
+    // credentials.
+    @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String apiKey;
 
     // ※ 중복 호출이 싫으면 이 @PostConstruct는 지우고 스케줄러만 두세요.
@@ -96,7 +100,23 @@ public class ModelSyncService {
                     );
                 }
 
-                // 필요하면 여기서 추가 필드 매핑 (e.setOwner(...), e.setType(...), 등)
+                // Map the model owner.  Use the 'owned_by' field from the API when available.
+                try {
+                    String owner = node.path("owned_by").asText(null);
+                    if (owner != null && !owner.isBlank()) {
+                        e.setOwner(owner);
+                    } else {
+                        // ensure the owner is never null; default to 'openai' when unset
+                        if (e.getOwner() == null || e.getOwner().isBlank()) {
+                            e.setOwner("openai");
+                        }
+                    }
+                } catch (Exception ignore) {
+                    // ignore owner mapping errors but ensure not-null
+                    if (e.getOwner() == null || e.getOwner().isBlank()) {
+                        e.setOwner("openai");
+                    }
+                }
 
                 fetchedIds.add(modelId);
                 toSave.add(e);

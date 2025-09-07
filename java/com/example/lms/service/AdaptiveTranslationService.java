@@ -2,7 +2,7 @@
 package com.example.lms.service;
 
 import com.example.lms.client.GTranslateClient;
-import com.example.lms.client.GeminiClient;
+import com.example.lms.learning.gemini.GeminiClient;
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.domain.TranslationSample;
 import com.example.lms.domain.enums.RulePhase;

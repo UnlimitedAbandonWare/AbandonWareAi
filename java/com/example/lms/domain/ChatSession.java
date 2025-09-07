@@ -48,10 +48,26 @@ public class ChatSession {
      * [수정] 이 세션의 소유자인 관리자(Administrator) 정보.
      */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "admin_id", nullable = false)
+    @JoinColumn(name = "admin_id", nullable = true)
     private Administrator administrator;
 
-    /**
+    
+
+/**
+ * 게스트/비회원 세션을 구분하기 위한 소유자 키.
+ * - 현재 요청의 클라이언트 IP(+UA 일부)를 SHA-256으로 해시하여 저장
+ * - 관리자가 소유한 세션인 경우 null
+ */
+@Column(name = "owner_key", length = 128)
+private String ownerKey;
+
+/**
+ * 소유자 유형: "ADMIN" | "ANON" ...
+ */
+@Column(name = "owner_type", length = 16)
+private String ownerType;
+
+/**
      * 세션에 포함된 대화 메시지 목록.
      * 세션이 삭제되면 메시지도 함께 삭제됩니다 (cascade = ALL, orphanRemoval = true).
      */
@@ -73,7 +89,18 @@ public class ChatSession {
         this.title = title;
     }
 
-    /**
+    
+
+/**
+ * 게스트 세션 생성자.
+ */
+public ChatSession(String title, String ownerKey, String ownerType) {
+    this.title = title;
+    this.ownerKey = ownerKey;
+    this.ownerType = ownerType;
+}
+
+/**
      * 제목과 소유 관리자 정보로 세션을 생성하는 생성자.
      * @param title 세션 제목
      * @param administrator 소유 관리자

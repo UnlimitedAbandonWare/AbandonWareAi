@@ -28,19 +28,10 @@ public class RetrievalOrderService {
      * @return a list of sources in the order they should be invoked
      */
     public List<Source> decideOrder(String queryText) {
-        if (queryText == null) {
-            return List.of(Source.WEB, Source.VECTOR, Source.KG);
-        }
-        String q = queryText.toLowerCase(java.util.Locale.ROOT);
-        // very simple interrogative detection
-        boolean hasWh = q.matches(".*\\b(who|what|where|when|why|how)\\b.*");
-        int len = q.length();
-        if (hasWh) {
-            return List.of(Source.KG, Source.WEB, Source.VECTOR);
-        }
-        if (len > 100) {
-            return List.of(Source.VECTOR, Source.WEB, Source.KG);
-        }
+        // Enforce a fixed retrieval order of Web → Vector → Knowledge Graph.  The heuristics
+        // previously used to reorder based on interrogative words or query length
+        // have been removed to ensure deterministic execution.  Additional stages
+        // such as Self‑Ask and Analyze are executed prior to this method.
         return List.of(Source.WEB, Source.VECTOR, Source.KG);
     }
 }

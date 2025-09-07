@@ -23,4 +23,12 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> 
      */
     List<ChatSession> findByAdministrator_UsernameOrderByCreatedAtDesc(String username);
 
+
+
+/**
+ * 게스트/비회원 소유 키 기준으로 생성일시 내림차순 조회
+ * @param ownerKey 소유자 키
+ */
+List<ChatSession> findByOwnerKeyOrderByCreatedAtDesc(String ownerKey);
+
 }
