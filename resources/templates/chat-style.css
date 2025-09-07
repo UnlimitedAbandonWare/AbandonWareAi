@@ -1,0 +1,668 @@
+/*
+ * chat-style.css – Custom styles for the AI 서비스 통합 플랫폼 UI
+ *
+ * This stylesheet modernises the look and feel of the chat interface while
+ * preserving all existing functionality. It extracts and extends the
+ * original inline styles from the HTML into a dedicated file. The new
+ * design introduces a refined colour palette, consistent spacing,
+ * responsive behaviour and subtle animations to enhance usability and
+ * aesthetics. Variables defined at the top centralise theme values for
+ * easy future adjustments.
+ */
+
+/* Root variables define the basic sizing and colour scheme used
+   throughout the UI. Adjust these values to change the overall theme. */
+:root {
+    /* Define a fresh colour palette inspired by the supplied artwork.
+       The primary gradient flows from a rich violet to a bright azure.
+       Secondary hues provide a soft contrast against the card surfaces,
+       while neutral tones unify the light background. */
+    --sidebar-width: 300px;
+    --top-bar-height: 72px;
+    --primary-color: #5f58ff;          /* electric violet */
+    --primary-color2: #58d5ff;         /* vibrant sky blue */
+    --primary-color-rgb: 95, 88, 255;
+    --primary-hover: #514bd8;          /* slightly darker violet */
+    --secondary-color: #f9faff;        /* near white for panels */
+    --accent-color: #44c8ff;           /* bright cyan for highlights */
+    --background-color: #f2f6fd;       /* page backdrop */
+    --border-color: #e4e8f3;           /* subtle border colour */
+}
+
+/* Global resets and typography */
+body, html {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    /* Subtle full-page backdrop using the generated abstract artwork.
+       Fixed positioning allows for a parallax effect when scrolling on mobile. */
+    /* Update path to the abstract background image after moving the CSS file into the css folder.
+       The relative path now needs to backtrack one directory up to reach the assets folder. */
+    background: var(--background-color) url('../assets/abstract-bg.png') no-repeat center/cover;
+    background-attachment: fixed;
+    color: #1b2537;
+}
+
+/* Custom scrollbar for the message input area. This styling makes the
+   scrollbar slim and unobtrusive to fit with the modern aesthetic. */
+#messageInput::-webkit-scrollbar {
+    width: 8px;
+}
+#messageInput::-webkit-scrollbar-thumb {
+    background-color: #c5c9d5;
+    border-radius: 4px;
+}
+#messageInput::-webkit-scrollbar-track {
+    background-color: #e9edf5;
+}
+
+/* On very small screens bump up base font sizes for readability. */
+@media (max-width: 575.98px) {
+    body, html {
+        font-size: 1rem;
+    }
+    .msg {
+        font-size: 1rem;
+    }
+    .form-control {
+        font-size: 1rem;
+        padding: .5rem 1rem;
+    }
+}
+
+/* Top utility bar uses a gradient background image to anchor the page
+   visually. White text and subtle shadows improve contrast. */
+.top-utility-bar {
+    height: var(--top-bar-height);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 2rem;
+    /* Blend the supplied header artwork with a custom gradient to create
+       depth and vibrancy. */
+    background-image:
+        linear-gradient(135deg,
+            rgba(var(--primary-color-rgb), 0.88),
+            rgba(88, 213, 255, 0.85)),
+        /* The header background now resides in the assets folder. Use a relative path from the css folder. */
+        url('../assets/header-bg.png');
+    background-size: cover;
+    background-position: center;
+    color: #ffffff;
+    box-shadow: 0 3px 8px rgba(var(--primary-color-rgb), 0.15);
+    position: relative;
+    z-index: 200;
+    font-size: .95rem;
+}
+.top-utility-bar a {
+    color: inherit;
+    text-decoration: none;
+    transition: opacity .2s ease, transform .2s ease;
+}
+.top-utility-bar a:hover {
+    opacity: .85;
+    transform: translateY(-1px);
+}
+
+/* Ensure all text and buttons inside the top utility bar are legible on the
+   gradient background. Override bootstrap colours to white. */
+.top-utility-bar strong,
+.top-utility-bar span,
+.top-utility-bar a:not(.btn),
+.top-utility-bar .text-primary {
+    color: #ffffff !important;
+}
+.top-utility-bar .btn-outline-primary {
+    border-color: rgba(255,255,255,0.7);
+    color: #ffffff;
+}
+
+/* XS 뷰(<=575.98px)에서 로그인 팝오버 트리거가 가려지는 문제를 방지합니다. */
+@media (max-width: 575.98px) {
+  .top-utility-bar a#login-popover-trigger {
+    display: inline-block !important;
+  }
+}
+.top-utility-bar .btn-outline-primary:hover {
+    background-color: rgba(255,255,255,0.2);
+    border-color: rgba(255,255,255,0.9);
+    color: #ffffff;
+}
+
+/* The model strategy bar sits just below the utility bar and uses a
+   translucent white backdrop with a blur effect. This ensures it
+   remains visible while not dominating the UI. */
+.model-strategy-bar {
+    position: sticky;
+    top: var(--top-bar-height);
+    z-index: 150;
+    display: flex;
+    gap: .6rem;
+    align-items: center;
+    padding: .6rem 1rem;
+    background-color: rgba(255,255,255,0.75);
+    backdrop-filter: saturate(180%) blur(10px);
+    border-bottom: 1px solid var(--border-color);
+    color: #1b2537;
+    font-size: .9rem;
+}
+.model-strategy-bar strong {
+    color: var(--primary-color);
+    margin-right: .25rem;
+}
+.model-strategy-bar select {
+    border: 1px solid var(--border-color);
+    border-radius: .5rem;
+    padding: .3rem .65rem;
+    background-color: #ffffff;
+    color: #1b2537;
+    font-size: .9rem;
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+.model-strategy-bar select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 .15rem rgba(var(--primary-color-rgb), .25);
+}
+#activeModelBadge {
+    margin-left: auto;
+    font-weight: 500;
+    color: var(--primary-color);
+}
+
+/* Main layout splits the page into a sidebar and chat region. */
+.main-container {
+    display: flex;
+    height: calc(100% - var(--top-bar-height));
+    position: relative;
+}
+
+/* Sidebar design: white card over a pastel background, with a blur
+   overlay to soften the underlying pattern. */
+.sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    /* Blend the geometric pattern with a soft gradient to create a
+       sophisticated navigation surface. */
+    background-image:
+        linear-gradient(135deg, rgba(255,255,255,0.95), rgba(245,248,255,0.9)),
+        /* The sidebar background now resides in the assets folder. Use a relative path from the css folder. */
+        url('../assets/sidebar-bg.png');
+    background-size: cover;
+    background-position: center;
+    border-right: 1px solid var(--border-color);
+    padding: 1.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-shadow: 2px 0 8px rgba(var(--primary-color-rgb), 0.08);
+    transition: transform .3s ease-in-out;
+}
+.sidebar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    /* Remove the heavy overlay; the blended gradient above takes over */
+    background-color: transparent;
+    backdrop-filter: none;
+    z-index: -1;
+}
+.sidebar h4 {
+    color: var(--primary-color);
+    font-weight: 600;
+    font-size: 1.25rem;
+    letter-spacing: 0.02em;
+}
+.sidebar-body {
+    flex-grow: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding-top: .5rem;
+}
+.session-list {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+}
+.session-item a {
+    display: block;
+    padding: .65rem .8rem;
+    border-radius: .5rem;
+    text-decoration: none;
+    color: #2c3e50;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: .92rem;
+    transition: background-color .2s ease, color .2s ease;
+}
+.session-item a:hover {
+    background-color: rgba(var(--primary-color-rgb), 0.08);
+}
+.session-item a.active {
+    background-image: linear-gradient(135deg, var(--primary-color), var(--primary-color2));
+    color: #fff;
+    font-weight: 500;
+    box-shadow: 0 2px 4px rgba(var(--primary-color-rgb), 0.25);
+}
+
+/* Admin status indicator */
+#adminStatus {
+    font-size: .8rem;
+    background: #ffffff;
+    padding: .4rem .6rem;
+    border-radius: .5rem;
+    text-align: center;
+    color: #6c757d;
+    margin-top: auto;
+    border: 1px solid var(--border-color);
+}
+
+/* New chat button styling */
+#newChatBtn {
+    border-radius: .5rem;
+    padding: .6rem 1rem;
+    font-weight: 500;
+    background-image: linear-gradient(135deg, var(--primary-color), var(--primary-color2));
+    border-color: transparent;
+    color: #fff;
+    transition: background .3s ease, box-shadow .2s ease, transform .1s ease;
+}
+#newChatBtn:hover {
+    background-image: linear-gradient(135deg, var(--primary-hover), var(--primary-color2));
+    box-shadow: 0 5px 12px rgba(var(--primary-color-rgb), .4);
+    transform: translateY(-2px);
+}
+
+/* Chat area card: white rounded container with subtle shadow. */
+.chat-area-wrapper {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    height: 100%;
+    padding: 1.5rem 2rem;
+    /* Glassmorphic panel with subtle translucency over the page backdrop */
+    background-color: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px);
+    border-radius: 1rem;
+    box-shadow: 0 12px 32px rgba(var(--primary-color-rgb), 0.08);
+    overflow: hidden;
+}
+
+/* Chat window styling */
+#chatWindow {
+    flex-grow: 1;
+    overflow-y: auto;
+    margin-bottom: 1rem;
+    padding-right: .5rem;
+}
+
+/* When the conversation window is empty, show a welcoming hero message.
+   This uses a pseudo-element rather than hardcoded HTML to avoid
+   interfering with existing chat logic. */
+#chatMessages:empty::before {
+    content: 'AI 서비스 통합 플랫폼\A무엇이든 물어보세요.';
+    white-space: pre-line;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 1.4rem;
+    font-weight: 600;
+    line-height: 1.3;
+    color: rgba(var(--primary-color-rgb), 0.85);
+    margin-top: 10%;
+}
+
+/* Message bubbles */
+.msg-container {
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+    margin-bottom: 1rem;
+}
+.msg {
+    padding: .8rem 1.25rem;
+    border-radius: 1rem;
+    max-width: 80%;
+    line-height: 1.6;
+    word-break: break-word;
+    white-space: pre-line;
+    font-size: .95rem;
+    animation: fadeIn .25s ease both;
+}
+.msg-user-container {
+    align-items: flex-end;
+}
+.msg-user {
+    background-image: linear-gradient(135deg, var(--primary-color), var(--primary-color2));
+    color: #ffffff;
+    box-shadow: 0 3px 8px rgba(var(--primary-color-rgb), .25);
+    align-self: flex-end;
+}
+.msg-assistant-container {
+    align-items: flex-start;
+}
+.msg-assistant {
+    background-color: #ffffff;
+    color: #1b2537;
+    box-shadow: 0 2px 6px rgba(var(--primary-color-rgb), 0.1);
+    border: 1px solid rgba(var(--primary-color-rgb), 0.05);
+}
+.msg a {
+    text-decoration: underline;
+    color: var(--primary-color);
+    transition: opacity .2s ease;
+}
+.msg a:hover {
+    opacity: .85;
+}
+
+/* Search trace styling */
+.search-trace {
+    display: block;
+    margin-top: .5rem;
+}
+.search-trace > summary {
+    cursor: pointer;
+    font-weight: 600;
+    list-style: none;
+    color: var(--primary-color);
+}
+.search-trace > summary::-webkit-details-marker {
+    display: none;
+}
+.search-trace .trace-body {
+    margin-top: .25rem;
+    padding-left: .75rem;
+    border-left: 3px solid var(--primary-color);
+}
+.search-trace .trace-steps {
+    margin: .25rem 0 .5rem;
+    padding-left: 1rem;
+}
+.search-trace .trace-snippets ul {
+    margin: 0;
+    padding-left: 1.1rem;
+}
+
+/* Form controls */
+.form-control {
+    border-radius: .5rem;
+    border: 1px solid var(--border-color);
+    background-color: #fafcff;
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+.form-control:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 .2rem rgba(var(--primary-color-rgb), .25);
+}
+
+/* Range slider styling */
+.form-range {
+    --bs-range-thumb-width: 1rem;
+    --bs-range-thumb-height: 1rem;
+    --bs-range-thumb-bg: var(--primary-color);
+    --bs-range-thumb-border: 0;
+    --bs-range-track-bg: #e7ebf5;
+    --bs-range-track-height: .25rem;
+    --bs-range-thumb-box-shadow: 0 0 0 0.1rem rgba(var(--primary-color-rgb), .25);
+}
+.form-range::-webkit-slider-thumb {
+    width: var(--bs-range-thumb-width);
+    height: var(--bs-range-thumb-height);
+    background-color: var(--primary-color);
+    border-radius: 50%;
+    border: none;
+    margin-top: -0.4rem;
+    box-shadow: var(--bs-range-thumb-box-shadow);
+}
+.form-range::-webkit-slider-thumb:hover {
+    background-color: var(--primary-hover);
+}
+.form-range::-webkit-slider-runnable-track {
+    background-color: var(--bs-range-track-bg);
+    height: var(--bs-range-track-height);
+    border-radius: .25rem;
+}
+.form-range:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 .2rem rgba(var(--primary-color-rgb), .3);
+}
+
+/* Toggle switches */
+.form-check-input {
+    cursor: pointer;
+    border-radius: 2rem;
+    width: 2.25rem;
+    height: 1.25rem;
+    border: 1px solid var(--border-color);
+    background-color: #e7eaf8;
+    transition: background-color .2s ease, border-color .2s ease;
+    position: relative;
+}
+.form-check-input:checked {
+    background-image: linear-gradient(135deg, var(--primary-color), var(--primary-color2));
+    border-color: var(--primary-color);
+}
+.form-check-input:focus {
+    box-shadow: 0 0 0 .1rem rgba(var(--primary-color-rgb), .25);
+}
+.form-check-input:checked::before {
+    transform: translateX(1rem);
+}
+.form-check-input::before {
+    content: "";
+    position: absolute;
+    top: .15rem;
+    left: .15rem;
+    width: .95rem;
+    height: .95rem;
+    border-radius: 50%;
+    background-color: #fff;
+    transition: transform .2s ease;
+    display: inline-block;
+}
+
+/* Button base styling with smooth transitions */
+.btn {
+    border-radius: .5rem;
+    font-weight: 500;
+    transition: background-color .2s ease, color .2s ease, box-shadow .2s ease, transform .1s ease;
+}
+.btn-primary {
+    background-image: linear-gradient(135deg, var(--primary-color), var(--primary-color2));
+    border-color: transparent;
+    color: #fff;
+}
+.btn-primary:hover {
+    background-image: linear-gradient(135deg, var(--primary-hover), var(--primary-color2));
+    box-shadow: 0 5px 12px rgba(var(--primary-color-rgb), .4);
+    color: #fff;
+    transform: translateY(-2px);
+}
+.btn-outline-primary {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+.btn-outline-primary:hover {
+    background-image: linear-gradient(135deg, var(--primary-color), var(--primary-color2));
+    color: #fff;
+}
+.btn-outline-secondary {
+    border-color: #adb5bd;
+    color: #6c757d;
+}
+.btn-outline-secondary:hover {
+    background-color: #e9edf5;
+    color: #2c3e50;
+}
+.btn-info {
+    background-color: #00bcd4;
+    border-color: #00bcd4;
+    color: #fff;
+}
+.btn-info:hover {
+    background-color: #009ca8;
+    border-color: #009ca8;
+    color: #fff;
+}
+.btn-danger {
+    background-color: #f44336;
+    border-color: #f44336;
+    color: #fff;
+}
+.btn-danger:hover {
+    background-color: #d32f2f;
+    border-color: #d32f2f;
+    color: #fff;
+}
+.btn-success {
+    background-color: #4caf50;
+    border-color: #4caf50;
+    color: #fff;
+}
+.btn-success:hover {
+    background-color: #3e8e41;
+    border-color: #3e8e41;
+    color: #fff;
+}
+.btn-secondary {
+    background-color: #6c757d;
+    border-color: #6c757d;
+    color: #fff;
+}
+.btn-secondary:hover {
+    background-color: #5a6268;
+    border-color: #5a6268;
+    color: #fff;
+}
+
+/* Sidebar toggler hidden by default. It appears on small screens. */
+.sidebar-toggler {
+    display: none;
+}
+
+/* Offcanvas styling for settings. Rounded edges and subtle shadow give
+   the drawer a polished appearance. */
+.offcanvas {
+    border-top-left-radius: 1rem;
+    border-bottom-left-radius: 1rem;
+    box-shadow: -4px 0 12px rgba(0,0,0,0.1);
+}
+.offcanvas-header {
+    border-bottom: 1px solid var(--border-color);
+}
+.offcanvas-title {
+    font-weight: 600;
+}
+
+/* Tools collapse card styling */
+#toolsCollapse .card {
+    border: 1px solid var(--border-color);
+    border-radius: .75rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+#toolsCollapse h6 {
+    color: var(--primary-color);
+    font-weight: 600;
+    margin-bottom: .75rem;
+}
+
+/* Help icon button */
+.help-icon {
+    background: none;
+    border: none;
+    padding: 0 .6rem;
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--primary-color);
+    cursor: pointer;
+    align-self: center;
+    transition: color .2s ease;
+}
+.help-icon:hover {
+    color: var(--primary-hover);
+}
+
+/* Help popover styling. Matches the card aesthetic of the chat area. */
+#helpPopover {
+    border: 1px solid var(--border-color);
+    background: #ffffff;
+    padding: .7rem .9rem;
+    border-radius: .5rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,.1);
+    max-width: 300px;
+    white-space: normal;
+    line-height: 1.45;
+    color: #2c3e50;
+}
+
+/* Responsive tweaks for tablets and phones */
+@media (max-width: 991.98px) {
+    .sidebar {
+        position: fixed;
+        top: var(--top-bar-height);
+        left: 0;
+        z-index: 1050;
+        transform: translateX(-100%);
+        height: calc(100% - var(--top-bar-height));
+    }
+    .sidebar.show {
+        transform: translateX(0);
+    }
+    .sidebar-toggler {
+        display: block;
+        position: fixed;
+        top: calc(var(--top-bar-height) + .75rem);
+        left: .75rem;
+        z-index: 1100;
+    }
+    .chat-area-wrapper {
+        padding-top: 4.5rem;
+        padding-left: .75rem;
+        padding-right: .75rem;
+    }
+}
+
+/* Fade-in animation for new chat messages */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* 모바일 XS 화면에서 로그인 팝오버 트리거가 가려지지 않도록 강제 노출 */
+@media (max-width: 575.98px) {
+  .top-utility-bar a#login-popover-trigger {
+    display: inline-block !important;
+  }
+}
+
+/* XS~SM에서만 보이는 플로팅 로그인 버튼 */
+[data-login-trigger].floating-login-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  color: #fff;
+  text-decoration: none;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .2);
+}
+@media (min-width: 768px) {
+  [data-login-trigger].floating-login-btn { display: none; }
+}
