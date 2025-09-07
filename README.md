@@ -397,5 +397,3 @@ CONTENT_GUARD=no direct Content impl / no d.id() (호출부: N/A 또는 파일�
 DESKTOP_OK_TOKEN=DESKTOP_OK (존재 확인; ZIP에는 제외)
 OUTPUTS=*Core.zip only (exclude: .git/**, **/build/**, .gradle/**, .idea/**, out/**, .DS_Store)
 ```
-
-Removes “lower-model bias”: on uncertainty/comparative/fact-check/multimodal image tasks, force single escalation to the high-tier model.
