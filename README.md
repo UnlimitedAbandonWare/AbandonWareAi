@@ -370,7 +370,6 @@ SSE Stream → Front-end (chat.js)
 * 권장 라이선스: **MIT**
 * PR 가이드:
 
-  * 시크릿 금지
   * `PromptBuilder.build(ctx)` 규칙 준수
   * **LangChain4j 1.0.1 고정** (BOM/순도 태스크 동반 수정)
   * EvidenceAwareGuard/FactVerifierService 우회 금지
