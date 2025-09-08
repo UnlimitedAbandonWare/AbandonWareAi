@@ -380,7 +380,7 @@ SSE Stream → Front-end (chat.js)
 
 * **Project**: AbandonWare AI
 * **Stack**: Java 17, Spring Boot 3.4, WebFlux, LC4J 1.0.1, MariaDB/H2, Redis(옵션)
-* **Contact**: *add your email here*
+* **Contact**: *ceuser01@naver.com*
 
 ---
 
