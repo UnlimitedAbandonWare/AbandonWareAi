@@ -16,6 +16,8 @@ import java.util.Map;
 @RequestMapping("/api/settings") // API 경로를 /api/settings 로 통일하여 관리
 @RequiredArgsConstructor
 public class ModelSettingsController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ModelSettingsController.class);
+
 
     // 컨트롤러는 이제 Repository를 직접 다루지 않고, 비즈니스 로직을 가진 Service만 호출합니다.
     private final ModelSettingsService modelSettingsService;

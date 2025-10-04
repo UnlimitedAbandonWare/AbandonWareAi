@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 public class ContextOrchestrator {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ContextOrchestrator.class);
+
 
     private final PromptEngine promptEngine;
     private final AuthorityScorer authorityScorer;

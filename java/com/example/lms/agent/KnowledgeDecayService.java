@@ -25,6 +25,8 @@ import java.util.List;
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "agent.knowledge-decay", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class KnowledgeDecayService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KnowledgeDecayService.class);
+
 
     private final DomainKnowledgeRepository knowledgeRepo;
     private final SynergyStatRepository synergyRepo;

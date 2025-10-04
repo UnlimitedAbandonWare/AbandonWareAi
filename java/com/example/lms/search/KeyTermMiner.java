@@ -17,6 +17,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class KeyTermMiner {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KeyTermMiner.class);
+
 
     private static final int DEFAULT_TOP_N = 3;
     private final Analyzer analyzer = new KoreanAnalyzer();

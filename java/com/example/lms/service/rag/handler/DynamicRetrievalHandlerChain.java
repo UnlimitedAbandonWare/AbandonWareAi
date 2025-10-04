@@ -8,6 +8,7 @@ import com.example.lms.telemetry.SseEventPublisher;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
+import com.example.lms.service.rag.fusion.WeightedReciprocalRankFuser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,8 @@ import java.util.List;
 @Slf4j
 @RequiredArgsConstructor
 public class DynamicRetrievalHandlerChain implements RetrievalHandler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DynamicRetrievalHandlerChain.class);
+
 
     private final MemoryHandler memoryHandler;
     private final SelfAskWebSearchRetriever selfAsk;
@@ -40,6 +43,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
     private final KnowledgeGraphHandler kg;
     private final RetrievalOrderService orderService;
     private final SseEventPublisher sse;
+    private final WeightedReciprocalRankFuser fuser;
 
     @Value("${pinecone.index.name}")
     private String pineconeIndexName;
@@ -70,7 +74,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
                 String hist = memoryHandler.loadForSession(sessionId);
                 if (hist != null && !hist.isBlank()) {
                     accumulator.add(Content.from(hist));
-                    if (accumulator.size() >= topK) return;
+                    // Early‑cut removed: do not return when reaching topK at this stage
                 }
             } catch (Exception e) {
                 log.warn("[Memory] {}", e.toString());
@@ -88,7 +92,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (needSelf) {
             try {
                 add(accumulator, selfAsk.retrieve(query));
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: continue gathering evidence instead of returning
             } catch (Exception e) {
                 log.warn("[SelfAsk] {}", e.toString());
             }
@@ -103,7 +107,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (needAnalyze) {
             try {
                 add(accumulator, analyze.retrieve(query));
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: continue gathering evidence instead of returning
             } catch (Exception e) {
                 log.warn("[Analyze] {}", e.toString());
             }
@@ -112,7 +116,7 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
         if (adaptiveWeb != null) {
             try {
                 adaptiveWeb.handle(query, accumulator);
-                if (accumulator.size() >= topK) return;
+                // Early‑cut removed: do not return here; allow subsequent stages
             } catch (Exception e) {
                 log.warn("[AdaptiveWeb] {}", e.toString());
             }
@@ -136,29 +140,52 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
             log.debug("ORDER_DECISION SSE skipped: {}", e.toString());
         }
         log.debug("[ORDER_DECISION] plan={} reason={}", plan, "heuristic");
+        
+        // Collect per-source results for fusion
+        java.util.List<Content> webRes = new java.util.ArrayList<>();
+        java.util.List<Content> vecRes = new java.util.ArrayList<>();
+        java.util.List<Content> kgRes  = new java.util.ArrayList<>();
+
         for (Source src : plan) {
-            if (accumulator.size() >= topK) break;
+            // Early‑cut removed: do not break when accumulator reaches topK; continue through all sources
             try {
                 switch (src) {
                     case WEB -> {
-                        add(accumulator, web.retrieve(query));
+                        var r = web.retrieve(query);
+                        if (r != null) webRes.addAll(r);
                     }
                     case VECTOR -> {
                         ContentRetriever vector = rag.asContentRetriever(pineconeIndexName);
-                        add(accumulator, vector.retrieve(query));
+                        var r = vector.retrieve(query);
+                        if (r != null) vecRes.addAll(r);
                     }
                     case KG -> {
                         if (kg != null) {
-                            add(accumulator, kg.retrieve(query));
+                            var r = kg.retrieve(query);
+                            if (r != null) kgRes.addAll(r);
                         }
                     }
                 }
-                if (accumulator.size() >= topK) break;
             } catch (Exception e) {
                 log.warn("[{}] fail-soft: {}", src, e.toString());
             }
         }
-        // 7. Repair stage (post‑processing)
+        // Apply weighted RRF fusion across available sources
+        java.util.List<java.util.List<Content>> sources = new java.util.ArrayList<>();
+        if (!webRes.isEmpty()) sources.add(webRes);
+        if (!vecRes.isEmpty()) sources.add(vecRes);
+        if (!kgRes.isEmpty())  sources.add(kgRes);
+
+        if (!sources.isEmpty()) {
+            var fused = fuser.fuse(sources, topK);
+            add(accumulator, fused);
+            try {
+                sse.emit("FUSION_APPLIED", new SseEventPublisher.Payload()
+                    .kv("sizes", java.util.Map.of("web", webRes.size(), "vec", vecRes.size(), "kg", kgRes.size()))
+                    .kv("topK", topK).build());
+            } catch (Exception ignore) {}
+        }
+// 7. Repair stage (post‑processing)
         try {
             if (repair != null) {
                 add(accumulator, repair.retrieve(query));
@@ -191,4 +218,17 @@ public class DynamicRetrievalHandlerChain implements RetrievalHandler {
             return java.util.Map.of();
         }
     }
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = original.metadata() != null
+            ? original.metadata()
+            : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        // Directly construct a new Query with the updated metadata.  LangChain4j 1.0.x
+        // exposes a public constructor taking text and metadata, so we avoid the deprecated
+        // builder API and any reflective fallback.
+        return new dev.langchain4j.rag.query.Query(original.text(), md);
+    }
+
 }

@@ -38,6 +38,8 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class AdminSessionService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AdminSessionService.class);
+
 
     private static final String COOKIE_NAME = "admin-token";
     private static final long   VALIDITY_MS = 24 * 60 * 60 * 1000L; // 24h

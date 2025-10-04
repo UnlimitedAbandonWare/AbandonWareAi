@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnMissingBean(SseEventPublisher.class)
 public class DefaultSseEventPublisher implements SseEventPublisher {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DefaultSseEventPublisher.class);
+
     @Override
     public void emit(String type, Object payload) {
         // Serialize payload gracefully using String.valueOf to avoid NPE

@@ -16,6 +16,8 @@ import java.util.HexFormat; // ✨ [개선] Java 17+ 의 HexFormat 사용
 @Slf4j
 @NoArgsConstructor(access = AccessLevel.PRIVATE) // 인스턴스화 방지
 public final class HashUtil {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(HashUtil.class);
+
 
     private static final MessageDigest SHA256_DIGEST;
 

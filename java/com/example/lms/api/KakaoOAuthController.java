@@ -20,6 +20,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RequestMapping("/kakao/oauth")
 @RequiredArgsConstructor
 public class KakaoOAuthController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KakaoOAuthController.class);
+
 
     /** REST API Key 등 설정 (@Value) */
     @Value("${kakao.rest-api-key}")

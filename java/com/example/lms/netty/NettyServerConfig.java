@@ -16,6 +16,8 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 @RequiredArgsConstructor
 public class NettyServerConfig implements DisposableBean {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(NettyServerConfig.class);
+
 
     // ✨ [수정] 프로퍼티 값을 안전하게 String으로 먼저 받습니다.
     @Value("${netty.port}")           private String portStr;

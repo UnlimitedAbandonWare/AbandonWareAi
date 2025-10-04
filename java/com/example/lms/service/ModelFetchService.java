@@ -32,9 +32,14 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ModelFetchService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ModelFetchService.class);
 
-    /** application.yml 의 openai.api.key 값을 주입 */
-    @Value("${openai.api.key}")
+
+    /** application.yml 의 openai.api.key 값을 주입.  When unset this falls
+     *  back to the OPENAI_API_KEY environment variable.  Do not fall back
+     *  to other vendor keys (e.g. GROQ_API_KEY) to prevent using
+     *  incompatible credentials. */
+    @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String openaiApiKey;
 
     private final ModelInfoRepository   modelInfoRepo;

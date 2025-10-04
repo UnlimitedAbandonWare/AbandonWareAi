@@ -1,10 +1,9 @@
 package com.example.lms.service.ner;
 
 import com.example.lms.service.correction.DomainTermDictionary;
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,11 +22,25 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 public class LLMNamedEntityExtractor implements NamedEntityExtractor {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LLMNamedEntityExtractor.class);
 
-    private final OpenAiService openAi;
+
+    /**
+     * The chat model used to perform named entity extraction.  We avoid
+     * depending on the OpenAI-Java SDK directly so that the LLM pipeline can
+     * be unified on LangChain4j.  A bean of type {@link ChatModel} must be
+     * available in the Spring context for this extractor to operate.  When no
+     * chat model is available, the extractor falls back to returning only
+     * dictionary terms.
+     */
+    private final ChatModel chatModel;
     private final DomainTermDictionary dict;
 
-    @Value("${ner.model:gpt-4o-mini}")
+    /**
+     * Model name for the underlying LLM.  Defaults to the latest GPT‑5 mini
+     * model.  This property can be overridden via application configuration.
+     */
+    @Value("${ner.model:gpt-5-mini}")
     private String model;
 
     /**
@@ -51,18 +64,13 @@ public class LLMNamedEntityExtractor implements NamedEntityExtractor {
 
         String rawLlmOutput = "";
         try {
-            ChatCompletionRequest request = ChatCompletionRequest.builder()
-                    .model(model)
-                    .messages(List.of(
-                            new ChatMessage(ChatMessageRole.SYSTEM.value(), sysPrompt),
-                            new ChatMessage(ChatMessageRole.USER.value(), userPrompt)
-                    ))
-                    .temperature(0.0) // 결정적(deterministic) 결과를 위해 0으로 설정
-                    .topP(0.05)      // 낮은 값으로 설정하여 더 집중된 결과 유도
-                    .build();
-
-            rawLlmOutput = openAi.createChatCompletion(request)
-                    .getChoices().get(0).getMessage().getContent();
+            if (chatModel != null) {
+                String combined = sysPrompt + "\n" + userPrompt;
+                ChatResponse res = chatModel.chat(UserMessage.from(combined));
+                if (res != null && res.aiMessage() != null && res.aiMessage().text() != null) {
+                    rawLlmOutput = res.aiMessage().text();
+                }
+            }
         } catch (Exception e) {
             log.debug("[NER] LLM API 호출에 실패했습니다: {}", e.toString());
         }

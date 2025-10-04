@@ -5,6 +5,8 @@ import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j; // 추가
 @Slf4j  // 로그 기능을 제공하기 위해 추가
 public class EnhancedSearchService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(EnhancedSearchService.class);
+
 
     private final NaverSearchService searchService;
 

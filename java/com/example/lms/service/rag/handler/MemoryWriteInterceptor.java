@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class MemoryWriteInterceptor {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MemoryWriteInterceptor.class);
+
 
     private final MemoryReinforcementService memorySvc;
 

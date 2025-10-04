@@ -16,6 +16,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 @Slf4j
 public class LearningWriteInterceptor {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LearningWriteInterceptor.class);
+
 
     private final GeminiCurationService curationService;
     private final MemoryReinforcementService memorySvc;

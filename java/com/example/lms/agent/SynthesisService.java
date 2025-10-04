@@ -17,12 +17,37 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class SynthesisService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SynthesisService.class);
+
 
     private final ChatModel chatModel;
     private final ClaimVerifierService claimVerifier;
     private final ObjectMapper om = new ObjectMapper();
 
-    @Value("${openai.chat.model:gpt-4o-mini}")
+    /**
+     * Remove enclosing markdown code fences from a JSON string.  LLMs may
+     * produce JSON wrapped in triple backticks (with optional language
+     * specifier).  Jackson cannot parse such strings directly.  This helper
+     * strips the opening and closing fences and trims whitespace.  If no
+     * fences are present the input is returned unchanged.
+     *
+     * @param s raw string from the LLM
+     * @return sanitized JSON without code fences
+     */
+    private static String sanitizeJson(String s) {
+        if (s == null) {
+            return "";
+        }
+        String t = s.strip();
+        if (t.startsWith("```")) {
+            t = t.replaceFirst("^```(?:json)?\\s*", "");
+            t = t.replaceFirst("\\s*```\\s*$", "");
+        }
+        return t;
+    }
+
+    // Use the default gpt‑5‑mini model for verification to align with MOE routing defaults
+    @Value("${openai.chat.model:gpt-5-mini}")
     private String verifyModel;
 
     public Optional<VerifiedKnowledge> synthesizeAndVerify(List<String> rawData, CuriosityTriggerService.KnowledgeGap gap) {
@@ -56,6 +81,7 @@ public class SynthesisService {
 
         String synthesized = chatModel.generate(prompt, 0.2, 900);
         if (synthesized == null || synthesized.isBlank()) return Optional.empty();
+        synthesized = sanitizeJson(synthesized);
 
         try {
             // 1) 자체 검증(기존 ClaimVerifierService 사용)
@@ -85,19 +111,26 @@ public class SynthesisService {
     private static String emptyOr(String s, String def) { return (s == null || s.isBlank()) ? def : s; }
 
     private boolean isJson(String s) {
-        try { om.readTree(s); return true; } catch (Exception ignore) { return false; }
+        try {
+            om.readTree(sanitizeJson(s));
+            return true;
+        } catch (Exception ignore) {
+            return false;
+        }
     }
 
     private List<String> extractSources(String json) {
         try {
-            JsonNode n = om.readTree(json);
+            JsonNode n = om.readTree(sanitizeJson(json));
             if (n.has("sources") && n.get("sources").isArray()) {
                 List<String> out = new ArrayList<>();
                 n.get("sources").forEach(x -> out.add(x.asText("")));
                 out.removeIf(String::isBlank);
                 return out;
             }
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+            // ignore parse errors
+        }
         return List.of();
     }
 }

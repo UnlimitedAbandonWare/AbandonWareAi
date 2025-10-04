@@ -16,6 +16,8 @@ import java.util.List;
 @Slf4j
 @RequiredArgsConstructor
 public class PairingGuardHandler extends AbstractRetrievalHandler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PairingGuardHandler.class);
+
 
     private final QueryContextPreprocessor preprocessor;
     private final SubjectResolver subjectResolver;   // ← 통합 버전으로 교체

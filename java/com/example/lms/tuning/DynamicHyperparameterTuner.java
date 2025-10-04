@@ -12,6 +12,8 @@ import com.example.lms.tuning.StrategyWeightTuner; // NEW
 @Component
 @RequiredArgsConstructor
 public class DynamicHyperparameterTuner {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DynamicHyperparameterTuner.class);
+
 
     private final HyperparameterService hp;
     private final StrategyPerformanceRepository perfRepo;

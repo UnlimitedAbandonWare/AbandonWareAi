@@ -9,6 +9,8 @@ import java.util.List;
 
 @Slf4j @RequiredArgsConstructor
 public class AnalyzeHandler extends AbstractRetrievalHandler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AnalyzeHandler.class);
+
     private final AnalyzeWebSearchRetriever retriever;
     @Override protected boolean doHandle(Query q, List<Content> acc) {
         try { acc.addAll(retriever.retrieve(q)); }

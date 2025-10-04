@@ -14,6 +14,8 @@ import java.util.List;
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "agent.knowledge-curation", name = "enabled", havingValue = "true")
 public class KnowledgeCurationScheduler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KnowledgeCurationScheduler.class);
+
 
     private final CuriosityTriggerService curiosity;
     private final SynthesisService synthesis;
@@ -26,7 +28,7 @@ public class KnowledgeCurationScheduler {
         curiosity.findKnowledgeGap().ifPresent(gap -> {
             log.info("[AGENT] Knowledge gap: entity='{}', domain='{}'", gap.entityName(), gap.domain());
 
-            // TODO: 실제 수집기로 대체 (웹/RAG 등). 일단 bootstrap 데이터 구성.
+            // Placeholder: replace with an actual collector (web/RAG etc.); currently constructs bootstrap data.
             List<String> raw = List.of(
                     "QUERY: " + gap.initialQuery(),
                     "DESC: "  + gap.description()

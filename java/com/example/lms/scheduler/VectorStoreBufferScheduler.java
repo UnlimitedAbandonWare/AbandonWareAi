@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class VectorStoreBufferScheduler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VectorStoreBufferScheduler.class);
+
 
     private final VectorStoreService vectorStoreService;
 

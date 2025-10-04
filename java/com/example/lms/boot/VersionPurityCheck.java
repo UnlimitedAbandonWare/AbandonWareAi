@@ -21,6 +21,8 @@ import java.util.Objects;
 @Slf4j
 @Component
 public class VersionPurityCheck {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VersionPurityCheck.class);
+
 
     /**
      * The required version prefix for all LangChain4j modules.  Should align

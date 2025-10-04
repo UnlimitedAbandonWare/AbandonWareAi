@@ -32,6 +32,8 @@ import java.util.Map;
 @Slf4j
 @Service
 public class DiagnosticsDumpService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DiagnosticsDumpService.class);
+
 
     private final RetrievalDiagnosticsCollector diagnosticsCollector;
     private final ObjectMapper objectMapper = new ObjectMapper();

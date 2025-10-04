@@ -24,12 +24,14 @@ import java.util.concurrent.CompletableFuture;
 @RequiredArgsConstructor
 @Slf4j
 public class TrainingService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TrainingService.class);
+
 
     private final SampleRepository sampleRepo;
     private final MemoryRepository memoryRepo;
     private final TrainingJobRepository jobRepo;
 
-    // TODO: 내일 실제 연산식을 구현할 유사도 측정 서비스
+    // Implementation placeholder: implement the similarity measurement service using the actual computation.
     // private final SimilarityService similarityService;
 
     private static final int PAGE_SIZE = 1000; // 한 번에 처리할 데이터 양

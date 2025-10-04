@@ -13,6 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DefaultKnowledgeBaseService.class);
+
 
     private final DomainKnowledgeRepository repo;
 
@@ -151,4 +153,26 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
         // No persistence implemented yet; return SKIPPED to indicate no-op
         return IntegrationStatus.SKIPPED;
     }
+
+
+    @Override
+    public java.util.Optional<java.time.Instant> getLastAccessedAt(String domain, String entityName) {
+        try {
+            return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
+                    .map(DomainKnowledge::getLastAccessedAt);
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    @Override
+    public java.util.Optional<java.lang.Double> getConfidenceScore(String domain, String entityName) {
+        try {
+            return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
+                    .map(DomainKnowledge::getConfidenceScore);
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
+    }
+
 }

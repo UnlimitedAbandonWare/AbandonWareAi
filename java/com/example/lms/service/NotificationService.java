@@ -7,10 +7,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class NotificationService {
     public void sendPush(Long userId, String message) {
-        // TODO: Redis/RabbitMQ publish push message
+        // Implementation placeholder: publish push messages via Redis or RabbitMQ.
     }
 
     public void sendKakao(String phone, String message) {
-        // TODO: 카카오톡 API 연동
+        // Implementation placeholder: integrate with the KakaoTalk API.
     }
 }

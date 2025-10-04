@@ -20,6 +20,8 @@ import java.util.Optional;
 @Component
 @RequiredArgsConstructor
 public class StrategyWeightTuner {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(StrategyWeightTuner.class);
+
 
     private final StrategyPerformanceRepository perfRepo;
     private final HyperparameterService hp;

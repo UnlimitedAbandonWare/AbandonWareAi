@@ -19,6 +19,8 @@ import org.springframework.stereotype.Component;
 @Component("retrievalDiagAspectSimple")      // ⬅ 빈 이름 충돌 방지
 @Order(Ordered.LOWEST_PRECEDENCE)            // ⬅ 둘 다 켜질 때 중복 영향 최소화
 public class RetrievalDiagAspect {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RetrievalDiagAspect.class);
+
 
     @Around("execution(* com.example.lms.service.rag.handler..*.handle(..))")
     public Object span(ProceedingJoinPoint pjp) throws Throwable {

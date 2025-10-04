@@ -26,6 +26,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @Slf4j
 public class QueryExpander {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(QueryExpander.class);
+
 
     private final KeyTermMiner        miner;
     private final ChatModel           chatModel;

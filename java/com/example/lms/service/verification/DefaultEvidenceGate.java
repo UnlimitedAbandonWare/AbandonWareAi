@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 public class DefaultEvidenceGate implements EvidenceGate {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DefaultEvidenceGate.class);
+
     @Override
     public boolean allowGeneration(DisambiguationResult dr, EvidenceSnapshot ev) {
         // Treat any non‑null DisambiguationResult as resolved; if a more

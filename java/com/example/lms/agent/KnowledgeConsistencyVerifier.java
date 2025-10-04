@@ -23,6 +23,8 @@ import java.util.*;
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "agent.knowledge-consistency", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class KnowledgeConsistencyVerifier {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KnowledgeConsistencyVerifier.class);
+
 
     private final DomainKnowledgeRepository knowledgeRepo;
     private final KnowledgeBaseService knowledgeBase;
@@ -66,7 +68,7 @@ public class KnowledgeConsistencyVerifier {
                 }
                 // Placeholder for future LLM-based checks: if throttle allows, send combined data to Gemini.
                 if (throttle != null && throttle.canProceed()) {
-                    // TODO: integrate with Gemini client for advanced contradiction detection
+                    // Placeholder: integrate with the Gemini client for advanced contradiction detection.
                     // For now we just log that the throttle permits a call; no API call is made.
                     log.debug("[KnowledgeConsistency] Throttle permits an external consistency check for {}:{}", domain, entity);
                 }

@@ -25,6 +25,8 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 public class MemoryAsEvidenceAdapter {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MemoryAsEvidenceAdapter.class);
+
 
     private final ChatHistoryService history;
 

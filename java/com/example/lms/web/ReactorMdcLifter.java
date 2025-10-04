@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @Configuration
 public class ReactorMdcLifter {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ReactorMdcLifter.class);
+
 
     @PostConstruct
     public void hook() {

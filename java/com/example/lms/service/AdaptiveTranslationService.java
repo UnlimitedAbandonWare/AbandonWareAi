@@ -2,7 +2,7 @@
 package com.example.lms.service;
 
 import com.example.lms.client.GTranslateClient;
-import com.example.lms.client.GeminiClient;
+import com.example.lms.learning.gemini.GeminiClient;
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.domain.TranslationSample;
 import com.example.lms.domain.enums.RulePhase;
@@ -50,6 +50,8 @@ import java.util.concurrent.ThreadLocalRandom;
 @Slf4j
 @RefreshScope
 public class AdaptiveTranslationService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AdaptiveTranslationService.class);
+
 
     /* ──────────────────────────────── 주입 의존성 ──────────────────────────────── */
     private final RuleEngine ruleEngine;

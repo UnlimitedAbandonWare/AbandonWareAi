@@ -18,6 +18,8 @@ import java.nio.file.StandardCopyOption;
 @Service
 @RequiredArgsConstructor
 public class LocalFileStorageService implements FileStorageService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LocalFileStorageService.class);
+
 
     /** application.yml 에서 설정 → 기본값은 project-root/uploads */
     @Value("${lms.upload-dir:uploads}")

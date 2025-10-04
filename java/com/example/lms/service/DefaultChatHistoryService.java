@@ -14,9 +14,11 @@ import java.util.Optional;
 @Service
 @Profile("stub")
 public class DefaultChatHistoryService implements ChatHistoryService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DefaultChatHistoryService.class);
+
 
     @Override
-    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail) {
+    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail, String clientIp) {
         log.debug("[ChatHistory] startNewSession user={} (stub)", userEmail);
         return Optional.empty();
     }

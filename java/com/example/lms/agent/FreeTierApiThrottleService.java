@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 @ConditionalOnProperty(prefix = "gemini.api.free-tier.throttle", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class FreeTierApiThrottleService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FreeTierApiThrottleService.class);
+
 
     /** The maximum number of API requests allowed per minute. */
     private final int maxPerMinute;

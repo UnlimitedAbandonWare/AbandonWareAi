@@ -24,6 +24,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @Slf4j
 public class KakaoOAuthServiceImpl implements KakaoOAuthService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KakaoOAuthServiceImpl.class);
+
 
     /* ─────────── 설정 (@Value) ─────────── */
     @Value("${kakao.rest-api-key}")

@@ -24,6 +24,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class SnippetPruner {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SnippetPruner.class);
+
 
     private final EmbeddingModel embeddingModel;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -42,6 +44,11 @@ public class SnippetPruner {
     private int minSentences;
     @Value("${memory.reinforce.pruning.llm.enabled:false}")
     private boolean llmPruningEnabled;
+
+    // [HARDENING] Prompt injection pattern; drop snippets containing these triggers
+    private static final java.util.regex.Pattern BLOCK =
+            java.util.regex.Pattern.compile(
+                    "(?i)\\b(ignore\\s+previous|system\\s*:|##\\s*시스템|do\\s*not\\s*follow\\s*above)\\b");
 
 
     /**
@@ -90,6 +97,14 @@ public class SnippetPruner {
         if (q.isBlank() || rawSnippet.isBlank()) {
             return Result.passThrough(snippet);
         }
+
+        // [HARDENING] drop snippet if it contains prompt-injection patterns
+        try {
+            String plain = stripHtml(rawSnippet);
+            if (BLOCK.matcher(plain).find()) {
+                return new Result("", 0.0, 0.0, 0, 0);
+            }
+        } catch (Exception ignore) {}
 
         try {
             // 1) 임베딩 기반

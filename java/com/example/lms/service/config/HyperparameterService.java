@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @Slf4j
 public class HyperparameterService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(HyperparameterService.class);
+
 
     private final HyperparameterRepository hyperparameterRepo;
     private final Map<String, Double> paramCache = new ConcurrentHashMap<>();
@@ -139,7 +141,8 @@ public class HyperparameterService {
      */
     public double getRerankSynergyWeight() {
         String sys = System.getProperty("rerank.synergy-weight");
-        String env = (sys == null ? System.getenv("RERANK_SYNERGY_WEIGHT") : null);
+        // Avoid direct environment access; fall back to system properties instead
+        String env = (sys == null ? System.getProperty("RERANK_SYNERGY_WEIGHT") : null);
         String raw = (sys != null ? sys : env);
         try {
             return (raw == null) ? 1.0 : Double.parseDouble(raw);

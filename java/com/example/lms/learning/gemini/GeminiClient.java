@@ -1,4 +1,4 @@
-package com.example.lms.client;
+package com.example.lms.learning.gemini;
 
 import com.example.lms.dto.learning.KnowledgeDelta;
 import com.example.lms.dto.learning.LearningEvent;
@@ -28,6 +28,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @RequiredArgsConstructor
 @Slf4j
 public class GeminiClient {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GeminiClient.class);
+
 
     /** 전역 WebClient.Builder 주입 */
     private final WebClient.Builder webClientBuilder;
@@ -59,6 +61,11 @@ public class GeminiClient {
                           "ok"   : false,
                           "error": "%s"
                         }""".formatted(e.getMessage())));
+    }
+
+    // Base hook: Decorator에서 오버라이드, 기본은 no-op
+    public List<String> keywordVariants(String cleaned, String anchor, int cap) {
+        return java.util.Collections.emptyList();
     }
 
     private Mono<GeminiResponse> postToGemini(String prompt) {

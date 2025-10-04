@@ -33,6 +33,8 @@ import dev.langchain4j.data.document.Metadata;
 @Component
 @RequiredArgsConstructor
 public class IndexingScheduler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(IndexingScheduler.class);
+
 
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;

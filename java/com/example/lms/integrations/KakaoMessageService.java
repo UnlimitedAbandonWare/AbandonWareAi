@@ -17,6 +17,8 @@ import java.util.Map;
 @Service
 @Slf4j
 public class KakaoMessageService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KakaoMessageService.class);
+
 
     private final WebClient kakaoWebClient;      // REST API 전용
     private final WebClient kakaoBizWebClient;   // Biz API 전용

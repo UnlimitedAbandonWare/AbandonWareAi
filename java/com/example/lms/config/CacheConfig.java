@@ -17,6 +17,8 @@ public class CacheConfig {
     public CacheManager cacheManager() {
         CaffeineCacheManager cm = new CaffeineCacheManager("chatResponses");
         cm.setCaffeine(Caffeine.newBuilder()
+                // Enable recording of cache statistics. This aids in debugging latency and hit ratio issues.
+                .recordStats()
                 .expireAfterWrite(5, TimeUnit.MINUTES)
                 .maximumSize(500));
         return cm;

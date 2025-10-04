@@ -1,5 +1,7 @@
 package com.example.lms.agent;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.example.lms.agent.KnowledgeGapLogger.GapEvent;
 import com.example.lms.dto.learning.EvidenceSnippet;
 import com.example.lms.dto.learning.LearningEvent;
 import com.example.lms.learning.gemini.GeminiCurationService;
@@ -32,6 +34,8 @@ import java.util.Set;
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "agent.autonomous-exploration", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class AutonomousExplorationService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AutonomousExplorationService.class);
+
 
     private final KnowledgeGapLogger gapLogger;
     private final SmartQueryPlanner planner;

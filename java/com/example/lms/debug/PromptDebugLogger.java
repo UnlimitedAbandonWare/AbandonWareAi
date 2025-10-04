@@ -16,6 +16,8 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 public class PromptDebugLogger {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PromptDebugLogger.class);
+
 
     private static final int DEFAULT_MAX_BYTES = 4096;
 

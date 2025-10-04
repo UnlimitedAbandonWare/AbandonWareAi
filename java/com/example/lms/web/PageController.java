@@ -32,6 +32,8 @@ import java.util.List;
 @Controller
 @RequiredArgsConstructor
 public class PageController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PageController.class);
+
 
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;

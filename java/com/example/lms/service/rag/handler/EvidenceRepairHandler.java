@@ -14,6 +14,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @RequiredArgsConstructor
 public class EvidenceRepairHandler implements ContentRetriever {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(EvidenceRepairHandler.class);
+
 
     private final WebSearchRetriever web;
     private final SubjectResolver subjectResolver;

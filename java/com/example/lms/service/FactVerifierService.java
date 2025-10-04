@@ -1,3 +1,4 @@
+
 // src/main/java/com/example/lms/service/FactVerifierService.java
 package com.example.lms.service;
 
@@ -9,19 +10,18 @@ import com.example.lms.service.verification.FactStatusClassifier;
 import com.example.lms.service.verification.FactVerificationStatus;
 import com.example.lms.service.verification.NamedEntityValidator;
 import com.example.lms.service.verification.SourceAnalyzerService;
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
-import com.example.lms.prompt.PromptBuilder;     // 🆕 치유 프롬프트 빌더
-import com.example.lms.prompt.PromptContext;    // 🆕 치유 컨텍스트
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
+import com.example.lms.prompt.PromptBuilder;
+import com.example.lms.prompt.PromptContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier; // ✅ 수정: Qualifier 임포트 추가
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.*;
-import java.util.regex.Pattern;
+        import java.util.regex.Pattern;
 
 /**
  * 답변 생성의 최종 단계에서 사실 여부를 검증하는 서비스입니다.
@@ -30,13 +30,15 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class FactVerifierService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FactVerifierService.class);
+
 
     private final SourceAnalyzerService sourceAnalyzer;
-    private final OpenAiService openAi;
+    private final ChatModel verifier;
     private final FactStatusClassifier classifier;
     private final ClaimVerifierService claimVerifier;
     private final EvidenceGate evidenceGate;
-    private final PromptBuilder promptBuilder; // 🆕 주입
+    private final PromptBuilder promptBuilder;
 
     // 선택적으로 주입되는 의존성
     @Autowired(required = false)
@@ -46,13 +48,14 @@ public class FactVerifierService {
     @Autowired(required = false)
     private NamedEntityValidator namedEntityValidator;
 
-    public FactVerifierService(OpenAiService openAi,
+    // ✅ 수정: 생성자에 @Qualifier("highModel") 추가
+    public FactVerifierService(@Qualifier("highModel") ChatModel verifier,
                                FactStatusClassifier classifier,
                                SourceAnalyzerService sourceAnalyzer,
                                ClaimVerifierService claimVerifier,
                                EvidenceGate evidenceGate,
                                PromptBuilder promptBuilder) {
-        this.openAi = Objects.requireNonNull(openAi, "openAi");
+        this.verifier = Objects.requireNonNull(verifier, "verifier");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
         this.sourceAnalyzer = Objects.requireNonNull(sourceAnalyzer, "sourceAnalyzer");
         this.claimVerifier = Objects.requireNonNull(claimVerifier, "claimVerifier");
@@ -61,7 +64,7 @@ public class FactVerifierService {
     }
 
     private static final int MIN_CONTEXT_CHARS = 80;
-    private static final int MAX_HEALING_RETRIES = 2; // 🆕 LLM 호출 최소화 가드
+    private static final int MAX_HEALING_RETRIES = 2;
 
     /** 컨텍스트-질문 정합성 메타 점검용 프롬프트 */
     private static final String META_TEMPLATE = """
@@ -120,14 +123,13 @@ public class FactVerifierService {
 
     /** 메모리 증거와 후속 질문 여부까지 반영하는 핵심 검증 메서드 */
     public String verify(String question, String context, String memory, String draft, String model, boolean isFollowUp) {
-        return verifyInternal(question, context, memory, draft, model, isFollowUp, 0); // 🆕 Self-Healing 루프 진입
+        return verifyInternal(question, context, memory, draft, model, isFollowUp, 0);
     }
 
-    // 🆕 치유 반복을 포함한 내부 구현
     private String verifyInternal(String question, String context, String memory, String draft, String model,
                                   boolean isFollowUp, int attempt) {
         if (!StringUtils.hasText(draft)) return "";
-        // --- 0. 초기 엔티티 검증: 답변에 등장하는 모든 엔티티가 근거에 존재하는지 확인 ---
+
         if (namedEntityValidator != null) {
             List<String> evidenceList = new ArrayList<>();
             if (StringUtils.hasText(context)) evidenceList.add(context);
@@ -139,7 +141,6 @@ public class FactVerifierService {
 
             if (vr.isEntityMismatch()) {
                 log.warn("[Verify] Unsupported entities detected by validator");
-                // 🆕 0-a. 즉시 치유 시도 (최대 재시도 확인)
                 if (attempt < MAX_HEALING_RETRIES) {
                     List<String> uc = computeUnsupportedEntities(context, memory, draft);
                     if (!uc.isEmpty()) {
@@ -151,11 +152,9 @@ public class FactVerifierService {
             }
         }
 
-        // --- 1. 사전 검사 (Pre-checks) ---
         boolean hasSufficientContext = StringUtils.hasText(context) && context.length() >= MIN_CONTEXT_CHARS;
         boolean hasSufficientMemory = StringUtils.hasText(memory) && memory.length() >= 40;
 
-        // 컨텍스트와 메모리가 모두 빈약하면, LLM에 의존하지 않고 시너지 주장 등만 간단히 필터링
         if (!hasSufficientContext && !hasSufficientMemory) {
             var result = claimVerifier.verifyClaims("", draft, model);
             return result.verifiedAnswer();
@@ -163,8 +162,6 @@ public class FactVerifierService {
 
         if (StringUtils.hasText(context) && context.contains("[검색 결과 없음]")) return draft;
 
-        // --- 2. 메타 검증 (Meta-Verification) ---
-        // 2a. 소스 신뢰도 분석: 팬 추측/상충 정보는 조기 차단
         try {
             String mergedContext = mergeContext(context, memory);
             SourceCredibility credibility = sourceAnalyzer.analyze(question, mergedContext);
@@ -176,10 +173,9 @@ public class FactVerifierService {
             log.debug("[Meta-Verify] Source analysis failed: {}", e.toString());
         }
 
-        // 2b. LLM을 이용한 질문-컨텍스트 정합성 분석
         try {
             String metaPrompt = String.format(META_TEMPLATE, question, context);
-            String metaVerdict = callOpenAi(metaPrompt, model, 0.0, 0.05, 5);
+            String metaVerdict = callChatModel(metaPrompt);
             if (metaVerdict.trim().toUpperCase(Locale.ROOT).startsWith("MISMATCH")) {
                 log.debug("[Verify] META-CHECK detected MISMATCH -> '정보 없음' 반환");
                 return "정보 없음";
@@ -188,14 +184,12 @@ public class FactVerifierService {
             log.debug("[Verify] META-CHECK failed: {}", e.toString());
         }
 
-        // --- 3. 핵심 검증 및 답변 재구성 ---
         FactVerificationStatus status = classifier.classify(question, context, draft, model);
 
         boolean isGrounded = isGroundedInContext(context, extractEntities(draft), 2);
         boolean hasEnoughEvidence = evidenceGate.hasSufficientCoverage(
                 question, toLines(context), toLines(memory), List.of(), isFollowUp);
 
-        // 🆕 근거 부족 시: 미지원 주장 치유 → 재검증 (최대 2회), 실패 시 보수적 필터링
         if (!isGrounded || !hasEnoughEvidence) {
             log.debug("[Verify] 근거 부족(grounded: {}, evidence: {})", isGrounded, hasEnoughEvidence);
             if (attempt < MAX_HEALING_RETRIES) {
@@ -209,10 +203,8 @@ public class FactVerifierService {
             return result.verifiedAnswer().isBlank() ? "정보 없음" : result.verifiedAnswer();
         }
 
-        // 근거가 충분할 때의 로직
         switch (status) {
             case PASS, INSUFFICIENT:
-                // PASS 상태여도, 미지원 주장(unsupported claims)은 제거해야 함
                 var passResult = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
                 String passAnswer = passResult.verifiedAnswer();
                 if (attempt < MAX_HEALING_RETRIES) {
@@ -225,15 +217,13 @@ public class FactVerifierService {
                 return passAnswer;
 
             case CORRECTED:
-                // CORRECTED 상태이고 근거도 충분하면, LLM을 통해 답변을 적극적으로 수정
                 log.debug("[Verify] CORRECTED 상태이며 근거 충분 -> LLM 기반 수정 시도");
                 String correctionPrompt = String.format(CORRECTION_TEMPLATE, question, context, draft);
                 try {
-                    String rawResponse = callOpenAi(correctionPrompt, model, 0.0, 0.05, 256);
+                    String rawResponse = callChatModel(correctionPrompt);
                     int contentStartIndex = rawResponse.indexOf("CONTENT:");
                     String correctedText = (contentStartIndex > -1) ? rawResponse.substring(contentStartIndex + 8).trim() : rawResponse.trim();
 
-                    // 수정된 답변도 마지막으로 한번 더 검증
                     var finalResult = claimVerifier.verifyClaims(mergeContext(context, memory), correctedText, model);
                     String finalAns = finalResult.verifiedAnswer();
                     if (attempt < MAX_HEALING_RETRIES) {
@@ -254,33 +244,29 @@ public class FactVerifierService {
         }
     }
 
-    // --- Private Helper Methods ---
-
-    private String callOpenAi(String prompt, String model, double temp, double topP, int maxTokens) {
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(model)
-                .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
-                .temperature(temp)
-                .topP(topP)
-                .maxTokens(maxTokens)
-                .build();
-        return openAi.createChatCompletion(request).getChoices().get(0).getMessage().getContent();
+    private String callChatModel(String prompt) {
+        try {
+            var res = verifier.chat(UserMessage.from(prompt));
+            if (res == null || res.aiMessage() == null) return "";
+            var ai = res.aiMessage();
+            return ai.text() == null ? "" : ai.text();
+        } catch (Exception e) {
+            log.debug("[FactVerifier] ChatModel call failed: {}", e.toString());
+            return "";
+        }
     }
 
-
-    // 🆕 다중 메시지 버전
-    private String callOpenAi(List<ChatMessage> messages, String model, double temp, double topP, int maxTokens) {
-        ChatCompletionRequest request = ChatCompletionRequest.builder()
-                .model(model)
-                .messages(messages)
-                .temperature(temp)
-                .topP(topP)
-                .maxTokens(maxTokens)
-                .build();
-        return openAi.createChatCompletion(request).getChoices().get(0).getMessage().getContent();
+    private String callChatModel(List<Object> messages) {
+        if (messages == null || messages.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Object m : messages) {
+            if (m == null) continue;
+            sb.append(String.valueOf(m));
+            sb.append('\n');
+        }
+        return callChatModel(sb.toString());
     }
 
-    // 🆕 미지원 주장(개체) 계산: 컨텍스트/메모리에 등장하지 않는 개체를 탐지
     private List<String> computeUnsupportedEntities(String ctx, String mem, String text) {
         List<String> entities = extractEntities(text);
         if (entities.isEmpty()) return List.of();
@@ -295,37 +281,31 @@ public class FactVerifierService {
         return out;
     }
 
-    // 🆕 치유 재생성
     private String correctiveRegenerate(String question, String context, String memory, String draft, String model, List<String> unsupportedClaims) {
         try {
             PromptContext healCtx = PromptContext.builder()
                     .userQuery(question)
-                    .lastAssistantAnswer(draft)      // DRAFT_ANSWER 섹션에 주입
+                    .lastAssistantAnswer(draft)
                     .unsupportedClaims(unsupportedClaims)
                     .systemInstruction("CORRECTIVE_REGENERATION")
                     .citationStyle("inline")
                     .build();
-            String healCtxSection = promptBuilder.build(healCtx);          // DRAFT_ANSWER 등
-            String healInstr = promptBuilder.buildInstructions(healCtx);      // 치유 규칙 + UNSUPPORTED_CLAIMS
+            String healCtxSection = promptBuilder.build(healCtx);
+            String healInstr = promptBuilder.buildInstructions(healCtx);
 
-            List<ChatMessage> msgs = new ArrayList<>();
-            // 1) 근거(컨텍스트)를 최우선 System 메시지로
+            List<String> msgs = new ArrayList<>();
             if (StringUtils.hasText(context)) {
-                msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), context));
+                msgs.add(context);
             }
-            // 2) 치유용 컨텍스트 섹션(DRAFT 포함)
             if (StringUtils.hasText(healCtxSection)) {
-                msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), healCtxSection));
+                msgs.add(healCtxSection);
             }
-            // 3) 치유용 인스트럭션
-            msgs.add(new ChatMessage(ChatMessageRole.SYSTEM.value(), healInstr));
-            // 4) 사용자 지시: 초안 수정 요청
-            msgs.add(new ChatMessage(ChatMessageRole.USER.value(), "위 지시를 따르고, 미지원 주장을 제거·수정하여 정답을 한국어로 다시 작성하세요."));
-
-            return callOpenAi(msgs, model, 0.2, 1.0, 512);
+            msgs.add(healInstr);
+            msgs.add("위 지시를 따르고, 미지원 주장을 제거·수정하여 정답을 한국어로 다시 작성하세요.");
+            return callChatModel(new java.util.ArrayList<>(msgs));
         } catch (Exception e) {
             log.warn("[Self-Healing] correctiveRegenerate failed: {}", e.toString());
-            return draft; // 실패 시 기존 초안 유지
+            return draft;
         }
     }
 
@@ -339,7 +319,6 @@ public class FactVerifierService {
         if (entityExtractor != null) {
             return entityExtractor.extract(text);
         }
-        // 폴백: 간단한 정규식 기반 개체 추출
         List<String> out = new ArrayList<>();
         if (text == null || text.isBlank()) return out;
         String[] patterns = {
@@ -367,7 +346,7 @@ public class FactVerifierService {
 
     private static boolean isGroundedInContext(String context, List<String> entities, int minLines) {
         if (context == null || context.isBlank() || entities == null || entities.isEmpty()) {
-            return entities == null || entities.isEmpty(); // 개체가 없으면 grounding은 의미 없으므로 true
+            return entities == null || entities.isEmpty();
         }
         String[] lines = context.split("\\R+");
         int entitiesFound = 0;
@@ -379,6 +358,6 @@ public class FactVerifierService {
                 entitiesFound++;
             }
         }
-        return entitiesFound >= entities.size(); // 모든 개체가 최소 기준을 만족해야 함
+        return entitiesFound >= entities.size();
     }
 }

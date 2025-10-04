@@ -11,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -22,6 +23,8 @@ import java.util.Map;
 @ConditionalOnProperty(prefix = "tavily", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class TavilyWebSearchRetriever implements ContentRetriever {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TavilyWebSearchRetriever.class);
+
 
     private final WebClient.Builder http;
 
@@ -61,6 +64,11 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
                         log.debug("[Tavily] call failed: {}", e.toString());
                         return Mono.empty();
                     })
+                    // Execute the HTTP call on an elastic scheduler to avoid
+                    // blocking reactive event loop threads.  The downstream
+                    // block() remains synchronous, but the network I/O
+                    // happens off the event loop.
+                    .subscribeOn(Schedulers.boundedElastic())
                     .block();
 
             if (resp == null) return List.of();

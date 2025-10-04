@@ -10,6 +10,8 @@ import java.util.List;
 
 @Slf4j @RequiredArgsConstructor
 public class SelfAskHandler extends AbstractRetrievalHandler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SelfAskHandler.class);
+
     private final SelfAskWebSearchRetriever retriever;
     @Override
     protected boolean doHandle(Query q, List<Content> acc) {
@@ -21,4 +23,17 @@ public class SelfAskHandler extends AbstractRetrievalHandler {
             return true;
         }
     }
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = original.metadata() != null
+            ? original.metadata()
+            : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        // Directly construct a new Query with the updated metadata.  LangChain4j 1.0.x
+        // provides a public constructor for Query that accepts text and metadata, rendering the
+        // previous builder and reflective fallback unnecessary.
+        return new dev.langchain4j.rag.query.Query(original.text(), md);
+    }
+
 }

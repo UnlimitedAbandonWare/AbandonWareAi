@@ -19,6 +19,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 @Slf4j
 public class GTranslateClient {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GTranslateClient.class);
+
 
     /** WebClientConfig 에서 만든 @Bean(name="googleTranslateWebClient") */
     @Qualifier("googleTranslateWebClient")

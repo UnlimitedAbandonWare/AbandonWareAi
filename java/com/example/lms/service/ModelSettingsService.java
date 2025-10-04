@@ -15,6 +15,8 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class ModelSettingsService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ModelSettingsService.class);
+
 
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;

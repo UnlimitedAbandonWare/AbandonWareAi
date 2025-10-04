@@ -173,4 +173,17 @@ public interface KnowledgeBaseService {
     default IntegrationStatus apply(com.example.lms.dto.learning.KnowledgeDelta delta) {
         return IntegrationStatus.SKIPPED;
     }
+
+
+    /**
+     * Returns the last accessed timestamp for the specified entity, if present.
+     * Implementations may update this field when relationships are retrieved.
+     */
+    java.util.Optional<java.time.Instant> getLastAccessedAt(String domain, String entityName);
+
+    /**
+     * Returns the confidence score (0.0~1.0) for the specified entity, if present.
+     */
+    java.util.Optional<java.lang.Double> getConfidenceScore(String domain, String entityName);
+
 }

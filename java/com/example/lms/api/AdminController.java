@@ -2,8 +2,9 @@
 package com.example.lms.api;
 
 import com.example.lms.dto.FineTuningOptionsDto;
+import com.example.lms.dto.FineTuningJobDto;
 import com.example.lms.service.FineTuningService;
-import com.theokanning.openai.fine_tuning.FineTuningJob;
+// (FineTuningJob import removed)
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -26,6 +27,8 @@ import java.util.Optional;
 @RequiredArgsConstructor
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AdminController.class);
+
 
     private final FineTuningService fineTuningService;
 
@@ -68,7 +71,7 @@ public class AdminController {
      * 모든 파인튜닝 작업 목록 조회
      */
     @GetMapping("/jobs")
-    public ResponseEntity<List<FineTuningJob>> listJobs() {
+    public ResponseEntity<List<FineTuningJobDto>> listJobs() {
         return ResponseEntity.ok(fineTuningService.listFineTuningJobs());
     }
 
@@ -77,7 +80,7 @@ public class AdminController {
      */
     @GetMapping("/status/{jobId}")
     public ResponseEntity<?> checkStatus(@PathVariable String jobId) {
-        Optional<FineTuningJob> jobOptional = fineTuningService.checkJobStatus(jobId);
+        Optional<FineTuningJobDto> jobOptional = fineTuningService.checkJobStatus(jobId);
         return jobOptional
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.status(404).body(

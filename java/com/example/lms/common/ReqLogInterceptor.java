@@ -9,6 +9,8 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Slf4j
 @Component              // ← Bean 이름은 클래스명 camelCase: reqLogInterceptor
 public class ReqLogInterceptor implements HandlerInterceptor {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ReqLogInterceptor.class);
+
 
     @Override
     public boolean preHandle(HttpServletRequest req,

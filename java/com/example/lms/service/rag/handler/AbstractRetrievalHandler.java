@@ -13,6 +13,8 @@ import java.util.List;
  */
 @Slf4j
 public abstract class AbstractRetrievalHandler implements RetrievalHandler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AbstractRetrievalHandler.class);
+
 
     private RetrievalHandler next;
 

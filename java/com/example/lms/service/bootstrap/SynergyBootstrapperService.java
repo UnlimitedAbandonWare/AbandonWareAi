@@ -17,6 +17,8 @@ import java.util.*;
 @Component
 @RequiredArgsConstructor
 public class SynergyBootstrapperService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SynergyBootstrapperService.class);
+
 
     private final KnowledgeBaseService kb;
     private final AdaptiveScoringService scoring;

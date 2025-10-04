@@ -2,6 +2,7 @@ package com.example.lms.prompt;
 
 import com.example.lms.service.rag.pre.CognitiveState;
 import dev.langchain4j.rag.content.Content;
+import dev.langchain4j.data.document.Document;
 
 import java.util.*;
 
@@ -25,6 +26,20 @@ public record PromptContext(
          * other sources.  If no file is uploaded, this value will be {@code null}.
          */
         String fileContext,
+        /**
+         * Optional location context captured from the client.  When present the assistant
+         * can reason about the user’s current position.  If the client has not
+         * granted location consent or no recent location exists this value will be
+         * {@code null}.  See {@link LocationSection} for field definitions.
+         */
+        LocationSection location,
+        /**
+         * Resolved human readable address associated with the user’s most recent location.
+         * When present the assistant can include a natural language description of the
+         * user’s location in the prompt instead of just raw coordinates.  This value
+         * may be null when no reverse geocoding has been performed or consent is absent.
+         */
+        String locationAddress,
 
         // ───── 3. 도메인 및 규칙 ─────
         String domain,                // 현재 대화의 도메인 (예: "Genshin Impact")
@@ -43,6 +58,10 @@ public record PromptContext(
         String citationStyle,         // 출처 표기 스타일 (예: "inline", "footnote")
         List<String> unsupportedClaims,   // 🆕 치유 단계에서 전달될 '미지원 주장' 목록
         String systemInstruction          // 🆕 특수 지시(예: "CORRECTIVE_REGENERATION")
+        , java.util.List<Document> localDocs
+        , java.util.List<Document> ragDocs
+        , Boolean ragEnabled
+        , Boolean webEnabled
 ) {
 
     /**
@@ -78,6 +97,37 @@ public record PromptContext(
         private String citationStyle = "inline";
         private List<String> unsupportedClaims = Collections.emptyList(); // 🆕
         private String systemInstruction;                                  // 🆕
+        /**
+         * Resolved human readable address associated with the user’s last location.
+         * This field is optional and may be null when no reverse geocoding has been
+         * performed or the user has not consented to location sharing.
+         */
+        private String locationAddress;
+        /**
+         * Latest location section attached to this context.  When present the assistant
+         * can reason about the user’s current geographical coordinates.  This value is
+         * optional and may be null when no location consent has been granted or when
+         * there is no recent location on record.
+         */
+        private LocationSection location;
+
+        // ───── 추가: 첨부 및 벡터 문서 ─────
+        /** Documents extracted from uploaded attachments.  These are injected
+         * into the prompt before any other evidence sources and treated as
+         * ground truth.  Defaults to an empty list when no attachments are
+         * provided. */
+        private java.util.List<Document> localDocs = java.util.Collections.emptyList();
+        /** Documents retrieved from the vector database when RAG is enabled.
+         * Defaults to an empty list. */
+        private java.util.List<Document> ragDocs = java.util.Collections.emptyList();
+        /** Toggle indicating whether RAG retrieval should be executed.  When
+         * true the retriever may be invoked; when false no vector search
+         * should occur. */
+        private Boolean ragEnabled;
+        /** Toggle indicating whether live/hybrid web search should be
+         * executed.  This flag is independent of RAG and can be enabled
+         * explicitly by the client. */
+        private Boolean webEnabled;
         public Builder userQuery(String v) { this.userQuery = v; return this; }
         public Builder lastAssistantAnswer(String v) { this.lastAssistantAnswer = v; return this; }
         public Builder history(String v) { this.history = v; return this; }
@@ -98,6 +148,93 @@ public record PromptContext(
         public Builder audience(String v) { this.audience = v; return this; }
         public Builder citationStyle(String v) { this.citationStyle = (v == null || v.isBlank() ? "inline" : v); return this; }
 
+        /**
+         * Assign a resolved human readable address to this context.  When blank or null
+         * the address will not be included in the LOCATION CONTEXT section of the
+         * generated prompt.
+         *
+         * @param v the resolved address line or null/blank to clear
+         * @return this builder for method chaining
+         */
+        public Builder locationAddress(String v) {
+            this.locationAddress = (v == null || v.isBlank() ? null : v);
+            return this;
+        }
+
+        /**
+         * Attach a prebuilt {@link LocationSection} to this context.  When provided
+         * the location will be available to downstream prompt builders via
+         * {@code ctx.location()}.  Passing {@code null} clears any previously set
+         * location.
+         */
+        public Builder location(LocationSection v) { this.location = v; return this; }
+
+        /**
+         * Convenience method to attach a {@link com.example.lms.location.domain.LastLocation}
+         * entity as the location section.  When the entity is non-null its
+         * properties are copied into a new {@link LocationSection} instance.
+         *
+         * @param loc the last known location or null
+         * @return this builder for chaining
+         */
+        public Builder withLocation(com.example.lms.location.domain.LastLocation loc) {
+            if (loc != null) {
+                this.location = new LocationSection(
+                        loc.getLatitude(),
+                        loc.getLongitude(),
+                        loc.getAccuracy(),
+                        loc.getCapturedAt()
+                );
+            } else {
+                this.location = null;
+            }
+            return this;
+        }
+
+        /** Assign the list of documents derived from uploaded attachments.  When
+         * null or empty the list is set to an empty list to avoid null checks.
+         *
+         * @param v documents representing attachment content
+         * @return this builder for chaining
+         */
+        public Builder localDocs(java.util.List<Document> v) {
+            this.localDocs = (v == null ? java.util.Collections.emptyList() : v);
+            return this;
+        }
+
+        /** Assign the list of documents retrieved from the vector database.  When
+         * null or empty the list is set to an empty list.
+         *
+         * @param v documents from vector retrieval
+         * @return this builder for chaining
+         */
+        public Builder ragDocs(java.util.List<Document> v) {
+            this.ragDocs = (v == null ? java.util.Collections.emptyList() : v);
+            return this;
+        }
+
+        /** Enable or disable RAG retrieval for this context.  When null the
+         * downstream handler may fall back to a configured default.
+         *
+         * @param v true to enable vector retrieval, false to disable
+         * @return this builder for chaining
+         */
+        public Builder ragEnabled(Boolean v) {
+            this.ragEnabled = v;
+            return this;
+        }
+
+        /** Enable or disable web search for this context.  When null the
+         * downstream handler may fall back to a configured default.
+         *
+         * @param v true to enable web search, false to disable
+         * @return this builder for chaining
+         */
+        public Builder webEnabled(Boolean v) {
+            this.webEnabled = v;
+            return this;
+        }
+
         public Builder unsupportedClaims(List<String> v) { this.unsupportedClaims = (v == null ? Collections.emptyList() : v); return this; } // 🆕
         public Builder systemInstruction(String v) { this.systemInstruction = (v == null ? "" : v.trim()); return this; }                     // 🆕
         /**
@@ -106,15 +243,49 @@ public record PromptContext(
          */
         public PromptContext build() {
             return new PromptContext(
-                    userQuery, lastAssistantAnswer, history,
-                    web, rag, memory,
+                    userQuery,
+                    lastAssistantAnswer,
+                    history,
+                    web,
+                    rag,
+                    memory,
                     fileContext,
-                    domain, intent, subject, protectedTerms, interactionRules,
-                    cognitiveState, // ✅ [추가]
-                    verbosityHint, minWordCount, sectionSpec, targetTokenBudgetOut,
-                    audience, citationStyle
-                    , unsupportedClaims, systemInstruction
+                    location,
+                    locationAddress,
+                    domain,
+                    intent,
+                    subject,
+                    protectedTerms,
+                    interactionRules,
+                    cognitiveState,
+                    verbosityHint,
+                    minWordCount,
+                    sectionSpec,
+                    targetTokenBudgetOut,
+                    audience,
+                    citationStyle,
+                    unsupportedClaims,
+                    systemInstruction,
+                    localDocs,
+                    ragDocs,
+                    ragEnabled,
+                    webEnabled
             );
         }
     }
+
+    /**
+     * Nested record representing a geospatial location captured from the client.  This
+     * structure encapsulates latitude, longitude, accuracy and the timestamp when
+     * the location was recorded.  Instances of this record are immutable and can
+     * be safely shared across threads.  When included in a {@link PromptContext}
+     * the assistant may choose to render a LOCATION CONTEXT section in the
+     * generated prompt.
+     *
+     * @param lat        the latitude coordinate (WGS84)
+     * @param lng        the longitude coordinate (WGS84)
+     * @param accuracy   the accuracy of the location in meters
+     * @param capturedAt the timestamp when the location was recorded
+     */
+    public static record LocationSection(double lat, double lng, float accuracy, java.time.Instant capturedAt) {}
 }

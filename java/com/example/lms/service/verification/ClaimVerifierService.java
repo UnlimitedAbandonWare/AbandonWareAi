@@ -2,10 +2,8 @@
 
 package com.example.lms.service.verification;
 
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,8 +27,10 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ClaimVerifierService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ClaimVerifierService.class);
 
-    private final OpenAiService openAi;
+
+    private final ChatModel chatModel;
     private final AdaptiveScoringService scoring;
     private final KnowledgeBaseService kb;
 
@@ -89,11 +89,10 @@ public class ClaimVerifierService {
           ANSWER:
           %s
           """.formatted(draft);
-        ChatCompletionRequest req = ChatCompletionRequest.builder()
-                .model(model).temperature(0d).topP(0.05d)
-                .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
-                .build();
-        String json = openAi.createChatCompletion(req).getChoices().get(0).getMessage().getContent();
+        // Use the ChatModel to execute the prompt directly.  Temperature and top‑p
+        // parameters cannot be tuned per call; the ChatModel bean should
+        // already be configured with appropriate defaults.
+        String json = callChatModel(prompt);
         return parseJsonArray(json);
     }
 
@@ -111,11 +110,7 @@ public class ClaimVerifierService {
           CLAIMS:
           %s
           """.formatted(context, claims.toString());
-        ChatCompletionRequest req = ChatCompletionRequest.builder()
-                .model(model).temperature(0d).topP(0.05d)
-                .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
-                .build();
-        String json = openAi.createChatCompletion(req).getChoices().get(0).getMessage().getContent();
+        String json = callChatModel(prompt);
         return parseJsonBooleans(json, claims.size());
     }
 
@@ -213,5 +208,27 @@ public class ClaimVerifierService {
             out.add(false);
         }
         return out;
+    }
+
+    /**
+     * Helper method that delegates to the injected ChatModel.  This method
+     * sends the provided prompt as a single user message and returns the
+     * assistant's response text.  If the ChatModel returns null the empty
+     * string is returned instead.  Any exceptions are caught and logged
+     * and an empty string is returned to allow graceful degradation.
+     *
+     * @param prompt the prompt to send
+     * @return the AI response text or an empty string
+     */
+    private String callChatModel(String prompt) {
+        try {
+            var res = chatModel.chat(UserMessage.from(prompt));
+            if (res == null || res.aiMessage() == null) return "";
+            var ai = res.aiMessage();
+            return ai.text() == null ? "" : ai.text();
+        } catch (Exception e) {
+            log.debug("[ClaimVerifier] ChatModel call failed: {}", e.toString());
+            return "";
+        }
     }
 }

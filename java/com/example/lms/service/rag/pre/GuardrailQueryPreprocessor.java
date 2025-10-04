@@ -16,7 +16,6 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 @Component("guardrailQueryPreprocessor")
-@Primary
 public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
 
     private final GameDomainDetector domainDetector;

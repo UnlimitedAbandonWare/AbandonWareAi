@@ -3,6 +3,7 @@ package com.example.lms.service.rag;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -13,6 +14,10 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class SelfAskPlanner {
+    // Always use the mini/low‑tier model for self‑ask planning to control
+    // latency and avoid unregistered high‑tier models.  The qualifier
+    // ensures Spring injects the "mini" ChatModel bean defined in ModelConfig.
+    @Qualifier("mini")
     private final ChatModel chatModel;
 
     /**

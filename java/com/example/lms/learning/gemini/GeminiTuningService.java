@@ -1,5 +1,5 @@
 package com.example.lms.learning.gemini;
-import com.example.lms.client.GeminiClient;                      // ★ 통합 클라이언트로 변경
+import com.example.lms.learning.gemini.GeminiClient;
 import com.example.lms.dto.learning.TuningJobRequest;
 import com.example.lms.dto.learning.TuningJobStatus;
 import lombok.RequiredArgsConstructor;

@@ -24,6 +24,8 @@ import java.util.jar.Manifest;
 @Slf4j
 @Component
 public class StartupVersionPurityCheck {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(StartupVersionPurityCheck.class);
+
 
     /** LangChain4j 고정 버전 접두사 */
     private static final String EXPECTED_PREFIX = "1.0.1";

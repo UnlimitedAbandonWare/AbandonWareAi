@@ -12,7 +12,9 @@ import java.util.Map;
 /**
  * Client for performing file search queries against the GPT API.
  *
- * <p>This class delegates to {@link GptApiClient} to perform the actual
+ * <p>This class delegates to {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GptFileSearchClient.class);
+@link GptApiClient} to perform the actual
  * HTTP request.  In this stub implementation it constructs a request
  * payload containing the query text and desired top‑k value but does
  * not execute any remote call.  Instead, it returns a static list

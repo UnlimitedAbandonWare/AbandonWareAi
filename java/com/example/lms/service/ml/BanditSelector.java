@@ -23,6 +23,8 @@ import org.springframework.beans.factory.annotation.Value;
 @RequiredArgsConstructor
 @Slf4j
 public class BanditSelector {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(BanditSelector.class);
+
 
     private final MemoryRepository    memoryRepo;
     private final TextSimilarityUtil  simUtil;

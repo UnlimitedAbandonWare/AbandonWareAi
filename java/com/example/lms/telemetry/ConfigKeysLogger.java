@@ -19,6 +19,8 @@ import java.util.List;
 @Configuration
 @RequiredArgsConstructor
 public class ConfigKeysLogger {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ConfigKeysLogger.class);
+
     private final Environment env;
 
     // List of keys considered interesting for diagnostics.  Modify this list

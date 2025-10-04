@@ -15,6 +15,8 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class MemoryHandler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MemoryHandler.class);
+
 
     private final ChatHistoryService historyService;
 

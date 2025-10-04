@@ -27,6 +27,8 @@ import java.util.regex.Pattern;
 @Service
 @RequiredArgsConstructor
 public class SourceAnalyzerService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SourceAnalyzerService.class);
+
 
     private final ObjectProvider<AuthorityScorer> authorityScorerProvider;
 
