@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LMS 통합 관리 대시보드</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- Chosen Palette: Calm Harmony (Warm Neutrals & Soft Accents) -->
+  <!-- Application Structure Plan: A single-page application with a fixed left-hand navigation menu and a main content area. This task-oriented dashboard structure (Dashboard, AI Playground, Training Center, Settings) was chosen to make the complex backend functionalities intuitive and manageable for an administrator. It prioritizes user tasks over mirroring the backend's code structure, allowing for a clear separation of concerns: high-level monitoring (Dashboard), interactive testing (Playground), in-depth learning analysis (Training Center), and configuration (Settings). This flow facilitates a natural administrative workflow. -->
+  <!-- Visualization & Content Choices:
+      - System Overview -> Goal: Inform -> Viz: KPI Cards & Charts (Chart.js) -> Interaction: Tooltips -> Justification: Provides a quick, high-level overview of system health and AI learning progress. Confirmed NO SVG.
+      - AI Interaction -> Goal: Test & Interact -> Viz: Two-panel layout with chat history and settings -> Interaction: Real-time chat, dynamic setting updates -> Justification: Allows for direct testing of the AI's response with immediate feedback on configuration changes. Confirmed NO SVG.
+      - Training Data -> Goal: Analyze & Monitor -> Viz: Interactive Data Table (HTML/JS) -> Interaction: Search, Sort -> Justification: Provides a granular view into the core reinforcement learning data (`translation_memory`), allowing admins to see exactly what the system is learning. Confirmed NO SVG.
+      - Training Process -> Goal: Control -> Viz: Job Status List & Progress Bars -> Interaction: Buttons to trigger jobs -> Justification: Separates the *control* of training from the *analysis* of its results, providing a clear action-oriented interface. Confirmed NO SVG.
+      - System Configuration -> Goal: Configure -> Viz: Grouped Form Inputs -> Interaction: Standard form elements -> Justification: Centralizes all key system parameters for easy management. Confirmed NO SVG.
+  -->
+  <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+  <style>
+    body {
+        font-family: 'Inter', sans-serif;
+        background-color: #f8f7f4;
+        color: #3f3c3a;
+    }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    .nav-link {
+        transition: all 0.2s ease;
+    }
+    .nav-link.active, .nav-link:hover {
+        background-color: #eaddc7;
+        color: #3f3c3a;
+    }
+    .main-content {
+        display: none;
+    }
+    .main-content.active {
+        display: block;
+    }
+    .chart-container {
+        position: relative;
+        width: 100%;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+        height: 300px;
+        max-height: 400px;
+    }
+    @media (min-width: 768px) {
+        .chart-container {
+            height: 350px;
+        }
+    }
+    .kpi-card {
+        background-color: #ffffff;
+        border: 1px solid #eaddc7;
+    }
+    .chat-bubble {
+        max-width: 80%;
+        padding: 0.75rem 1rem;
+        border-radius: 1rem;
+    }
+    .chat-user {
+        background-color: #8d7b68;
+        color: white;
+        align-self: flex-end;
+        border-bottom-right-radius: 0.25rem;
+    }
+    .chat-assistant {
+        background-color: #ffffff;
+        color: #3f3c3a;
+        border: 1px solid #eaddc7;
+        align-self: flex-start;
+        border-bottom-left-radius: 0.25rem;
+    }
+  </style>
+</head>
+<body class="flex h-screen">
+
+<!-- Sidebar Navigation -->
+<nav class="w-64 bg-white p-4 flex flex-col shadow-lg">
+  <div class="text-2xl font-bold text-[#65451F] mb-8">
+    <i class="fas fa-university mr-2"></i>LMS 통합 대시보드
+  </div>
+  <ul class="space-y-2">
+    <li><a href="#dashboard" class="nav-link flex items-center p-3 rounded-lg text-gray-700 font-medium active"><i class="fas fa-chart-pie w-6 mr-3"></i>대시보드</a></li>
+    <li><a href="#playground" class="nav-link flex items-center p-3 rounded-lg text-gray-700 font-medium"><i class="fas fa-comments w-6 mr-3"></i>AI 채팅</a></li>
+    <li><a href="#training" class="nav-link flex items-center p-3 rounded-lg text-gray-700 font-medium"><i class="fas fa-dumbbell w-6 mr-3"></i>학습 센터</a></li>
+    <li><a href="#settings" class="nav-link flex items-center p-3 rounded-lg text-gray-700 font-medium"><i class="fas fa-cogs w-6 mr-3"></i>시스템 설정</a></li>
+    <li><a href="#models" class="nav-link flex items-center p-3 rounded-lg text-gray-700 font-medium"><i class="fas fa-cubes w-6 mr-3"></i>모델 관리</a></li>
+    <li><a href="#kakao" class="nav-link flex items-center p-3 rounded-lg text-gray-700 font-medium"><i class="fas fa-comment-dots w-6 mr-3"></i>카카오 연동</a></li>
+  </ul>
+  <div class="mt-auto text-center text-xs text-gray-400">
+    <p>&copy; 2025 AI-Powered LMS</p>
+  </div>
+</nav>
+
+<!-- Main Content Area -->
+<main class="flex-1 p-8 overflow-y-auto">
+
+  <!-- Dashboard Section -->
+  <section id="dashboard" class="main-content active">
+    <h1 class="text-3xl font-bold mb-2">통합 대시보드</h1>
+    <p class="text-gray-600 mb-8">AI 강화 기능과 기존 LMS 관리 기능을 포함한 시스템 전체 현황을 보여줍니다.</p>
+
+    <div class="bg-white p-6 rounded-xl shadow-md mb-8">
+      <h2 class="text-xl font-semibold mb-4">AI 시스템 현황</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div class="kpi-card p-6 rounded-xl shadow-sm">
+          <h3 class="text-gray-500 text-sm font-medium">번역 메모리 총 개수</h3>
+          <p class="text-3xl font-bold mt-2">1,284,591</p>
+        </div>
+        <div class="kpi-card p-6 rounded-xl shadow-sm">
+          <h3 class="text-gray-500 text-sm font-medium">평균 보상(Q-Value)</h3>
+          <p class="text-3xl font-bold mt-2 text-green-600">0.892 <i class="fas fa-arrow-up text-sm"></i></p>
+        </div>
+        <div class="kpi-card p-6 rounded-xl shadow-sm">
+          <h3 class="text-gray-500 text-sm font-medium">활성 학습 작업</h3>
+          <p class="text-3xl font-bold mt-2">1</p>
+        </div>
+        <div class="kpi-card p-6 rounded-xl shadow-sm">
+          <h3 class="text-gray-500 text-sm font-medium">API 호출 (24h)</h3>
+          <p class="text-3xl font-bold mt-2">35,720</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+      <div class="bg-white p-6 rounded-xl shadow-md">
+        <h2 class="text-xl font-semibold mb-4">학습 성과 (평균 보상 추이)</h2>
+        <div class="chart-container"><canvas id="rewardChart"></canvas></div>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md">
+        <h2 class="text-xl font-semibold mb-4">번역 소스 분포</h2>
+        <div class="chart-container"><canvas id="sourceChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- [수정] 기존 관리자 기능 섹션 추가 -->
+    <div class="bg-white p-6 rounded-xl shadow-md">
+      <h2 class="text-xl font-semibold mb-4">LMS 핵심 관리 기능</h2>
+      <p class="text-gray-600 mb-6">교수, 강의, 공지 등 기존 학습 관리 시스템의 주요 기능 페이지로 이동합니다.</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <a th:href="@{/professors}" class="block p-6 bg-gray-50 rounded-lg text-center hover:bg-[#eaddc7] hover:shadow-lg transition-all duration-300">
+          <i class="fas fa-chalkboard-teacher text-4xl text-[#65451F] mb-3"></i>
+          <p class="font-semibold text-gray-800 text-lg">교수 관리</p>
+        </a>
+        <a th:href="@{/courses}" class="block p-6 bg-gray-50 rounded-lg text-center hover:bg-[#eaddc7] hover:shadow-lg transition-all duration-300">
+          <i class="fas fa-book-open text-4xl text-[#65451F] mb-3"></i>
+          <p class="font-semibold text-gray-800 text-lg">강의 관리</p>
+        </a>
+        <a th:href="@{/admin/notices}" class="block p-6 bg-gray-50 rounded-lg text-center hover:bg-[#eaddc7] hover:shadow-lg transition-all duration-300">
+          <i class="fas fa-bullhorn text-4xl text-[#65451F] mb-3"></i>
+          <p class="font-semibold text-gray-800 text-lg">공지 관리</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI Chat Playground Section -->
+  <section id="playground" class="main-content">
+    <h1 class="text-3xl font-bold mb-2">AI 채팅 플레이그라운드</h1>
+    <p class="text-gray-600 mb-8">다양한 설정을 적용하며 AI의 응답을 실시간으로 테스트할 수 있는 공간입니다.</p>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[75vh]">
+      <div class="lg:col-span-2 flex flex-col bg-white rounded-xl shadow-md border border-gray-200">
+        <div id="chat-window" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4">
+          <!-- Chat messages will be appended here -->
+        </div>
+        <div class="p-4 border-t border-gray-200">
+          <div class="relative">
+            <input id="chat-input" type="text" placeholder="메시지를 입력하세요..." class="w-full py-3 pl-4 pr-16 rounded-full bg-gray-100 focus:outline-none focus:ring-2 focus:ring-[#eaddc7]">
+            <button id="chat-send-btn" class="absolute right-2 top-1/2 -translate-y-1/2 bg-[#8d7b68] text-white w-10 h-10 rounded-full hover:bg-[#65451F] transition-colors">
+              <i class="fas fa-paper-plane"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md border border-gray-200 overflow-y-auto">
+        <h2 class="text-xl font-semibold mb-6">고급 설정</h2>
+        <div class="space-y-6">
+          <div>
+            <label for="system-prompt" class="block text-sm font-medium text-gray-700 mb-1">시스템 프롬프트</label>
+            <textarea id="system-prompt" rows="4" class="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-[#eaddc7] focus:border-[#eaddc7]">You are a helpful assistant.</textarea>
+          </div>
+          <div>
+            <label for="temperature" class="block text-sm font-medium text-gray-700">온도 (Temperature): <span id="temp-value" class="font-bold">0.7</span></label>
+            <input id="temperature" type="range" min="0" max="2" step="0.1" value="0.7" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+          </div>
+          <div>
+            <label for="top-p" class="block text-sm font-medium text-gray-700">Top P: <span id="top-p-value" class="font-bold">1.0</span></label>
+            <input id="top-p" type="range" min="0" max="1" step="0.05" value="1.0" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium text-gray-700">자동 번역</span>
+            <label for="auto-translate" class="inline-flex relative items-center cursor-pointer">
+              <input type="checkbox" id="auto-translate" class="sr-only peer">
+              <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#8d7b68]"></div>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Training Center Section -->
+  <section id="training" class="main-content">
+    <h1 class="text-3xl font-bold mb-2">학습 센터</h1>
+    <p class="text-gray-600 mb-8">AI의 학습 과정을 모니터링하고, 새로운 학습 작업을 시작하거나 학습 데이터를 관리합니다.</p>
+
+    <div class="bg-white p-6 rounded-xl shadow-md mb-8">
+      <h2 class="text-xl font-semibold mb-4">학습 작업 관리</h2>
+      <div class="flex items-center justify-between">
+        <p class="text-sm text-gray-600">시스템의 비동기 학습 작업을 관리하고 상태를 확인합니다.</p>
+        <button id="start-training-btn" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center">
+          <i class="fas fa-play mr-2"></i>새로운 비동기 학습 시작
+        </button>
+      </div>
+      <ul id="training-jobs-list" class="mt-4 space-y-3">
+        <!-- Training jobs will be appended here -->
+      </ul>
+    </div>
+
+    <div class="bg-white p-6 rounded-xl shadow-md">
+      <h2 class="text-xl font-semibold mb-4">번역 메모리 (Translation Memory)</h2>
+      <input type="text" id="tm-search" placeholder="Source Hash로 검색..." class="w-full p-2 border border-gray-300 rounded-md mb-4">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm text-left text-gray-500">
+          <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+          <tr>
+            <th scope="col" class="py-3 px-6">Source Hash</th>
+            <th scope="col" class="py-3 px-6">Corrected Text</th>
+            <th scope="col" class="py-3 px-6">Q-Value</th>
+            <th scope="col" class="py-3 px-6">Hit Count</th>
+            <th scope="col" class="py-3 px-6">Last Used</th>
+          </tr>
+          </thead>
+          <tbody id="tm-table-body">
+          <!-- Translation memory rows will be appended here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- System Settings Section -->
+  <section id="settings" class="main-content">
+    <h1 class="text-3xl font-bold mb-2">시스템 설정</h1>
+    <p class="text-gray-600 mb-8">API 키, 외부 서비스 연동 정보 등 시스템의 핵심 설정을 관리합니다.</p>
+    <div class="bg-white p-8 rounded-xl shadow-md">
+      <div class="space-y-8">
+        <div>
+          <h3 class="text-lg font-semibold text-gray-900 border-b pb-2 mb-4">OpenAI / Gemini 설정</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label for="openai-key" class="block text-sm font-medium text-gray-700">OpenAI API Key</label>
+              <input type="password" id="openai-key" value="sk-xxxxxxxxxxxxxxxxxxxxxxxx" class="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md shadow-sm">
+            </div>
+            <div>
+              <label for="gemini-key" class="block text-sm font-medium text-gray-700">Gemini API Key</label>
+              <input type="password" id="gemini-key" value="AIzaSyAxxxxxxxxxxxxxxxxxxx" class="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md shadow-sm">
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3 class="text-lg font-semibold text-gray-900 border-b pb-2 mb-4">Google Translate 설정</h3>
+          <div>
+            <label for="gtranslate-keys" class="block text-sm font-medium text-gray-700">API Keys (쉼표로 구분)</label>
+            <textarea id="gtranslate-keys" rows="3" class="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md shadow-sm">AIzaSyBxxxxxxxx, AIzaSyCxxxxxxxx</textarea>
+          </div>
+        </div>
+        <div>
+          <h3 class="text-lg font-semibold text-gray-900 border-b pb-2 mb-4">강화학습 파라미터</h3>
+          <div>
+            <label for="softmax-temp" class="block text-sm font-medium text-gray-700">소프트맥스 탐색 온도 (τ)</label>
+            <input type="number" id="softmax-temp" value="1.2" step="0.1" class="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md shadow-sm">
+            <p class="text-xs text-gray-500 mt-1">값이 높을수록 탐험(Exploration)을, 낮을수록 활용(Exploitation)을 우선합니다.</p>
+          </div>
+        </div>
+      </div>
+      <div class="mt-8 text-right">
+        <button class="bg-green-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-green-700 transition-colors">설정 저장</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Model Management Section -->
+  <section id="models" class="main-content">
+    <h1 class="text-3xl font-bold mb-2">모델 관리</h1>
+    <p class="text-gray-600 mb-8">시스템에 동기화된 AI 모델 목록과 상세 정보를 보여줍니다.</p>
+    <div class="bg-white p-6 rounded-xl shadow-md">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm text-left text-gray-500">
+          <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+          <tr>
+            <th scope="col" class="py-3 px-6">Model ID</th>
+            <th scope="col" class="py-3 px-6">Owned By</th>
+            <th scope="col" class="py-3 px-6">Release Date</th>
+            <th scope="col" class="py-3 px-6">Context Window</th>
+          </tr>
+          </thead>
+          <tbody id="models-table-body">
+          <!-- Models will be appended here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Kakao Integration Section -->
+  <section id="kakao" class="main-content">
+    <h1 class="text-3xl font-bold mb-2">카카오 연동</h1>
+    <p class="text-gray-600 mb-8">카카오 메시지 발송, OAuth, 웹훅 등 연동 기능을 테스트하고 모니터링합니다.</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div class="bg-white p-6 rounded-xl shadow-md">
+        <h2 class="text-xl font-semibold mb-4">메시지 발송 테스트</h2>
+        <div class="space-y-4">
+          <div>
+            <label for="kakao-uuid" class="block text-sm font-medium text-gray-700">친구 UUID</label>
+            <input type="text" id="kakao-uuid" value="abcdefg-1234-..." class="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md">
+          </div>
+          <div>
+            <label for="kakao-msg" class="block text-sm font-medium text-gray-700">메시지 내용</label>
+            <textarea id="kakao-msg" rows="3" class="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md">과제 제출 링크입니다!</textarea>
+          </div>
+          <button class="w-full bg-yellow-400 text-gray-800 px-6 py-2 rounded-lg font-bold hover:bg-yellow-500 transition-colors">친구에게 메시지 전송</button>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl shadow-md">
+        <h2 class="text-xl font-semibold mb-4">최근 웹훅 로그</h2>
+        <ul class="space-y-3 text-sm">
+          <li class="p-3 bg-gray-50 rounded-md">
+            <p><i class="fas fa-check-circle text-green-500"></i> <span class="font-mono text-xs">[2025-06-24 11:55:01]</span></p>
+            <p class="ml-5 text-gray-600">Intent: ASSIGNMENT_SUBMIT, User: xyz-5678</p>
+          </li>
+          <li class="p-3 bg-gray-50 rounded-md">
+            <p><i class="fas fa-check-circle text-green-500"></i> <span class="font-mono text-xs">[2025-06-24 11:52:45]</span></p>
+            <p class="ml-5 text-gray-600">Intent: ASSIGNMENT_SUBMIT, User: abc-1234</p>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+      const navLinks = document.querySelectorAll('.nav-link');
+      const contentSections = document.querySelectorAll('.main-content');
+
+      const mockData = {
+          rewardHistory: { labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], data: [0.65, 0.68, 0.72, 0.75, 0.82, 0.89] },
+          sourceDistribution: { labels: ['Translation Memory', 'GPT-3.5', 'GPT-4', 'Gemini'], data: [62, 25, 8, 5] },
+          trainingJobs: [
+              { id: 1024, status: 'COMPLETED', start: '2025-06-24 09:00', finish: '2025-06-24 09:32', progress: 100 },
+              { id: 1025, status: 'RUNNING', start: '2025-06-24 11:30', finish: '-', progress: 45 },
+              { id: 1023, status: 'FAILED', start: '2025-06-23 18:00', finish: '2025-06-23 18:15', progress: 20 },
+          ],
+          translationMemory: [
+              { hash: 'a1b2..c3d4', corrected: 'This is a test.', qValue: 0.98, hits: 152, lastUsed: '2025-06-24 10:45' },
+              { hash: 'e5f6..g7h8', corrected: 'Please submit your assignment.', qValue: 0.95, hits: 88, lastUsed: '2025-06-24 09:12' },
+              { hash: 'i9j0..k1l2', corrected: 'The quick brown fox jumps over the lazy dog.', qValue: 0.88, hits: 23, lastUsed: '2025-06-23 14:20' },
+              { hash: 'm3n4..o5p6', corrected: 'Hello, World!', qValue: 0.99, hits: 1205, lastUsed: '2025-06-24 11:30' },
+          ],
+          models: [
+              { id: 'gpt-4o', owner: 'openai', release: '2024-05-13', window: '128k' },
+              { id: 'gpt-4-turbo', owner: 'openai', release: '2024-04-09', window: '128k' },
+              { id: 'gpt-3.5-turbo', owner: 'openai', release: '2022-11-30', window: '16k' },
+              { id: 'gemini-1.5-pro', owner: 'google', release: '2024-02-15', window: '1M' },
+          ]
+      };
+
+      const navigateTo = (hash) => {
+          const targetId = hash.substring(1);
+          contentSections.forEach(section => {
+              section.classList.toggle('active', section.id === targetId);
+          });
+          navLinks.forEach(link => {
+              link.classList.toggle('active', link.getAttribute('href') === hash);
+          });
+      };
+
+      navLinks.forEach(link => {
+          link.addEventListener('click', (e) => {
+              e.preventDefault();
+              window.location.hash = e.currentTarget.getAttribute('href');
+          });
+      });
+
+      window.addEventListener('hashchange', () => navigateTo(window.location.hash || '#dashboard'));
+
+      const createChart = (ctx, type, data, options) => new Chart(ctx, { type, data, options });
+
+      const renderRewardChart = () => {
+          const ctx = document.getElementById('rewardChart').getContext('2d');
+          createChart(ctx, 'line', {
+              labels: mockData.rewardHistory.labels,
+              datasets: [{
+                  label: '평균 보상 점수', data: mockData.rewardHistory.data,
+                  borderColor: '#8d7b68', backgroundColor: 'rgba(141, 123, 104, 0.1)',
+                  fill: true, tension: 0.4,
+              }]
+          }, { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: false } } });
+      };
+
+      const renderSourceChart = () => {
+          const ctx = document.getElementById('sourceChart').getContext('2d');
+          createChart(ctx, 'doughnut', {
+              labels: mockData.sourceDistribution.labels,
+              datasets: [{
+                  data: mockData.sourceDistribution.data,
+                  backgroundColor: ['#8d7b68', '#a4907c', '#c8b6a6', '#eaddc7'],
+                  hoverOffset: 4
+              }]
+          }, { responsive: true, maintainAspectRatio: false });
+      };
+
+      const renderUI = (containerId, data, renderer) => {
+          const container = document.getElementById(containerId);
+          container.innerHTML = '';
+          data.forEach(item => container.insertAdjacentHTML('beforeend', renderer(item)));
+      };
+
+      const jobRenderer = job => {
+          const statusColor = { COMPLETED: 'bg-green-100 text-green-800', RUNNING: 'bg-blue-100 text-blue-800', FAILED: 'bg-red-100 text-red-800' }[job.status];
+          const icon = { COMPLETED: 'fas fa-check-circle text-green-500', RUNNING: 'fas fa-sync fa-spin text-blue-500', FAILED: 'fas fa-exclamation-triangle text-red-500' }[job.status];
+          return `<li class="p-4 bg-gray-50 rounded-lg flex items-center justify-between">
+                      <div class="flex items-center"><i class="${icon} text-xl mr-4"></i>
+                          <div><p class="font-semibold">Job ID: ${job.id}</p><p class="text-xs text-gray-500">시작: ${job.start} / 종료: ${job.finish}</p></div>
+                      </div>
+                      <div class="flex items-center gap-4">
+                          <div class="w-48 bg-gray-200 rounded-full h-2.5"><div class="bg-blue-600 h-2.5 rounded-full" style="width: ${job.progress}%"></div></div>
+                          <span class="text-sm font-medium px-2.5 py-0.5 rounded ${statusColor}">${job.status}</span>
+                      </div></li>`;
+      };
+
+      const tmRenderer = tm => `<tr class="bg-white border-b">
+                                  <td class="py-4 px-6 font-mono text-xs">${tm.hash}</td><td class="py-4 px-6">${tm.corrected}</td>
+                                  <td class="py-4 px-6 font-semibold ${tm.qValue > 0.9 ? 'text-green-600' : 'text-yellow-600'}">${tm.qValue.toFixed(2)}</td>
+                                  <td class="py-4 px-6">${tm.hits}</td><td class="py-4 px-6">${tm.lastUsed}</td></tr>`;
+
+      const modelRenderer = model => `<tr class="bg-white border-b">
+                                  <td class="py-4 px-6 font-semibold">${model.id}</td><td class="py-4 px-6">${model.owner}</td>
+                                  <td class="py-4 px-6">${model.release}</td><td class="py-4 px-6">${model.window}</td></tr>`;
+
+      const chatWindow = document.getElementById('chat-window');
+      const addChatMessage = (message, sender) => {
+          const bubble = document.createElement('div');
+          bubble.className = `chat-bubble ${sender === 'user' ? 'chat-user' : 'chat-assistant'}`;
+          bubble.textContent = message;
+          chatWindow.appendChild(bubble);
+          chatWindow.scrollTop = chatWindow.scrollHeight;
+      };
+
+      document.getElementById('chat-send-btn').addEventListener('click', () => {
+          const input = document.getElementById('chat-input');
+          if (input.value.trim()) {
+              addChatMessage(input.value.trim(), 'user');
+              input.value = '';
+              setTimeout(() => addChatMessage("이것은 AI의 응답입니다. 현재 설정에 따라 내용이 달라집니다.", "assistant"), 1000);
+          }
+      });
+      document.getElementById('chat-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') document.getElementById('chat-send-btn').click(); });
+      document.getElementById('temperature').addEventListener('input', (e) => document.getElementById('temp-value').textContent = e.target.value);
+      document.getElementById('top-p').addEventListener('input', (e) => document.getElementById('top-p-value').textContent = e.target.value);
+
+      // Initial render
+      navigateTo(window.location.hash || '#dashboard');
+      renderRewardChart();
+      renderSourceChart();
+      renderUI('training-jobs-list', mockData.trainingJobs, jobRenderer);
+      renderUI('tm-table-body', mockData.translationMemory, tmRenderer);
+      renderUI('models-table-body', mockData.models, modelRenderer);
+      addChatMessage("안녕하세요! LMS 통합 대시보드입니다. 무엇을 도와드릴까요?", "assistant");
+  });
+</script>
+</body>
+</html>

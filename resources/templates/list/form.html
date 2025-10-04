@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <title>공지 작성</title>
+</head>
+<body>
+<h1>공지 작성/수정</h1>
+<form th:action="@{/admin/notices}" th:object="${notice}" method="post">
+  <input type="hidden" th:field="*{id}"/>
+  <label>제목: <input type="text" th:field="*{title}" /></label><br/>
+  <label>내용: <textarea th:field="*{content}"></textarea></label><br/>
+  <label>타입:
+    <select th:field="*{type}">
+      <option th:each="t : ${T(com.example.lms.domain.NoticeType).values()}"
+              th:value="${t}" th:text="${t}"></option>
+    </select>
+  </label><br/>
+  <label>부서ID: <input type="number" th:field="*{targetDeptId}" /></label><br/>
+  <label>사용자ID: <input type="number" th:field="*{targetUserId}" /></label><br/>
+  <button type="submit">저장</button>
+</form>
+</body>
+</html>

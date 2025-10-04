@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8"/>
+  <title>기본 모델 설정</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+</head>
+<body class="container py-4">
+
+<h1 class="mb-4">기본 모델 설정</h1>
+
+<div th:if="${successMessage}" class="alert alert-success" role="alert" th:text="${successMessage}"></div>
+<div th:if="${errorMessage}" class="alert alert-danger" role="alert" th:text="${errorMessage}"></div>
+
+
+<form th:action="@{/model-settings/save}" method="post" class="row g-3 align-items-center mb-4">
+  <div class="col-auto">
+    <label for="defaultModel" class="form-label">사용할 모델</label>
+    <select id="defaultModel" name="defaultModel" class="form-select">
+      <option th:each="m : ${models}"
+              th:value="${m.modelId}"
+              th:text="${m.modelId}"
+              th:selected="${m.modelId == currentModel}">
+      </option>
+      <option th:if="${#lists.isEmpty(models)}" disabled>등록된 모델이 없습니다.</option>
+    </select>
+  </div>
+  <div class="col-auto">
+    <button type="submit" class="btn btn-primary">저장</button>
+  </div>
+</form>
+
+<div class="mb-4">
+  <strong>현재 선택된 모델:</strong>
+  <span th:text="${currentModel} ?: '설정되지 않음'"></span>
+</div>
+<hr/>
+<a th:href="@{/chat}" class="btn btn-outline-secondary">챗 페이지로 이동</a>
+
+</body>
+</html>
