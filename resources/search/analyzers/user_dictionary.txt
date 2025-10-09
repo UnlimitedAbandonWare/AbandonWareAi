@@ -1,0 +1,6 @@
+# User-defined dictionary entries for Nori tokenizer
+# Format: word<TAB>tag<TAB>tokenization
+# The tag column may be left empty to let Nori infer the part-of-speech.
+대한민국	NNP
+인공지능	NNG
+랭체인	NNP

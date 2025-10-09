@@ -1,11 +1,22 @@
-# application.properties 파일 제외
-/src/main/resources/application.properties
-/src/main/resources/application-ultra.properties
-/src/main/resources/application-secrets.yml
-# keystore 파일 제외 (나중에 필요할 수 있으니 추가)
+# Secrets
+.env
+.env.*
+*.pem
+*.key
 *.p12
 *.jks
-
-/resources
-/resources
-*.properties
+*.pfx
+secrets/
+# Build/Cache
+node_modules/
+dist/
+build/
+target/
+__pycache__/
+# --- added by automated sanitization ---
+resources/*secrets*.yml
+resources/*.p12
+resources/*.p12.*
+resources/*.pfx
+resources/*.jks
+resources/*.keystore

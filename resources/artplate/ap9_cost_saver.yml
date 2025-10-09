@@ -1,0 +1,11 @@
+
+id: AP9_COST_SAVER
+name: "Cost Saver"
+params:
+  sources:
+    vector:
+      top_k: 8
+    web:
+      top_k: 4
+  reranker:
+    use_ce: false

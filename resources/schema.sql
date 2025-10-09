@@ -1,0 +1,1 @@
+-- Placeholder schema; add minimal tables required for bootstrap.

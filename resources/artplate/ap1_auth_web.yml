@@ -1,0 +1,11 @@
+
+id: AP1_AUTH_WEB
+name: "Auth Web (Official Sources)"
+params:
+  sources:
+    web:
+      domain_tier: [gov, edu, news.tier1]
+      top_k: 16
+  reranker:
+    use_ce: true
+    ce_budget_ms: 700

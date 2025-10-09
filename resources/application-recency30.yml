@@ -1,0 +1,9 @@
+# application-recency30.yml
+correction:
+  alias:
+    enabled: true
+    threshold: 0.62
+    max-candidates: 3
+    merge: RRF_WEIGHTED
+    tile:
+      dir: classpath:tiles

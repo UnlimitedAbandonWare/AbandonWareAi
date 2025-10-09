@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <title th:text="|과제 제출 – ${asg.title}|">과제 제출</title>
+</head>
+<body>
+  <th:block th:replace="~{fragments/header :: header}"></th:block>
+<div class="container py-4">
+
+  <h2 class="mb-3" th:text="|${asg.course.title} / ${asg.title}|">과제명</h2>
+
+  <div class="alert alert-info">
+    마감&nbsp;<span th:text="${#temporals.format(asg.dueDate,'yyyy-MM-dd HH:mm')}">2025-06-30 23:59</span>
+    까지 1회 제출 가능
+  </div>
+
+  <form class="border p-4 rounded" method="post" th:action="@{/upload}" enctype="multipart/form-data">
+    <input type="hidden" name="token" th:value="${token}"/>
+
+    <div class="mb-3">
+      <label for="file" class="form-label fw-bold">제출 파일</label>
+      <input class="form-control" type="file" id="file" name="file" required>
+    </div>
+
+    <button class="btn btn-success">제출</button>
+  </form>
+</div>
+</body>
+</html>
