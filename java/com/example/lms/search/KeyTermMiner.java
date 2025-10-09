@@ -1,6 +1,4 @@
 package com.example.lms.search;
-
-import lombok.extern.slf4j.Slf4j;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.ko.KoreanAnalyzer;
 import org.apache.lucene.document.Document;
@@ -13,10 +11,11 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.stream.Collectors;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Service
 public class KeyTermMiner {
+    private static final Logger log = LoggerFactory.getLogger(KeyTermMiner.class);
 
     private static final int DEFAULT_TOP_N = 3;
     private final Analyzer analyzer = new KoreanAnalyzer();

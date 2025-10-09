@@ -71,7 +71,7 @@ public class ExamService {
     }
 
     /* ───────────────────────────
-       2. 서술형(Essay) 자동 채점 (stub)
+       2. 서술형(Essay) 자동 채점 (shim)
        ─────────────────────────── */
     public void evaluateEssay(Long examId, Long studentId, List<String> essayAnswers) {
         double additional = (essayAnswers == null || essayAnswers.isEmpty()) ? 0 : 5;

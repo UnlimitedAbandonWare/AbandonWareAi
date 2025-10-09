@@ -1,4 +1,4 @@
-package com.example.lms.client;
+package com.example.lms.learning.gemini;
 
 import com.example.lms.dto.learning.KnowledgeDelta;
 import com.example.lms.dto.learning.LearningEvent;
@@ -6,7 +6,6 @@ import com.example.lms.dto.learning.LearningExampleRow;
 import com.example.lms.dto.learning.TuningJobRequest;
 import com.example.lms.dto.learning.TuningJobStatus;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -19,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 /**
  * 통합 Gemini 클라이언트.
  * - REST 호출(번역/프롬프트 생성) + 학습 파이프라인용 스텁(curate/batch/tuning)을 한 곳에 모음.
@@ -26,8 +27,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  */
 @Component("geminiClient")
 @RequiredArgsConstructor
-@Slf4j
 public class GeminiClient {
+    private static final Logger log = LoggerFactory.getLogger(GeminiClient.class);
 
     /** 전역 WebClient.Builder 주입 */
     private final WebClient.Builder webClientBuilder;
@@ -59,6 +60,11 @@ public class GeminiClient {
                           "ok"   : false,
                           "error": "%s"
                         }""".formatted(e.getMessage())));
+    }
+
+    // Base hook: Decorator에서 오버라이드, 기본은 no-op
+    public List<String> keywordVariants(String cleaned, String anchor, int cap) {
+        return java.util.Collections.emptyList();
     }
 
     private Mono<GeminiResponse> postToGemini(String prompt) {

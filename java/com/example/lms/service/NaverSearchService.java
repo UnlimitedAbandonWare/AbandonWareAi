@@ -38,6 +38,7 @@ import com.example.lms.service.rag.LangChainRAGService;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.rag.query.Query;
+import com.example.lms.config.NaverFilterProperties;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import java.util.regex.Matcher;
 import java.io.IOException;
@@ -57,7 +58,6 @@ import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.Arrays;
 import java.util.stream.Stream;
-import lombok.extern.slf4j.Slf4j;
 // - Lombok RequiredArgsConstructor는 명시 생성자와 충돌
 import org.apache.commons.codec.digest.DigestUtils;
 import org.jsoup.Jsoup;                 // HTML 파서
@@ -74,6 +74,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.util.StringUtils;
 import reactor.util.retry.Retry;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Simplified NaverSearchService that does not automatically append
@@ -84,8 +86,8 @@ import reactor.util.retry.Retry;
  */
 @Service
 @Primary
-@Slf4j
 public class NaverSearchService {
+    private static final Logger log = LoggerFactory.getLogger(NaverSearchService.class);
 
     /**
      * LLM 답변을 활용한 검색 (딥 리서치 모드)
@@ -124,6 +126,17 @@ public class NaverSearchService {
         public boolean keywordFilterEnabled;
         public String suffixApplied;
         public long totalMs;
+        /** Reason why the domain filter was disabled, or null when enabled. */
+        public String reasonDomainFilterDisabled;
+        /** Reason why the keyword filter was disabled, or null when enabled. */
+        public String reasonKeywordFilterDisabled;
+
+        /** Whether an organisation was resolved for this query. */
+        public boolean orgResolved;
+        /** The canonical name of the resolved organisation, if any. */
+        public String orgCanonical;
+        /** List of site filters applied during org‑aware search. */
+        public java.util.List<String> siteFiltersApplied = new java.util.ArrayList<>();
     }
 
     /**
@@ -158,6 +171,10 @@ public class NaverSearchService {
     /** Cache for normalized queries to web snippet lists. */
     /** 비동기 캐시 (block 금지) */
     private final AsyncLoadingCache<String, List<String>> cache;
+
+    // [HARDENING] optional detector for location intent; auto-wired when present
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.location.intent.LocationIntentDetector locationIntentDetector;
     /** Cache to prevent reinforcing duplicate snippets. */
     private final LoadingCache<String, Boolean> recentSnippetCache;
     /** Cache for location token embeddings (memoization) */
@@ -171,11 +188,21 @@ public class NaverSearchService {
     /** Supplier of the current session id. */
     private final Supplier<Long> sessionIdProvider;
 
+    /**
+     * Optional Redis‑based cooldown service.  When provided this service
+     * guards external API calls with a short‑lived lock to prevent
+     * thundering herd behaviour and excessive concurrent requests.  When
+     * null no cooldown is applied and calls proceed immediately.  The
+     * implementation is provided via Spring and may be absent when Redis
+     * is unavailable or not configured.
+     */
+    private final com.example.lms.service.redis.RedisCooldownService cooldownService;
+
     /* === Configuration properties === */
     // (client-id / client-secret 개별 프로퍼티는 더 이상 사용하지 않는다)
     /** 단순화된 호출 타임아웃(ms) */
     private static final long API_TIMEOUT_MS = 3000;
-    @Value("${naver.search.web-top-k:5}")
+    @Value("${naver.search.web-top-k:8}")
     private int webTopK;   // LLM에 넘길 개수
     @Value("${naver.search.rag-top-k:5}")
     private int ragTopK;   // 벡터 RAG top‑k
@@ -187,19 +214,19 @@ public class NaverSearchService {
     private String querySuffix;
     @Value("${naver.search.query-sim-threshold:0.3}")
     private double querySimThreshold;
-    @Value("${naver.filters.enable-domain-filter:false}")
-    private volatile boolean enableDomainFilter;
+    // Domain filtering enabled flag.  This value is initialised from {@link NaverFilterProperties}.
+    private volatile boolean enableDomainFilter; // [HARDENING] default true
 
     /* ---------- 2. ApiKey 헬퍼 타입 ---------- */
     private record ApiKey(String id, String secret) { }
 
     // 기본 허용 목록에 서브도메인 포함 도메인 추가(부재 시 0개 스니펫 방지)
-    @Value("${naver.filters.domain-allowlist:eulji.ac.kr,eulji.or.kr}")
+    // Comma separated allowlist of domain suffixes.  Populated from {@link NaverFilterProperties}.
     private volatile String allowlist;
-    @Value("${naver.filters.enable-keyword-filter:false}")
+    // Keyword filtering enabled flag (initialised from NaverFilterProperties).
     private boolean enableKeywordFilter;
     // 키워드 필터는 OR(하나 이상 매칭)로 완화
-    @Value("${naver.filters.keyword-min-hits:1}")
+    // Minimum number of keyword hits required; populated from {@link NaverFilterProperties}.
     private int keywordMinHits;
     /* === Configuration properties === */
     @Value("${naver.search.debug:false}")          // ⬅ 추가
@@ -231,13 +258,35 @@ public class NaverSearchService {
     private static final Pattern DOMAIN_SCOPE_PREFIX =
             Pattern.compile("(?i)^\\s*(site\\s+)?\\S+\\s+ac\\s+kr\\b");
 
-    /* ── 헤징(동시 이중 발사) 관련: 기본 OFF, 필요 시 지연 헤징만 허용 ── */
-    /* 🔵 다중-키 헤징 전략 제거: 항상 첫 번째 네이버 키만 사용 */
-    private final boolean hedgeEnabled = false;
-    @Value("${naver.hedge.timeout-ms:3000}")
-    private long hedgeTimeoutMs;   // primary 타임아웃 계산엔 그대로 사용
-    @Value("${naver.search.timeout-ms:5000}")
-    private long apiTimeoutMs;
+        /* ── 헤징(동시 이중 발사) 관련: 기본 OFF, 필요 시 지연 헤징만 허용 ── */
+        /* 🔵 다중-키 헤징 전략 제거: 항상 첫 번째 네이버 키만 사용 */
+        /**
+         * When true a hedged search will trigger a delayed DuckDuckGo fallback in
+         * parallel with the primary Naver request.  The first source to return
+         * wins, shortening perceived latency when Naver is slow or returns no
+         * results.  Controlled via the naver.hedge.enabled property.  Defaults
+         * to false to preserve sequential behaviour unless explicitly enabled.
+         */
+        @org.springframework.beans.factory.annotation.Value("${naver.hedge.enabled:false}")
+        private boolean hedgeEnabled;
+        /**
+         * Maximum timeout (milliseconds) to wait for the primary Naver API call
+         * before giving up.  Reduced from the previous default of 3000ms to
+         * 1000ms to tighten per-call bounds.  Configurable via
+         * naver.hedge.timeout-ms.
+         */
+        @Value("${naver.hedge.timeout-ms:1000}")
+        private long hedgeTimeoutMs;   // primary 타임아웃 계산엔 그대로 사용
+        /**
+         * Delay before issuing a parallel DuckDuckGo fallback when hedging is
+         * enabled.  A smaller delay allows the fallback to race with a slow
+         * primary call.  Configurable via naver.hedge.delay-ms; defaults to
+         * 200ms when unspecified.
+         */
+        @Value("${naver.hedge.delay-ms:200}")
+        private long hedgeDelayMs;
+        @Value("${naver.search.timeout-ms:5000}")
+        private long apiTimeoutMs;
 
     @Value("${naver.search.debug-json:false}")
     private boolean debugJson;
@@ -264,10 +313,41 @@ public class NaverSearchService {
     @Value("${naver.reinforce-assistant.weight:0.4}")
     private double assistantReinforceWeight;
 
-    @Value("${naver.filters.domain-policy:filter}")  // off|boost|filter
+    // Domain policy controlling filter/boost behaviour.  Initialised from {@link NaverFilterProperties}.
     private String domainPolicy;
+
+    /**
+     * Toggle for the DuckDuckGo fallback.  When false (default) all
+     * fallback behaviour is disabled and empty results are returned
+     * instead.  This property can be overridden via
+     * `naver.fallback.duckduckgo.enabled` in application properties.
+     */
+    @Value("${naver.fallback.duckduckgo.enabled:false}")
+    private boolean fallbackDuckDuckGo;
     @Value("${naver.search.fusion:none}") // none|rrf
     private String fusionPolicy;
+
+    /** Centralised filter properties bean */
+    @org.springframework.beans.factory.annotation.Autowired
+    private NaverFilterProperties naverFilterProperties;
+
+    /**
+     * Initialise filter flags from {@link NaverFilterProperties}.  This method runs after
+     * dependency injection and assigns the internal filtering fields to the
+     * values supplied by the centralised configuration bean.  When no allowlist
+     * is configured the field defaults to an empty string.
+     */
+    @jakarta.annotation.PostConstruct
+    private void initFilterProperties() {
+        if (this.naverFilterProperties != null) {
+            this.enableDomainFilter = naverFilterProperties.isEnableDomainFilter();
+            java.util.List<String> list = naverFilterProperties.getDomainAllowlist();
+            this.allowlist = (list == null || list.isEmpty()) ? "" : String.join(",", list);
+            this.enableKeywordFilter = naverFilterProperties.isEnableKeywordFilter();
+            this.keywordMinHits = naverFilterProperties.getKeywordMinHits();
+            this.domainPolicy = naverFilterProperties.getDomainPolicy();
+        }
+    }
     private Set<String> productKeywords;
     private Set<String> foldKeywords;
     private Set<String> flipKeywords;
@@ -275,8 +355,12 @@ public class NaverSearchService {
 
     /* === Patterns and stop words === */
     // ❌ 불용어/접두사/필러 제거 로직 삭제 (단순 검색 전용으로 축소)
+    // [HARDENING] Require both intent keywords and geographic suffix tokens
     private static final Pattern LOCATION_PATTERN =
-            Pattern.compile(".*(역|정류장|도로|길|거리|로|시|구|동|읍|면|군).*", Pattern.UNICODE_CASE);
+            Pattern.compile(
+                    "(?=.*(근처|가까운|주변|길찾기|경로|지도|주소|위치|시간|얼마나\\s*걸려|가는\\s*법))" +
+                    "(?=.*(시|구|동|읍|면|군|로|길|거리|역|정류장))",
+                    Pattern.UNICODE_CHARACTER_CLASS | Pattern.CASE_INSENSITIVE);
     private static final Pattern NON_ALNUM =
             Pattern.compile("[^\\p{IsHangul}\\p{L}\\p{Nd}]");
     // () 캐시키/유사도 정규화에 사용할 패턴 (한글/영문/숫자만 유지)
@@ -434,7 +518,13 @@ public class NaverSearchService {
             @Value("${naver.web.cache.max-size:2000}") long maxSize,
             @Value("${naver.web.cache.ttl-sec:300}") long ttlSec,
             PlatformTransactionManager txManager,
-            RateLimitPolicy ratePolicy) {                     // NEW – 주입
+            RateLimitPolicy ratePolicy,
+            // Inject the shared Naver WebClient bean.  Qualifier ensures
+            // that the correct bean is selected when multiple WebClients
+            // are available.
+            @Qualifier("naverWebClient") WebClient web,
+            @Autowired(required = false) com.example.lms.service.redis.RedisCooldownService cooldownService) {
+        // cooldownService assignment deferred below
         this.queryTransformer = queryTransformer;
         this.memorySvc = memorySvc;
         this.retrieverProvider = retrieverProvider;
@@ -445,6 +535,10 @@ public class NaverSearchService {
         this.naverKeysCsv = naverKeysCsv;           // 🔴 저장
         this.relevanceScorer = new RelevanceScorer(embeddingModel);
         this.ratePolicy = ratePolicy;
+
+        // Assign the optional cooldown service.  When null no Redis‑backed
+        // cooldown is applied and requests will proceed without gating.
+        this.cooldownService = cooldownService;
 
         /* ───────────────────────────────
          * ① 공통 HTTP 요청‑응답 로그 필터
@@ -466,10 +560,9 @@ public class NaverSearchService {
         };
 
         /* ② NAVER Open API 클라이언트 */
-        this.web = WebClient.builder()
-                .baseUrl("https://openapi.naver.com")
-                .filter(logFilter)
-                .build();
+        // Use the provided WebClient and attach our logging filter.  We
+        // mutate the builder to avoid modifying the original shared instance.
+        this.web = web.mutate().filter(logFilter).build();
 
         /* ③ DuckDuckGo(HTML) 폴백 클라이언트  ⚠️ 미초기화로 인한 컴파일 오류 해결 */
         this.duck = WebClient.builder()
@@ -663,7 +756,9 @@ public class NaverSearchService {
         // ✔ 의도/별칭 정규화는 상위 LLM 단계에서 처리됨 (여긴 입력 그대로 사용)
         if (trace != null) {
             trace.domainFilterEnabled = enableDomainFilter;
+            trace.reasonDomainFilterDisabled = enableDomainFilter ? null : "PROPERTY_FALSE";
             trace.keywordFilterEnabled = enableKeywordFilter;
+            trace.reasonKeywordFilterDisabled = enableKeywordFilter ? null : "PROPERTY_FALSE";
             trace.suffixApplied = deriveLocationSuffix(query);
         }
 
@@ -709,12 +804,13 @@ public class NaverSearchService {
 
             // ▶ 순차 실행: 가장 가능성 높은 쿼리부터 하나씩 시도하고,
             //    누적 스니펫이 topK에 도달하는 즉시 상류 취소(early exit)
-            return Flux.fromIterable(qs)
-                    .concatMap(q -> Mono.fromFuture(cache.get(cacheKeyFor(q)))
-                            .subscribeOn(Schedulers.boundedElastic()))
-                    .flatMapIterable(list -> list)   // 각 쿼리 결과를 줄 단위로
-                    .filter(acc2::add)               // 중복 제거(LinkedHashSet)
-                    .take(topK)                      // ★ topK 채워지면 즉시 종료
+                return Flux.fromIterable(qs)
+                        .flatMap(q -> Mono.fromFuture(cache.get(cacheKeyFor(q)))
+                                .subscribeOn(Schedulers.boundedElastic()), 3)
+                        .flatMapIterable(list -> list)   // 각 쿼리 결과를 줄 단위로
+                        .filter(acc2::add)               // 중복 제거(LinkedHashSet)
+                        .onBackpressureBuffer()
+                        .take(topK)                      // ★ topK 채워지면 즉시 종료
                     .collect(Collectors.toCollection(LinkedHashSet::new))
                     .<List<String>>map(set -> new ArrayList<>(set))   // ✔ 제네릭 교정
                     .doOnNext(snips -> {
@@ -787,28 +883,29 @@ public class NaverSearchService {
         /* ② 중복 차단 & early-exit */
         LinkedHashSet<String> acc = new LinkedHashSet<>();
         // ▶ 순차 실행  조기 종료 (일반 검색 브랜치)
-        Flux<String> snippetFlux =
-                Flux.fromIterable(expandedQueries)
-                        .concatMap(q -> Mono.fromFuture(cache.get(cacheKeyFor(q)))
-                                .subscribeOn(Schedulers.boundedElastic()))
-                        .flatMapIterable(list -> list)
-                        .filter(acc::add)   // 중복 제거(LinkedHashSet)
-                        .take(topK);        // ★ topK 확보 시 즉시 종료
+            Flux<String> snippetFlux =
+                    Flux.fromIterable(expandedQueries)
+                            .flatMap(q -> Mono.fromFuture(cache.get(cacheKeyFor(q)))
+                                    .subscribeOn(Schedulers.boundedElastic()), 3)
+                            .flatMapIterable(list -> list)
+                            .filter(acc::add)   // 중복 제거(LinkedHashSet)
+                            .onBackpressureBuffer()
+                            .take(topK);        // ★ topK 확보 시 즉시 종료
 
         // ▶ 전체 검색 파이프라인 타임아웃(동적 계산, 상한 4.5s) + 폴백
-        long perCallMs = Math.max(500L, hedgeTimeoutMs); // 각 API 호출 타임아웃
+            long perCallMs = Math.min(1200L, Math.max(500L, hedgeTimeoutMs)); // per-call 상한 1.2s
         int n = Math.max(1, expandedQueries.size());
         // 순차 실행이므로 waves = 쿼리 개수 (상한 4.5s)
         int waves = Math.max(1, n);
-        long overallMs = Math.min(4500L, perCallMs * waves + 500L); // headroom 0.5s
+            long overallMs = Math.min(3000L, perCallMs * waves + 300L); // 상한 3.0s, headroom 0.3s
 
         final String queryCopy2 = query;            // capture for reinforcement
 
 
         if ("rrf".equalsIgnoreCase(fusionPolicy) && isGamePatchQuery(normalized)) {
             Map<String,Double> rrf = new java.util.HashMap<>();
-            return Flux.fromIterable(expandedQueries)
-                    .concatMap(q -> Mono.fromFuture(cache.get(cacheKeyFor(q))).subscribeOn(Schedulers.boundedElastic()))
+                return Flux.fromIterable(expandedQueries)
+                        .flatMap(q -> Mono.fromFuture(cache.get(cacheKeyFor(q))).subscribeOn(Schedulers.boundedElastic()), 3)
                     .doOnNext(list -> {
                         int rank = 0;
                         for (String s : list) {
@@ -855,12 +952,21 @@ public class NaverSearchService {
                         .embeddingModel(embeddingModel)
                         .maxResults(ragTopK)
                         .build();
-                localCtx = localRetriever.retrieve(Query.from(query))
+                // [HARDENING] build query with session metadata for isolation
+                dev.langchain4j.rag.query.Query qObj =
+                        dev.langchain4j.rag.query.Query.builder()
+                                .text(query)
+                                .metadata(dev.langchain4j.data.document.Metadata.from(
+                                        java.util.Map.of(
+                                                com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                                sid
+                                        )))
+                                .build();
+                localCtx = localRetriever.retrieve(qObj)
                         .stream()
                         .filter(c -> {
                             Map<?, ?> md = c.metadata();
-                            // Use unified metadata key "sid" rather than "sessionId"
-                            return md != null && sid.equals(md.get(LangChainRAGService.META_SID));
+                            return md != null && sid.equals(String.valueOf(md.get(com.example.lms.service.rag.LangChainRAGService.META_SID)));
                         })
                         .map(Content::toString)
                         .toList();
@@ -882,13 +988,21 @@ public class NaverSearchService {
             // external RAG
             ContentRetriever ext = retrieverProvider.getIfAvailable();
             if (ext != null) {
-                remoteCtx = ext.retrieve(Query.from(query)).stream()
+                // [HARDENING] build query with session metadata for external retriever
+                dev.langchain4j.rag.query.Query qExt =
+                        dev.langchain4j.rag.query.Query.builder()
+                                .text(query)
+                                .metadata(dev.langchain4j.data.document.Metadata.from(
+                                        java.util.Map.of(
+                                                com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                                sid
+                                        )))
+                                .build();
+                remoteCtx = ext.retrieve(qExt).stream()
                         .limit(ragTopK)
                         .filter(c -> {
                             Map<?, ?> md = c.metadata();
-                            return sid.equals(md != null
-                                    ? md.get(LangChainRAGService.META_SID)
-                                    : null);
+                            return md != null && sid.equals(String.valueOf(md.get(com.example.lms.service.rag.LangChainRAGService.META_SID)));
                         })
                         .map(Content::toString)
                         .toList();
@@ -915,11 +1029,38 @@ public class NaverSearchService {
         //  키가 아예 없을 때도 DuckDuckGo로 폴백
         if (isBlank(query)) return Mono.just(Collections.emptyList());
         if (!hasCreds()) {
-            log.warn("No NAVER creds → fallback DuckDuckGo");
-            return callDuckDuckGoMono(appendLocationSuffix(query));
+            log.warn("No NAVER creds → fallback");
+            // Only invoke DuckDuckGo fallback when enabled.  Otherwise
+            // return an empty result so that other providers may run.
+            if (fallbackDuckDuckGo) {
+                return callDuckDuckGoMono(appendLocationSuffix(query));
+            }
+            return Mono.just(Collections.emptyList());
         }
 
         String apiQuery = appendLocationSuffix(query);
+
+        // Apply a short cooldown lock before invoking the external API.  When a lock
+        // cannot be acquired the service skips the Naver call and falls back to
+        // DuckDuckGo (when enabled) or returns an empty list.  The key is
+        // derived from the query to avoid locking unrelated requests.  A TTL
+        // of one second prevents thundering herd retries while allowing
+        // subsequent calls to proceed quickly after the lock expires.
+        if (cooldownService != null) {
+            try {
+                String lockKey = "naver:api:" + org.apache.commons.codec.digest.DigestUtils.md5Hex(apiQuery);
+                boolean acquired = cooldownService.setNxEx(lockKey, "1", 1);
+                if (!acquired) {
+                    log.debug("[Naver API] cooldown active for {} → skipping API call", apiQuery);
+                    if (fallbackDuckDuckGo) {
+                        return callDuckDuckGoMono(apiQuery);
+                    }
+                    return Mono.just(Collections.emptyList());
+                }
+            } catch (Exception ignore) {
+                // On any error acquiring the lock proceed without gating.
+            }
+        }
 
         /* topK보다 적게 받아와 결과가 부족해지는 문제 → {스터프2} 전략 반영 */
         int fetch = Math.min(100, Math.max(display, webTopK));
@@ -943,31 +1084,61 @@ public class NaverSearchService {
                 .retrieve()
                 .toEntity(String.class)
                 // 구독 지연(레이트리밋/Retry-After 반영)
-                .delaySubscription(Duration.ofMillis(Math.max(0, ratePolicy.currentDelayMs())))
+                    .delaySubscription(Duration.ofMillis(Math.max(0, Math.min(200, ratePolicy.currentDelayMs()))))
                 // 일관된 타임아웃
                 .timeout(Duration.ofMillis(apiTimeoutMs));
 
 
-        /* 🔵 단일 키 모드 – 실패 시 DuckDuckGo 폴백 */
-        return primary
-                .map(entity -> {
-                    try { ratePolicy.updateFromHeaders(entity.getHeaders()); } catch (Exception ignore) {}
-                    String json = entity.getBody();
-                    if (debugJson && json != null) {
-                        log.debug("[Naver RAW] {} chars: {}", json.length(), safeTrunc(json, 4000));
-                    }
-                    return parseNaverResponse(query, json);
-                })
-                .onErrorResume(WebClientResponseException.class, e -> {
-                    int sc = e.getStatusCode().value();
-                    log.warn("Naver API {} → fallback DuckDuckGo", sc);
-                    return callDuckDuckGoMono(apiQuery);
-                })
-                .onErrorResume(t -> {
-                    log.warn("Naver API '{}' failed: {}", query, t.toString());
-                    return callDuckDuckGoMono(apiQuery);
-                })
-                .onErrorReturn(Collections.emptyList());
+            /* 🔵 단일 키 모드 – 실패 시 DuckDuckGo 폴백 및 헤징 지원 */
+
+            // Parse and retry logic for the primary call.  Errors are mapped to an empty list
+            // so that the hedging logic below can determine when to trigger fallbacks.
+            Mono<List<String>> primaryParsed = primary
+                    .map(entity -> {
+                        try { ratePolicy.updateFromHeaders(entity.getHeaders()); } catch (Exception ignore) {}
+                        String json = entity.getBody();
+                        if (debugJson && json != null) {
+                            log.debug("[Naver RAW] {} chars: {}", json.length(), safeTrunc(json, 4000));
+                        }
+                        return parseNaverResponse(query, json);
+                    })
+                    // Retry up to two additional times on 5xx errors before giving up
+                    .retryWhen(Retry.backoff(2, Duration.ofMillis(200))
+                            .filter(ex -> ex instanceof WebClientResponseException w && w.getStatusCode().is5xxServerError()))
+                    .onErrorResume(WebClientResponseException.class, e -> {
+                        // On error return empty list; fallback is handled below
+                        log.warn("Naver API {} failed: {}", e.getStatusCode().value(), e.toString());
+                        if (!hedgeEnabled && fallbackDuckDuckGo) {
+                            return callDuckDuckGoMono(apiQuery);
+                        }
+                        return Mono.just(Collections.emptyList());
+                    })
+                    .onErrorResume(t -> {
+                        log.warn("Naver API '{}' failed: {}", query, t.toString());
+                        if (!hedgeEnabled && fallbackDuckDuckGo) {
+                            return callDuckDuckGoMono(apiQuery);
+                        }
+                        return Mono.just(Collections.emptyList());
+                    })
+                    .flatMap(list -> {
+                        // When hedging is disabled, invoke the fallback only if the primary returned no results
+                        if (!hedgeEnabled && fallbackDuckDuckGo && list.isEmpty()) {
+                            return callDuckDuckGoMono(apiQuery);
+                        }
+                        return Mono.just(list);
+                    })
+                    .onErrorReturn(Collections.emptyList());
+
+            if (hedgeEnabled && fallbackDuckDuckGo) {
+                // Race the primary against a delayed fallback.  The first completed signal wins.
+                return Mono.firstWithSignal(
+                        primaryParsed,
+                        callDuckDuckGoMono(apiQuery)
+                                .delaySubscription(Duration.ofMillis(Math.max(0L, Math.min(1000L, hedgeDelayMs))))
+                );
+            } else {
+                return primaryParsed;
+            }
 
     }
     private static boolean looksFresh(String q) {
@@ -1076,7 +1247,7 @@ public class NaverSearchService {
                 .uri(uri)
                 .retrieve()
                 .bodyToMono(String.class)
-                .timeout(Duration.ofMillis(Math.max(1200, hedgeTimeoutMs)))
+                    .timeout(Duration.ofMillis(1200))
                 .map(html -> {
                     if (isCaptchaHtml(html)) {
                         log.warn("DuckDuckGo CAPTCHA/봇 차단 감지 → 빈 결과 반환");
@@ -1113,7 +1284,9 @@ public class NaverSearchService {
         if (trace != null) {
             trace.suffixApplied = deriveLocationSuffix(query);
             trace.domainFilterEnabled = enableDomainFilter;
+            trace.reasonDomainFilterDisabled = enableDomainFilter ? null : "PROPERTY_FALSE";
             trace.keywordFilterEnabled = enableKeywordFilter;
+            trace.reasonKeywordFilterDisabled = enableKeywordFilter ? null : "PROPERTY_FALSE";
         }
 
         int topK = (trace != null && !trace.steps.isEmpty())
@@ -1148,8 +1321,12 @@ public class NaverSearchService {
                         .block(Duration.ofSeconds(10));
             } catch (WebClientResponseException e) {
                 if (e.getStatusCode().value() == 429) {
-                    log.warn("Naver API 429 – DuckDuckGo fallback");
-                    return callDuckDuckGoSync(query, trace); // 시그니처 고정(String, SearchTrace)
+                    log.warn("Naver API 429 – fallback");
+                    // Only fallback to DuckDuckGo when enabled; otherwise return empty
+                    if (fallbackDuckDuckGo) {
+                        return callDuckDuckGoSync(query, trace); // 시그니처 고정(String, SearchTrace)
+                    }
+                    return java.util.Collections.emptyList();
                 } else {
                     throw e;
                 }
@@ -1215,10 +1392,13 @@ public class NaverSearchService {
 
             return lines;
 
-        } catch (Exception ex) {
+            } catch (Exception ex) {
             log.error("Naver API call failed", ex);
-            // 동기 경로에서도 DDG 폴백
-            return callDuckDuckGoSync(query, trace);
+            // 동기 경로에서도 DDG 폴백, unless disabled
+            if (fallbackDuckDuckGo) {
+                return callDuckDuckGoSync(query, trace);
+            }
+            return java.util.Collections.emptyList();
         } finally {
             // trace-mode sync 호출이므로 항상 세마포어 반환
             this.enableDomainFilter = prevFilter; // 원복
@@ -1413,77 +1593,21 @@ public class NaverSearchService {
     }
 
     private String deriveLocationSuffix(String q) {
+        // [HARDENING] Simplify: if suffix not configured, return null.
         if (isBlank(querySuffix)) {
             return null;
         }
-        if (!isLocationQuery(q)) {
-            return querySuffix;
-        }
-        String sid = String.valueOf(sessionIdProvider.get());
-        String memCtx;
-        try {
-            memCtx = memorySvc.loadContext(sid);
-        } catch (Exception ignore) {
-            memCtx = null;
-        }
-        if (isBlank(memCtx)) {
-            return querySuffix;
-        }
-        LinkedHashSet<String> candidates = new LinkedHashSet<>();
-        for (String token : memCtx.split("\\s+")) {
-            if (LOCATION_PATTERN.matcher(token).find()) {
-                candidates.add(token);
-            }
-        }
-        if (candidates.isEmpty()) {
-            return querySuffix;
-        }
-        double bestSim = 0.0;
-        String bestCandidate = null;
-        try {
-            // ⚡ embed query once & memoize
-            var qVec = locationEmbedCache.get(q);
-
-            // ⚡ batch‑embed only the tokens not yet cached
-            List<String> uncached = candidates.stream()
-                    .filter(c -> locationEmbedCache.getIfPresent(c) == null)
-                    .toList();
-            if (!uncached.isEmpty()) {
-                try {
-                    List<Embedding> embs = embeddingModel.embedAll(
-                            uncached.stream().map(TextSegment::from).toList()
-                    ).content();
-                    for (int i = 0; i < uncached.size(); i++) {
-                        locationEmbedCache.put(uncached.get(i), embs.get(i).vector());
-                    }
-                } catch (Exception ignore) { /* graceful fallback */ }
-            }
-
-            for (String cand : candidates) {
-                try {
-                    float[] cVec = locationEmbedCache.get(cand);
-                    if (qVec.length != cVec.length) continue;
-                    double dot = 0, nq = 0, nc = 0;
-                    for (int i = 0; i < qVec.length; i++) {
-                        dot += qVec[i] * cVec[i];
-                        nq  += qVec[i] * qVec[i];
-                        nc  += cVec[i] * cVec[i];
-                    }
-                    if (nq == 0 || nc == 0) continue;
-                    double sim = dot / (Math.sqrt(nq) * Math.sqrt(nc) + 1e-9);
-                    if (sim > bestSim) {
-                        bestSim = sim;
-                        bestCandidate = cand;
-                    }
-                } catch (Exception ignore) {
-                    // ignore
+        // Use intent detector if available to determine if query is location‑intent
+        if (locationIntentDetector != null) {
+            try {
+                var intent = locationIntentDetector.detect(q);
+                // Only attach suffix when intent is not NONE
+                if (intent == com.example.lms.location.intent.LocationIntent.NONE) {
+                    return null;
                 }
+            } catch (Exception ignore) {
+                // on failure, fall through
             }
-        } catch (Exception ignore) {
-            // ignore
-        }
-        if (bestCandidate != null && bestSim >= adaptiveThreshold(q)) {
-            return bestCandidate;
         }
         return querySuffix;
     }

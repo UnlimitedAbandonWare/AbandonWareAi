@@ -2,8 +2,9 @@ package com.example.lms.service.rag.handler;
 
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
-import lombok.extern.slf4j.Slf4j;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * 책임 연쇄 패턴을 위한 추상 베이스 클래스입니다.
@@ -11,8 +12,8 @@ import java.util.List;
  * 템플릿 메서드 패턴을 사용하여 예외 발생 시에도 체인이 끊기지 않는 안정적인 실행을 보장합니다.
  * </p>
  */
-@Slf4j
 public abstract class AbstractRetrievalHandler implements RetrievalHandler {
+    private static final Logger log = LoggerFactory.getLogger(AbstractRetrievalHandler.class);
 
     private RetrievalHandler next;
 

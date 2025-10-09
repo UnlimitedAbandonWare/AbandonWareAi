@@ -2,15 +2,17 @@ package com.example.lms.location.geo;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.Optional;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Kakao implementation of the {@link ReverseGeocodingClient}.  This
@@ -21,9 +23,9 @@ import java.util.Optional;
  * an error occurs during the HTTP call or JSON parsing, the
  * implementation returns an empty {@link Optional}.
  */
-@Slf4j
 @Component
 public class KakaoReverseGeocodingClient implements ReverseGeocodingClient {
+    private static final Logger log = LoggerFactory.getLogger(KakaoReverseGeocodingClient.class);
 
     /** Kakao REST API host for reverse geocoding */
     private static final String BASE_URL = "https://dapi.kakao.com";
@@ -61,8 +63,15 @@ public class KakaoReverseGeocodingClient implements ReverseGeocodingClient {
                     .header(HttpHeaders.AUTHORIZATION, "KakaoAK " + apiKey)
                     .retrieve()
                     .bodyToMono(String.class)
-                    .timeout(Duration.ofSeconds(3));
+                    .timeout(Duration.ofSeconds(3))
+                    // Offload the HTTP call to a dedicated I/O scheduler so that
+                    // any downstream blocking does not tie up the event loop.
+                    .subscribeOn(Schedulers.boundedElastic());
 
+            // Blocking here is acceptable as this API returns a synchronous
+            // Optional.  Because the upstream Mono subscribes on an
+            // elastic scheduler, the network I/O will not block reactive
+            // event loops.
             String json = call.block();
             if (json == null || json.isEmpty()) {
                 return Optional.empty();

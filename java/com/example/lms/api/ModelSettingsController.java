@@ -2,7 +2,6 @@ package com.example.lms.api;
 
 import com.example.lms.service.ModelSettingsService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -10,12 +9,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @RestController
 @RequestMapping("/api/settings") // API 경로를 /api/settings 로 통일하여 관리
 @RequiredArgsConstructor
 public class ModelSettingsController {
+    private static final Logger log = LoggerFactory.getLogger(ModelSettingsController.class);
 
     // 컨트롤러는 이제 Repository를 직접 다루지 않고, 비즈니스 로직을 가진 Service만 호출합니다.
     private final ModelSettingsService modelSettingsService;

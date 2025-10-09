@@ -2,11 +2,12 @@ package com.example.lms.search;
 
 import dev.langchain4j.model.chat.ChatModel;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * LLM-as-a-Judge:  웹 스니펫 증거로 키워드 검증 (도메인 중립)
@@ -18,8 +19,8 @@ import java.util.List;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class LlmKeywordSanitizer {
+    private static final Logger log = LoggerFactory.getLogger(LlmKeywordSanitizer.class);
 
     private final ChatModel chatModel;
 

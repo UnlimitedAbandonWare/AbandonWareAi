@@ -1,8 +1,9 @@
 package com.example.lms.service.verification;
 
 import com.example.lms.service.disambiguation.DisambiguationResult;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Default implementation of {@link EvidenceGate}.  It permits generation
@@ -11,9 +12,9 @@ import org.springframework.stereotype.Component;
  * heuristics or thresholds could be added here without changing the
  * interface.
  */
-@Slf4j
 @Component
 public class DefaultEvidenceGate implements EvidenceGate {
+    private static final Logger log = LoggerFactory.getLogger(DefaultEvidenceGate.class);
     @Override
     public boolean allowGeneration(DisambiguationResult dr, EvidenceSnapshot ev) {
         // Treat any non‑null DisambiguationResult as resolved; if a more

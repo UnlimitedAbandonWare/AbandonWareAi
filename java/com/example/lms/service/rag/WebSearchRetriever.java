@@ -5,16 +5,28 @@ import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import java.util.List;
 import java.util.regex.Pattern;             /* 🔴 NEW */
 import com.example.lms.service.rag.filter.GenericDocClassifier;
-@Slf4j
+import com.example.lms.service.rag.detector.GameDomainDetector;
+import com.example.lms.service.rag.filter.EducationDocClassifier;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @RequiredArgsConstructor
 @org.springframework.stereotype.Component
 public class WebSearchRetriever implements ContentRetriever {
+    private static final Logger log = LoggerFactory.getLogger(WebSearchRetriever.class);
     private final NaverSearchService searchSvc;
+    /**
+     * Aggregate web search across multiple providers.  This component fans
+     * out to the configured {@link com.acme.aicore.domain.ports.WebSearchProvider}
+     * implementations (Bing/Naver/Brave) in priority order and merges the
+     * results.  When present it allows the web retrieval stage to fall
+     * back to additional providers when the primary Naver results are
+     * insufficient.  It is optional and may be null when no providers
+     * are configured.
+     */
+    private final com.acme.aicore.adapters.search.CachedWebSearch multiSearch;
     // 스프링 프로퍼티로 주입(생성자 주입의 int 빈 문제 회피)
     @org.springframework.beans.factory.annotation.Value("${rag.search.top-k:5}")
     private int topK;
@@ -22,7 +34,12 @@ public class WebSearchRetriever implements ContentRetriever {
     private static final int MIN_SNIPPETS = 2;
     //  도메인 신뢰도 점수로 정렬 가중
     private final com.example.lms.service.rag.auth.AuthorityScorer authorityScorer;
-    private final GenericDocClassifier genericClassifier = new GenericDocClassifier();
+    // 범용 판정기는 주입받아 도메인별로 동작하도록 한다.
+    private final GenericDocClassifier genericClassifier;
+    // 질의 도메인 추정기
+    private final com.example.lms.service.rag.detector.GameDomainDetector domainDetector;
+    // 교육 토픽 분류기: 교육 도메인일 때 스니펫 필터링에 사용된다.
+    private final com.example.lms.service.rag.filter.EducationDocClassifier educationClassifier;
     private static final Pattern META_TAG = Pattern.compile("\\[[^\\]]+\\]");
     private static final Pattern TIME_TAG = Pattern.compile("\\b\\d{1,2}:\\d{2}\\b");
     /* 🔵 봇/캡차 페이지 힌트 */
@@ -83,6 +100,10 @@ public class WebSearchRetriever implements ContentRetriever {
     @Override
     public List<Content> retrieve(Query query) {
         String normalized = normalize(query != null ? query.text() : "");
+        // 쿼리 도메인 추정: null 가능성을 고려하여 GENERAL 기본값 사용
+        String domain = domainDetector != null ? domainDetector.detect(normalized) : "GENERAL";
+        boolean isGeneral = "GENERAL".equalsIgnoreCase(domain);
+
         // Extract a version token from the query.  When present, enforce that
         // each snippet contains the exact version.  This helps prevent
         // contamination from neighbouring versions (e.g. 5.7 or 5.9) when the
@@ -94,16 +115,64 @@ public class WebSearchRetriever implements ContentRetriever {
                 .stream()
                 .filter(s -> !CAPTCHA_HINT.matcher(s).find())  // 🔒 캡차 노이즈 컷
                 .filter(s -> must == null || must.matcher(s).find()) // enforce version token when necessary
+                // cut tag pages early (/tag/ or ?tag=)
+                .filter(s -> {
+                    String url = extractUrl(s);
+                    if (url == null) return true;
+                    String lower = url.toLowerCase();
+                    return !(lower.contains("/tag/") || lower.contains("?tag="));
+                })
                 .toList();
+
+        // 🚀 Fan-out to additional providers via CachedWebSearch.  When the
+        // primary Naver results are fewer than the desired count, fetch
+        // supplementary snippets from other providers (e.g. Bing/Brave).  The
+        // CachedWebSearch component merges provider responses according to
+        // provider priorities and caches the result.  Failures are
+        // intentionally swallowed to avoid impacting the main retrieval.
+        List<String> supplemental = java.util.Collections.emptyList();
+        if (multiSearch != null) {
+            try {
+                var q = new com.acme.aicore.domain.model.WebSearchQuery(normalized);
+                // Limit fanout to three providers (Bing, Naver, Brave) and
+                // block for up to 3 seconds to avoid blocking the caller.
+                var bundle = multiSearch.searchMulti(q, 3)
+                        .block(java.time.Duration.ofSeconds(3));
+                if (bundle != null && bundle.docs() != null) {
+                    supplemental = bundle.docs().stream()
+                            .map(d -> {
+                                String core = (d.title() + " — " + d.snippet()).trim();
+                                return core.isBlank() ? d.url() : core;
+                            })
+                            .filter(s -> s != null && !s.isBlank())
+                            .toList();
+                }
+            } catch (Exception e) {
+                // ignore errors; supplemental remains empty
+            }
+        }
+
+        // Prepend the supplemental results to the primary list, ensuring
+        // duplicates are removed while preserving order.  This prioritises
+        // provider results before applying ranking heuristics below.  Only
+        // the first (topK*2) snippets are considered to limit memory usage.
+        if (supplemental != null && !supplemental.isEmpty()) {
+            java.util.LinkedHashSet<String> combined = new java.util.LinkedHashSet<>();
+            combined.addAll(supplemental);
+            combined.addAll(first);
+            first = combined.stream().limit(Math.max(topK, 1) * 2).toList();
+        }
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] first raw={} (q='{}')", first.size(), normalized);
         }
-        // 선호+ 도메인  Authority 가중 정렬(삭제 아님)
+        // 선호+ 도메인  Authority 가중 정렬(삭제 아님). 범용 페널티는 GENERAL/EDUCATION 도메인에서는 제거
         List<String> ranked = first.stream()
                 .distinct()
                 .sorted((a, b) -> {
-                    double aw = authorityScorer.weightFor(extractUrl(a)) - genericClassifier.penalty(a);
-                    double bw = authorityScorer.weightFor(extractUrl(b)) - genericClassifier.penalty(b);
+                    double aw = authorityScorer.weightFor(extractUrl(a))
+                               - (isGeneral ? 0.0 : genericClassifier.penalty(a, domain));
+                    double bw = authorityScorer.weightFor(extractUrl(b))
+                               - (isGeneral ? 0.0 : genericClassifier.penalty(b, domain));
                     int cmp = Double.compare(bw, aw); // high first (penalty 반영)
                     if (cmp != 0) return cmp;
                     // 동률이면 선호 도메인 우선
@@ -111,11 +180,13 @@ public class WebSearchRetriever implements ContentRetriever {
                 })
                 .limit(topK)
                 .toList();
-        // 과도하게 범용인 결과는 컷
-        ranked = ranked.stream()
-                .filter(s -> !genericClassifier.isGenericSnippet(s))
-                .limit(topK)
-                .toList();
+        // 범용 스니펫 컷: 도메인 특화(예: GENSHIN/EDU)에서만 적용
+        if (!isGeneral) {
+            ranked = ranked.stream()
+                    .filter(s -> !genericClassifier.isGenericSnippet(s, domain))
+                    .limit(topK)
+                    .toList();
+        }
 
         // 2) 폴백: 지나친 공손어/호칭 정리
         List<String> fallback = ranked.size() >= MIN_SNIPPETS ? List.of()
@@ -126,6 +197,24 @@ public class WebSearchRetriever implements ContentRetriever {
                 .distinct()
                 .limit(topK)
                 .toList();
+
+        // If the detected domain is EDUCATION, apply an education topic filter
+        // to remove snippets that are unrelated to education/academy topics.  This
+        // leverages the EducationDocClassifier to detect whether a snippet is
+        // genuinely about education.  Without this filter generic or noise
+        // snippets from pet or automotive sites may contaminate the retrieval.
+        if ("EDUCATION".equalsIgnoreCase(domain) && educationClassifier != null) {
+            finalSnippets = finalSnippets.stream()
+                    .filter(s -> {
+                        try {
+                            return educationClassifier.isEducation(s);
+                        } catch (Exception e) {
+                            return true;
+                        }
+                    })
+                    .limit(topK)
+                    .toList();
+        }
 
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] selected={} (topK={})", finalSnippets.size(), topK);

@@ -1,7 +1,7 @@
 package com.example.lms.telemetry;
-
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Simple telemetry service that records search events.  This component is
@@ -11,9 +11,9 @@ import org.springframework.stereotype.Component;
  * present (e.g. in legacy deployments) calls to {@link #recordSearchEvent}
  * are silently ignored.
  */
-@Slf4j
 @Component
 public class TelemetryService {
+    private static final Logger log = LoggerFactory.getLogger(TelemetryService.class);
 
     /**
      * Record a search event with various parameters.  This method is

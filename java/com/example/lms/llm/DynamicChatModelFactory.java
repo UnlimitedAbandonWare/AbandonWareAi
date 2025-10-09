@@ -4,26 +4,49 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import com.example.lms.llm.ModelCapabilities;
 import org.springframework.util.StringUtils;
+import java.time.Duration;
 
 @Component
 public class DynamicChatModelFactory {
 
-    @Value("${openai.api.key:}")
-    private String openaiApiKey;
+    @Value("${openai.api.key:${OPENAI_API_KEY:}}")
+    private String apiKey;
+
+    @Value("${openai.base-url:https://api.openai.com}")
+    private String remoteBaseUrl;     // '/v1' 없는 루트 기대
+
+    @Value("${local-llm.enabled:false}")
+    private boolean localEnabled;
+
+    @Value("${local-llm.base-url:}")
+    private String localBaseUrl;      // '/v1' 포함 기대
+
+    private static String ensureNoTrailingSlash(String s) {
+        if (s == null) return "";
+        return s.endsWith("/") ? s.substring(0, s.length() - 1) : s;
+    }
+    private static String ensureV1(String baseNoV1) {
+        String base = ensureNoTrailingSlash(baseNoV1);
+        return base.endsWith("/v1") ? base : base + "/v1";
+    }
 
     public ChatModel lc(String modelId, double temperature, double topP, Integer maxTokens) {
+        if (!StringUtils.hasText(apiKey)) {
+            throw new IllegalStateException("[LLM] API key missing (openai.api.key/OPENAI_API_KEY)");
+        }
+
+        String baseUrl = localEnabled && StringUtils.hasText(localBaseUrl)
+                ? localBaseUrl
+                : ensureV1(remoteBaseUrl);
+
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
                 .modelName(modelId)
+                .apiKey(apiKey)
+                .baseUrl(baseUrl)
                 .temperature(ModelCapabilities.sanitizeTemperature(modelId, temperature))
-                .topP(topP);
-
-        String key = StringUtils.hasText(openaiApiKey) ? openaiApiKey : System.getenv("OPENAI_API_KEY");
-        if (!StringUtils.hasText(key)) {
-            throw new IllegalStateException("OpenAI API key is missing. Set 'openai.api.key' or ENV OPENAI_API_KEY.");
-        }
-        builder.apiKey(key);
+                .topP(topP)
+                .timeout(Duration.ofSeconds(65));
 
         if (maxTokens != null && maxTokens > 0) {
             builder.maxTokens(maxTokens);
@@ -31,32 +54,9 @@ public class DynamicChatModelFactory {
         return builder.build();
     }
 
-    /**  추천(Recommender) 작업용 보수적 세팅(temperature ≤ 0.2, topP=1.0) */
-    public ChatModel lcWithPolicy(String intent,
-                                  String modelId,
-                                  double temperature,
-                                  double topP,
-                                  Integer maxTokens) {
-        if ("RECOMMENDATION".equalsIgnoreCase(intent)) {
-            temperature = Math.min(temperature, 0.2);
-            topP = 1.0;
-        }
-        return lc(modelId, temperature, topP, maxTokens);
-    }
-
-    /** ✅ ChatModel 인스턴스에서 실제 modelName을 최대한 복원 */
     public String effectiveModelName(ChatModel model) {
         try {
-            // OpenAiChatModel (langchain4j) 우선
             if (model instanceof OpenAiChatModel m) {
-                // 1) 공개 메서드
-                try {
-                    var meth = m.getClass().getDeclaredMethod("modelName");
-                    meth.setAccessible(true);
-                    Object v = meth.invoke(m);
-                    if (v != null) return v.toString();
-                } catch (NoSuchMethodException ignore) {}
-                // 2) 필드 리플렉션
                 try {
                     var f = m.getClass().getDeclaredField("modelName");
                     f.setAccessible(true);
@@ -64,7 +64,6 @@ public class DynamicChatModelFactory {
                     if (v != null) return v.toString();
                 } catch (NoSuchFieldException ignore) {}
             }
-            // 기타 모델: toString() 내 표기가 있으면 사용
             String s = String.valueOf(model);
             if (s.contains("gpt-")) return s;
             return model.getClass().getSimpleName();

@@ -3,23 +3,26 @@ package com.example.lms.service.correction;
 import com.example.lms.util.ProductAliasNormalizer;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+import com.example.lms.prompt.PromptBuilder;
+import com.example.lms.prompt.PromptContext;
 
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Service
 public class LLMQueryCorrectionService implements QueryCorrectionService {
+    private static final Logger log = LoggerFactory.getLogger(LLMQueryCorrectionService.class);
 
     private final ObjectProvider<ChatModel> chatModelProvider;
     private final DomainTermDictionary dictionaryProvider;
+    private final PromptBuilder promptBuilder;
 
     @Value("${query.correction.enabled:true}")
     private boolean enabled;
@@ -31,10 +34,12 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
     // --- @RequiredArgsConstructor 대신 생성자 직접 작성 ---
     public LLMQueryCorrectionService(
             ObjectProvider<ChatModel> chatModelProvider,
-            @Qualifier("defaultDomainTermDictionary") DomainTermDictionary dictionaryProvider // ✅ 특정 빈 선택
+            @Qualifier("defaultDomainTermDictionary") DomainTermDictionary dictionaryProvider, // ✅ 특정 빈 선택
+            PromptBuilder promptBuilder
     ) {
         this.chatModelProvider = chatModelProvider;
         this.dictionaryProvider = dictionaryProvider;
+        this.promptBuilder = promptBuilder;
     }
     // ----------------------------------------------------
 
@@ -60,7 +65,14 @@ public class LLMQueryCorrectionService implements QueryCorrectionService {
         try {
             ChatModel llm = chatModelProvider.getIfAvailable();
             if (llm == null) return originalInput;
-            String corrected = callChatModel(llm, systemPrompt + "\n" + originalInput);
+            String corrected = callChatModel(llm, promptBuilder.build(
+                PromptContext.builder()
+                    .systemInstruction(systemPrompt)
+                    .userQuery(originalInput)
+                    .domain("query-correction")
+                    .subject("spellfix")
+                    .build()
+            ));
             if (corrected == null || corrected.isBlank()) return originalInput;
             corrected = corrected.trim();
             if (!protectedTerms.isEmpty()) {

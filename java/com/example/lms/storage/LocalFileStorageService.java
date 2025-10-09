@@ -3,7 +3,6 @@ package com.example.lms.storage;
 
 import com.example.lms.storage.FileStorageService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -13,11 +12,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Service
 @RequiredArgsConstructor
 public class LocalFileStorageService implements FileStorageService {
+    private static final Logger log = LoggerFactory.getLogger(LocalFileStorageService.class);
 
     /** application.yml 에서 설정 → 기본값은 project-root/uploads */
     @Value("${lms.upload-dir:uploads}")

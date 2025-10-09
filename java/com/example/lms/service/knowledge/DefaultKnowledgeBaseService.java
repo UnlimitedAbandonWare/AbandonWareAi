@@ -3,16 +3,16 @@ package com.example.lms.service.knowledge;
 import com.example.lms.domain.knowledge.DomainKnowledge;
 import com.example.lms.repository.DomainKnowledgeRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Service
 @RequiredArgsConstructor
 public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
+    private static final Logger log = LoggerFactory.getLogger(DefaultKnowledgeBaseService.class);
 
     private final DomainKnowledgeRepository repo;
 
@@ -151,4 +151,26 @@ public class DefaultKnowledgeBaseService implements KnowledgeBaseService {
         // No persistence implemented yet; return SKIPPED to indicate no-op
         return IntegrationStatus.SKIPPED;
     }
+
+
+    @Override
+    public java.util.Optional<java.time.Instant> getLastAccessedAt(String domain, String entityName) {
+        try {
+            return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
+                    .map(DomainKnowledge::getLastAccessedAt);
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    @Override
+    public java.util.Optional<java.lang.Double> getConfidenceScore(String domain, String entityName) {
+        try {
+            return repo.findByDomainAndEntityNameIgnoreCase(domain, entityName)
+                    .map(DomainKnowledge::getConfidenceScore);
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
+    }
+
 }

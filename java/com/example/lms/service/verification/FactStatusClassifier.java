@@ -3,13 +3,14 @@ package com.example.lms.service.verification;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * 초안 답변을 컨텍스트와 비교하여 PASS, CORRECTED, INSUFFICIENT 상태로 분류합니다.
@@ -18,10 +19,10 @@ import java.util.Locale;
  * LLM 호출이 실패하면 안전하게 휴리스틱 결과로 폴백(Fallback)합니다.
  * </p>
  */
-@Slf4j
 @Service("factStatusClassifier")
 @RequiredArgsConstructor
 public class FactStatusClassifier {
+    private static final Logger log = LoggerFactory.getLogger(FactStatusClassifier.class);
 
     /** ChatModel은 선택적으로 주입됩니다. 없으면 휴리스틱 분류만 동작합니다. */
     private final ObjectProvider<ChatModel> chatModelProvider;

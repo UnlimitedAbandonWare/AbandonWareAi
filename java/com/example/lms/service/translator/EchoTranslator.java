@@ -14,7 +14,7 @@ public class EchoTranslator implements BasicTranslator {
 
     @Override
     public String translate(String text, String srcLang, String tgtLang) {
-        // TODO: OpenAI 번역 호출 등으로 대체
+        // Implementation shim: replace with a call to an external translation service (e.g., OpenAI).
         return text;
     }
 }

@@ -1,5 +1,7 @@
 package com.example.lms.learning.gemini;
-import com.example.lms.client.GeminiClient;                      // ★ 통합 클라이언트로 변경
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.example.lms.learning.gemini.GeminiClient;
 import com.example.lms.dto.learning.KnowledgeDelta;
 import com.example.lms.dto.learning.LearningEvent;
 import com.example.lms.dto.learning.MemorySnippet;
@@ -7,7 +9,6 @@ import com.example.lms.service.EmbeddingStoreManager;
 import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.util.List;
@@ -19,8 +20,8 @@ import java.util.List;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class GeminiCurationService {
+    private static final Logger log = LoggerFactory.getLogger(GeminiCurationService.class);
 
     private final GeminiClient geminiClient;
     private final KnowledgeBaseService knowledgeBase;
@@ -40,7 +41,7 @@ public class GeminiCurationService {
 
         KnowledgeDelta delta;
         try {
-            // TODO: model selection could be read from configuration
+            // Model selection can be read from configuration; adjust as needed.
             delta = geminiClient.curate(event, "gemini-2.5-pro", Duration.ofSeconds(30));
         } catch (Exception e) {
             log.warn("Gemini curation failed: {}", e.toString());

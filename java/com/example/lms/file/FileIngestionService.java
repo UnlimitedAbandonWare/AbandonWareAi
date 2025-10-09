@@ -1,6 +1,4 @@
 package com.example.lms.file;
-
-import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.IOUtils;
 import org.springframework.stereotype.Service;
 
@@ -9,6 +7,10 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 /**
  * Service responsible for extracting plain text from a variety of file formats.
  * When users upload attachments via the chat API the controller forwards the raw
@@ -20,8 +22,8 @@ import org.apache.pdfbox.Loader;
  * result in a null return value to avoid breaking the chat flow.
  */
 @Service
-@Slf4j
 public class FileIngestionService {
+    private static final Logger log = LoggerFactory.getLogger(FileIngestionService.class);
 
     private static final int MAX_CHARS = 50_000;
 
@@ -57,9 +59,9 @@ public class FileIngestionService {
                 return truncate(text);
 
             } else if (mt.equals("application/pdf")) {
-                // PDFBox 3.x: InputStream 오버로드 제거 → byte[] 또는 RandomAccessRead 사용
-                try (org.apache.pdfbox.pdmodel.PDDocument doc = Loader.loadPDF(content)) {
-                    org.apache.pdfbox.text.PDFTextStripper stripper = new org.apache.pdfbox.text.PDFTextStripper();
+                // PDFBox 3.x: Loader.loadPDF(byte[]) 사용
+                try (PDDocument doc = Loader.loadPDF(content)) {
+                    PDFTextStripper stripper = new PDFTextStripper();
                     String text = stripper.getText(doc);
                     return truncate(text);
                 } catch (Throwable t) {

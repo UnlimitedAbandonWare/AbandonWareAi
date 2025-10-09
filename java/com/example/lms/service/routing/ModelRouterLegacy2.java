@@ -13,7 +13,11 @@ import org.springframework.stereotype.Component;
  * profile is active.  It bypasses all signal heuristics and does not
  * implement any escalation logic.
  */
-@Component("modelRouterCore")
+// Expose this legacy router under a distinct bean name.  Using a unique
+// name prevents bean name clashes with the primary {@code ModelRouterCore}
+// and allows callers to explicitly request the legacy implementation via
+// {@code @Qualifier("modelRouterLegacy")}.
+@Component("modelRouterLegacy")
 @Profile("legacy-router")
 public class ModelRouterLegacy2 implements ModelRouter {
 

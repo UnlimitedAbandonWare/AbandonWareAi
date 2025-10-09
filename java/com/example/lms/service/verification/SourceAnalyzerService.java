@@ -3,7 +3,6 @@ package com.example.lms.service.verification;
 import com.example.lms.domain.enums.SourceCredibility;
 import com.example.lms.service.rag.auth.AuthorityScorer;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +10,8 @@ import java.net.URI;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * 출처의 신뢰도를 종합적으로 분석하는 서비스입니다.
@@ -23,10 +24,10 @@ import java.util.regex.Pattern;
  * </ol>
  * </p>
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SourceAnalyzerService {
+    private static final Logger log = LoggerFactory.getLogger(SourceAnalyzerService.class);
 
     private final ObjectProvider<AuthorityScorer> authorityScorerProvider;
 

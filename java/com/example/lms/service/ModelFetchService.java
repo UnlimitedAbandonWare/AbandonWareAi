@@ -8,7 +8,6 @@ import com.example.lms.repository.ModelInfoRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -20,6 +19,8 @@ import org.springframework.web.client.RestTemplate;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * OpenAI /v1/models 목록을 주기적으로 동기화하여
@@ -28,13 +29,16 @@ import java.util.stream.Collectors;
  * 두 테이블을 모두 **업서트(upsert) 방식**으로 갱신한다.
  */
 @EnableScheduling
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ModelFetchService {
+    private static final Logger log = LoggerFactory.getLogger(ModelFetchService.class);
 
-    /** application.yml 의 openai.api.key 값을 주입 */
-    @Value("${openai.api.key}")
+    /** application.yml 의 openai.api.key 값을 주입.  When unset this falls
+     *  back to the OPENAI_API_KEY environment variable.  Do not fall back
+     *  to other vendor keys (e.g. GROQ_API_KEY) to prevent using
+     *  incompatible credentials. */
+    @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String openaiApiKey;
 
     private final ModelInfoRepository   modelInfoRepo;

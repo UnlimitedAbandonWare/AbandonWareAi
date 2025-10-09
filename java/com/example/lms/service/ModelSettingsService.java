@@ -4,17 +4,17 @@ import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.repository.ModelEntityRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils; // ✨ [추가] StringUtils import
 
 import java.util.Optional;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Service
 @RequiredArgsConstructor
 public class ModelSettingsService {
+    private static final Logger log = LoggerFactory.getLogger(ModelSettingsService.class);
 
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;

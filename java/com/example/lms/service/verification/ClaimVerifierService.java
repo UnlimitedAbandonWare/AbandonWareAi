@@ -5,13 +5,14 @@ package com.example.lms.service.verification;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.service.scoring.AdaptiveScoringService;
 import java.util.*;
         import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * LLM을 사용하여 초안 답변에 포함된 개별 주장(Claim)을 컨텍스트와 비교하여 검증합니다.
@@ -23,10 +24,10 @@ import java.util.stream.Collectors;
  * 3. <b>답변 재구성:</b> 'false' 판정을 받은 주장이 포함된 문장 전체를 초안에서 제거하여 최종 답변을 생성합니다.
  * </p>
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ClaimVerifierService {
+    private static final Logger log = LoggerFactory.getLogger(ClaimVerifierService.class);
 
     private final ChatModel chatModel;
     private final AdaptiveScoringService scoring;

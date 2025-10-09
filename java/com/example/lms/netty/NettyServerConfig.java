@@ -7,15 +7,15 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Configuration
 @RequiredArgsConstructor
 public class NettyServerConfig implements DisposableBean {
+    private static final Logger log = LoggerFactory.getLogger(NettyServerConfig.class);
 
     // ✨ [수정] 프로퍼티 값을 안전하게 String으로 먼저 받습니다.
     @Value("${netty.port}")           private String portStr;

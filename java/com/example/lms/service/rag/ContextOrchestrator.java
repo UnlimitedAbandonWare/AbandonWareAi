@@ -11,24 +11,31 @@ import com.example.lms.service.config.HyperparameterService;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Component
 @RequiredArgsConstructor
 public class ContextOrchestrator {
+    private static final Logger log = LoggerFactory.getLogger(ContextOrchestrator.class);
 
     private final PromptEngine promptEngine;
     private final AuthorityScorer authorityScorer;
     private final ContradictionScorer contradictionScorer;
     private final ContextEnergyModel energyModel;
     private final HyperparameterService hp;
+
+    // ─ Anger Overdrive (optional beans) ─
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.overdrive.OverdriveGuard overdriveGuard;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.overdrive.AngerOverdriveNarrower overdriveNarrower;
+
 
     @Value("${orchestrator.max-docs:10}")
     private int maxDocs;
@@ -129,6 +136,16 @@ public class ContextOrchestrator {
                 .sorted(Comparator.comparingDouble(s -> -s.score))
                 .map(s -> s.content)
                 .collect(Collectors.toList());
+
+        // 3-A. (희소/저권위/모순) 조건 시 앵거 오버드라이브 발동 → 점군 압축 & 다단계 축소
+        if (overdriveGuard != null && overdriveNarrower != null) {
+            try {
+                if (overdriveGuard.shouldActivate(query, candidates)) {
+                    candidates = overdriveNarrower.narrow(query, candidates);
+                }
+            } catch (Exception ignored) { /* fail-soft */ }
+        }
+
 
         // 3-B. 에너지 기반 선택 (Authority/Redundancy/Contradiction/Recency 등)
         List<Content> finalDocs = energyBasedSelection

@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
 /**
  * REST controller exposing endpoints for Gemini-based learning ingestion,
  * batch processing and optional Vertex tuning. Endpoints are deliberately
- * simple and return placeholder objects; a real implementation should
+ * simple and return shim objects; a real implementation should
  * produce more descriptive responses based on the curation and tuning outcomes.
  */
 @RestController

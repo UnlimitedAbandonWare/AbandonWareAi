@@ -9,13 +9,12 @@ import com.example.lms.service.subject.SubjectResolver;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import java.util.List;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @RequiredArgsConstructor
 public class PairingGuardHandler extends AbstractRetrievalHandler {
+    private static final Logger log = LoggerFactory.getLogger(PairingGuardHandler.class);
 
     private final QueryContextPreprocessor preprocessor;
     private final SubjectResolver subjectResolver;   // ← 통합 버전으로 교체

@@ -9,7 +9,6 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import dev.langchain4j.data.document.Metadata;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * 주기적으로 새 문서를 불러와 벡터 스토어에 추가하는 스케줄러입니다.
@@ -29,10 +30,10 @@ import dev.langchain4j.data.document.Metadata;
  * <p>문서는 메타데이터(예: source, url, fetchedAt 등)를 포함한 상태로 생성하고,
  * 분할된 세그먼트는 임베딩 후 EmbeddingStore에 저장합니다.</p>
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class IndexingScheduler {
+    private static final Logger log = LoggerFactory.getLogger(IndexingScheduler.class);
 
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;

@@ -4,11 +4,16 @@ import com.example.lms.service.rag.AnalyzeWebSearchRetriever;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j @RequiredArgsConstructor
+@RequiredArgsConstructor
 public class AnalyzeHandler extends AbstractRetrievalHandler {
+
+    
+
+    private static final Logger log = LoggerFactory.getLogger(AnalyzeHandler.class);
     private final AnalyzeWebSearchRetriever retriever;
     @Override protected boolean doHandle(Query q, List<Content> acc) {
         try { acc.addAll(retriever.retrieve(q)); }

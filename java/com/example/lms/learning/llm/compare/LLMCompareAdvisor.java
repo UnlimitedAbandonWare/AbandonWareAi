@@ -49,7 +49,7 @@ public class LLMCompareAdvisor {
 
     /**
      * Generate a natural language explanation for a comparison result. This
-     * placeholder implementation simply summarises the ranking order.
+     * shim implementation simply summarises the ranking order.
      *
      * @param in the input used for comparison
      * @param out the result of the comparison

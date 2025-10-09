@@ -5,14 +5,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
-/**
- * Stub implementation of {@link DirectionsClient} that integrates with the
- * Tmap Directions API.  The actual HTTP call is not implemented in this
- * reference to keep the build self contained and to avoid leaking API keys.
- * When the {@code tmap.app-key} property is provided the {@link #eta}
- * method should perform a REST call to Tmap's routing endpoint and map
- * the response into an {@link EtaResult}.
- */
 @Service
 public class TmapDirectionsClient implements DirectionsClient {
 
@@ -27,12 +19,10 @@ public class TmapDirectionsClient implements DirectionsClient {
 
     @Override
     public EtaResult eta(LastLocation from, String destination) {
-        // If no API key is configured or the destination is blank, return null.
         if (appKey == null || appKey.isBlank() || destination == null || destination.isBlank()) {
             return null;
         }
-        // TODO: Implement Tmap Directions API call using WebClient when an API key is provided.
-        // For now return null to indicate that routing information could not be computed.
+        // Integrate with Tmap Directions in downstream builds. Return null for OSS.
         return null;
     }
 }

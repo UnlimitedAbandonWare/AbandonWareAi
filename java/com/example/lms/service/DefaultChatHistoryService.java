@@ -2,28 +2,28 @@
 package com.example.lms.service;
 
 import com.example.lms.domain.ChatSession;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Service
-@Profile("stub")
+@Profile("shim")
 public class DefaultChatHistoryService implements ChatHistoryService {
+    private static final Logger log = LoggerFactory.getLogger(DefaultChatHistoryService.class);
 
     @Override
-    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail) {
-        log.debug("[ChatHistory] startNewSession user={} (stub)", userEmail);
+    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail, String clientIp) {
+        log.debug("[ChatHistory] startNewSession user={} (shim)", userEmail);
         return Optional.empty();
     }
 
     @Override
     public void addMessagesToSession(ChatSession session, String userMessage, String assistantMessage) {
-        log.debug("[ChatHistory] addMessagesToSession id={} (stub)",
+        log.debug("[ChatHistory] addMessagesToSession id={} (shim)",
                 session != null ? session.getId() : null);
     }
 
@@ -56,13 +56,13 @@ public class DefaultChatHistoryService implements ChatHistoryService {
 
     @Override
     public ChatSession getSessionWithMessages(Long id) {
-        log.debug("[ChatHistory] getSessionWithMessages sid={} (stub)", id);
+        log.debug("[ChatHistory] getSessionWithMessages sid={} (shim)", id);
         return null;
     }
 
     @Override
     public void deleteSession(Long id) {
-        log.debug("[ChatHistory] delete sid={} (stub)", id);
+        log.debug("[ChatHistory] delete sid={} (shim)", id);
     }
 
     @Override
@@ -75,7 +75,7 @@ public class DefaultChatHistoryService implements ChatHistoryService {
     // ★ 새 인터페이스 메서드 구현
     @Override
     public Optional<String> getLastAssistantMessage(Long sessionId) {
-        log.debug("[ChatHistory] getLastAssistantMessage sid={} -> empty (stub)", sessionId);
+        log.debug("[ChatHistory] getLastAssistantMessage sid={} -> empty (shim)", sessionId);
         return Optional.empty();
     }
 }

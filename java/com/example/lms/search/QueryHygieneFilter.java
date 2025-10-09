@@ -46,6 +46,22 @@ public final class QueryHygieneFilter {
         return kept;
     }
 
+    /**
+     * 도메인에 따라 적절한 상한 및 유사도 임계치를 적용하여 쿼리 목록을 정제합니다.
+     * GENERAL 도메인은 6개의 쿼리와 자카드 임계치 0.60을 사용하며, 그 외 도메인은
+     * 4개의 쿼리와 임계치 0.80을 사용합니다.
+     *
+     * @param input  원본 쿼리 목록
+     * @param domain 추정 도메인(GENERAL, GENSHIN, EDUCATION 등)
+     * @return 정제된 쿼리 목록
+     */
+    public static List<String> sanitizeForDomain(List<String> input, String domain) {
+        boolean isGeneral = domain != null && "GENERAL".equalsIgnoreCase(domain);
+        int max = isGeneral ? 6 : 4;
+        double jaccardThreshold = isGeneral ? 0.60 : 0.80;
+        return sanitize(input, max, jaccardThreshold);
+    }
+
     private static String shorten(String s) {
         return (s.length() > 128) ? s.substring(0, 128) : s;
     }

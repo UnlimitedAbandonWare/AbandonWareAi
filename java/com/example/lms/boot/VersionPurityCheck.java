@@ -1,26 +1,32 @@
 // src/main/java/com/example/lms/boot/VersionPurityCheck.java
 package com.example.lms.boot;
 
-import jakarta.annotation.PostConstruct;
+
 import lombok.extern.slf4j.Slf4j;
+import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
 import java.util.Objects;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Perform a runtime check that all dev.langchain4j modules on the classpath
  * share the same expected version.  This complements the static Gradle BOM
  * alignment enforced during the build.  At startup the class loader is
  * inspected for packages beginning with {@code dev.langchain4j}.  If any
+    private static final Logger log = LoggerFactory.getLogger(VersionPurityCheck.class);
  * package has an implementation version that does not start with the
  * expected prefix (1.0.1), an IllegalStateException is thrown to abort
  * application startup.  This guard prevents inadvertent mixing of 0.2.x and
  * 1.0.x artifacts which can cause subtle classpath conflicts.
  */
-@Slf4j
 @Component
+@Slf4j
 public class VersionPurityCheck {
+    private static final Logger log = LoggerFactory.getLogger(VersionPurityCheck.class);
+
 
     /**
      * The required version prefix for all LangChain4j modules.  Should align

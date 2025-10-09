@@ -1,10 +1,10 @@
 // src/main/java/com/example/lms/debug/PromptDebugLogger.java
 package com.example.lms.debug;
-
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Logs prompts and responses when debugging flags are enabled.  This logger
@@ -13,9 +13,9 @@ import org.springframework.stereotype.Component;
  * dumping is disabled the methods are no‑ops.  Maximum length limits are
  * respected to avoid flooding logs with large payloads.
  */
-@Slf4j
 @Component
 public class PromptDebugLogger {
+    private static final Logger log = LoggerFactory.getLogger(PromptDebugLogger.class);
 
     private static final int DEFAULT_MAX_BYTES = 4096;
 

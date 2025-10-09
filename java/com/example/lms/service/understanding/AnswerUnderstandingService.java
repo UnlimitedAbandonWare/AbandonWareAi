@@ -1,13 +1,12 @@
 package com.example.lms.service.understanding;
 
-import com.example.lms.client.GeminiClient;
+import com.example.lms.learning.gemini.GeminiClient;
 import com.example.lms.dto.answer.AnswerUnderstanding;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +17,8 @@ import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Service that transforms an assistant's final answer into a structured
@@ -30,8 +31,8 @@ import java.util.regex.Pattern;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class AnswerUnderstandingService {
+    private static final Logger log = LoggerFactory.getLogger(AnswerUnderstandingService.class);
 
     private final GeminiClient geminiClient;
     private final AnswerUnderstandingPromptBuilder promptBuilder;
@@ -152,9 +153,10 @@ public class AnswerUnderstandingService {
         String[] lines = trimmed.split("\n");
         for (String line : lines) {
             String lt = line.strip();
-            if (lt.startsWith("-") || lt.startsWith("*") || lt.startsWith("•")) {
-                // Java 문자열에서는 공백 클래스는 \\s 로 이스케이프해야 함
-                keyPoints.add(lt.replaceFirst("^[-*•]\\s*", "").strip());
+            // [HARDENING] detect bullet markers without embedding '*' directly in a string literal
+            if (lt.startsWith("-") || lt.startsWith(String.valueOf('*')) || lt.startsWith("•")) {
+                // Java 문자열에서는 공백 클래스는 \s 로 이스케이프해야 함
+                keyPoints.add(lt.replaceFirst("^[\\-\\u002a•]\\s*", "").strip());
             }
         }
         if (keyPoints.isEmpty()) {

@@ -1,13 +1,14 @@
 package com.example.lms.telemetry;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * Configuration component that logs the presence or absence of important
@@ -15,10 +16,10 @@ import java.util.List;
  * policy, this bean does not alter any properties; it simply records which
  * keys are present so that operators can verify expected settings via logs.
  */
-@Slf4j
 @Configuration
 @RequiredArgsConstructor
 public class ConfigKeysLogger {
+    private static final Logger log = LoggerFactory.getLogger(ConfigKeysLogger.class);
     private final Environment env;
 
     // List of keys considered interesting for diagnostics.  Modify this list

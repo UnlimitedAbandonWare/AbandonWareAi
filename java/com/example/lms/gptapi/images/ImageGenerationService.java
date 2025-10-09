@@ -2,8 +2,9 @@ package com.example.lms.gptapi.images;
 
 import com.example.lms.dto.ImageTask;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * High level service for GPT API image operations.
@@ -14,10 +15,10 @@ import org.springframework.stereotype.Service;
  * In this minimal implementation it simply forwards the task to the
  * client and returns the resulting URL.</p>
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ImageGenerationService {
+    private static final Logger log = LoggerFactory.getLogger(ImageGenerationService.class);
 
     private final GptImageClient client;
 

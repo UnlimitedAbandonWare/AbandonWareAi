@@ -5,7 +5,6 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -14,14 +13,16 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
 /**
  * LLM과 도메인 사전을 함께 사용하여 텍스트에서 명명 개체(Named Entity)를 추출합니다.
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class LLMNamedEntityExtractor implements NamedEntityExtractor {
+    private static final Logger log = LoggerFactory.getLogger(LLMNamedEntityExtractor.class);
 
     /**
      * The chat model used to perform named entity extraction.  We avoid

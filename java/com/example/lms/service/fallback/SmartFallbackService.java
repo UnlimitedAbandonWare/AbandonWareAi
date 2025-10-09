@@ -5,7 +5,6 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
@@ -18,11 +17,12 @@ import java.util.List;
 import com.example.lms.agent.KnowledgeGapLogger;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.service.subject.SubjectResolver;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Service
 @RequiredArgsConstructor
 public class SmartFallbackService {
+    private static final Logger log = LoggerFactory.getLogger(SmartFallbackService.class);
 
     /**
      * Lazily provide a ChatModel for fallback generation.  We use an

@@ -1,13 +1,12 @@
 package com.example.lms.telemetry;
-
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.context.annotation.Primary;
-
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 @Primary
 @Component  // 스프링이 자동으로 빈 등록
 public class LoggingSseEventPublisher implements SseEventPublisher {
+    private static final Logger log = LoggerFactory.getLogger(LoggingSseEventPublisher.class);
 
     @Override
     public void emit(String type, Object payload) {

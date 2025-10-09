@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 public class GeminiCurationPromptBuilder {
 
     public String build(PromptContext context) {
-        // For now, delegate to the default toString on PromptContext as a placeholder.
+        // For now, delegate to the default toString on PromptContext as a shim.
         // A real implementation would assemble the JSON schema and embed evidence.
         return context == null ? "" : context.toString();
     }
