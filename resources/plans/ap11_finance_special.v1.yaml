@@ -1,0 +1,17 @@
+name: AP11_FINANCE_SPECIAL
+version: '1'
+params:
+  domain: finance
+  officialSourcesOnly: true
+  web_top_k: 20
+chain:
+- alias_correct
+- retrieve_web_official
+- retrieve_vector
+- fuse_grandas
+- rerank_cross
+- gate_citation
+- final_sigmoid
+alias:
+  corrector:
+    enabled: true

@@ -1,0 +1,18 @@
+name: zero_break.v1
+burst:
+  self_ask: 3
+  query_burst: 18
+  extreme_z: 24
+k_allocation:
+  web: 30
+  vector: 15
+  kg: 10
+rulebreak:
+  whitelist_bypass: true
+  audit: true
+guards:
+  citation_min: 3
+  final_tau: 0.95
+alias:
+  corrector:
+    enabled: true

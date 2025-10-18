@@ -1,0 +1,15 @@
+name: brave.v1
+burst:
+  self_ask: 3
+  query_burst: 12
+  extreme_z: 18
+k_allocation:
+  web: 20
+  vector: 10
+  kg: 6
+guards:
+  citation_min: 3
+  final_tau: 0.92
+alias:
+  corrector:
+    enabled: true

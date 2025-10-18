@@ -1,0 +1,21 @@
+id: safe_autorun
+description: 기본 안전 계획
+retrieval:
+  order:
+    stages:
+    - vector
+    - web
+    - kg
+  k:
+    web: 8
+    vector: 8
+    kg: 4
+fusion:
+  recencyWeight:
+    halfLifeDays: 7
+gates:
+  requireCitations: false
+  allowRuleBreak: false
+alias:
+  corrector:
+    enabled: true

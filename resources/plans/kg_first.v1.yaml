@@ -1,0 +1,22 @@
+id: kg_first.v1
+retrieval:
+  order:
+  - KG
+  - VECTOR
+  - WEB
+  topk:
+    web: 6
+    vector: 8
+    kg: 8
+budgets:
+  total_ms: 3500
+  web_ms: 1200
+  reranker_ms: 1000
+fusion:
+  score_calibrator: isotonic@v1
+guards:
+  min_citations: 2
+  whitelist_profile: trusted+kg
+alias:
+  corrector:
+    enabled: true
