@@ -1,0 +1,4 @@
+server.port: 8080
+alias:
+  corrector:
+    enabled: true

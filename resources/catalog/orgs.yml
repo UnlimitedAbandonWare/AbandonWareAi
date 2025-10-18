@@ -1,0 +1,56 @@
+---
+# Sample organisation catalog used by the Entity/Concept Generalization patch.
+#
+# Each entry defines a canonical organisation name together with a list of
+# alternative spellings (aliases), regions in which the organisation is
+# primarily located and sites which may host official information about the
+# organisation.  When a user query contains any of the aliases the
+# OrganisationResolver will normalise it to the canonical name.  Regions and
+# sites are used by the OrgAwareQueryAugmenter to construct additional
+# location‑aware search queries.
+
+- id: dw_academy
+  canonical: "DW 아카데미"
+  aliases:
+    - "DW 아카데미"
+    - "dw 아카데미"
+    - "dw학원"
+    - "디더블유 아카데미"
+  regions:
+    - "대전"
+    - "유성구"
+  sites:
+    - "place.naver.com"
+
+- id: hanwha_vision_veda
+  canonical: "한화비전 VEDA"
+  aliases:
+    - "한화비전 베다"
+    - "Hanwha Vision VEDA"
+    - "VEDA"
+    - "베다"
+  regions:
+    - "용인"
+    - "판교"
+    - "성남"
+    - "수원"
+  sites:
+    - "hanwhavision.com"
+    - "place.naver.com"
+
+- id: eulji_university_hospital
+  canonical: "을지대학교 병원"
+  aliases:
+    - "을지대학교 병원"
+    - "을지대학병원"
+    - "을지 병원"
+  regions:
+    - "대전"
+    - "세종"
+  sites:
+    - "eulji.ac.kr"
+    - "place.naver.com"
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

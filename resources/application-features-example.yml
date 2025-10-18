@@ -1,0 +1,15 @@
+features:
+  telemetry:
+    virtual-point:
+      enabled: false
+  alias:
+    corrector:
+      enabled: false
+  mpc:
+    enabled: false
+telemetry:
+  virtual-point:
+    path: /var/log/app/virt/virt_points.ndjson
+alias:
+  corrector:
+    enabled: true

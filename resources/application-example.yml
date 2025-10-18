@@ -1,0 +1,42 @@
+selfask:
+  enabled: true
+orchestrator:
+  gate:
+    complexity:
+      enabled: true
+planner:
+  dsl:
+    enabled: true
+guard:
+  preflight:
+    enabled: true
+  pii:
+    enabled: true
+  citation:
+    min-sources: 2
+  final-quality:
+    enabled: true
+    tau: 0.9
+runtime:
+  time-budget:
+    ms: 4000
+onnx:
+  guard:
+    max-concurrency: 4
+retrieval:
+  bm25:
+    enabled: true
+fusion:
+  score:
+    calibrate:
+      enabled: true
+cache:
+  singleflight:
+    enabled: true
+overdrive:
+  enabled: true
+extremez:
+  enabled: true
+alias:
+  corrector:
+    enabled: true

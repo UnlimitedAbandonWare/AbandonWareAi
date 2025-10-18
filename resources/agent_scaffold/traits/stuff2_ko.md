@@ -1,0 +1,1 @@
+type: trait\nid: stuff2_ko\npriority: high\n\n- 운영 철학 샘플 문구 -\n

@@ -1,0 +1,5 @@
+id: resume_llm_mcp\nlang: ko\nrole: system\nversion: '1.0.0'\n
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

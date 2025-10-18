@@ -1,0 +1,30 @@
+---
+# Sample concept catalog used by the Entity/Concept Generalization patch.
+#
+# Each entry defines a canonical concept together with a list of alternative
+# spellings (aliases).  When a user query mentions any of the aliases the
+# ConceptResolver will normalise it to the canonical concept.  Sites may
+# optionally bias search towards authoritative sources.
+
+- id: pandemic
+  canonical: "판데믹"
+  aliases:
+    - "팬데믹"
+    - "세계적 대유행"
+    - "pandemic"
+  sites:
+    - "wikipedia.org"
+    - "who.int"
+
+- id: skunk
+  canonical: "스커크"
+  aliases:
+    - "스컹크"
+    - "skunk"
+  sites:
+    - "wikipedia.org"
+    - "britannica.com"
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
