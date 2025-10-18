@@ -12,6 +12,9 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+
+
 
 /**
  * 커스텀 보안 설정.
@@ -27,30 +30,46 @@ import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
  * </ul>
  */
 @Configuration
+@ConditionalOnProperty(name = "security.force-https", havingValue = "true")
 @RequiredArgsConstructor
 public class CustomSecurityConfig {
 
     private final CustomUserDetailsService customUserDetailsService;
 
     @Bean
-    @Order(1)  // ★ 클래스가 아니라 빈(@Bean 메서드)에 명시
+    @Order(3)  // ↓ lower priority than the open and default chains
     SecurityFilterChain adminSecurity(HttpSecurity http) throws Exception {
         var handler = new CsrfTokenRequestAttributeHandler();
         handler.setCsrfRequestAttributeName("_csrf");
 
+        // Restrict this ADMIN-only chain to admin-related endpoints only.
+        http.securityMatcher("/admin/**", "/api/admin/**", "/dashboard/**", "/model-settings/**");
+
         http
-                .securityMatcher("/admin/**")
                 .userDetailsService(customUserDetailsService)
                 .csrf(csrf -> csrf
                         .csrfTokenRequestHandler(handler)
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
-                .authorizeHttpRequests(auth -> auth.anyRequest().hasRole("ADMIN"))
-                .formLogin(form -> form
-                        .loginPage("/login")
-                        .loginProcessingUrl("/login")
-                        .defaultSuccessUrl("/", true)
-                        .permitAll())
-                .rememberMe(rem -> rem.key("...").tokenValiditySeconds(86400).alwaysRemember(true))
+                .authorizeHttpRequests(auth -> auth
+                        // Permit anonymous access to error pages and static assets in this chain
+                        .requestMatchers(
+                                "/error",
+                                "/favicon.ico",
+                                "/webjars/**",
+                                "/css/**",
+                                "/js/**",
+                                "/images/**"
+                        ).permitAll()
+                        // All other requests under the admin matcher must have ADMIN role
+                        .anyRequest().hasRole("ADMIN")
+                )
+                // Do not configure formLogin() here; the main authentication chain will handle login
+                // Preserve remember‑me configuration for admin users
+                .rememberMe(rem -> rem
+                        .key("...")
+                        .tokenValiditySeconds(86400)
+                        .alwaysRemember(true)
+                )
                 .logout(logout -> logout
                         .logoutRequestMatcher(new AntPathRequestMatcher("/logout", "POST"))
                         .logoutSuccessUrl("/login?logout")

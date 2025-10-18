@@ -3,13 +3,15 @@ package com.example.lms.diag;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+
+
+
 
 /**
  * Collects per-request diagnostics for the retrieval pipeline.  A new

@@ -1,6 +1,7 @@
 // src/main/java/com/example/lms/rag/PartialFailure.java
 package com.example.lms.rag;
 
+
 /**
  * Represents a partial failure encountered during the retrieval or
  * verification phases.  Instead of bubbling an exception up the call

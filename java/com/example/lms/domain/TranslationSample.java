@@ -6,8 +6,10 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
-
 import java.time.LocalDateTime;
+
+
+
 
 /**
  * 번역 샘플 & 교정 데이터 & 학습 로그 통합 엔티티

@@ -3,6 +3,8 @@ package com.example.lms.entity;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
+
+
 /**
  * TranslationMemory.MemoryStatus ↔️ DB 문자열 매핑기.
  *

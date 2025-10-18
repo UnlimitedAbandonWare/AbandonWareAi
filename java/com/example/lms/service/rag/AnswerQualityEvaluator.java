@@ -7,9 +7,11 @@ import dev.langchain4j.model.output.Response;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.Optional;
+
+
+
 
 @Component
 @RequiredArgsConstructor

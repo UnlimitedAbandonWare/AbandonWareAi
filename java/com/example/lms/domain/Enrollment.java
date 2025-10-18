@@ -8,6 +8,8 @@ import com.example.lms.domain.Student;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
+
+
 /**
  * 수강 신청(Entity) - Enrollment 테이블과 매핑
  */

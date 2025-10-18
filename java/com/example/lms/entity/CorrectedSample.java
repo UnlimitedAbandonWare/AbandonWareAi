@@ -4,6 +4,8 @@ package com.example.lms.entity;
 import jakarta.persistence.*;
 import lombok.*;
 
+
+
 @Entity
 @Getter @Setter @NoArgsConstructor
 @Table(name = "corrected_sample")

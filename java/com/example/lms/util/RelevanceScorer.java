@@ -1,6 +1,8 @@
 package com.example.lms.util;
-//검색
+
 import dev.langchain4j.model.embedding.EmbeddingModel;
+
+//검색
 
 /**
  * Cosine‑similarity 기반 간단 유사도 스코어러.

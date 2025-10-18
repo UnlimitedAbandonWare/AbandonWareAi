@@ -1,5 +1,6 @@
 package com.example.lms.gptsearch.web;
 
+
 /**
  * Enumeration of supported web search providers.  The ordering of values in
  * this enum does not imply priority; actual provider preference should be
@@ -15,5 +16,13 @@ public enum ProviderId {
     /** SerpAPI aggregator */
     SERPAPI,
     /** Mock provider for testing or when API keys are missing */
-    MOCK;
+    MOCK,
+    /**
+     * NAVER Web Search provider.  This provider wraps the existing
+     * {@link com.example.lms.service.NaverSearchService} to expose Naver
+     * results through the {@link com.example.lms.gptsearch.web.WebSearchProvider}
+     * interface.  Adding this enum constant allows the adaptive search
+     * layer to reference Naver as a first‑class provider.
+     */
+    NAVER;
 }

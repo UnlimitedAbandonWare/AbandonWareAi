@@ -1,9 +1,11 @@
 package com.example.lms.service.verbosity;
 
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.Locale;
+
+
+
 
 @Component
 public class SectionSpecGenerator {

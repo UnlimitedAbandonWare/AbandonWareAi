@@ -1,16 +1,18 @@
 package com.example.lms.service.rag.pre;
-import org.springframework.context.annotation.Primary;   // ✅ 추가
 
 import org.openkoreantext.processor.OpenKoreanTextProcessorJava;
 import org.openkoreantext.processor.tokenizer.KoreanTokenizer.KoreanToken;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import scala.collection.Seq;
-
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import org.springframework.context.annotation.Primary;   // ✅ 추가
+
+
+
 
 /**
  * 간단한 NER  위치 주입 전처리기 구현.

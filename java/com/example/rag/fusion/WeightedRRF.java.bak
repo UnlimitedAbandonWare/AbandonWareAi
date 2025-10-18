@@ -1,0 +1,61 @@
+package com.example.rag.fusion;
+
+
+import com.example.guard.RiskScorer;
+import java.util.*;
+
+/** Weighted Reciprocal Rank Fusion (RRF). */
+public final class WeightedRRF {
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setRiskScorer(RiskScorer riskScorer) { this.riskScorer = riskScorer; }
+    public void setRiskAlpha(double alpha) { this.riskAlpha = alpha; }
+
+    private RiskScorer riskScorer;
+    private double riskAlpha = 0.5;
+
+    private WeightedRRF() {}
+    public static class ScoredDoc {
+        public final String id;
+        public final int rank;     // 1-based
+        public final double score; // calibrated score if available
+        public ScoredDoc(String id, int rank, double score){ this.id=id; this.rank=rank; this.score=score; }
+    }
+
+    public static Map<String,Double> combine(Map<String,List<ScoredDoc>> ranked, Map<String,Double> weights, int k) {
+        Map<String,Double> fused = new HashMap<>();
+        final int K = k <= 0 ? 60 : k;
+        for (Map.Entry<String,List<ScoredDoc>> e : ranked.entrySet()){
+            final String source = e.getKey();
+            final double w = weights.getOrDefault(source, 1.0);
+            final List<ScoredDoc> lst = e.getValue();
+            for (int i=0;i<lst.size();i++){
+                ScoredDoc d = lst.get(i);
+                int r = d.rank > 0 ? d.rank : (i+1);
+                double inc = w * (1.0 / (K + r));
+                fused.put(d.id, fused.getOrDefault(d.id, 0.0) + inc);
+            }
+        }
+        return fused;
+    }
+
+    private double applyRisk(double base, Object d) {
+        try {
+            // Expect d to have methods getDomain(), getText(), isStale(), getNovelty(), getAuthorityTier()
+            String domain = invokeStr(d, "getDomain");
+            String text   = invokeStr(d, "getText");
+            boolean stale = invokeBool(d, "isStale");
+            double novelty = invokeDbl(d, "getNovelty");
+            double auth    = invokeDbl(d, "getAuthorityTier");
+
+            double rdi = (riskScorer == null) ? 0.0 :
+                riskScorer.score(new RiskScorer.Features(domain, text, stale, novelty, auth),
+                                 new RiskScorer.RiskProps(riskAlpha, java.util.Set.of("루머","확인되지","썰","추정","카더라"), 0.25, 0.25));
+            return Math.max(0.0, base * (1.0 - riskAlpha * rdi));
+        } catch (Throwable t) {
+            return base;
+        }
+    }
+    private String invokeStr(Object o, String m) throws Exception { return (String)o.getClass().getMethod(m).invoke(o); }
+    private boolean invokeBool(Object o, String m) throws Exception { return (Boolean)o.getClass().getMethod(m).invoke(o); }
+    private double invokeDbl(Object o, String m) throws Exception { return (Double)o.getClass().getMethod(m).invoke(o); }
+}}

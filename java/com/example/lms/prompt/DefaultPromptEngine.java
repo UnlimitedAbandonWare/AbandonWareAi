@@ -5,12 +5,14 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+
+
 
 /**
  * PromptEngine 인터페이스의 기본 구현체.

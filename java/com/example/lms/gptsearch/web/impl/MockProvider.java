@@ -4,6 +4,8 @@ import com.example.lms.gptsearch.web.ProviderId;
 import com.example.lms.gptsearch.web.dto.WebSearchQuery;
 import com.example.lms.gptsearch.web.dto.WebSearchResult;
 
+
+
 /**
  * Mock search provider that returns no results.  This is used when no API
  * keys are configured or for unit testing the web search integration.

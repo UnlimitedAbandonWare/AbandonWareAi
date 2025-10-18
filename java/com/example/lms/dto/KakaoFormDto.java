@@ -2,6 +2,8 @@ package com.example.lms.dto;
 
 import lombok.Data;
 
+
+
 @Data
 public class KakaoFormDto {
     private String userKey;

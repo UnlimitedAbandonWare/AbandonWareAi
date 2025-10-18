@@ -2,9 +2,11 @@ package com.example.lms.learning.llm.compare;
 
 import com.example.lms.compare.common.CompareResult;
 import com.example.lms.compare.state.CompareState;
-
 import java.util.ArrayList;
 import java.util.List;
+
+
+
 
 /**
  * Simple advisor that can convert a free‑form natural language utterance
@@ -49,7 +51,7 @@ public class LLMCompareAdvisor {
 
     /**
      * Generate a natural language explanation for a comparison result. This
-     * placeholder implementation simply summarises the ranking order.
+     * shim implementation simply summarises the ranking order.
      *
      * @param in the input used for comparison
      * @param out the result of the comparison

@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.Query;
 import java.util.List;
 
 
+
+
 /**
  * JPA Repository for ModelEntity.
  * PK 타입이 String(modelId) 인 점에 유의하세요.

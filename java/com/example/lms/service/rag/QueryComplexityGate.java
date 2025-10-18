@@ -3,10 +3,12 @@ package com.example.lms.service.rag;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
+
+
+
 
 /**
  * 쿼리 복잡도를 판단해 검색 흐름을 제어하는 게이트웨이.

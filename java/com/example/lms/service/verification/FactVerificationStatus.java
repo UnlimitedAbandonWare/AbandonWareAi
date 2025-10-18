@@ -1,5 +1,6 @@
 package com.example.lms.service.verification;
 
+
 /**
  * 팩트 검증 1단계 분류기의 결과 값.
  *

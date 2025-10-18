@@ -4,8 +4,10 @@ package com.example.lms.repository;
 import com.example.lms.domain.TranslationRule;
 import com.example.lms.domain.enums.RulePhase;
 import org.springframework.data.jpa.repository.JpaRepository;
-
 import java.util.List;
+
+
+
 
 /**
  * {@link TranslationRule} 전용 JPA 리포지토리

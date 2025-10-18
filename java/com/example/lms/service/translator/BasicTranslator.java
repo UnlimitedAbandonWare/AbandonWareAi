@@ -1,6 +1,7 @@
 // src/main/java/com/example/lms/service/translator/BasicTranslator.java
 package com.example.lms.service.translator;
 
+
 /**
  * 가장 단순한 “문장 단위 번역기” 역할.
  * - 실제 서비스에선 OpenAI·Papago·DeepL 등으로 교체하면 됩니다.

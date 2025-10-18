@@ -4,15 +4,18 @@ package com.example.lms.service;
 import com.example.lms.domain.ConfigurationSetting;
 import com.example.lms.repository.ConfigurationSettingRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 전역 Key-Value 설정 저장소.
@@ -20,10 +23,10 @@ import java.util.stream.Collectors;
  *  ─ 일괄 저장 : saveAllSettings(Map)  ← 과거 이름 호환용 saveAll(Map) 추가
  *  ─ 전체 조회 : getAllSettings()
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SettingsService {
+    private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
 
     private final ConfigurationSettingRepository settingRepo;
 
@@ -40,7 +43,7 @@ public class SettingsService {
     @Value("${gpt.system.prompt.default:You are a helpful assistant.}")
     private String defaultSystemPrompt;
 
-    @Value("${openai.api.model.default:gpt-4o-mini}")
+    @Value("${openai.api.model.default:gpt-5-mini}")
     private String defaultModel;
 
     @Value("${openai.api.temperature.default:0.7}")

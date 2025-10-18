@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+
+
 /**
  * Container for a list of web documents returned from a search.  The
  * result also records the provider ID that produced the documents.

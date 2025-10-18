@@ -9,15 +9,18 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import dev.langchain4j.data.document.Metadata;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 주기적으로 새 문서를 불러와 벡터 스토어에 추가하는 스케줄러입니다.
@@ -29,10 +32,17 @@ import dev.langchain4j.data.document.Metadata;
  * <p>문서는 메타데이터(예: source, url, fetchedAt 등)를 포함한 상태로 생성하고,
  * 분할된 세그먼트는 임베딩 후 EmbeddingStore에 저장합니다.</p>
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class IndexingScheduler {
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.ocr.OcrService ocr;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.EmbeddingStoreManager embeddingStoreManager;
+
+
+    private static final Logger log = LoggerFactory.getLogger(IndexingScheduler.class);
 
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -112,4 +122,18 @@ public class IndexingScheduler {
          */
         List<Document> fetchNewDocumentsSince(LocalDateTime lastFetchTime);
     }
+
+    @org.springframework.scheduling.annotation.Scheduled(cron="${indexing.ocr.cron:0 */10 * * * *}")
+    public void runOcrIndexing() {
+        try {
+            if (ocr == null || embeddingStoreManager == null) return;
+            java.lang.reflect.Method mScan = ocr.getClass().getMethod("scanNewImages");
+            java.util.List spans = (java.util.List) mScan.invoke(ocr);
+            java.lang.reflect.Method mChunk = ocr.getClass().getMethod("chunk", java.util.List.class);
+            java.util.List chunks = (java.util.List) mChunk.invoke(ocr, spans);
+            java.lang.reflect.Method mUpsert = embeddingStoreManager.getClass().getMethod("embedAndUpsert", java.util.List.class);
+            mUpsert.invoke(embeddingStoreManager, chunks);
+        } catch (Throwable t) { }
+    }
+
 }

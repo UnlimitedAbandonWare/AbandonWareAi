@@ -3,6 +3,8 @@ package com.example.lms.dto;
 
 import lombok.Getter;
 
+
+
 /**
  * 채팅 API 응답 DTO – 프론트엔드 요구 필드 100 % 일치
  */

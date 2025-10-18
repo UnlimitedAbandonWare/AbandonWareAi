@@ -4,10 +4,12 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.ToString;
 import org.hibernate.annotations.UpdateTimestamp;
-// import org.hibernate.annotations.CreationTimestamp; // (선택) Hibernate @CreationTimestamp 사용 가능
 import org.apache.commons.codec.digest.DigestUtils;
-
 import java.time.LocalDateTime;
+
+
+// import org.hibernate.annotations.CreationTimestamp; // (선택) Hibernate @CreationTimestamp 사용 가능
+
 
 @Entity
 @Table(
@@ -191,4 +193,47 @@ public class TranslationMemory {
         this.updatedAt  = now;
         this.status     = MemoryStatus.ACTIVE;
     }
+    /* ===== Manual getters/setters for environments without Lombok processing ===== */
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+
+    public String getSourceHash() { return sourceHash; }
+    public void setSourceHash(String sourceHash) { this.sourceHash = sourceHash; }
+
+    public String getSessionId() { return sessionId; }
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+
+    public String getCorrected() { return corrected; }
+    public void setCorrected(String corrected) { this.corrected = corrected; }
+
+    public Integer getHitCount() { return hitCount; }
+    public void setHitCount(Integer hitCount) { this.hitCount = hitCount; }
+
+    public int getSuccessCount() { return successCount; }
+    public void setSuccessCount(int successCount) { this.successCount = successCount; }
+
+    public int getFailureCount() { return failureCount; }
+    public void setFailureCount(int failureCount) { this.failureCount = failureCount; }
+
+    public Double getCosineSimilarity() { return cosineSimilarity; }
+    public void setCosineSimilarity(Double cosineSimilarity) { this.cosineSimilarity = cosineSimilarity; }
+
+    public double getQValue() { return qValue; }
+    public void setQValue(double qValue) { this.qValue = qValue; }
+
+    public String getSourceTag() { return sourceTag; }
+    public void setSourceTag(String sourceTag) { this.sourceTag = sourceTag; }
+
+    public Double getConfidenceScore() { return confidenceScore; }
+    public void setConfidenceScore(Double confidenceScore) { this.confidenceScore = confidenceScore; }
+
+    public LocalDateTime getLastUsedAt() { return lastUsedAt; }
+    public void setLastUsedAt(LocalDateTime lastUsedAt) { this.lastUsedAt = lastUsedAt; }
+
+    public Double getEnergy() { return energy; }
+    public void setEnergy(Double energy) { this.energy = energy; }
+
+    public Double getTemperature() { return temperature; }
+    public void setTemperature(Double temperature) { this.temperature = temperature; }
+
 }

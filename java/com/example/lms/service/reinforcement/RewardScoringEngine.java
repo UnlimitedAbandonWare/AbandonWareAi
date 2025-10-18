@@ -1,11 +1,13 @@
 package com.example.lms.service.reinforcement;
 
 import com.example.lms.entity.TranslationMemory;
-
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+
+
+
 
 /**
  * <h2>RewardScoringEngine – Unified Edition ({스터프18}+{스터프19})</h2>

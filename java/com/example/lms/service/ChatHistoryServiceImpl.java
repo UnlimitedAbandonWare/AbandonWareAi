@@ -8,11 +8,9 @@ import com.example.lms.repository.AdministratorRepository;
 import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.ChatSessionRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -20,21 +18,33 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 @Service
 @Primary
 @RequiredArgsConstructor
-@Slf4j
 public class ChatHistoryServiceImpl implements ChatHistoryService {
+    private static final Logger log = LoggerFactory.getLogger(ChatHistoryServiceImpl.class);
 
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final AdministratorRepository administratorRepository;
+    
+    private final com.example.lms.web.ClientOwnerKeyResolver ownerKeyResolver;
+@org.springframework.beans.factory.annotation.Value("${history.skip-weak-assistant:true}")
+    private boolean skipWeakAssistant;
+
 
     /* -------------------- META PREFIXES -------------------- */
     private static final String TRACE_META_PREFIX          = "⎔TRACE⎔";
     private static final String TRACE_META_PREFIX_B64      = "⎔TRACE64⎔";
     private static final String LEGACY_TRACE_META_PREFIX_Q = "?TRACE?";
+    // Prefix for understanding summary meta.
+    private static final String USUM_META_PREFIX = "⎔USUM⎔";
 
     /* =======================================================
      * HTML 차단 정책
@@ -45,7 +55,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (content == null) return false;
         return content.startsWith(TRACE_META_PREFIX)
                 || content.startsWith(TRACE_META_PREFIX_B64)
-                || content.startsWith(LEGACY_TRACE_META_PREFIX_Q);
+                || content.startsWith(LEGACY_TRACE_META_PREFIX_Q)
+                || content.startsWith(USUM_META_PREFIX);
     }
 
     /** 아주 느슨한 생 HTML 감지 (TRACE 메타는 선별에서 이미 제외) */
@@ -77,22 +88,56 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
 
     @Override
     @Transactional
-    public Optional<ChatSession> startNewSession(String firstMessage, String username) {
+    
+public Optional<ChatSession> startNewSession(String firstMessage, String username, String clientIp) {
+    // Allow both admin-owned and guest sessions.
+    String safe = java.util.Objects.toString(firstMessage, "");
+    String title = safe.length() > 20 ? safe.substring(0, 20) + "..." : safe;
+
+    ChatSession session;
+    if (username == null || username.isBlank() || "anonymousUser".equals(username)) {
+        String ownerKey;
+        try {
+            ownerKey = ownerKeyResolver.ownerKey();
+        } catch (RuntimeException e) {
+            // When no HttpServletRequest is bound to the current thread the ClientOwnerKeyResolver
+            // will throw an IllegalStateException.  Fall back to a stable identifier derived
+            // from the provided client IP.  If the IP is unavailable or hashing fails,
+            // generate a random UUID.  This ensures anonymous sessions can still be
+            // created during asynchronous processing while maintaining per‑client consistency.
+            ownerKey = null;
+            if (clientIp != null && !clientIp.isBlank() && !"unknown".equalsIgnoreCase(clientIp)) {
+                try {
+                    ownerKey = com.example.lms.util.HashUtil.sha256(clientIp);
+                } catch (Exception ignore) {
+                    ownerKey = null;
+                }
+            }
+            if (ownerKey == null || ownerKey.isBlank()) {
+                ownerKey = java.util.UUID.randomUUID().toString();
+            }
+        }
+        session = new ChatSession(title);
+        session.setOwnerKey(ownerKey);
+        session.setOwnerType("ANON");
+        session = sessionRepository.save(session);
+        log.info("익명 게스트 세션 시작: ownerKey={} title='{}' (id={})",
+                (ownerKey == null ? "null" : ownerKey.substring(0, Math.min(8, ownerKey.length())) + "..."),
+                title, session.getId());
+    } else {
         Administrator admin = administratorRepository.findByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("관리자를 찾을 수 없습니다: " + username));
-
-        String safe = Objects.toString(firstMessage, "");
-        String title = safe.length() > 20 ? safe.substring(0, 20) + "..." : safe;
-
-        ChatSession session = sessionRepository.save(new ChatSession(title, admin));
+        session = sessionRepository.save(new ChatSession(title, admin));
         log.info("{} 관리자가 세션을 시작했습니다. title='{}' (id={})", username, title, session.getId());
-
-        // 첫 사용자 메시지 즉시 저장
-        save(new ChatMessage(session, "user", safe));
-        log.debug("세션 {}: 첫 사용자 메시지 저장 완료", session.getId());
-
-        return Optional.of(session);
     }
+
+    // 첫 사용자 메시지 즉시 저장
+    save(new ChatMessage(session, "user", safe));
+    log.debug("세션 {}: 첫 사용자 메시지 저장 완료", session.getId());
+
+    return Optional.of(session);
+}
+
 
     /* -------------------- Message utilities -------------------- */
 
@@ -115,11 +160,21 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
             log.debug("Unsupported role '{}' → skip persist (session {})", role, sessionId);
             return;
         }
+        // Skip weak assistant drafts like "정보 없음" when toggle is on
+        if (skipWeakAssistant && "assistant".equals(r)) {
+            try {
+                if (com.example.lms.service.guard.EvidenceAwareGuard.looksWeak(c)) {
+                    log.debug("weak assistant draft suppressed → skip persist (session {})", sessionId);
+                    return;
+                }
+            } catch (Throwable ignore) {}
+        }
+
 
         // 1) TRACE 메타(system)면 무조건 저장
         if ("system".equals(r) && isTraceMeta(c)) {
             save(sessionId, r, c);
-            log.debug("세션 {}: system TRACE 메타 저장 ({} bytes)", sessionId, c.length());
+            log.debug("세션 {}: system meta 저장 ({} bytes)", sessionId, c.length());
             return;
         }
 
@@ -144,9 +199,15 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<ChatSession> getSessionsForUser(String username) {
-        return sessionRepository.findByAdministrator_UsernameOrderByCreatedAtDesc(username);
+    
+public List<ChatSession> getSessionsForUser(String username) {
+    if (username == null || username.isBlank() || "anonymousUser".equals(username)) {
+        String ownerKey = ownerKeyResolver.ownerKey();
+        return sessionRepository.findByOwnerKeyOrderByCreatedAtDesc(ownerKey);
     }
+    return sessionRepository.findByAdministrator_UsernameOrderByCreatedAtDesc(username);
+}
+
 
     @Override
     @Transactional(readOnly = true)

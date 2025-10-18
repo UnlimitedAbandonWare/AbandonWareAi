@@ -3,6 +3,8 @@ package com.example.lms.service;
 import com.example.lms.dto.KakaoFriends;
 import java.util.List;
 
+
+
 /** Kakao OAuth + 메시지 전송 공통 API */
 public interface KakaoOAuthService {
 

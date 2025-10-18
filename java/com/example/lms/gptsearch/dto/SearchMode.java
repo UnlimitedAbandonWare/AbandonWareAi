@@ -1,5 +1,6 @@
 package com.example.lms.gptsearch.dto;
 
+
 /**
  * Enumeration of search execution modes for the GPT Web Search plugin.  These
  * values control whether and how the system performs live web queries when

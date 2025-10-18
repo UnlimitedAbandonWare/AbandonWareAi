@@ -4,6 +4,8 @@ import com.example.lms.domain.Notice;
 import com.example.lms.domain.NoticeType;
 import java.util.List;
 
+
+
 /** 공지 조회·등록·삭제 인터페이스 */
 public interface NoticeService {
 
