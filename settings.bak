@@ -1,0 +1,24 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+        maven { url = uri("https://repo.spring.io/release") }
+    }
+}
+
+rootProject.name = 'demo-1'
+
+include("app", "lms-core", "cfvm-raw")
+
+project(":app").projectDir = file("app")
+project(":lms-core").projectDir = file("lms-core")
+project(":cfvm-raw").projectDir = file("cfvm-raw")
+
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+    repositories {
+        mavenCentral()
+        maven { url = uri("https://repo.spring.io/release") }
+    }
+}
