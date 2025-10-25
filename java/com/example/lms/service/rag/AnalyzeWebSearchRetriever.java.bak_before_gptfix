@@ -1,0 +1,128 @@
+package com.example.lms.service.rag;
+
+import trace.TraceContext;
+import com.example.lms.service.NaverSearchService;
+import dev.langchain4j.rag.content.Content;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
+import dev.langchain4j.rag.query.Query;
+import lombok.RequiredArgsConstructor;
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
+import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.util.StringUtils;
+import java.io.IOException;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
+
+/**
+ * [GPT-PRO-AGENT v2] — concise navigation header (no runtime effect).
+ * Module: com.example.lms.service.rag.AnalyzeWebSearchRetriever
+ * Role: config
+ * Dependencies: com.example.lms.service.NaverSearchService
+ * Observability: propagates trace headers if present.
+ * Thread-Safety: unknown.
+ */
+/* agent-hint:
+id: com.example.lms.service.rag.AnalyzeWebSearchRetriever
+role: config
+*/
+public \1
+    public AnalyzeWebSearchRetriever(org.apache.lucene.analysis.Analyzer analyzer,
+                                     com.example.lms.service.NaverSearchService svc,
+                                     int maxTokens,
+                                     com.example.lms.service.rag.QueryContextPreprocessor preprocessor,
+                                     com.example.lms.search.SmartQueryPlanner smartQueryPlanner) {
+        // wire minimal fields when present by reflection to keep this class stable across merges
+        try {
+            java.lang.reflect.Field f;
+            f = getClass().getDeclaredField("koreanAnalyzer"); f.setAccessible(true); f.set(this, analyzer);
+        } catch (Throwable ignore) {}
+        try {
+            java.lang.reflect.Field f = getClass().getDeclaredField("naver"); f.setAccessible(true); f.set(this, svc);
+        } catch (Throwable ignore) {}
+        try {
+            java.lang.reflect.Field f = getClass().getDeclaredField("maxTokens"); f.setAccessible(true); f.setInt(this, maxTokens);
+        } catch (Throwable ignore) {}
+        try {
+            java.lang.reflect.Field f = getClass().getDeclaredField("preprocessor"); f.setAccessible(true); f.set(this, preprocessor);
+        } catch (Throwable ignore) {}
+        try {
+            java.lang.reflect.Field f = getClass().getDeclaredField("smartQueryPlanner"); f.setAccessible(true); f.set(this, smartQueryPlanner);
+        } catch (Throwable ignore) {}
+    }
+
+
+    private int timeoutMs = 1800;
+    private int webTopK = 10;
+    public void setTimeoutMs(int ms) { this.timeoutMs = ms; }
+    public void setWebTopK(int k) { this.webTopK = k; }
+    
+    private static final Logger log = LoggerFactory.getLogger(AnalyzeWebSearchRetriever.class);
+
+    private final Analyzer analyzer; // 한국어 형태소 분석기 (e.g., Nori)
+    private final NaverSearchService searchService;
+    private final int topK;
+    @Qualifier("guardrailQueryPreprocessor")
+    private final com.example.lms.service.rag.pre.QueryContextPreprocessor preprocessor;
+
+    // SmartQueryPlanner for centralised query generation.  Handlers must
+    // not perform local expansion; the planner encapsulates noise clipping,
+    // domain inference, keyword extraction and sanitisation.
+    
+
+    
+/* Removed manual constructor; Lombok @RequiredArgsConstructor will generate it. */
+
+private final com.example.lms.search.SmartQueryPlanner smartQueryPlanner;
+
+    @Override
+    public List<Content> retrieve(Query query) {
+        String originalQuery = (query != null && query.text() != null) ? query.text().trim() : "";
+        originalQuery = preprocessor.enrich(originalQuery);
+        if (!StringUtils.hasText(originalQuery)) {
+            return Collections.emptyList();
+        }
+
+        // Use SmartQueryPlanner to generate all search queries.  The planner
+        // performs domain inference, noise clipping and keyword extraction.
+        // Null-safe: if the planner is unavailable, fall back to using the original query as-is.
+        java.util.List<String> queries;
+        if (smartQueryPlanner == null) {
+            log.warn("[AnalyzeWebSearchRetriever] smartQueryPlanner is null; using passthrough plan.");
+            queries = java.util.List.of(originalQuery);
+        } else {
+            queries = smartQueryPlanner.plan(
+                    originalQuery,
+                    /* assistantDraft */ null,
+                    /* max */ 8
+            );
+        }
+
+        // Execute searches in parallel for each query and collect the snippets.
+        java.util.List<String> mergedSnippets = queries.parallelStream()
+                .flatMap(q -> {
+                    try {
+                        return searchService.searchSnippets(q, topK).stream();
+                    } catch (Exception e) {
+                        log.warn("[Analyze] Failed to search for query '{}': {}", q, e.getMessage());
+                        return Stream.empty();
+                    }
+                })
+                .toList();
+
+        // Deduplicate and convert to Content objects, preserving order.
+        return new java.util.LinkedHashSet<>(mergedSnippets).stream()
+                .limit(topK)
+                .map(Content::from)
+                .collect(java.util.stream.Collectors.toList());
+    }
+    // Local query expansion helpers removed to enforce planner‑only generation.
+}

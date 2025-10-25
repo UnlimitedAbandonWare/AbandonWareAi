@@ -4,6 +4,8 @@ import com.example.lms.gptsearch.web.WebSearchProvider;
 import com.example.lms.gptsearch.web.dto.WebSearchQuery;
 import com.example.lms.gptsearch.web.dto.WebSearchResult;
 
+
+
 /**
  * Base class for search providers.  Provides a default fallback
  * implementation that returns an empty result.  Subclasses should

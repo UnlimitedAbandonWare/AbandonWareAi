@@ -3,10 +3,12 @@ package com.example.lms.debug;
 
 import java.util.regex.Pattern;
 
+
+
 /**
  * Utility for masking sensitive tokens and API keys when logging prompts
  * and responses.  Certain token formats, such as OpenAI API keys
- * (sk-...) or Google API keys (AIza....), should never be logged in
+ * (sk-/* ... *&#47;) or Google API keys (AIza/* ... *&#47;.), should never be logged in
  * plain text.  This class replaces such substrings with asterisks while
  * preserving overall length to aid debugging without exposing secrets.
  */

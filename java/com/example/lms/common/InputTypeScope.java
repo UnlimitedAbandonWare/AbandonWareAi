@@ -1,6 +1,7 @@
 // src/main/java/com/example/lms/common/InputTypeScope.java
 package com.example.lms.common;
 
+
 /**
  * Thread local holder for the current input type.  When a chat request
  * originates from a voice input on the client, the front‑end sets

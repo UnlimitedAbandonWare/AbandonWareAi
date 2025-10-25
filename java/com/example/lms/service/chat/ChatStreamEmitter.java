@@ -5,13 +5,16 @@ import com.example.lms.dto.ChatStreamEvent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Sinks;
-
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * Simple registry and emitter for server‑sent events.  The chat controller
@@ -22,8 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 @RequiredArgsConstructor
-@Slf4j
 public class ChatStreamEmitter {
+    private static final Logger log = LoggerFactory.getLogger(ChatStreamEmitter.class);
 
     private final Map<String, Sinks.Many<ServerSentEvent<ChatStreamEvent>>> sinks = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -75,4 +78,32 @@ public class ChatStreamEmitter {
             log.warn("[Emitter] Failed to serialize understanding: {}", e.toString());
         }
     }
+
+    public void sendToken(String sessionKey, String text) {
+        send(sessionKey, com.example.lms.dto.ChatStreamEvent.token(text));
+    }
+    public void sendStatus(String sessionKey, String text) {
+        send(sessionKey, com.example.lms.dto.ChatStreamEvent.status(text));
+    }
+
+    /**
+     * Emit a generic event to the registered SSE sink.  If no sink exists for
+     * the given session or either parameter is null the call is a no-op.
+     *
+     * @param sessionKey session identifier to emit to
+     * @param event the stream event to send
+     */
+    private void send(String sessionKey, com.example.lms.dto.ChatStreamEvent event) {
+        if (sessionKey == null || event == null) return;
+        var sink = sinks.get(sessionKey);
+        if (sink == null) return;
+        try {
+            sink.tryEmitNext(ServerSentEvent.<com.example.lms.dto.ChatStreamEvent>builder(event)
+                    .event(event.type())
+                    .build());
+        } catch (Exception e) {
+            log.warn("[Emitter] Failed to send SSE event: {}", e.toString());
+        }
+    }
+    
 }

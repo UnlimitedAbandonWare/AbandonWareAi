@@ -3,6 +3,8 @@ package com.example.lms.service.disambiguation;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 
+
+
 /**
  * 사용자의 모호한 질의를 재작성하고 해소한 결과를 담는 DTO입니다.
  * LLM이 생성한 JSON 응답을 이 객체로 매핑합니다.

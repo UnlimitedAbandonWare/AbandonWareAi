@@ -5,6 +5,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 import java.util.Optional;
 
+
+
 /**
  * DomainKnowledge 엔티티에 대한 데이터 접근을 처리하는 Spring Data JPA 리포지토리입니다.
  */

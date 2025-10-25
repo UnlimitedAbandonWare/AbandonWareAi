@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomi
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+
+
 /**
  * JDBC batch size 설정으로 saveAll / deleteAllByIdInBatch 성능을 극대화한다.
  */

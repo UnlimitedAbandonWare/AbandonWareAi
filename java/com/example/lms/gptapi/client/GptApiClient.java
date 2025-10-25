@@ -1,11 +1,13 @@
 package com.example.lms.gptapi.client;
 
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.util.Collections;
 import java.util.Map;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * Simple GPT API client wrapper.
@@ -18,9 +20,9 @@ import java.util.Map;
  * you would inject a WebClient or RestTemplate and perform the call
  * asynchronously with retries.</p>
  */
-@Slf4j
 @Component
 public class GptApiClient {
+    private static final Logger log = LoggerFactory.getLogger(GptApiClient.class);
 
     @Value("${gptapi.base-url:}")
     private String baseUrl;
@@ -29,7 +31,7 @@ public class GptApiClient {
     private String apiKey;
 
     /**
-     * Execute a POST request against the GPT API.  In this stub
+     * Execute a POST request against the GPT API.  In this shim
      * implementation the method simply logs the request parameters and
      * returns an empty map.
      *

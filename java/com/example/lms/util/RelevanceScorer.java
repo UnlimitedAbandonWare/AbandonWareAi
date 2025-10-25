@@ -1,10 +1,12 @@
 package com.example.lms.util;
-//검색
+
 import dev.langchain4j.model.embedding.EmbeddingModel;
+
+//검색
 
 /**
  * Cosine‑similarity 기반 간단 유사도 스코어러.
- * 필요한 건 query·doc 두 문장을 받아 0~1 사이 double 점수를 돌려주는 score(...) 하나뿐입니다.
+ * 필요한 건 query·doc 두 문장을 받아 0~1 사이 double 점수를 돌려주는 score(/* ... *&#47;) 하나뿐입니다.
  */
 public class RelevanceScorer {
 

@@ -4,9 +4,11 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
 import java.util.List;
 import java.util.Map;
+
+
+
 
 /**
  * Data transfer object mirroring the fields of {@link com.example.lms.compare.state.CompareState}

@@ -4,9 +4,11 @@ package com.example.lms.model;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
 import java.math.BigDecimal;
 import java.time.LocalDate;
+
+
+
 
 /**
  * OpenAI 모델 메타데이터 저장용 JPA 엔티티

@@ -6,14 +6,15 @@ import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import java.util.*;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
+
 @RequiredArgsConstructor
 public class EvidenceRepairHandler implements ContentRetriever {
+    private static final Logger log = LoggerFactory.getLogger(EvidenceRepairHandler.class);
 
     private final WebSearchRetriever web;
     private final SubjectResolver subjectResolver;

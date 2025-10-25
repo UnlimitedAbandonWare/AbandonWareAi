@@ -3,11 +3,13 @@ package com.example.lms.service.subject;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.repository.DomainKnowledgeRepository;
 import org.springframework.stereotype.Component;
-
 import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+
+
 
 /**
  * 사용자 쿼리에서 핵심 주제어를 추출하는 메인 해석기 (통합 버전).

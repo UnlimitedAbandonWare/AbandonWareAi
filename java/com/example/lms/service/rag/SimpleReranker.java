@@ -2,9 +2,11 @@ package com.example.lms.service.rag;
 
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.stream.Collectors;
+
+
+
 
 @Component
 public class SimpleReranker {

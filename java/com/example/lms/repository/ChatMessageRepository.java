@@ -1,13 +1,13 @@
 package com.example.lms.repository;
-import java.util.List;
 
+import java.util.List;
 import com.example.lms.domain.ChatMessage;
 import org.springframework.data.jpa.repository.JpaRepository;
-
 import java.util.Optional;
 
-import org.springframework.data.jpa.repository.JpaRepository;
-import com.example.lms.domain.ChatMessage;
+
+
+
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
     List<ChatMessage> findBySessionId(Long sessionId);

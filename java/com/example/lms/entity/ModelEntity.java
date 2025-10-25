@@ -8,9 +8,11 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-
 import java.math.BigDecimal;
 import java.time.LocalDate;
+
+
+
 
 /**
  * JPA 엔티티: OpenAI 모델 메타데이터 저장용

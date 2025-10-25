@@ -3,9 +3,11 @@ package com.example.lms.service.rag.fusion;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.stream.Collectors;
+
+
+
 
 /**
  * 여러 검색 결과 리스트를 RRF(Reciprocal Rank Fusion) 알고리즘으로 융합하여
@@ -51,6 +53,10 @@ public class ReciprocalRankFuser {
             return Collections.emptyList();
         }
 
+        // Use a simple RRF score without any z-score normalisation or min/max
+        // scaling.  The original definition of Reciprocal Rank Fusion sums
+        // 1/(k + rank) across all sources.  Normalisation or capping is
+        // explicitly avoided to preserve the ranking based solely on ranks.
         Map<String, Double> scores = new HashMap<>();
         // LinkedHashMap을 사용하여 처음 등장한 순서를 유지 (안정성 확보)
         Map<String, Content> firstAppearance = new LinkedHashMap<>();
@@ -61,20 +67,19 @@ public class ReciprocalRankFuser {
             int rank = 0;
             for (Content content : list) {
                 if (content == null) continue;
-
                 rank++; // RRF의 rank는 1부터 시작
                 String key = keyOf(content);
-
                 // 처음 등장한 문서만 저장 (중복 방지)
                 firstAppearance.putIfAbsent(key, content);
-
                 // RRF 점수 계산 및 누적
                 double reciprocalRankScore = 1.0 / (k + rank);
                 scores.merge(key, reciprocalRankScore, Double::sum);
             }
         }
-
-        // 계산된 점수를 기준으로 내림차순 정렬하여 상위 topK개만 반환
+        if (scores.isEmpty()) {
+            return Collections.emptyList();
+        }
+        // 계산된 RRF 점수를 기준으로 내림차순 정렬하여 상위 topK개만 반환합니다.
         return scores.entrySet().stream()
                 .sorted(Map.Entry.comparingByValue(Comparator.reverseOrder()))
                 .limit(Math.max(1, topK))

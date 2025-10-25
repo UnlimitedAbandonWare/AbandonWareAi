@@ -4,10 +4,12 @@ package com.example.lms.domain;
 import com.example.lms.domain.Course;
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
-
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+
+
+
 
 /**
  * 교수(Professor) 엔티티

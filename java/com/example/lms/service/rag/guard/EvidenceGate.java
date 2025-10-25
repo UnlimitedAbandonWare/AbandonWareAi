@@ -2,11 +2,13 @@ package com.example.lms.service.rag.guard;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
+
+
+
 
 /**
  * 질문에 답변하기에 앞서 수집된 컨텍스트(증거)가 충분한지 양적으로 판단하는 게이트입니다.

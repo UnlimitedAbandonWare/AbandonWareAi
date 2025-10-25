@@ -3,8 +3,11 @@ package com.example.lms.learning.gemini;
 import com.example.lms.dto.learning.LearningEvent;
 import com.example.lms.service.MemoryReinforcementService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * Intercepts the chat pipeline after fact verification to trigger knowledge
@@ -14,8 +17,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-@Slf4j
 public class LearningWriteInterceptor {
+    private static final Logger log = LoggerFactory.getLogger(LearningWriteInterceptor.class);
 
     private final GeminiCurationService curationService;
     private final MemoryReinforcementService memorySvc;

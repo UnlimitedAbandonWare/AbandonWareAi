@@ -1,7 +1,6 @@
 // src/main/java/com/example/lms/web/ReactorMdcLifter.java
 package com.example.lms.web;
 
-import lombok.extern.slf4j.Slf4j;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
 import org.slf4j.MDC;
@@ -10,19 +9,22 @@ import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Operators;
 import reactor.util.context.Context;
-
-import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * Bridges Reactor Context -> MDC via a global hook.
  */
-@Slf4j
 @Configuration
 public class ReactorMdcLifter {
+    private static final Logger log = LoggerFactory.getLogger(ReactorMdcLifter.class);
 
     @PostConstruct
     public void hook() {

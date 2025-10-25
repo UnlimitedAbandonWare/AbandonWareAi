@@ -3,6 +3,8 @@ package com.example.lms.gptsearch.web;
 import com.example.lms.gptsearch.web.dto.WebSearchQuery;
 import com.example.lms.gptsearch.web.dto.WebSearchResult;
 
+
+
 /**
  * A provider of live web search results.  Implementations of this
  * interface wrap external APIs such as Bing, Tavily or Google Custom

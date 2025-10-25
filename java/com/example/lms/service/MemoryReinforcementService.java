@@ -1,7 +1,9 @@
 package com.example.lms.service;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.regex.Pattern;
 import com.example.lms.service.VectorStoreService;
-
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.repository.TranslationMemoryRepository;
 import com.example.lms.service.reinforcement.RewardScoringEngine;
@@ -9,29 +11,31 @@ import com.example.lms.service.reinforcement.SnippetPruner;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import jakarta.annotation.PostConstruct;
-import lombok.extern.slf4j.Slf4j;
-import java.time.Duration;                    // ★ NEW
-import java.time.LocalDateTime;              // ★ NEW
 import org.springframework.beans.factory.annotation.Value;
-
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
-
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
-
 import org.springframework.data.repository.query.Param;
+import java.util.List;
+
+
+import java.time.Duration;                    // ★ NEW
+import java.time.LocalDateTime;              // ★ NEW
+
+
+
 import java.lang.reflect.Method;                 // NEW
 import java.nio.charset.StandardCharsets;       // NEW
 import java.security.MessageDigest;             // NEW
-import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException; // ⬅️ 누락 import 추가
-@Slf4j
 @Service
 @Transactional
 public class MemoryReinforcementService {
+    private static final Logger log = LoggerFactory.getLogger(MemoryReinforcementService.class);
+
 
     // ===== [볼츠만/담금질 상수] =====
     private static final double W_SIM  = 1.0;
@@ -103,12 +107,16 @@ public class MemoryReinforcementService {
                                      double score,
                                      String hash) {
 
+        // When no existing record is found, construct a new TranslationMemory with the
+        // computed source hash.  Using a lambda avoids relying on a Lombok-generated
+        // no‑arg constructor that may not be present if annotation processing fails.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
-                .orElseGet(TranslationMemory::new);
+                .orElseGet(() -> new TranslationMemory(hash));
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
-            tm.setSessionId((sid == null || sid.isBlank()) ? "*" : sid);
+            // [HARDENING] use __TRANSIENT__ instead of wildcard for unknown session
+            tm.setSessionId((sid == null || sid.isBlank()) ? "__TRANSIENT__" : sid);
             // 존재하는 수치 필드만 안전하게 초기화
             tm.setHitCount(0);
             tm.setSuccessCount(0);
@@ -227,7 +235,7 @@ public class MemoryReinforcementService {
 
         try {
             // (기존 긍/부정 점수 업데이트 로직)
-            // ... upsertViaRepository(sid, ...), incrementHitCountBySourceHash(...) 등 기존 구현 유지 ...
+            // / * ... * / upsertViaRepository(sid, / * ... * /), incrementHitCountBySourceHash(/ * ... * /) 등 기존 구현 유지 / * ... * /
 
             // 핵심: 에너지/온도 갱신
             updateEnergyAndTemperature(msgHash);
@@ -381,12 +389,14 @@ public class MemoryReinforcementService {
             log.debug("[Reinforce] skip store (score < cutoff or bad snippet). score={}, cutoff={}", score, lowScoreCutoff);
             return;
         }
-        String sid  = StringUtils.hasText(sessionId) ? sessionId : "*";
+        // [HARDENING] normalize null/blank to __TRANSIENT__
+        String sid  = StringUtils.hasText(sessionId) ? sessionId : "__TRANSIENT__";
         String hash = sha1(snippet);
 
         // 기존 레코드 조회 or 새로 생성
+        // When no record exists, construct a new TranslationMemory with the current snippet's hash.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
-                .orElseGet(TranslationMemory::new);
+                .orElseGet(() -> new TranslationMemory(hash));
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
@@ -439,7 +449,7 @@ public class MemoryReinforcementService {
             }
         } catch (Exception ignore) {}
         // + 벡터 색인 큐에 적재(예외 무시)
-        try { vectorStoreService.enqueue(sessionId != null ? sessionId : "*", snippet); } catch (Exception ignore) {}
+        try { vectorStoreService.enqueue(sessionId != null ? sessionId : "__TRANSIENT__", snippet); } catch (Exception ignore) {}
     }
 
     /**
@@ -474,8 +484,9 @@ public class MemoryReinforcementService {
      */
     public void reinforceMemoryWithText(String text) {
         if (!StringUtils.hasText(text)) return;
-        // 세션 미상 → 공용("*")으로 적재, 보수적 점수 0.5
-        reinforceWithSnippet("*", "", text, "TEXT", 0.5);
+        // 세션 미상 → 공용(__TRANSIENT__)으로 적재, 보수적 점수 0.5 [HARDENING]
+        // [HARDENING] unknown session -> __TRANSIENT__
+        reinforceWithSnippet("__TRANSIENT__", "", text, "TEXT", 0.5);
     }
 
     /* ────────────── 호환 유틸 ────────────── */
@@ -536,19 +547,21 @@ public class MemoryReinforcementService {
     }
     /* ====================== Missing helpers (added) ====================== */
 
-    /** 세션키 정규화: 숫자면 chat- 접두, 없으면 "*" */
+    /** 세션키 정규화: 숫자면 chat- 접두, 없으면 "__TRANSIENT__" */ // [HARDENING]
     private static String normalizeSessionId(String sessionId) {
-        if (!StringUtils.hasText(sessionId)) return "*";
+        // [HARDENING] return __TRANSIENT__ when no session id
+        if (!StringUtils.hasText(sessionId)) return "__TRANSIENT__";
         String s = sessionId.trim();
         if (s.startsWith("chat-")) return s;
         if (s.matches("\\d+")) return "chat-" + s;
         return s;
     }
 
-    /** “안정적인” 세션키 판단: 공용(*) | chat- 접두 | 6자 이상 영숫자/대시 */
+    /** “안정적인” 세션키 판단: chat- 접두 또는 6자 이상 영숫자/대시; '*' 및 __TRANSIENT__ are unstable */ // [HARDENING]
     private static boolean isStableSid(String sid) {
         if (!StringUtils.hasText(sid)) return false;
-        if ("*".equals(sid)) return true;
+        // [HARDENING] __TRANSIENT__ is not considered stable; we avoid wildcard '*'
+        if ("__TRANSIENT__".equals(sid)) return false;
         if (sid.startsWith("chat-")) return true;
         return Pattern.compile("^[A-Za-z0-9\\-]{6,}$").matcher(sid).matches();
     }
@@ -573,11 +586,11 @@ public class MemoryReinforcementService {
 
     /* =========================================================
      *  이하, 기존 서비스 내부 유틸/메서드 유지
-     *  - normalizeSessionId(...)
-     *  - isStableSid(...)
-     *  - storageHashFromSnippet(...)
-     *  - upsertViaRepository(...)
-     *  - reward(...)
+     *  - normalizeSessionId(/* ... *&#47;)
+     *  - isStableSid(/* ... *&#47;)
+     *  - storageHashFromSnippet(/* ... *&#47;)
+     *  - upsertViaRepository(/* ... *&#47;)
+     *  - reward(/* ... *&#47;)
      *  - etc.
      * ========================================================= */
 }

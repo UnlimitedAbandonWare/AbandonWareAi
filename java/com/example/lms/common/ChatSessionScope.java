@@ -1,6 +1,7 @@
 // src/main/java/com/example/lms/common/ChatSessionScope.java
 package com.example.lms.common;
 
+
 /** ThreadLocal 로 보관하는 ‘현재 chat_session.id’ */
 public final class ChatSessionScope {
     private static final ThreadLocal<Long> CURRENT = new ThreadLocal<>();

@@ -7,10 +7,12 @@ import com.example.lms.service.TranslationTrainingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.util.CollectionUtils; // [수정] CollectionUtils 임포트
-
 import java.util.List;
 import java.util.Map;
+
+
+import org.springframework.util.CollectionUtils; // [수정] CollectionUtils 임포트
+
 
 import static java.util.stream.Collectors.toList;
 
