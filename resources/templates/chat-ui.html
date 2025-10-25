@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI 서비스 통합 플랫폼</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet"/>
+
+  <meta name="_csrf" th:content="${_csrf?.token}" th:if="${_csrf}"/>
+  <meta name="_csrf_header" th:content="${_csrf?.headerName}" th:if="${_csrf}"/>
+  <!-- (선택) 브라우저 프리렌더 힌트 -->
+  <script type="speculationrules">{ "prerender": [] }</script>
+  <!-- Import custom font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <!-- Custom stylesheet -->
+  <!-- Updated stylesheet path to be relative. The CSS file resides in the same
+       directory as this HTML file, so a simple relative reference is
+       sufficient. -->
+  <!-- Use Thymeleaf to resolve the path to the CSS file in the static/css folder. -->
+  <link rel="stylesheet" th:href="@{/css/chat-style.css}"/>
+  <!-- Legacy styles disabled by changing type -->
+  <style id="legacy-styles" type="text/disabled-css">
+    :root {
+        --sidebar-width: 340px;
+        --border-color: #dee2e6;
+        --top-bar-height: 40px;
+    }
+
+    /* 공통 */
+    body, html {
+        height: 100%;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    /* ▼▼▼ Textarea 스크롤바 디자인 ▼▼▼ */
+    #messageInput::-webkit-scrollbar {
+        width: 8px;
+    }
+    #messageInput::-webkit-scrollbar-thumb {
+        background-color: #ccc;
+        border-radius: 4px;
+    }
+    #messageInput::-webkit-scrollbar-track {
+        background-color: #f1f1f1;
+    }
+    /* ▲▲▲ Textarea 스크롤바 디자인 ▲▲▲ */
+
+    /* 작은 화면(모바일)용 가독성 개선 */
+    @media (max-width: 575.98px) {
+        body, html {
+            font-size: 1rem;
+        }
+
+        .msg {
+            font-size: 1rem;
+        }
+
+        .form-control {
+            font-size: 1rem;
+            padding: .5rem 1rem;
+        }
+    }
+
+    /* 유틸리티 바 */
+    .top-utility-bar {
+        height: var(--top-bar-height);
+        background: #f8f9fa;
+        border-bottom: 1px solid var(--border-color);
+        padding: 0 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        font-size: .85rem;
+    }
+
+    .top-utility-bar a {
+        text-decoration: none;
+    }
+
+    /* 메인 레이아웃 */
+    .main-container {
+        display: flex;
+        height: calc(100% - var(--top-bar-height));
+        position: relative;
+    }
+
+    /* 사이드바 */
+    .sidebar {
+        width: var(--sidebar-width);
+        min-width: var(--sidebar-width);
+        background: #f8f9fa;
+        border-right: 1px solid var(--border-color);
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        transition: transform .3s ease-in-out;
+        height: 100%;
+    }
+
+    .sidebar-body {
+        flex-grow: 1;
+        overflow-y: auto;
+        min-height: 0;
+    }
+
+    .session-list {
+        list-style: none;
+        padding-left: 0;
+    }
+
+    .session-item a {
+        display: block;
+        padding: .75rem 1rem;
+        border-radius: .5rem;
+        text-decoration: none;
+        color: #212529;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .session-item a:hover {
+        background: #e9ecef;
+    }
+
+    .session-item a.active {
+        background: #0d6efd;
+        color: #fff;
+        font-weight: 500;
+    }
+
+    /* ▼▼▼ [수정] admin-section 스타일은 더 이상 필요 없으므로 삭제 가능 ▼▼▼ */
+    /* .admin-section { ... } */
+
+    #adminStatus {
+        font-size: .8rem;
+        background: #f8f9fa;
+        padding: .25rem .5rem;
+        border-radius: .4rem;
+        text-align: center;
+    }
+    /* ▲▲▲ [수정] admin-section 스타일 삭제 및 adminStatus 스타일 단순화 ▲▲▲ */
+
+
+    /* 채팅 영역 */
+    .chat-area-wrapper {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        height: 100%;
+        padding: 1.25rem 2rem;
+    }
+
+    #chatWindow {
+        flex-grow: 1;
+        overflow-y: auto;
+        margin-bottom: 1rem;
+    }
+
+    .msg-container {
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+        margin-bottom: 1rem;
+    }
+
+    .msg {
+        padding: .75rem 1.25rem;
+        border-radius: 1.25rem;
+        max-width: 80%;
+        line-height: 1.55;
+        word-break: break-word;
+        /* 검색 과정 패널 등 HTML 블록이 깨지지 않도록 줄바꿈 유지 */
+        white-space: pre-line;
+    }
+
+    /* 메시지 내 링크 스타일 지정 */
+    .msg a {
+        color: #0d6efd;
+        text-decoration: underline;
+    }
+
+    .msg-user-container {
+        align-items: flex-end;
+    }
+
+    .msg-user {
+        background: #0d6efd;
+        color: #fff;
+    }
+
+    .msg-assistant-container {
+        align-items: flex-start;
+    }
+
+    .msg-assistant {
+        background: #e9ecef;
+    }
+
+    /* 메시지 내부 링크 스타일 */
+    .msg a {
+        text-decoration: underline;
+        color: #0d6efd;
+    }
+    .msg a:hover { opacity: .85; }
+
+    /* 검색 과정 패널 */
+    .search-trace {
+        display: block;
+        margin-top: .5rem;
+    }
+    .search-trace > summary {
+        cursor: pointer;
+        font-weight: 600;
+        list-style: none;
+    }
+    .search-trace > summary::-webkit-details-marker { display: none; }
+    .search-trace .trace-body {
+        margin-top: .25rem;
+        padding-left: .75rem;
+        border-left: 3px solid #ced4da;
+    }
+    .search-trace .trace-steps {
+        margin: .25rem 0 .5rem;
+        padding-left: 1rem;
+    }
+    .search-trace .trace-snippets ul {
+        margin: 0;
+        padding-left: 1.1rem;
+    }
+
+    /* 사이드바 토글러 (모바일) */
+    .sidebar-toggler {
+        display: none;
+    }
+
+    /* 로그인 팝오버 */
+    .login-popover {
+        --bs-popover-max-width: 300px;
+        REPLACE_ME: var(--bs-primary);
+        --bs-popover-header-bg: var(--bs-primary);
+        REPLACE_ME: var(--bs-white);
+    }
+
+    /* 992px 미만(태블릿/모바일) 레이아웃 */
+    @media (max-width: 991.98px) {
+        .sidebar {
+            position: fixed;
+            top: var(--top-bar-height);
+            left: 0;
+            z-index: 1050;
+            transform: translateX(-100%);
+            height: calc(100% - var(--top-bar-height));
+        }
+
+        .sidebar.show {
+            transform: translateX(0);
+        }
+
+        .sidebar-toggler {
+            display: block;
+            position: fixed;
+            top: calc(var(--top-bar-height) + .75rem);
+            left: .75rem;
+            z-index: 1100;
+        }
+
+        .chat-area-wrapper {
+            padding-top: 4.5rem;
+        }
+
+        /* ▼▼▼ [추가] 모바일에서 좌우 패딩 줄이기 ▼▼▼ */
+        .chat-area-wrapper {
+            padding-left: .75rem;
+            padding-right: .75rem;
+        }
+        /* ▲▲▲ [추가] 모바일에서 좌우 패딩 줄이기 ▲▲▲ */
+    }
+
+    /* Gemini 도움말 버튼 스타일 */
+    .help-icon {
+        background: none;
+        border: none;
+        padding: 0 .5rem;
+        font-size: 0.9rem;
+        line-height: 1;
+        color: #0d6efd;
+        cursor: pointer;
+        align-self: center;
+    }
+
+    /* Gemini 도움말 팝오버 스타일 */
+    #helpPopover {
+        border: 1px solid var(--border-color);
+        background: #ffffff;
+        padding: .6rem .8rem;
+        border-radius: .5rem;
+        box-shadow: 0 2px 6px rgba(0,0,0,.2);
+        max-width: 280px;
+        white-space: normal;
+        line-height: 1.4;
+    }
+  </style>
+  <script>
+    window.FeatureFlags = window.FeatureFlags || {};
+    if (typeof FeatureFlags.imageSimulator === 'undefined') {
+      FeatureFlags.imageSimulator = false;
+    }
+  </script>
+</head>
+<body>
+
+<div class="top-utility-bar">
+  <div sec:authorize="isAuthenticated()" class="d-flex align-items-center gap-3">
+    <span><strong sec:authentication="name" class="text-primary">사용자</strong>님 환영합니다.</span>
+    <a href="/index" class="btn btn-sm btn-outline-primary">LMS 가기</a>
+    <!--
+       로그아웃 링크에 id 속성을 부여합니다. id="logoutLink"를 유지해야
+       JavaScript에서 클릭을 가로채어 POST /logout 요청을 보내고 404를
+       방지할 수 있습니다.
+    -->
+    <a th:href="@{/logout}" id="logoutLink">로그아웃</a>
+  </div>
+  <div sec:authorize="!isAuthenticated()">
+    <a href="#" id="login-popover-trigger" role="button">로그인</a>
+  </div>
+  <!-- === Model Strategy UI (프런트 전용, 백엔드 무변경) =================== -->
+  <!-- Model strategy bar: styling moved to chat-style.css -->
+  <div id="model-strategy" class="model-strategy-bar">
+    <strong>Model:</strong>
+    <select id="modelStrategySelect" style="padding:.25rem .5rem;">
+      <option value="auto-moe" selected>Auto (MOE-first)</option>
+      <option value="manual">Manual (use picker)</option>
+      <option value="backend-default">Backend default</option>
+    </select>
+    <select id="modelPicker" style="padding:.25rem .5rem; max-width: 420px;"></select>
+    <span id="activeModelBadge" style="margin-left:auto;font-size:.9rem;opacity:.85">active: <code id="activeModelText">detecting…</code></span>
+    <!-- model-strategy.js 가 옵션 주입/동기화 -->
+    <!-- X-Model-Override 헤더 주입, body.model 동기화 -->
+  </div>
+</div>
+
+<button class="btn btn-light border sidebar-toggler" id="sideOpen" aria-label="Open sidebar">
+  <i class="bi bi-list"></i>
+</button>
+
+<div class="main-container">
+  <aside class="sidebar" id="sideNav" aria-label="대시보드 사이드바">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 class="mb-0">AI Platform</h4>
+      <button class="btn-close d-lg-none" id="sideClose" aria-label="Close sidebar"></button>
+    </div>
+
+    <div class="d-grid mb-3">
+      <button id="newChatBtn" class="btn btn-primary"><i class="bi bi-plus-lg"></i> 새 대화</button>
+    </div>
+
+    <div class="sidebar-body">
+      <nav aria-label="세션 목록">
+        <ul id="sessionList" class="session-list list-unstyled mb-3"></ul>
+      </nav>
+    </div>
+  </aside>
+  <main class="chat-area-wrapper">
+    <div class="d-flex justify-content-end gap-2 mb-2">
+      <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="offcanvas"
+              data-bs-target="#aiSettingsOffcanvas" aria-controls="aiSettingsOffcanvas">
+        <i class="bi bi-gear-wide-connected"></i> AI 코어 설정
+      </button>
+      <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse"
+              data-bs-target="#toolsCollapse" aria-expanded="false" aria-controls="toolsCollapse">
+        <i class="bi bi-tools"></i> 도구 및 학습
+      </button>
+    </div>
+
+    <div class="collapse" id="toolsCollapse">
+      <div class="card card-body p-3 mb-3">
+        <div class="row gy-4">
+          <div class="col-lg-7">
+            <h6 class="mb-3"><i class="bi bi-toggles2"></i> 부가 기능</h6>
+            <div class="d-flex flex-wrap gap-3">
+              <div class="form-check form-switch">
+                <input id="useAdaptiveTranslator" class="form-check-input" type="checkbox">
+                <label class="form-check-label" for="useAdaptiveTranslator">적응형 번역</label>
+              </div>
+              <div class="form-check form-switch">
+                <input id="autoTranslate" class="form-check-input" type="checkbox">
+                <label class="form-check-label" for="autoTranslate">한/영 자동번역</label>
+              </div>
+              <div class="form-check form-switch">
+                <input id="usePolish" class="form-check-input" type="checkbox">
+                <label class="form-check-label" for="usePolish">2-Pass 폴리싱</label>
+              </div>
+              <div class="form-check form-switch">
+                <input id="useHistory" class="form-check-input" type="checkbox" checked>
+                <label class="form-check-label" for="useHistory">대화 기록 저장</label>
+              </div>
+              <!-- 이해 요약 표시/저장 토글 -->
+              <div class="form-check form-switch">
+                <input id="understandingToggle" class="form-check-input" type="checkbox">
+                <label class="form-check-label" for="understandingToggle">이해 요약 표시/저장</label>
+              </div>
+
+              <!-- (NEW) GPT Web Search controls -->
+              <div class="w-100"></div>
+              <div class="mb-2" style="min-width:200px;">
+                <label for="searchModeSelect" class="form-label small">검색 모드</label>
+                <select id="searchModeSelect" class="form-select form-select-sm">
+                  <option value="AUTO" selected>자동 (AUTO)</option>
+                  <option value="OFF">끄기 (OFF)</option>
+                  <option value="FORCE_LIGHT">경량 (LIGHT)</option>
+                  <option value="FORCE_DEEP">강화 (DEEP)</option>
+                </select>
+              </div>
+              <!-- 정밀 검색 토글 -->
+              <div class="form-check form-switch">
+                <input id="precisionToggle" class="form-check-input" type="checkbox">
+                <label class="form-check-label" for="precisionToggle">정밀 검색(대용량 스캔)</label>
+              </div>
+              <div class="mb-2" style="min-width:200px;">
+                <label for="webProvidersSelect" class="form-label small">검색 공급자</label>
+                <select id="webProvidersSelect" class="form-select form-select-sm" multiple>
+                  <option value="BING">Bing</option>
+                  <option value="TAVILY">Tavily</option>
+                  <option value="GOOGLECSE">Google CSE</option>
+                  <option value="SERPAPI">SerpAPI</option>
+                </select>
+                <small class="text-muted">Ctrl/Command 키를 사용하여 여러 공급자를 선택할 수 있습니다.</small>
+              </div>
+              <div class="form-check form-switch">
+                <input id="officialSourcesOnly" class="form-check-input" type="checkbox">
+                <label class="form-check-label" for="officialSourcesOnly">공식 출처만</label>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-5 border-lg-start ps-lg-4">
+            <h6 class="mb-3"><i class="bi bi-gpu-card"></i> 학습 & 파인튜닝</h6>
+            <div class="d-flex gap-2 mb-2">
+              <button id="trainBtn" class="btn btn-sm btn-info w-100">
+                <span class="spinner-border spinner-border-sm d-none me-1"></span>
+                <i class="bi bi-magic"></i> 규칙 학습
+              </button>
+              <button id="startFineTuneBtn" class="btn btn-sm btn-danger w-100">
+                <span class="spinner-border spinner-border-sm d-none me-1"></span>
+                <i class="bi bi-fire"></i> 파인튜닝
+              </button>
+            </div>
+            <div class="input-group input-group-sm mb-2">
+              <input id="jobIdInput" class="form-control" placeholder="Job ID"/>
+              <button id="checkFineTuneBtn" class="btn btn-secondary">
+                <i class="bi bi-search"></i>
+              </button>
+            </div>
+            <div id="adminStatus" class="small text-muted">준비 완료.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <section id="chatWindow" aria-live="polite">
+      <div id="chatMessages" class="d-flex flex-column h-100"></div>
+    </section>
+
+    <div class="mt-auto">
+      <div class="input-group">
+        <textarea id="messageInput" class="form-control"
+                  placeholder="무엇이든 물어보세요. (Enter=전송 · Shift+Enter=줄바꿈)" rows="1" style="resize:none"></textarea>
+        <!-- 파일 첨부 버튼: 메시지 입력창 옆에 배치 -->
+        <button id="attachBtn" class="btn btn-outline-secondary" type="button"><i class="bi bi-paperclip"></i></button>
+        <button id="btn-mic" class="btn btn-outline-secondary ms-2" title="음성 입력"><i class="bi bi-mic"></i></button>
+        <button id="btn-tts" class="btn btn-outline-secondary ms-1" title="읽어주기"><i class="bi bi-volume-up"></i></button>
+        <button id="sendBtn" class="btn btn-primary px-3" type="button">
+          <i class="bi bi-send-fill"></i>
+        </button>
+        <!-- Gemini 도움말 버튼 -->
+        <button id="sendBtnHelp" class="help-icon" type="button" popovertarget="helpPopover" aria-label="도움말">?</button>
+      </div>
+      <!-- 숨김 파일 입력: 실제 업로드는 하지 않고 선택만 처리 -->
+      <input id="fileInput" type="file" class="d-none" />
+      <!-- 선택된 파일 표시 영역 -->
+      <div id="selectedFileWrap" class="mt-2 d-none">
+        <span id="selectedFileName" class="badge bg-light text-dark border">선택된 파일 없음</span>
+        <button id="clearFileBtn" type="button" class="btn-close btn-close-sm ms-2"></button>
+      </div>
+
+      <!-- Drag & Drop 영역: 파일을 끌어다 놓아서 업로드할 수 있습니다.  
+           채팅 입력 창 바로 아래에 위치시키며, 드래그 중에는 배경색을 변경하여
+           사용자가 올바른 영역에 파일을 두고 있는지 시각적으로 알려줍니다.  
+           파일 첨부 버튼을 통한 선택과 동일한 기능을 제공합니다. -->
+      <div id="dropZone" class="border border-dashed rounded p-3 text-muted my-2">
+        여기에 파일을 끌어다 놓으세요 (또는 클립 아이콘 클릭)
+      </div>
+        <div class="d-flex justify-content-end mt-2 gap-3">
+        <div class="form-check form-switch form-check-sm">
+          <input class="form-check-input" type="checkbox" id="useRag" title="웹 검색(RAG) 활성화">
+          <label class="form-check-label text-muted" for="useRag">지능형 정보보강 모드</label>
+        </div>
+        <!-- 추가: 실시간 Gemini 연동 학습 토글 -->
+        <div class="form-check form-switch form-check-sm">
+          <input class="form-check-input" type="checkbox" id="useGeminiLearning">
+          <label class="form-check-label text-muted" for="useGeminiLearning">실시간 Gemini 연동 학습</label>
+        </div>
+        <!-- 위치 기반 기능 토글 -->
+        <div class="form-check form-switch form-check-sm">
+          <input class="form-check-input" type="checkbox" id="locToggle">
+          <label class="form-check-label text-muted" for="locToggle">📍 위치 기반 기능</label>
+        </div>
+      </div>
+      <!-- 위치 기반 퀵액션 및 위치 전송 버튼 -->
+      <div id="quickActions" class="d-flex flex-wrap mt-2 gap-2">
+        <button class="btn btn-sm btn-outline-secondary qa" data-q="나 지금 어디야?">나 지금 어디야?</button>
+        <button class="btn btn-sm btn-outline-secondary qa" data-q="가장 가까운 약국 찾아줘">가까운 약국</button>
+        <button class="btn btn-sm btn-outline-secondary qa" data-q="여기서 시청까지 걸어서 얼마나 걸려?">시청까지 소요시간</button>
+        <button id="sendLocBtn" class="btn btn-sm btn-outline-primary">내 위치 전송</button>
+      </div>
+      <!-- Gemini 도움말 팝오버 -->
+      <div id="helpPopover" popover>설명 로딩 중...</div>
+    </div>
+  </main>
+</div>
+
+<template id="login-form-template">
+  <form id="popoverLoginForm" class="p-2">
+    <div id="popoverLoginError" class="alert alert-danger p-1 small d-none mb-2 text-center">로그인 실패</div>
+    <div class="mb-2"><input type="text" name="username" class="form-control form-control-sm" placeholder="아이디" required></div>
+    <div class="mb-2"><input type="password" name="password" class="form-control form-control-sm" placeholder="비밀번호" required></div>
+    <div class="d-grid"><button type="submit" class="btn btn-primary btn-sm">로그인</button></div>
+  </form>
+</template>
+
+<script th:inline="javascript">
+  /*<![CDATA[*/
+  window.initialData = {
+    models: /*[[${models}]]*/ [],
+    currentModel: /*[[${currentModel}]]*/ null
+  };
+  /*]]>*/
+</script>
+
+<!-- === Offcanvas: AI 코어 설정 (스크립트 밖, 실제 DOM에 존재해야 함) === -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="aiSettingsOffcanvas" aria-labelledby="aiSettingsLabel">
+  <div class="offcanvas-header border-bottom">
+    <h5 class="offcanvas-title" id="aiSettingsLabel"><i class="bi bi-gear-wide-connected"></i> AI 코어 설정</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body">
+    <section aria-labelledby="gpt-settings-heading">
+      <h6 id="gpt-settings-heading" class="mb-3">GPT 상세 설정</h6>
+      <div class="mb-3">
+        <label class="form-label small" for="maxTokensSlider">Max Tokens: <span id="maxTokensValue">2048</span></label>
+        <input id="maxTokensSlider" type="range" class="form-range" min="256" max="16384" step="128" value="2048"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="maxMemorySlider">장기 기억 토큰: <span id="maxMemoryValue">7500</span></label>
+        <input id="maxMemorySlider" type="range" class="form-range" min="0" max="15000" step="500" value="7500"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="maxRagSlider">RAG 토큰: <span id="maxRagValue">5000</span></label>
+        <input id="maxRagSlider" type="range" class="form-range" min="0" max="10000" step="500" value="5000"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="searchTopKSlider">웹 스니펫 개수(top-k): <span id="searchTopKValue">5</span></label>
+        <input id="searchTopKSlider" type="range" class="form-range" min="1" max="30" step="1" value="5"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="systemPromptInput">시스템 프롬프트</label>
+        <textarea id="systemPromptInput" class="form-control form-control-sm" rows="3"></textarea>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="temperatureSlider">온도: <span id="temperatureValue">0.7</span></label>
+        <input id="temperatureSlider" type="range" class="form-range" min="0" max="2" step="0.1" value="0.7"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="topPSlider">Top P: <span id="topPValue">1.0</span></label>
+        <input id="topPSlider" type="range" class="form-range" min="0" max="1" step="0.05" value="1.0"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="freqPenaltySlider">반복 패널티: <span id="freqPenaltyValue">0.0</span></label>
+        <input id="freqPenaltySlider" type="range" class="form-range" min="-2.0" max="2.0" step="0.1" value="0.0"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small" for="presPenaltySlider">주제 패널티: <span id="presPenaltyValue">0.0</span></label>
+        <input id="presPenaltySlider" type="range" class="form-range" min="-2.0" max="2.0" step="0.1" value="0.0"/>
+      </div>
+      <button id="saveSettingsBtn" class="btn btn-success w-100">
+        <i class="bi bi-check-lg"></i> 설정 저장
+      </button>
+    </section>
+    <section class="mt-4 pt-4 border-top" aria-labelledby="model-settings-heading">
+      <h6 id="model-settings-heading" class="mb-2">기본 모델</h6>
+      <div class="input-group">
+        <select id="defaultModelSelect" class="form-select"></select>
+        <button id="saveModelBtn" class="btn btn-outline-success" aria-label="Save model">
+          <i class="bi bi-save"></i>
+        </button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- === Scripts (순서 중요) === -->
+<!-- Updated script paths to point to local files in the current directory
+     instead of the non-existent /js folder. These files live alongside this
+     HTML document, so the relative paths ensure they are loaded correctly
+     when the app is deployed. -->
+<!-- Local scripts: remove the `/js/` prefix so that the browser loads
+     the JavaScript files from the current folder. These placeholder
+     scripts will be generated alongside this HTML file. -->
+<!-- Updated script tags to use Thymeleaf path resolution. Each JavaScript file resides
+     in the static/js directory, so the @{/js/...} syntax correctly resolves
+     their locations when the application is deployed. -->
+<script type="module" th:src="@{/js/fetch-wrapper.js}"></script>
+<script defer th:src="@{/js/model-strategy.js}"></script>
+<script type="module" th:src="@{/js/chat.js(v=${#dates.createNow().time})}"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
