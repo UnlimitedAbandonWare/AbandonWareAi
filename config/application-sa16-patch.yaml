@@ -1,0 +1,22 @@
+nova:
+  modes:
+    hypernova:
+      enabled: true
+      plan: classpath:plans/hypernova.v1.yaml
+  fusion:
+    twpm:
+      p-base: 2.0
+      tail-quantile: 0.15
+    cvar:
+      alpha: 0.15
+      mix: 0.5
+  rerank:
+    dpp:
+      size: 10
+      lambda: 0.7
+  safety:
+    citation:
+      min: 3
+    final-sigmoid:
+      k: 10.0
+      x0: 0.85

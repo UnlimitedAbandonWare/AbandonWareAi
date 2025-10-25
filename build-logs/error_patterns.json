@@ -1,0 +1,15 @@
+{
+  "spring.beans.unsatisfied-dependency": 2,
+  "config.value.invalid-boolean.probe.search.enabled": 4,
+  "spring.boot.application-run-failed": 1,
+  "spring.beans.type-mismatch": 1,
+  "gradle.bootRun.failed": 1,
+  "gradle.process.non-zero-exit": 1,
+  "javac.cannot-find-symbol": 1,
+  "javac.missing-variable.enabled": 1,
+  "gradle.compileJava.failed": 1,
+  "java.illegal_start_of_expression": 1,
+  "java.expected_semicolon_or_ternary": 2,
+  "java.class_expected_extra_closing_brace": 1,
+  "java.malformed_comment_javadoc": 1
+}

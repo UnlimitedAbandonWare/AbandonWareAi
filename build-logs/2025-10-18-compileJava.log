@@ -1,0 +1,11 @@
+> Task :compileJava
+C:\AbandonWare\demo-1\demo-1\src\main\java\com\abandonware\ai\probe\SearchProbeController.java:37: error: cannot find symbol
+        if (!enabled) return ResponseEntity.status(403).body("Probe disabled");
+             ^
+  symbol:   variable enabled
+  location: class SearchProbeController
+1 error
+
+> Task :compileJava FAILED
+
+FAILURE: Build failed with an exception.

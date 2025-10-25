@@ -1,0 +1,51 @@
+spring:
+  config:
+    activate:
+      on-profile: zerobreak
+zerobreak:
+  enabled: true
+  require_signed_token=[REDACTED]
+  default_policy: [recency, max_recall]
+  whitelist_override: conditional  # off|conditional|on
+  citation_gate_min_sources: 3
+  final_sigmoid_threshold: 0.90
+  banner_text: "【주의: 확장 탐색(Zero Break) 모드 적용】"
+  header_names:
+    token=[REDACTED]
+    policy: X-ZeroBreak-Policy
+naver:
+  search:
+    web-top-k: 24
+    timeout-ms: 3500
+  hedge:
+    enabled: true
+    delay-ms: 120
+retrieval:
+  vector:
+    enabled: true
+  fusion:
+    rrf:
+      weighted: true
+onnx:
+  enabled: true
+upstash:
+  cache:
+    ttl-seconds: 900
+  ratelimiter:
+    enabled: true
+probe:
+  search:
+    enabled: true
+    admin-token=[REDACTED]
+soak:
+  enabled: true
+telemetry:
+  sse:
+    enabled: true
+trace:
+  forward-request-ids: true
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

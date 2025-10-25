@@ -1,0 +1,70 @@
+{
+  "spring.beans.unsatisfied-dependency": [
+    "2025-10-18T20:16:00.742+0900 WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\n2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]",
+    "2025-10-18T20:16:00.742+0900 WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\n2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]"
+  ],
+  "config.value.invalid-boolean.probe.search.enabled": [
+    "2025-10-18T20:16:00.742+0900 WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\n2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]",
+    "2025-10-18T20:16:00.742+0900 WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\n2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]",
+    "2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]\n> Task :bootRun FAILED",
+    "org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]\n> Task :bootRun FAILED\nFAILURE: Build failed with an exception."
+  ],
+  "spring.boot.application-run-failed": [
+    "2025-10-18T20:16:00.742+0900 WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\n2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]"
+  ],
+  "spring.beans.type-mismatch": [
+    "2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\\AbandonWare\\demo-1\\demo-1\\build\\classes\\java\\main\\com\\example\\lms\\probe\\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]\n> Task :bootRun FAILED"
+  ],
+  "gradle.bootRun.failed": [
+    "Caused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]\nCaused by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]\n> Task :bootRun FAILED\nFAILURE: Build failed with an exception.\n* What went wrong:"
+  ],
+  "gradle.process.non-zero-exit": [
+    "* What went wrong:\nExecution failed for task ':bootRun'.\n> Process 'command 'C:\\jdk\\jdk-17.0.13\\bin\\java.exe'' finished with non-zero exit value 1"
+  ],
+  "javac.cannot-find-symbol": [
+    "> Task :compileJava\nC:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\abandonware\\ai\\probe\\SearchProbeController.java:37: error: cannot find symbol\n        if (!enabled) return ResponseEntity.status(403).body(\"Probe disabled\");\n             ^"
+  ],
+  "javac.missing-variable.enabled": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\abandonware\\ai\\probe\\SearchProbeController.java:37: error: cannot find symbol\n        if (!enabled) return ResponseEntity.status(403).body(\"Probe disabled\");\n             ^\n  symbol:   variable enabled\n  location: class SearchProbeController"
+  ],
+  "gradle.compileJava.failed": [
+    "1 error\n\n> Task :compileJava FAILED\n\nFAILURE: Build failed with an exception."
+  ],
+  "sessions": [
+    {
+      "timestamp": "2025-10-24T00:06:54.654564Z",
+      "fixed": [
+        {
+          "file": "/mnt/data/workdir_src111_merges15/src/main/java/com/example/lms/service/rag/EmbeddingModelCrossEncoderReranker.java",
+          "line": 227,
+          "pattern": "java.illegal_start_of_expression",
+          "fix": "merge split multiplication into assignment"
+        },
+        {
+          "file": "/mnt/data/workdir_src111_merges15/src/main/java/com/example/lms/service/rag/mp/LowRankWhiteningStats.java",
+          "line": 79,
+          "pattern": "java.expected_semicolon_or_ternary",
+          "fix": "replace '-' with '?' in ternary; ensure double literal"
+        },
+        {
+          "file": "/mnt/data/workdir_src111_merges15/src/main/java/com/example/lms/service/rag/mp/LowRankWhiteningStats.java",
+          "line": 101,
+          "pattern": "java.expected_semicolon_or_ternary",
+          "fix": "replace '-' with '?' in ternary; null guard"
+        },
+        {
+          "file": "/mnt/data/workdir_src111_merges15/src/main/java/com/example/lms/service/reinforcement/RewardScoringEngine.java",
+          "line": 186,
+          "pattern": "java.class_expected_extra_closing_brace",
+          "fix": "remove extra '}' at EOF"
+        },
+        {
+          "file": "/mnt/data/workdir_src111_merges15/src/main/java/_abandonware_backup/ai/agent/tool/response/ToolResponse.java",
+          "line": 11,
+          "pattern": "java.malformed_comment_javadoc",
+          "fix": "split '*/**' into '*/' + '/**'"
+        }
+      ]
+    }
+  ]
+}

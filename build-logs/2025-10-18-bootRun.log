@@ -1,0 +1,10 @@
+2025-10-18T20:16:00.742+0900 WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\AbandonWare\demo-1\demo-1\build\classes\java\main\com\example\lms\probe\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]
+2025-10-18T20:16:00.794+0900 ERROR o.s.boot.SpringApplication - Application run failed
+org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'searchProbeController' defined in file [C:\AbandonWare\demo-1\demo-1\build\classes\java\main\com\example\lms\probe\SearchProbeController.class]: Unsatisfied dependency expressed through constructor parameter 1: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]
+Caused by: org.springframework.beans.TypeMismatchException: Failed to convert value of type 'java.lang.String' to required type 'boolean'; Invalid boolean value [{probe.search.enabled:false}]
+Caused by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]
+> Task :bootRun FAILED
+FAILURE: Build failed with an exception.
+* What went wrong:
+Execution failed for task ':bootRun'.
+> Process 'command 'C:\jdk\jdk-17.0.13\bin\java.exe'' finished with non-zero exit value 1

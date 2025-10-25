@@ -1,0 +1,24 @@
+# config/application-example.yml — 참고용 키
+retrieval:
+  kg:
+    enabled: true
+    order-index: 0
+
+onnx:
+  enabled: true
+
+probe:
+  search:
+    enabled: true
+  admin-token=[REDACTED]
+
+upstash:
+  url: ${UPSTASH_URL:}
+  api-key=[REDACTED]
+  cache:
+    ttl-seconds: 300
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true
