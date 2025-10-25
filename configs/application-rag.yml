@@ -1,0 +1,29 @@
+search:
+  rrf:
+    k: 60
+    weights:
+      ocr: 1.0
+      bing: 0.84
+      brave: 0.7056
+      naver: 0.5927
+  reranker:
+    enabled: true
+    topN: 70
+    batchSize: 24
+rag:
+  tesseract:
+    enabled: true
+    mode: SOFTMAX
+    temperature: 0.85
+    epsilon: 0.05
+    noise-sigma: 0.0
+    source-prior:
+      local: 0.7
+      web: 0.6
+      memory: 0.85
+      kb: 0.75
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

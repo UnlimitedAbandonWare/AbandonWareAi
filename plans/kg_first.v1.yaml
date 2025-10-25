@@ -1,0 +1,13 @@
+order: [KG, VECTOR, WEB]
+k:
+  kg: 10
+  vector: 8
+  web: 6
+timeouts:
+  webMs: 900
+  vectorMs: 900
+  kgMs: 1200
+gates:
+  domainWhitelist: normal
+  finalSigmoid: on
+  dppDiversity: on

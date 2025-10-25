@@ -1,0 +1,15 @@
+search:
+  rrf:
+    k: 60
+    weights:
+      bing: 1.0
+      brave: 0.84
+      naver: 0.7056
+  reranker:
+    enabled: true
+    topN: 70
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

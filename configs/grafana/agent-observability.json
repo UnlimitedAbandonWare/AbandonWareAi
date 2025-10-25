@@ -1,0 +1,160 @@
+{
+  "title": "Agent Observability",
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": true,
+  "tags": [
+    "agent",
+    "orchestrator",
+    "tooling"
+  ],
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Success Rate (5m)",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "1 - job:agent_step_error_rate",
+          "legendFormat": "success"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p50/p90/p99",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        }
+      },
+      "targets": [
+        {
+          "expr": "job:agent_step_latency_ms:p50",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "job:agent_step_latency_ms:p90",
+          "legendFormat": "p90"
+        },
+        {
+          "expr": "job:agent_step_latency_ms:p99",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Tool Calls per Minute",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "job:agent_tool_calls_per_min"
+        }
+      ],
+      "options": {
+        "displayMode": "basic"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Budget Blocks / Consent Required (per min)",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 6,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "job:agent_budget_block_per_min",
+          "legendFormat": "budget blocks"
+        },
+        {
+          "expr": "job:agent_consent_required_per_min",
+          "legendFormat": "consent required"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "DLQ Depth",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 11
+      },
+      "targets": [
+        {
+          "expr": "job:agent_dlq_depth"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top Tools (5m)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 6,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (tool) (rate(agent_tool_calls_total[5m])))",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "tool",
+        "type": "query",
+        "query": "label_values(agent_tool_calls_total, tool)",
+        "datasource": null,
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  }
+}

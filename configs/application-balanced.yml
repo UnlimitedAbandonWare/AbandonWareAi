@@ -1,0 +1,32 @@
+search:
+  providers:
+  - bing
+  - naver
+  - brave
+  rrf:
+    k: 60
+    minOverlap: 1
+    weights:
+      bing: 1.0
+      naver: 0.84
+      brave: 0.7056
+  cache:
+    ttlSeconds: 600
+  reranker:
+    enabled: true
+    model: onnx/cross-encoder-msmarco-MiniLM-L-6-v2.onnx
+    topN: 70
+    batchSize: 24
+    normalizeScores: true
+    scoreThreshold: 0.0
+    device: cpu
+    onnx:
+      intraOpNumThreads: 1
+      interOpNumThreads: 1
+      executionProviders:
+      - CPUExecutionProvider
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true
