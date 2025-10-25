@@ -1,0 +1,11 @@
+name: rulebreak.v1
+retrieval:
+  kalloc: { web-weight: 0.85, rag-weight: 0.15 }
+  web: { webTopK: 22, timeoutMs: 2500 }
+fusion: { calibratedRrf: true }
+rerank: { onnx: { enabled: true, budgetMs: 2000, maxConcurrency: 4 } }
+safety: { citationGate: { minOfficialSources: 1, minSnippetChars: 200 } }
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

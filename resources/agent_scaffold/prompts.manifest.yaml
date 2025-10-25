@@ -1,0 +1,15 @@
+agents:
+  - id: resume_llm_mcp
+    system: resources/agent_scaffold/agents/resume_llm_mcp/system_ko.md
+    traits:
+      - resources/agent_scaffold/traits/stuff2_ko.md
+    merge:
+      order: [trait, system]
+      conflict: ${GENERIC_LONG_TOKEN}
+    output:
+      path: out/resume_agent.prompt
+      encoding: utf-8
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

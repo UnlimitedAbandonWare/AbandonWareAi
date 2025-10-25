@@ -1,0 +1,332 @@
+spring:
+  autoconfigure:
+    exclude: null
+  codec:
+    max-in-memory-size: 16MB
+abandonware:
+  persona:
+    tutor: You are a patient and friendly tutor. Explain concepts step by step using
+      simple language and concrete examples. Encourage the user to ask follow‑up questions
+      when something is unclear. Avoid overly technical jargon unless asked.
+    analyzer: You are a critical analyst. Provide thorough reasoning, highlighting
+      pros and cons and exploring multiple perspectives. Focus on evidence and logical
+      argumentation. Maintain a neutral and factual tone.
+    brainstormer: You are a creative brainstormer. Generate a variety of ideas without
+      judging them. Encourage divergent thinking and explore unconventional possibilities.
+      Keep responses energetic and inspiring.
+  reranker:
+    backend: onnx-runtime
+    onnx:
+      model-path: classpath:/models/your-cross-encoder.onnx
+      execution-provider: cpu
+      vocab-path: classpath:/models/vocab.txt
+      max-seq-len: 256
+      normalize: true
+      fallback-enabled: false
+scoring:
+  path-alignment:
+    enabled: true
+search:
+  budget:
+    per-page-ms: 3500
+  llm:
+    backend: ${SEARCH_LLM_BACKEND:gemini}
+  keyword:
+    selected-terms:
+      max-must: ${REPLACE_ME:3}
+      cache-ttl-minutes: ${REPLACE_ME:10}
+  llm-terms:
+    enable: true
+    max-must: 3
+    cache-ttl-minutes: 10
+  brave:
+    enabled: ${BRAVE_ENABLED:${brave.enabled:true}}
+    api-key: ${BRAVE_API_KEY:${brave.api-key:}}
+    base-url: ${BRAVE_BASE_URL:${brave.base-url:https://api.search.brave.com}}
+    qps: ${BRAVE_QPS:${brave.qps:1}}
+  wiki:
+    enabled: true
+    lang: ko
+    user-agent: 'AbandonWareAI/1.0 (contact: you@example.com)'
+rag:
+  search:
+    top-k: 10
+  precision:
+    max-aggregate-chars: 35000
+  fuse:
+    candidates: 64
+  guard:
+    min-evidence-count: 2
+    REPLACE_ME: 1
+  safety:
+    enforceSid: true
+  index:
+    transient-namespace: __TRANSIENT__
+  snippet:
+    index-web-default: false
+    ttl-days: 14
+  embedding:
+    dimension-guard: true
+router:
+  allow-header-override: false
+  moe:
+    high: gpt-5-chat-latest
+    mini: gpt-5-mini
+    tokens-threshold: "REDACTED"    complexity-threshold: 0.55
+    uncertainty-threshold: 0.35
+    web-evidence-threshold: 0.55
+    escalate-on-rigid-temp: true
+  threshold: 0.62
+  margin: 0.08
+  learning-intents: PAIRING,REASONING
+naver:
+  hedge:
+    enabled: true
+  filters:
+    enable-domain-filter: true
+  fallback:
+    duckduckgo:
+      enabled: ${NAV_FALLBACK_DDG:false}
+    enable-keyword-filter: true
+    keyword-min-hits: 2
+    domain-allowlist:
+    - go.kr
+    - ac.kr
+    - lenovo.com
+    - news.naver.com
+    - hoyoverse.com
+    - hoyolab.com
+  search:
+    blocked-domains:
+    - ohmygod10.com
+    - messenger1004.com
+    - blog.messenger1004.com
+    - muscle1004.com
+    - hermes10901.com
+    query-suffix: ''
+ranking:
+  rrf:
+    k: 60
+    weights:
+      web: 1.0
+      semantic: 0.84
+      kg: 0.7056
+  rerank:
+    ce:
+      topK: 10
+authority:
+  tier-weights:
+    official: 1.0
+    guide: 0.85
+    wiki: 0.8
+    news: 0.7
+    community: 0.55
+rerank:
+  gate:
+    uncertainty-threshold: 0.45
+    disagreement-threshold: 0.25
+    margin-threshold: 0.08
+  ambiguity:
+    tau: 0.15
+    mixed-cluster-threshold: 0.35
+  rrf:
+    k: 60
+    weight:
+      locale: 0.4
+      language: 0.25
+      authority: 0.2
+      recency: 0.15
+    weights:
+      web: 1.0
+      semantic: 0.84
+      kg: 0.7056
+ce:
+  enabled: true
+  ambiguity-threshold: 0.35
+prompt:
+  ambiguous-first-ask: true
+  inject-source-tags: true
+feature-flags:
+  cluster-majority-gate: true
+  source-agreement:
+    topN: 7
+    minAgree: 5
+  terminal-intents:
+  - LOCATION
+  - AUTH
+  - HEALTHCHECK
+chat:
+  defaults:
+    useRag: false
+  resume:
+    replay-capacity: 512
+    ttl-seconds: 300
+location:
+  enabled: true
+kakao:
+  rest-key: ${KAKAO_REST_KEY:}
+google:
+  api-key: ${GOOGLE_API_KEY:}
+tmap:
+  app-key: ${TMAP_APP_KEY:}
+query-hygiene:
+  typo-map:
+    종운: 중운
+  synonym-map:
+    중운:
+    - Chongyun
+    달리아:
+    - Dahlia
+management:
+  endpoints:
+    web:
+      exposure:
+        include:
+        - health
+        - info
+        - prometheus
+        - metrics
+        - env
+        - logfile
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ai-core-src-x-1core
+local-llm:
+  enabled: false
+  provider: ollama
+  base-url: http://localhost:11434/v1
+  model: llama3:8b-instruct-q4_K_M
+  api-key: ollama
+gemini:
+  api:
+    key: ${GEMINI_API_KEY:}
+tavily:
+  api:
+    key: ${TAVILY_API_KEY:}
+openai:
+  image:
+    api-key: ${openai.api.key}
+    endpoint: https://api.openai.com/v1/images/generations
+    model: gpt-image-1
+    timeout: PT60S
+    size: 1024x1024
+  api:
+    url: https://api.openai.com/v1
+  chat:
+    model: gpt-5-mini
+    model-high-tier: gpt-5-chat-latest
+    force-high-tier: true
+  stt:
+    model: whisper-1
+  tts:
+    model: gpt-4o-mini-tts
+    voice: alloy
+guard:
+  evidence_regen:
+    enabled: true
+    min_web_docs: 1
+    min_total_docs: 2
+    action: REGENERATE_AND_ESCALATE
+logging:
+  level:
+    com.example.lms.plugin.image: INFO
+domain:
+  allowlist:
+    default-profile: official
+    external-dir: ''
+probe:
+  search:
+    enabled: false
+  admin-token: "REDACTED"  max-noise-ratio: 0.15
+retriever:
+  budget-ms:
+    total: 6000
+    self-ask: 500
+    analyze: 500
+    web: 3000
+    vector: 2000
+brave:
+  api:
+    key: ${BRAVE_API_KEY:}
+  timeoutMs: 2500
+groq:
+  api:
+    key: ${GROQ_API_KEY:}
+  base-url: https://api.groq.com/openai/v1
+  mini-model: llama-3.1-8b-instant
+  big-model: llama-3.1-70b-versatile
+upstash:
+  redis:
+    enabled: true
+    rest-url: ${UPSTASH_REDIS_REST_URL:}
+    rest-token: "REDACTED"  cache:
+    ttl-seconds: 600
+  ratelimit:
+    per-minute: 30
+retrieval:
+  fusion:
+    mode: weighted-rrf
+    softmax:
+      temperature: 1.0
+      calibration: minmax
+    rrf:
+      k: 60
+      weights:
+        w_web: 1.0
+        w_sem: 0.84
+        w_kg: 0.7056
+  vector:
+    enabled: true
+  kg:
+    half-life-days: 60
+    score:
+      weights: 0.25,0.45,0.20,0.10
+vector:
+  upstash:
+    enabled: true
+    url: ${UPSTASH_VECTOR_URL:}
+    token: "REDACTED"    index: ${UPSTASH_VECTOR_INDEX:rag}
+    connect-timeout-ms: 1500
+    read-timeout-ms: 2500
+  routing:
+    topics:
+      genshin:
+        upstash: 0.7
+        primary: 0.3
+      default:
+        upstash: 0.5
+        primary: 0.5
+    min-per-store: 1
+integrations:
+  n8n:
+    enabled: ${N8N_ENABLED:true}
+    notify-url: ${N8N_NOTIFY_URL:}
+    webhook-secret: "REDACTED"agent:
+  models:
+    path: ${AGENT_MODELS_PATH:classpath:configs/models.manifest.yaml}
+
+# ADDED v12: prcyk & ocr config
+
+  prcyk:
+    enabled: true
+    weights: { P: 0.2, R: 0.25, C: 0.25, Y: 0.2, K: 0.1 }
+    thresholds:
+      degrade: 0.55
+      fallback: 0.35
+    penalties:
+      rdi: 0.15
+
+rag:
+  ocr:
+    enabled: true
+    minConfidence: 0.65
+    maxPages: 50
+    chunk:
+      maxChars: 1200
+      overlap: 120
+    rrf:
+      weight: 1.2
+

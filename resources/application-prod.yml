@@ -1,0 +1,39 @@
+spring:
+  profiles: prod
+
+retrieval:
+  routing:
+    thresholds:
+      complexMinTokens: "${COMPLEXMINTOKENS}"
+      topKComplex: 24
+      topKWebRequired: 32
+      rerankMinCandidates: 12
+      budgetSimple: 0.20
+      budgetComplex: 0.40
+      budgetWeb: 0.60
+
+pass9x:
+"REDACTED"  threshold: 0.90
+  minEvidence: 2
+
+onnx:
+  rerank:
+    maxConcurrent: 6
+    acquireTimeoutMs: 100
+    minBudgetMs: 350
+    minCandidatesForCross: 12
+
+cache:
+  singleflight:
+    enabled: true
+    maxWaitMs: 600
+
+risk:
+  alpha: 0.6
+  stalePenalty: 0.30
+  lowAuthorityPenalty: 0.30
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

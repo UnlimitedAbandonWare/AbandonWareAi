@@ -1,0 +1,17 @@
+name: AP9_COST_SAVER
+version: '1'
+params:
+  use_cross_encoder: false
+  budget_ms: 1200
+chain:
+- alias_correct
+- retrieve_web
+- retrieve_vector
+- fuse_rrf
+- rerank_bi
+- final_sigmoid
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

@@ -1,0 +1,17 @@
+
+id: AP3_VEC_DENSE
+name: "Dense Vector First"
+params:
+  sources:
+    vector:
+      top_k: 24
+    web:
+      top_k: 8
+  reranker:
+    use_ce: true
+    ce_budget_ms: 600
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

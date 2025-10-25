@@ -1,0 +1,7 @@
+# Local development overrides
+server.port: 8080
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

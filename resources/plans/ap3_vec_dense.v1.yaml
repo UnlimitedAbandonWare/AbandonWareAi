@@ -1,0 +1,16 @@
+name: AP3_VEC_DENSE
+version: '1'
+params:
+  vector_only: true
+  vector_top_k: 15
+chain:
+- alias_correct
+- retrieve_vector
+- calibrate_scores
+- rerank_bi
+- final_sigmoid
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
