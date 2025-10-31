@@ -2,13 +2,15 @@
 package com.example.lms.controller;
 
 import com.example.lms.domain.TrainingJob;
-import com.example.lms.service.TrainingService; // 이 경로가 정확한지 확인
 import com.example.lms.service.TranslationTrainingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
 import java.util.Map;
+
+
+import com.example.lms.service.TrainingService; // 이 경로가 정확한지 확인
+
 
 /**
  * ✨ 비동기 학습(Job) + 즉시 학습(train-now) API를 모두 제공하는 단일 컨트롤러

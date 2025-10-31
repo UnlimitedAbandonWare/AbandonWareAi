@@ -7,7 +7,6 @@ import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.repository.ModelEntityRepository;
 import com.example.lms.service.ModelSettingsService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Controller;
@@ -16,9 +15,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
-
 import java.util.Comparator;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * PageController – 전역/관리자 페이지 + 모델 관리 통합 (2025-06-29 최종본)
@@ -28,10 +31,10 @@ import java.util.List;
  * • 모델 저장은 ModelSettingsService로 위임하여 비즈니스 로직을 명확히 분리.
  * • DB에 current_model이 없을 때 application.properties의 기본 모델로 안전하게 폴백.
  */
-@Slf4j
 @Controller
 @RequiredArgsConstructor
 public class PageController {
+    private static final Logger log = LoggerFactory.getLogger(PageController.class);
 
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;

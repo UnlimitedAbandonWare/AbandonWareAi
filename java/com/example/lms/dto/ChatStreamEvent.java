@@ -1,5 +1,6 @@
 package com.example.lms.dto;
 
+
 /**
  * SSE 이벤트 페이로드.
  * type: "status" | "trace" | "token" | "final" | "error" | "thought"

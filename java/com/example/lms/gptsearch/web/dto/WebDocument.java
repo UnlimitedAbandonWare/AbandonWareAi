@@ -2,6 +2,8 @@ package com.example.lms.gptsearch.web.dto;
 
 import java.time.Instant;
 
+
+
 /**
  * Represents a single web search hit returned by a provider.  Each
  * document includes a URL, title, a short snippet of text and optional

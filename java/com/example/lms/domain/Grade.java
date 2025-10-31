@@ -5,6 +5,8 @@ import com.example.lms.domain.Student;
 import jakarta.persistence.*;
 import lombok.*;
 
+
+
 @Entity
 @Table(name = "grades")
 @Data

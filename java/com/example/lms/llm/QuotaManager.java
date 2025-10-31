@@ -5,6 +5,8 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+
+
 /**
  * Tracks usage of language models and enforces simple soft limits on a
  * best‑effort basis.  The quotas are maintained per model identifier and
@@ -85,7 +87,8 @@ public final class QuotaManager {
      */
     private static int getLimitForModel(String model) {
         String envName = model.toUpperCase().replaceAll("[^A-Z0-9]", "_") + "_LIMIT_RPM";
-        String val = System.getenv(envName);
+        // Use system properties instead of environment variables to obtain limits
+        String val = System.getProperty(envName);
         if (val == null) return 60;
         try {
             return Integer.parseInt(val.trim());

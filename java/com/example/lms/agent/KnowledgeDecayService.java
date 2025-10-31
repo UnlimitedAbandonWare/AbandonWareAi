@@ -5,14 +5,17 @@ import com.example.lms.domain.scoring.SynergyStat;
 import com.example.lms.repository.DomainKnowledgeRepository;
 import com.example.lms.repository.SynergyStatRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * Service that gradually decays the confidence scores of knowledge entries based on recency of
@@ -20,11 +23,11 @@ import java.util.List;
  * associated with poor synergy statistics will see their confidence reduced.  This allows the
  * retrieval layer to prioritise fresher and more reliable knowledge.
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "agent.knowledge-decay", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class KnowledgeDecayService {
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeDecayService.class);
 
     private final DomainKnowledgeRepository knowledgeRepo;
     private final SynergyStatRepository synergyRepo;

@@ -2,6 +2,8 @@ package com.example.lms.service.rag.pre;
 
 import java.util.List;
 
+
+
 /** 인지 상태 DTO (PromptContext에 내장) */
 /**
  * Data transfer object capturing high‑level attributes about the user's query.  In

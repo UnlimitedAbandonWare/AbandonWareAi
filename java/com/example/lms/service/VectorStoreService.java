@@ -7,15 +7,18 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import com.example.lms.service.rag.LangChainRAGService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.springframework.stereotype.Service;
-
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * VectorStoreService – enriched version
@@ -31,21 +34,22 @@ import org.springframework.beans.factory.annotation.Value;
  *       재시도 로직 추가.</li>
  * </ul>
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class VectorStoreService {
+    private static final Logger log = LoggerFactory.getLogger(VectorStoreService.class);
 
     /*──────────────────────────────────  Core  ──────────────────────────────────*/
 
     private final EmbeddingModel embeddingModel;
+    @Qualifier("federatedEmbeddingStore")   // ← 주입 대상을 명시
     private final EmbeddingStore<TextSegment> embeddingStore;
 
     /** 한 번에 DB에 적재할 최대 청크. 기본값은 512이며, application.yml에서 vectorstore.batch-size로 재정의할 수 있다. */
     @Value("${vectorstore.batch-size:512}")
     private int batchSize;
 
-    /** <sha-256(text) → BufferEntry> : 중복-방지 & 배치버퍼 */
+    /** <sid:sha-256(text) → BufferEntry> : 중복-방지 & 배치버퍼 */ // [HARDENING] include sessionId in dedupe key
     private final ConcurrentHashMap<String, BufferEntry> queue = new ConcurrentHashMap<>();
 
     /** flush 실패 back-off */
@@ -60,16 +64,18 @@ public class VectorStoreService {
      *
      * @param sessionId   현재 챗 세션 id (null 가능 → "0")
      * @param text        원본 텍스트
-     * @param extraMeta   page · product · url ... 임의 메타데이터(선택)
+     * @param extraMeta   page · product · url /* ... *&#47; 임의 메타데이터(선택)
      */
     public void enqueue(String sessionId,
                         String text,
                         Map<String, Object> extraMeta) {
 
         if (text == null || text.isBlank()) return;
-        String sid = sessionId == null ? "0" : sessionId;
+        // [HARDENING] normalize session id and include it in dedupe key
+        String sid = (sessionId == null || sessionId.isBlank()) ? "__TRANSIENT__" : sessionId;
         String hash = DigestUtils.sha256Hex(text);
-        queue.putIfAbsent(hash, new BufferEntry(sid, text, extraMeta));
+        String key = sid + ":" + hash;
+        queue.putIfAbsent(key, new BufferEntry(sid, text, extraMeta));
         if (queue.size() >= batchSize) flush();
     }
 
@@ -111,8 +117,12 @@ public class VectorStoreService {
         } catch (Exception e) {
             log.warn("[VectorStore] 🔸 batch insert 실패 – {}", e.toString());
             // 실패한 snapshot 전체를 다시 큐에 되돌림
-            snapshot.forEach(be -> queue.putIfAbsent(
-                    DigestUtils.sha256Hex(be.text()), be));
+            // [HARDENING] restore failed entries with sid-prefixed key
+            snapshot.forEach(be -> {
+                String sid = (be.sessionId() == null || be.sessionId().isBlank()) ? "__TRANSIENT__" : be.sessionId();
+                String key = sid + ":" + DigestUtils.sha256Hex(be.text());
+                queue.putIfAbsent(key, be);
+            });
             // ❶ 1 → 2 → 4 → 8 ‥ 최대 1 분까지 back-off
             backoffMillis = Math.min(backoffMillis == 0 ? 1000 : backoffMillis * 2, 60_000);
         }
@@ -123,13 +133,17 @@ public class VectorStoreService {
     /** 메타데이터 빌더 – 세션 키(sid) 통일 + extra 메타 병합 */
     private Map<String, Object> buildMeta(BufferEntry be) {
         Map<String, Object> md = new HashMap<>();
+        // [HARDENING] merge extra meta first and ensure external sid is not overriding
+        if (be.extraMeta() != null) {
+            md.putAll(be.extraMeta());
+            md.remove(LangChainRAGService.META_SID);
+        }
         md.put(LangChainRAGService.META_SID, be.sessionId());
-        if (be.extraMeta() != null) md.putAll(be.extraMeta());
         // enrich with auto-extracted summary and keywords for improved recall and precision
         String text = be.text();
         if (text != null && !text.isBlank()) {
             // simple summarization: take first 100 characters
-            String summary = text.length() > 100 ? text.substring(0, 100) + "…" : text;
+            String summary = text.length() > 100 ? text.substring(0, 100) + "/* ... *&#47;" : text;
             md.put("summary", summary);
             // generate keywords from text: extract unique tokens longer than one character
             Set<String> keywords = extractKeywords(text);

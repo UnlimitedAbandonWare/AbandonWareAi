@@ -3,8 +3,10 @@ package com.example.lms.repository;
 
 import com.example.lms.domain.TranslationSample;
 import org.springframework.data.jpa.repository.JpaRepository;
-
 import java.util.List;
+
+
+
 
 /**
  * 번역 샘플 로그 테이블 접근용 JPA Repository

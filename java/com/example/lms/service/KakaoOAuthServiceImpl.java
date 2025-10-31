@@ -5,7 +5,6 @@ import com.example.lms.dto.KakaoFriends;
 import com.example.lms.service.KakaoFriendService;
 import com.example.lms.service.KakaoOAuthService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -14,16 +13,20 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
-
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /** 카카오 OAuth + "나에게 보내기" 구현체 */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class KakaoOAuthServiceImpl implements KakaoOAuthService {
+    private static final Logger log = LoggerFactory.getLogger(KakaoOAuthServiceImpl.class);
 
     /* ─────────── 설정 (@Value) ─────────── */
     @Value("${kakao.rest-api-key}")

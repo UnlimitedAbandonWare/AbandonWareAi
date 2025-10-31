@@ -2,14 +2,17 @@
 package com.example.lms.service.rag.auth;
 
 import com.example.lms.domain.enums.RerankSourceCredibility;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * URL 신뢰도(Authority)를 분류/감쇠 계수로 제공하는 서비스.
@@ -24,9 +27,8 @@ import java.util.stream.Collectors;
  *    - 값 범위 [0,1]을 등급으로 매핑: >=0.95 OFFICIAL, >=0.75 TRUSTED, >=0.50 COMMUNITY, 그 외 UNVERIFIED
  * 2) 설정 매칭이 없으면 내장 휴리스틱으로 분류(정부/교육/벤더/문서, 메이저 미디어/백과, 커뮤니티/블로그 등).
  */
-@Slf4j
-@Component
-public class AuthorityScorer {
+@Component("authAuthorityScorer")public class AuthorityScorer {
+    private static final Logger log = LoggerFactory.getLogger(AuthorityScorer.class);
 
     /**
      * application.properties에서 로드된 도메인별 가중치 테이블.
@@ -34,6 +36,15 @@ public class AuthorityScorer {
      * (예: search.authority.weights.official=apache.org:1.0,oracle.com:0.98)
      */
     private final Map<String, Double> table;
+
+    // Tier weight overrides.  These values are injected from the
+    // authority.tier-weights.* properties.  They allow per‑category tuning
+    // of the decay factor returned by {@link #decayFor(RerankSourceCredibility)}.
+    private final double tierOfficial;
+    private final double tierGuide;
+    private final double tierWiki;
+    private final double tierNews;
+    private final double tierCommunity;
 
     /**
      * 구성 값 병합:
@@ -48,7 +59,15 @@ public class AuthorityScorer {
             @Value("${search.authority.weights.official:}") String officialCsv,
             @Value("${search.authority.weights.wiki:}") String wikiCsv,
             @Value("${search.authority.weights.community:}") String communityCsv,
-            @Value("${search.authority.weights.blog:}") String blogCsv
+            @Value("${search.authority.weights.blog:}") String blogCsv,
+            // Tier weights for KR domains.  These values override the default
+            // decay factors used by {@link #decayFor(RerankSourceCredibility)} when
+            // present.  Each weight should be in the range [0,1].
+            @Value("${authority.tier-weights.official:1.0}") double wOfficial,
+            @Value("${authority.tier-weights.guide:0.85}")   double wGuide,
+            @Value("${authority.tier-weights.wiki:0.80}")    double wWiki,
+            @Value("${authority.tier-weights.news:0.70}")    double wNews,
+            @Value("${authority.tier-weights.community:0.55}") double wCommunity
     ) {
         LinkedHashMap<String, Double> merged = new LinkedHashMap<>();
         merged.putAll(parse(officialCsv));
@@ -62,6 +81,14 @@ public class AuthorityScorer {
         }
 
         this.table = Collections.unmodifiableMap(merged);
+
+        // Assign injected tier weights to fields.  These override the default
+        // decay factors used in {@link #decayFor(RerankSourceCredibility)}.
+        this.tierOfficial  = clamp(wOfficial);
+        this.tierGuide     = clamp(wGuide);
+        this.tierWiki      = clamp(wWiki);
+        this.tierNews      = clamp(wNews);
+        this.tierCommunity = clamp(wCommunity);
 
         if (table.isEmpty()) {
             log.info("[AuthorityScorer] No explicit weights loaded. Using heuristic-only classification.");
@@ -154,13 +181,20 @@ public class AuthorityScorer {
         return RerankSourceCredibility.UNVERIFIED;
     }
 
-    /** 등급별 지수 감쇠 상수(OFFICIAL=1.0 … UNVERIFIED=0.25). */
+    /** 등급별 지수 감쇠 상수(OFFICIAL=1.0 /* ... *&#47; UNVERIFIED=0.25). */
     public double decayFor(RerankSourceCredibility credibility) {
-        if (credibility == null) return 0.25;
+        if (credibility == null) {
+            return 0.25;
+        }
         return switch (credibility) {
-            case OFFICIAL   -> 1.0;
-            case TRUSTED    -> 0.75;
-            case COMMUNITY  -> 0.5;
+            case OFFICIAL   -> tierOfficial;
+            case TRUSTED    -> {
+                // Trusted sources encompass guide/wiki/news categories.  Use
+                // their average weight for a balanced decay factor.
+                double avg = (tierGuide + tierWiki + tierNews) / 3.0;
+                yield clamp(avg);
+            }
+            case COMMUNITY  -> tierCommunity;
             case UNVERIFIED -> 0.25;
         };
     }
@@ -208,6 +242,29 @@ public class AuthorityScorer {
         }
     }
 
+    /**
+     * Normalize a host name for matching purposes.  This helper lower‑cases
+     * the host and strips a leading "www." prefix when present.  No further
+     * processing is performed (e.g. eTLD+1 extraction) because public suffix
+     * parsing is not available.  The normalization is sufficient to
+     * distinguish between unrelated domains such as {@code hoyolab.com} and
+     * {@code nothoyolab.com} while still allowing subdomain matches such as
+     * {@code docs.example.com} → {@code example.com}.
+     *
+     * @param h the raw host (may be null)
+     * @return a normalized host or null when the input is null/blank
+     */
+    private static String normalizeHost(String h) {
+        if (h == null || h.isBlank()) {
+            return null;
+        }
+        String lower = h.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("www.")) {
+            lower = lower.substring(4);
+        }
+        return lower;
+    }
+
     /** [0,1]로 클램프 */
     private static double clamp(double value) {
         return Math.max(0.0, Math.min(1.0, value));
@@ -216,11 +273,22 @@ public class AuthorityScorer {
     /** 설정 테이블에서 가장 잘 매칭되는 가중치 선택(가장 높은 값 우선) */
     private static Double bestMatchingWeight(String host, Map<String, Double> table) {
         if (table == null || table.isEmpty()) return null;
+        if (host == null || host.isBlank()) {
+            return null;
+        }
+        // Normalize the input host once to avoid repeated allocations.
+        String hNorm = normalizeHost(host);
         Double best = null;
         for (Map.Entry<String, Double> e : table.entrySet()) {
             String key = e.getKey();
             if (key == null || key.isBlank()) continue;
-            if (host.contains(key)) {
+            String kNorm = normalizeHost(key);
+            if (kNorm == null) continue;
+            // Match exact domain or subdomains only.  We avoid partial
+            // substring matches (e.g. "nothoyolab.com" should not match
+            // "hoyolab.com").  A match occurs when the normalized host is
+            // identical to the key or ends with "." + key.
+            if (hNorm.equals(kNorm) || hNorm.endsWith("." + kNorm)) {
                 if (best == null || e.getValue() > best) {
                     best = e.getValue();
                 }

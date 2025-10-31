@@ -1,5 +1,6 @@
 package com.example.lms.dto;
 
+
 /**
  * 채팅 API 응답 DTO.
  *

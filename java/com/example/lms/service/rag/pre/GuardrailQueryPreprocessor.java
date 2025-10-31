@@ -8,15 +8,16 @@ import com.example.lms.service.subject.SubjectResolver;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+
+
+
 @Component("guardrailQueryPreprocessor")
-@Primary
 public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
 
     private final GameDomainDetector domainDetector;

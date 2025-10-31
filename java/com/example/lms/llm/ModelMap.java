@@ -1,5 +1,6 @@
 package com.example.lms.llm;
 
+
 /**
  * Centralises the mapping between logical model tiers and the concrete model
  * names.  The actual model identifiers are resolved from environment
@@ -23,7 +24,7 @@ public final class ModelMap {
      * otherwise a default of {@code gemini-2.5-flash-lite} is used.
      */
     public static String getFlashLiteModel() {
-        String m = System.getenv("GEMINI_FLASH_LITE_MODEL");
+        String m = System.getProperty("GEMINI_FLASH_LITE_MODEL");
         return (m == null || m.isBlank()) ? "gemini-2.5-flash-lite" : m;
     }
 
@@ -35,7 +36,7 @@ public final class ModelMap {
      * otherwise {@code gemini-2.5-flash} is returned.
      */
     public static String getFlashModel() {
-        String m = System.getenv("GEMINI_FLASH_MODEL");
+        String m = System.getProperty("GEMINI_FLASH_MODEL");
         return (m == null || m.isBlank()) ? "gemini-2.5-flash" : m;
     }
 
@@ -47,7 +48,7 @@ public final class ModelMap {
      * otherwise {@code gemini-2.5-pro} is returned.
      */
     public static String getProModel() {
-        String m = System.getenv("GEMINI_PRO_MODEL");
+        String m = System.getProperty("GEMINI_PRO_MODEL");
         return (m == null || m.isBlank()) ? "gemini-2.5-pro" : m;
     }
 
@@ -59,7 +60,7 @@ public final class ModelMap {
      * consulted, otherwise {@code gemini-1.5-flash-legacy} is used.
      */
     public static String getLargeContextModel() {
-        String m = System.getenv("GEMINI_LARGE_CONTEXT_MODEL");
+        String m = System.getProperty("GEMINI_LARGE_CONTEXT_MODEL");
         return (m == null || m.isBlank()) ? "gemini-1.5-flash-legacy" : m;
     }
 
@@ -72,7 +73,7 @@ public final class ModelMap {
      * (e.g. {@code gemini-embedding-001}).
      */
     public static String getEmbeddingModel() {
-        String m = System.getenv("EMBEDDING_BACKEND");
+        String m = System.getProperty("EMBEDDING_BACKEND");
         return (m == null || m.isBlank()) ? "text-embedding-3-small" : m;
     }
 
@@ -84,7 +85,7 @@ public final class ModelMap {
      * {@code gpt-5-chat-latest} is returned.
      */
     public static String getGptProModel() {
-        String m = System.getenv("GPT_PRO_MODEL");
+        String m = System.getProperty("GPT_PRO_MODEL");
         return (m == null || m.isBlank()) ? "gpt-5-chat-latest" : m;
     }
 }

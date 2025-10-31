@@ -14,10 +14,12 @@ import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
-
 import java.io.IOException;
 import java.util.Optional;
 import java.util.UUID;
+
+
+
 
 /**
  * Servlet filter that establishes per‑request tracing identifiers and
@@ -29,7 +31,7 @@ import java.util.UUID;
  * the request completes to avoid leakage between threads.
  */
 @Slf4j
-@Component
+@Component("exTraceFilter")
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class TraceFilter implements Filter {
 

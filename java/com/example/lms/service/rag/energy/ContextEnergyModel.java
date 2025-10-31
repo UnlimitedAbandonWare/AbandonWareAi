@@ -5,10 +5,12 @@ import com.example.lms.service.rag.auth.AuthorityScorer;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+
+
 
 /** 컨텍스트 집합의 총 에너지를 최소화하도록 선택 */
 @Component

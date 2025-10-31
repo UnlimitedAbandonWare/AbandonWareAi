@@ -3,15 +3,18 @@ package com.example.lms.search;
 
 import dev.langchain4j.model.chat.ChatModel;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * ─────────────────────────────────────────────────────────
@@ -24,8 +27,8 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class QueryExpander {
+    private static final Logger log = LoggerFactory.getLogger(QueryExpander.class);
 
     private final KeyTermMiner        miner;
     private final ChatModel           chatModel;

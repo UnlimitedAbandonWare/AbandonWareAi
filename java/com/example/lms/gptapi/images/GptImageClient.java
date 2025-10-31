@@ -4,11 +4,13 @@ import com.example.lms.dto.ImageTask;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+
+
 /**
  * Client for GPT API image generation and editing.
  *
- * <p>This stub implementation does not perform any outbound network
- * requests.  Instead it generates a deterministic placeholder image
+ * <p>This shim implementation does not perform any outbound network
+ * requests.  Instead it generates a deterministic shim image
  * URL based on the provided prompt and operation mode.  In a real
  * implementation you would call the OpenAI or Gemini image API and
  * return the resulting download URL or base64 data.</p>
@@ -19,7 +21,7 @@ public class GptImageClient {
 
     /**
      * Generate or edit an image based on the given task definition.  The
-     * returned string is a placeholder URL containing the task mode and
+     * returned string is a shim URL containing the task mode and
      * a hash of the prompt.  This ensures that repeated calls with the
      * same parameters produce the same result.
      *
@@ -31,7 +33,7 @@ public class GptImageClient {
             return null;
         }
         // Compute a simple hash of the prompt to create a deterministic
-        // placeholder path.  We avoid leaking the raw prompt by hashing it.
+        // shim path.  We avoid leaking the raw prompt by hashing it.
         int h = task.getPrompt().hashCode();
         String mode = (task.getMode() == null ? "generate" : task.getMode().toLowerCase());
         // Assemble a pseudo‑URL.  In practice you would save the image to

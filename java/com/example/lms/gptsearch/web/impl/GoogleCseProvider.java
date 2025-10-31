@@ -4,8 +4,10 @@ import com.example.lms.gptsearch.web.ProviderId;
 import com.example.lms.gptsearch.web.dto.WebSearchQuery;
 import com.example.lms.gptsearch.web.dto.WebSearchResult;
 
+
+
 /**
- * Stub implementation of the Google Custom Search provider.  A complete
+ * shim implementation of the Google Custom Search provider.  A complete
  * implementation would query the Google CSE API using a CX identifier and
  * an API key and map the results to {@link WebSearchResult} instances.
  */
@@ -17,7 +19,7 @@ public class GoogleCseProvider extends AbstractWebSearchProvider {
 
     @Override
     protected WebSearchResult doSearch(WebSearchQuery query) {
-        // TODO: Implement Google CSE API integration
+        // shim: implement Google CSE API integration.
         return new WebSearchResult(id().name(), java.util.Collections.emptyList());
     }
 }

@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+
+
 /**
  * 도메인 특화 지식을 데이터베이스에서 조회하고 관리하는 중앙 서비스 인터페이스입니다.
  * 이 서비스는 RAG 파이프라인의 여러 단계에서 '진실의 원천(Source of Truth)' 역할을 수행합니다.
@@ -173,4 +175,17 @@ public interface KnowledgeBaseService {
     default IntegrationStatus apply(com.example.lms.dto.learning.KnowledgeDelta delta) {
         return IntegrationStatus.SKIPPED;
     }
+
+
+    /**
+     * Returns the last accessed timestamp for the specified entity, if present.
+     * Implementations may update this field when relationships are retrieved.
+     */
+    java.util.Optional<java.time.Instant> getLastAccessedAt(String domain, String entityName);
+
+    /**
+     * Returns the confidence score (0.0~1.0) for the specified entity, if present.
+     */
+    java.util.Optional<java.lang.Double> getConfidenceScore(String domain, String entityName);
+
 }

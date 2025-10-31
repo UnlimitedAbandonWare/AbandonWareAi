@@ -6,9 +6,11 @@ import com.example.lms.service.rag.pre.QueryContextPreprocessor;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.regex.Pattern;
+
+
+
 
 @Component
 public class ElementConstraintScorer {
