@@ -1,0 +1,95 @@
+{
+  "timestamp": "2025-10-15T05:41:05.892670Z",
+  "files_changed": 22,
+  "duplicates_removed_total": 22,
+  "details": [
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/app/src/main/resources/application-addons-example.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/app/src/main/resources/application-diag.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/app/src/main/resources/application.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/app/src/main/resources/application-features-example.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/app/src/main/resources/application-gap15-stubs.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/app/src/main/resources/application-prod.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/config/application-example.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/config/application-zerobreak.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/configs/application-balanced.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/configs/application-news.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/configs/application-rag.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/extras/gap15-stubs_v1/src/main/resources/application-stubs.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-dev.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-example.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-local.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-secrets.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-recency30.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-prod.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-features-example.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-merge16.yml",
+      "duplicates_removed": 1
+    },
+    {
+      "file": "/mnt/data/work_src111s_merge15_fix2/src/main/resources/application-patch.yml",
+      "duplicates_removed": 1
+    }
+  ]
+}

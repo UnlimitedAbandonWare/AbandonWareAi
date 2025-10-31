@@ -1,0 +1,28 @@
+{
+  "timestamp": "2025-10-17T12:57:15.009",
+  "patterns_detected": [
+    {
+      "code": "ILLEGAL_ESCAPE_CHAR",
+      "hint": "Use double backslashes in Java strings for regex classes (\\\\p{L}, \\\\s, \\\\d, etc.)."
+    },
+    {
+      "code": "BAD_HYPHEN_ESCAPE",
+      "hint": "Use \\\\- inside character classes or put '-' at range edges."
+    },
+    {
+      "code": "SPLIT_RAW_WS",
+      "hint": "Use .split(\"\\\\s+\") not .split(\"\\s+\")."
+    },
+    {
+      "code": "CNF_BM25_INDEX",
+      "hint": "Add import com.abandonware.ai.agent.integrations.index.Bm25LocalIndex; or qualify type."
+    }
+  ],
+  "files_examples": [
+    "com/abandonware/ai/agent/integrations/index/Bm25LocalIndex.java",
+    "com/abandonware/ai/agent/integrations/TextUtils.java",
+    "com/example/lms/matrix/MatrixTransformer.java",
+    "com/example/lms/service/rag/patch/SelfAskWebSearchRetriever.java"
+  ],
+  "fix_commit": "auto-patch: regex escape normalization + Bm25LocalIndex import"
+}
