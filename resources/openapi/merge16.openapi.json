@@ -1,0 +1,170 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "merge16 Orchestration API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/rag/query": {
+      "post": {
+        "summary": "Unified RAG query",
+        "operationId": "ragQuery",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rag/probe": {
+      "post": {
+        "summary": "Probe orchestration quickly with only a query string",
+        "operationId": "ragProbe",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "q": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "q"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "QueryRequest": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "useWeb": {
+            "type": "boolean"
+          },
+          "useVector": {
+            "type": "boolean"
+          },
+          "useKg": {
+            "type": "boolean"
+          },
+          "useBm25": {
+            "type": "boolean"
+          },
+          "enableSelfAsk": {
+            "type": "boolean"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "topK": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "enableOnnx": {
+            "type": "boolean"
+          },
+          "enableBiEncoder": {
+            "type": "boolean"
+          },
+          "whitelistOnly": {
+            "type": "boolean"
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "Doc": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          },
+          "rank": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "QueryResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "planApplied": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Doc"
+            }
+          },
+          "debug": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+id: safe.v1
+desc: 안전/보수 전략 기본값
+k:
+  web: 10
+  vector: 6
+  bm25: 8
+  kg: 3
+calibration:
+  recency:
+    halfLifeDays: 21
+    maxBoost: 0.10
+  authority:
+    profile: "gov,academic,news"
+    maxBoost: 0.15
+  scale:
+    method: "isotonic"
+fuse:
+  rrf:
+    k: 60
+    weight: { web: 1.0, vector: 0.9, bm25: 0.8, kg: 1.1 }
+guard:
+  onnx:
+    maxConcurrent: 4
+    budgetMs: 800
+override: { }
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

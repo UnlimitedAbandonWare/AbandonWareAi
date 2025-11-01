@@ -1,0 +1,16 @@
+spring:
+  config.activate.on-profile: novanext
+nova:
+  next:
+    enabled: true
+    alphaCvar: 0.90
+    lambdaCvar: 0.35
+    p0: 1.20
+    alphaTwpm: 0.80
+    kTotal: 24
+    tempSoftmax: 0.85
+    floorWeb: 4
+    floorVec: 4
+    floorKg: 2
+whitening:
+  enabled: true

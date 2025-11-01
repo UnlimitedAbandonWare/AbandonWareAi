@@ -1,0 +1,16 @@
+id: brave
+description: "탐색폭/안전 게이트 상향"
+retrieval:
+  order:
+    stages: ["web","vector","kg"]
+  k: { web: 16, vector: 10, kg: 6 }
+fusion:
+  recencyWeight: { halfLifeDays: 3 }
+gates:
+  requireCitations: true
+  allowRuleBreak: true
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

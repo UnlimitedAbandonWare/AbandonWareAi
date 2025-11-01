@@ -1,0 +1,16 @@
+{
+  "tools": [
+    {
+      "id": "web.search",
+      "title": "Web Search",
+      "schema": {
+        "query": "string",
+        "topK": "integer",
+        "timeoutMs": "integer"
+      },
+      "permissions": [
+        "internet:read"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+
+# Patch toggles (can be merged into application.yml)
+rerank:
+  dpp:
+    enabled: true
+    top-k: 12
+    alpha: 0.7
+    beta: 0.3
+fusion:
+  canonicalizer:
+    enabled: true
+  calibrator:
+    enabled: true
+    mode: platt
+    per-source: web,vector,kg
+retrieval:
+  kpolicy:
+    mode: adaptive
+    web:
+      max: 20
+    vector:
+      max: 12
+    kg:
+      max: 6
+  bm25:
+    enabled: true
+    hybrid:
+      mode: bm25+dense
+singleflight:
+  web:
+    enabled: true
+  embedding:
+    enabled: true
+onnx:
+  batch:
+    max-size: 16
+    max-wait-ms: 8
+  semaphore:
+    max-permits: 4
+  guard:
+    enabled: true
+embedding:
+  cache:
+    enabled: true
+    ttl-seconds: 43200
+    max-entries: 50000
+guard:
+  autorun:
+    enabled: true
+    min-citations: 2
+    min-authority: 0.7
+prompt:
+  builder:
+    enabled: true
+    lines:
+      total: 80
+    portfolio:
+      min-lines-per-source: 4
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

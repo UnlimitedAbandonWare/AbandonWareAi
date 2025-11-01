@@ -1,0 +1,6 @@
+openai:
+  api:
+    <REDACTED>
+  chat:
+    model-high-tier: ${REPLACE_ME:${openai.api.model}}
+    model-low-tier:  ${REPLACE_ME:${openai.api.model}}

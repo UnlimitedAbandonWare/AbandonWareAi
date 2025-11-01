@@ -1,0 +1,42 @@
+spring:
+  autoconfigure:
+    exclude:
+    - dev.langchain4j.spring.AiAutoConfiguration
+    - dev.langchain4j.spring.autoconfigure.${GENERIC_LONG_TOKEN}
+    - dev.langchain4j.service.spring.${GENERIC_LONG_TOKEN}
+    - dev.langchain4j.model.openai.spring.autoconfigure.OpenAiAutoConfiguration
+  profiles: dev
+probe:
+  search:
+    enabled: true
+  admin-token: "<REDACTED>"
+retrieval:
+  routing:
+    thresholds:
+      complexMinTokens: "${COMPLEXMINTOKENS}"
+      topKComplex: 20
+      topKWebRequired: 24
+      rerankMinCandidates: 8
+      budgetSimple: 0.3
+      budgetComplex: 0.4
+      budgetWeb: 0.5
+pass9x:
+"REDACTED"  threshold: 0.8
+  minEvidence: 1
+onnx:
+  rerank:
+    maxConcurrent: 2
+    acquireTimeoutMs: 150
+    minBudgetMs: 250
+    minCandidatesForCross: 8
+cache:
+  singleflight:
+    enabled: true
+    maxWaitMs: 1200
+risk:
+  alpha: 0.3
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

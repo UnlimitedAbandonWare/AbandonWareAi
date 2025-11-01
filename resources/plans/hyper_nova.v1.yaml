@@ -1,0 +1,27 @@
+id: hyper_nova.v1
+version: "0.1.0"
+description: "TWPM+CVaR 융합, 위험 가중 K-할당, DPP 중복 억제, 강화 게이트"
+budget:
+  time_ms: 18000
+concurrency:
+  reranker_max_parallel: 2
+k_allocation:
+  total: 24
+  floor:
+    web: 4
+    vec: 4
+    kg: 2
+whitening:
+  enabled: true
+expansion:
+  self_ask: 3
+fusion:
+  rrf: weighted
+  post: hypernova   # RrfHypernovaBridge 활성화 신호
+rerank:
+  pass1: "REDACTED"  dpp:
+    enabled: true
+    sigma: 0.7
+  pass2: "REDACTED"gates:
+  citation_min: 3
+  final_sigmoid: { k: 8.0, x0: 0.72, pass: 0.90 }

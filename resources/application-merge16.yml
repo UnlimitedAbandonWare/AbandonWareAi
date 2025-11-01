@@ -1,0 +1,55 @@
+# --- merge16: unified orchestration toggles -----------------------
+rag:
+  pipeline:
+    enabled: true               # master switch
+    sources:
+      web: true
+      vector: true
+      kg: true
+      bm25: true
+    fuse:
+      method: weighted-rrf
+      top-k: 8
+    rerank:
+      biencoder-enabled: true
+      onnx-enabled: true
+    planner:
+      self-ask-enabled: false
+      plan-id: "safe_autorun.v1"
+    guardrail:
+      ${GENERIC_LONG_TOKEN}: false
+      ${GENERIC_LONG_TOKEN}: false
+
+naver:
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 1800
+    web-top-k: 6
+    cache:
+      ttl-seconds: 900
+
+retrieval:
+  vector:
+    enabled: true
+    routing:
+      news: 0.7
+      default: 0.3
+
+upstash:
+  cache:
+    ttl-seconds: 900
+  ratelimit:
+    window-seconds: 60
+    burst: 120
+
+onnx:
+  enabled: true
+  model:
+    cross-encoder-path: "models/ms-marco-MiniLM-L-6-v2.onnx"
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true

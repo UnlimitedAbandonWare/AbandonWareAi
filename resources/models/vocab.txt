@@ -1,0 +1,12 @@
+[PAD]
+[CLS]
+[SEP]
+[UNK]
+this
+is
+a
+test
+##t
+##e
+##s
+##t
