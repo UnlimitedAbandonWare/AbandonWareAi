@@ -1,0 +1,1201 @@
+{
+  "scanned_files": 2452,
+  "java_files": 1989,
+  "matches_by_file": {
+    "app/src/main/java/com/abandonware/ai/addons/synthesis/MatrixTransformer.java": [
+      {
+        "offset": 1850,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1850,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "app/src/main/java/com/abandonware/ai/agent/consent/BasicConsentService.java": [
+      {
+        "offset": 1143,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1143,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "app/src/main/java/com/abandonware/ai/agent/consent/ConsentService.java": [
+      {
+        "offset": 971,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 971,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "app/src/main/java/com/abandonware/ai/agent/consent/RedisConsentService.java": [
+      {
+        "offset": 2133,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2133,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "app/src/main/java/com/abandonware/ai/agent/web/IdentityController.java": [
+      {
+        "offset": 426,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "app/src/main/java/com/abandonware/ai/agent/web/RoomController.java": [
+      {
+        "offset": 827,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/addons/synthesis/MatrixTransformer.java": [
+      {
+        "offset": 1850,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1850,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/agent/consent/BasicConsentService.java": [
+      {
+        "offset": 1143,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1143,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/agent/consent/ConsentService.java": [
+      {
+        "offset": 971,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 971,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/agent/integrations/RrfWeightTuner.java": [
+      {
+        "offset": 288,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 318,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 346,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 372,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 318,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 346,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 372,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/agent/integrations/TextUtils.java": [
+      {
+        "offset": 2867,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2935,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2867,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2935,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/agent/integrations/service/rag/retriever/Bm25LocalRetriever.java": [
+      {
+        "offset": 1654,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1654,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/agent/web/IdentityController.java": [
+      {
+        "offset": 426,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/agent/web/RoomController.java": [
+      {
+        "offset": 827,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/abandonware/ai/service/rag/fusion/WeightedRRF.java": [
+      {
+        "offset": 5029,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/acme/aicore/app/ConversationService.java": [
+      {
+        "offset": 3228,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3228,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/agent/CuriosityTriggerService.java": [
+      {
+        "offset": 2290,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2337,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2403,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2448,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2290,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2337,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2403,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2448,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/agent/SynthesisService.java": [
+      {
+        "offset": 2353,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2414,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2353,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2414,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/api/ChatApiController.java": [
+      {
+        "offset": 23178,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 23497,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 30914,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31507,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31599,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31696,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31794,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 32817,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 35871,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 37056,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 37163,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 38551,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 38643,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 47489,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 47760,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 53645,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 69666,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 69707,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 23178,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 23497,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 30914,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31507,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31599,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31696,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 31794,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 32817,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 35871,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 37056,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 37163,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 38551,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 38643,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 47489,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 47760,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 53645,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 69707,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/config/AppSecurityConfig.java": [
+      {
+        "offset": 3769,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/config/CustomSecurityConfig.java": [
+      {
+        "offset": 3059,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3059,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/config/QueryTransformerConfig.java": [
+      {
+        "offset": 530,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/debug/PromptDebugLogger.java": [
+      {
+        "offset": 3201,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3201,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/debug/PromptMasker.java": [
+      {
+        "offset": 275,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 311,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 311,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/domain/ChatSession.java": [
+      {
+        "offset": 1444,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/dto/help/ContextHelpController.java": [
+      {
+        "offset": 661,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/entity/MemoryStatusConverter.java": [
+      {
+        "offset": 211,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 280,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 280,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/gptsearch/web/impl/NaverProvider.java": [
+      {
+        "offset": 2350,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/health/LlmHealth.java": [
+      {
+        "offset": 2407,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2407,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/image/GroundedImagePromptBuilder.java": [
+      {
+        "offset": 10522,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 10522,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/integration/handlers/AdaptiveWebSearchHandler.java": [
+      {
+        "offset": 14594,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 14594,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/prompt/DefaultPromptEngine.java": [
+      {
+        "offset": 3954,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 4135,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 4135,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/prompt/PromptContext.java": [
+      {
+        "offset": 397,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/search/LlmKeywordSanitizer.java": [
+      {
+        "offset": 960,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 983,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 960,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 983,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/search/RateLimitPolicy.java": [
+      {
+        "offset": 1591,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1591,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/ChatHistoryServiceImpl.java": [
+      {
+        "offset": 3835,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 5389,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3835,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 5389,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/CourseService.java": [
+      {
+        "offset": 1941,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/DefaultQueryTransformer.java": [
+      {
+        "offset": 482,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/EmbeddingStoreManager.java": [
+      {
+        "offset": 1599,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1599,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/MemoryReinforcementService.java": [
+      {
+        "offset": 22249,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 22758,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 24946,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 24980,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 25024,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 25065,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 25093,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 22249,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 22758,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 24980,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 25024,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 25065,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 25093,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/NaverSearchService.java": [
+      {
+        "offset": 11731,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 79454,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 79773,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 88782,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 79773,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 88782,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/TrainingService.java": [
+      {
+        "offset": 3765,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3765,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/VectorStoreService.java": [
+      {
+        "offset": 2485,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 5935,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 5935,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/config/HyperparameterService.java": [
+      {
+        "offset": 1100,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1100,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/fallback/SmartFallbackService.java": [
+      {
+        "offset": 4587,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/patch/NaverSearchService.java": [
+      {
+        "offset": 11094,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 78984,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 79303,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 88312,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 79303,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 88312,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/AnalyzeWebSearchRetriever.java": [
+      {
+        "offset": 959,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 975,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 975,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/ModelBasedQueryComplexityClassifier.java": [
+      {
+        "offset": 3143,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3967,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3143,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3967,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/QueryComplexityGate.java": [
+      {
+        "offset": 1572,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1572,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/QueryUtils.java": [
+      {
+        "offset": 455,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/WebSearchRetriever.java": [
+      {
+        "offset": 13700,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 13700,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/auth/AuthorityScorer.java": [
+      {
+        "offset": 7544,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/genshin/ElementLexicon.java": [
+      {
+        "offset": 835,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 835,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java": [
+      {
+        "offset": 4891,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 4891,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/reinforcement/SnippetPruner.java": [
+      {
+        "offset": 8725,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 8725,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/service/web/BraveSearchService.java": [
+      {
+        "offset": 6620,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 6620,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/tools/ScoringRunner.java": [
+      {
+        "offset": 7957,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 7957,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/trace/WebClientDiagnostics.java": [
+      {
+        "offset": 1774,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 1774,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/transform/QueryTransformer.java": [
+      {
+        "offset": 2915,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/lms/util/RelevanceScorer.java": [
+      {
+        "offset": 191,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/moe/MultiSourceMoE.java": [
+      {
+        "offset": 532,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/com/example/risk/RiskModelProvider.java": [
+      {
+        "offset": 427,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      }
+    ],
+    "src/main/java/config/RagLightAdapters.java": [
+      {
+        "offset": 3546,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 9130,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 3546,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 9130,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/main/java/tools/trace/OrchestrationTraceTool.java": [
+      {
+        "offset": 314,
+        "before": "/ * ... */",
+        "after": "/ * ... *&#47;"
+      },
+      {
+        "offset": 334,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 372,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 401,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 334,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 372,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 401,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/test/java/com/abandonware/ai/agent/flow/FlowDslExecutorTest.java": [
+      {
+        "offset": 2203,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2203,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ],
+    "src/test/java/com/example/lms/service/guard/EvidenceAwareGuardTest.java": [
+      {
+        "offset": 2396,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      },
+      {
+        "offset": 2396,
+        "before": "/* ... */",
+        "after": "/* ... *&#47;"
+      }
+    ]
+  },
+  "total_matches": 197,
+  "notes": [
+    "This patch neutralizes placeholder sequences like '/* ... */' inside block/Javadoc comments that prematurely close the comment and break compilation.",
+    "It rewrites the trailing '*/' within those placeholders to '*&#47;' (HTML entity for '/'), which keeps source safe while preserving rendered text in Javadoc."
+  ],
+  "history": [
+    {
+      "patch_id": "fix_inline_placeholder_in_code_ctx",
+      "description": "Inline code placeholders '/* ... *&#47;' converted back to valid '/* ... */' when outside comments. Placeholders inside comments normalized to '/* ... *&#47;' to avoid premature close.",
+      "stats": {
+        "files_modified": 44,
+        "code_context_repairs": 19
+      },
+      "examples": [
+        {
+          "before": "ToolScope/* ... *&#47; required",
+          "after": "ToolScope/* ... */ required",
+          "context": "METHOD_PARAM (code)"
+        },
+        {
+          "before": "/* Example: /* ... */ inside Javadoc */",
+          "after": "/* Example: /* ... *&#47; inside Javadoc */",
+          "context": "JAVADOC (comment)"
+        }
+      ]
+    },
+    {
+      "patch_id": "restore_varargs_placeholders_in_code",
+      "time": "2025-10-21T02:55:26.692252Z",
+      "description": "Converted code placeholders '/* ... */' (from earlier safety pass) back to real Java varargs '...' where used between a type and a parameter name in method signatures.",
+      "impact": {
+        "files_scanned": 1989,
+        "files_modified": 12,
+        "varargs_restored_estimate": 14
+      },
+      "examples": [
+        {
+          "before": "boolean has(ConsentToken token, ToolScope/* ... */ required)",
+          "after": "boolean has(ConsentToken token, ToolScope... required)"
+        },
+        {
+          "before": "private static long firstLong(HttpHeaders h, String/* ... */ names)",
+          "after": "private static long firstLong(HttpHeaders h, String... names)"
+        }
+      ]
+    },
+    {
+      "patch_id": "merge_duplicate_yaml_keys__fusion__src_main_resources_application_yml",
+      "timestamp": "2025-10-21T03:55:08.000658Z",
+      "description": "Deduplicated top-level 'fusion' keys within the same YAML document in src/main/resources/application.yml. Merged contents of the two 'fusion' blocks (rrf/locale-boost + fuser/twpm/cvar) into a single mapping to resolve SnakeYAML DuplicateKeyException during Spring Boot startup.",
+      "file": "src/main/resources/application.yml",
+      "strategy": [
+        "Split YAML by document separators ('---').",
+        "Within each document, detect repeated top-level keys.",
+        "If duplicate 'fusion' keys exist, keep the first block and append inner content of subsequent 'fusion' blocks underneath it, then remove the duplicate headers.",
+        "Re-emit the YAML with the same document boundaries."
+      ],
+      "examples": [
+        {
+          "before": "fusion:\n  rrf:\n    k: 60\n...\n fusion:\n  fuser: TWPM_CVAR\n  twpm:\n    pMin: 1.0\n",
+          "after": "fusion:\n  rrf:\n    k: 60\n  ...\n  fuser: TWPM_CVAR\n  twpm:\n    pMin: 1.0\n    ..."
+        }
+      ],
+      "stats": {
+        "files_modified": 1,
+        "dupe_keys_removed": 1
+      }
+    }
+  ],
+  "last_updated": "2025-10-21T02:55:26.692252Z",
+  "patterns": [
+    {
+      "id": "DUP_YAML_DUP_KEY",
+      "desc": "SnakeYAML duplicate key in application.yml",
+      "regex": "DuplicateKeyException.*duplicate key\\s+(?<key>[A-Za-z0-9_.-]+)",
+      "fix": "normalize_yaml(application.yml)"
+    }
+  ]
+}
