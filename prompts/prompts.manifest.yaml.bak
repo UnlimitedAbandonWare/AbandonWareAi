@@ -1,0 +1,16 @@
+agents:
+  - id: resume_llm_mcp
+    system: agents/resume_llm_mcp/system_ko.md
+    traits:
+      - traits/zero_break_trait_ko.md
+    merge:
+      order: [trait, system]
+      conflict: project_overrides_global
+    output:
+      path: out/resume_agent__zerobreak.prompt
+      encoding: utf-8
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

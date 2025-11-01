@@ -1,0 +1,20 @@
+id: safe_autorun
+desc: "보수적 경로. 인용/PII/Final-Sigmoid 강제"
+retrieval:
+  web: { k: 6 }
+  vector: { k: 4 }
+gates:
+  citation: { min: 2, host_diversity: 2 }
+  pii: { enabled: true }
+  final_sigmoid: { pass9x: 0.90 }
+rerank:
+  bi_encoder: { enabled: true }
+  cross_encoder: { enabled: false }
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+  vector:
+    enabled: true

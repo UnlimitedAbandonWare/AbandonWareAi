@@ -1,0 +1,23 @@
+id: zero_break
+desc: "최대 탐색·최대 안전(관리자 승인/토큰 필요)"
+retrieval:
+  web:   { k: 18, recency_bias: true }
+  vector:{ k: 8 }
+expansion:
+  self_ask: 3
+  query_burst: 12
+  extreme_z: 24
+gates:
+  citation: { min: 4, host_diversity: 3 }
+  pii: { enabled: true }
+  final_sigmoid: { pass9x: 0.95 }
+audit:
+  banner: "【주의: Zero Break 모드】"
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+  vector:
+    enabled: true
