@@ -1,0 +1,30 @@
+# config/application-example.yml — 참고용 키
+retrieval:
+  kg:
+    enabled: true
+    order-index: 0
+
+onnx:
+
+budget:
+  request-time-ms: 3500
+
+naver:
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+ocr:
+  enabled: true
+  min-confidence: 0.78
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+  vector:
+    enabled: true

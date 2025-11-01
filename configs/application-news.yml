@@ -1,0 +1,45 @@
+search:
+  rrf:
+    k: 60
+    weights:
+      bing: 1.0
+      brave: 0.84
+      naver: 0.7056
+  reranker:
+    enabled: true
+    topN: 70
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true
+
+# --- auto-patch settings ---
+onnx:
+  enabled: true
+  max-concurrency: 3
+
+budget:
+  request-time-ms: 3500
+
+naver:
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+ocr:
+  enabled: true
+  min-confidence: 0.78
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

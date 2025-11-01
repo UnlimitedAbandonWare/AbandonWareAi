@@ -1,0 +1,62 @@
+search:
+  providers:
+  - bing
+  - naver
+  - brave
+  rrf:
+    k: 60
+    minOverlap: 1
+    weights:
+      bing: 1.0
+      naver: 0.84
+      brave: 0.7056
+  cache:
+    ttlSeconds: 600
+  reranker:
+    enabled: true
+    model: onnx/cross-encoder-msmarco-MiniLM-L-6-v2.onnx
+    topN: 70
+    batchSize: 24
+    normalizeScores: true
+    scoreThreshold: 0.0
+    device: cpu
+    onnx:
+      intraOpNumThreads: 1
+      interOpNumThreads: 1
+      executionProviders:
+      - CPUExecutionProvider
+
+# NineTile alias corrector
+alias:
+  corrector:
+    enabled: true
+
+# --- auto-patch settings ---
+onnx:
+  enabled: true
+  max-concurrency: 3
+
+budget:
+  request-time-ms: 3500
+
+naver:
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+ocr:
+  enabled: true
+  min-confidence: 0.78
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

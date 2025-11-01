@@ -1,0 +1,15 @@
+# Auto-added to suppress config-server lookup warnings when running locally
+spring:
+  cloud:
+    config:
+      enabled: false
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true
