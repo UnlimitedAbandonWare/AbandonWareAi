@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8" />
+  <title>공지 관리</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"/>
+</head>
+<body>
+  <th:block th:replace="~{fragments/header :: header}"></th:block>
+<div class="container my-5">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="fs-4"><i class="fas fa-bullhorn me-2"></i>공지 관리</h1>
+    <a class="btn btn-success" th:href="@{/admin/notices/new}"><i class="fas fa-plus me-1"></i>새 공지 작성</a>
+  </div>
+  <table class="table table-hover align-middle text-center">
+    <thead class="table-light">
+    <tr>
+      <th>#</th>
+      <th>제목</th>
+      <th>타입</th>
+      <th>대상</th>
+      <th>작성자</th>
+      <th>작성일</th>
+      <th>관리</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr th:each="notice, st : ${notices}">
+      <td th:text="${st.index + 1}">1</td>
+      <td><a th:href="@{|/admin/notices/${notice.id}|}" th:text="${notice.title}">제목</a></td>
+      <td th:text="${notice.type}">GLOBAL</td>
+      <td th:text="${notice.type.name() == 'DEPARTMENT' ? notice.targetDeptId : (notice.type.name() == 'PERSONAL' ? notice.targetUserId : '전체')}">전체</td>
+      <td th:text="${notice.createdBy?.username}">admin</td>
+      <td th:text="${#temporals.format(notice.createdAt, 'yyyy-MM-dd HH:mm')}">2025-07-04 10:00</td>
+      <td>
+        <form th:action="@{|/admin/notices/${notice.id}/delete|}" method="post" onsubmit="return confirm('삭제하시겠습니까?');" style="display:inline;">
+          <button type="submit" class="btn btn-sm btn-outline-danger">삭제</button>
+        </form>
+      </td>
+    </tr>
+    <tr th:if="${#lists.isEmpty(notices)}">
+      <td colspan="7" class="text-center py-4 text-muted">등록된 공지사항이 없습니다.</td>
+    </tr>
+    </tbody>
+  </table>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

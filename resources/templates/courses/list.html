@@ -1,0 +1,83 @@
+<!-- src/main/resources/templates/courses/list.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8" />
+  <title>강의 목록</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    body { background-color: #f8f9fa; }
+    .table-hover tbody tr { transition: background-color 0.2s ease-in-out; }
+    .table-hover tbody tr:hover { background-color: #e9ecef; }
+  </style>
+</head>
+<body>
+  <!-- 공통 헤더 fragment -->
+  <th:block th:replace="~{fragments/header :: header}"></th:block>
+
+<div class="container my-5">
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-white p-3">
+      <div class="d-flex justify-content-between align-items-center">
+        <h1 class="mb-0 fs-4"><i class="fas fa-book-open me-2"></i>강의 목록</h1>
+        <a class="btn btn-success" th:href="@{/courses/new(profId=${profId})}"><i class="fas fa-plus me-1"></i>강의 등록</a>
+      </div>
+    </div>
+    <div class="card-body">
+      <!-- 교수별 필터 -->
+      <form class="row g-3 mb-4 p-3 bg-light border rounded" th:action="@{/courses}" method="get">
+        <div class="col-md-5">
+          <label for="profId" class="form-label fw-bold">교수별 조회</label>
+          <select id="profId" name="profId" class="form-select">
+            <option value="">-- 전체 교수 --</option>
+            <option th:each="p : ${allProfessors}"
+                    th:value="${p.id}"
+                    th:text="${p.name}"
+                    th:selected="${profId != null && profId == p.id}"></option>
+          </select>
+        </div>
+        <div class="col-md-7 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary"><i class="fas fa-search me-1"></i>조회</button>
+          <a th:href="@{/courses}" class="btn btn-secondary ms-2">전체 목록</a>
+        </div>
+      </form>
+
+      <!-- 강의 테이블 -->
+      <div class="table-responsive">
+        <table class="table table-hover align-middle text-center">
+          <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>제목</th>
+            <th>설명</th>
+            <th>교수</th>
+            <th>수강인원</th>
+            <th>관리</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr th:if="${#lists.isEmpty(courses)}">
+            <td colspan="6" class="text-center text-muted py-5">해당 조건의 강의가 없습니다.</td>
+          </tr>
+          <tr th:each="c : ${courses}">
+            <td th:text="${c.id}">1</td>
+            <td class="fw-bold" th:text="${c.title}">Java 기초</td>
+            <td class="text-start" th:text="${#strings.abbreviate(c.description, 40)}">설명…</td>
+            <td th:text="${c.professor?.name ?: '미지정'}">홍길동</td>
+            <td><span class="badge bg-info rounded-pill" th:text="${c.enrollments.size()}">0</span></td>
+            <td>
+              <a class="btn btn-sm btn-outline-dark" th:href="@{|/courses/${c.id}|}"><i class="fas fa-eye me-1"></i>상세</a>
+              <a class="btn btn-sm btn-outline-primary ms-1" th:href="@{|/courses/${c.id}/edit|}"><i class="fas fa-edit me-1"></i>수정</a>
+            </td>
+          </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

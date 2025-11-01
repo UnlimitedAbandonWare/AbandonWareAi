@@ -1,0 +1,6 @@
+# Synonym definitions for Korean analysis
+# Each line specifies a group of equivalent terms separated by commas.
+# The synonym_graph filter will expand query terms to include these synonyms.
+AI,인공지능,에이아이
+랭체인,LangChain,랑체인
+대한민국,한국,코리아
