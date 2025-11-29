@@ -1,0 +1,67 @@
+package com.example.lms.service.onnx;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * ONNX Cross-Encoder reranker (compile-safe stub).
+ * Adds a semaphore gate to avoid overload and falls back to identity ordering
+ * when the compute budget cannot be acquired within the configured timeout.
+ *
+ * System properties (optional):
+ *  - onnx.max.concurrent            (int, default 4)
+ *  - onnx.acquire.timeout.ms        (long ms, default 150)
+ */
+
+    private static int getIntProp(int def, String... keys){
+        for (String k: keys){
+            String v = System.getProperty(k);
+            if (v != null && !v.isBlank()){
+                try { return Integer.parseInt(v.trim()); } catch (Exception ignore) {}
+            }
+        }
+        return def;
+    }
+    private static long getLongProp(long def, String... keys){
+        for (String k: keys){
+            String v = System.getProperty(k);
+            if (v != null && !v.isBlank()){
+                try { return Long.parseLong(v.trim()); } catch (Exception ignore) {}
+            }
+        }
+        return def;
+    }
+    
+public class OnnxCrossEncoderReranker {
+    private final Semaphore gate;
+    private final long acquireTimeoutMs;
+
+    public OnnxCrossEncoderReranker() {
+        int maxConc = Integer.getInteger("onnx.max.concurrent", 4);
+        this.gate = new Semaphore(Math.max(1, maxConc), true);
+        this.acquireTimeoutMs = Long.getLong("onnx.acquire.timeout.ms", 150L);
+    }
+
+    public <T> List<T> rerank(String query, List<T> candidates, int topN) {
+        if (candidates == null || candidates.isEmpty()) return List.of();
+        boolean acquired = false;
+        try {
+            acquired = gate.tryAcquire(acquireTimeoutMs, TimeUnit.MILLISECONDS);
+            // NOTE: This stub returns identity ordering to keep the module buildable without ONNX runtime.
+            return limit(candidates, topN);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return limit(candidates, topN);
+        } finally {
+            if (acquired) gate.release();
+        }
+    }
+
+    private static <T> List<T> limit(List<T> in, int k) {
+        if (in == null) return List.of();
+        if (k <= 0 || k >= in.size()) return new ArrayList<>(in);
+        return new ArrayList<>(in.subList(0, k));
+    }
+}

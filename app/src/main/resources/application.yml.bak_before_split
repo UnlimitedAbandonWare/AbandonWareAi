@@ -1,0 +1,130 @@
+spring:
+  application:
+    name: demo-1
+  profiles:
+    active: local
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+
+probe:
+  search:
+    enabled: true
+    admin-token: ${PROBE_ADMIN_TOKEN:}
+
+onnx:
+  enabled: true
+  model:
+    path: "models/cross-encoder-msmarco-MiniLM-L-6-v2.onnx"
+  tokenizer:
+    mode: "djl"
+
+retrieval:
+  vector:
+    enabled: true
+
+vector:
+  routing:
+    policy: "topic-weight"
+    defaultStore: "local"
+
+governance:
+  citation:
+    minCount: 3
+  finalSigmoid:
+    k: 6.0
+    x0: 0.65
+    pass: 0.90
+
+ocr:
+  enabled: true
+  timeBudgetMs: 900
+  timeoutMs: 900
+  minConfidence: 0.65
+
+soak:
+  persistArtifacts: true
+  artifactPath: artifacts/soak
+
+
+prompts:
+  manifest: classpath:prompts/prompts.manifest.yaml
+  output:
+    path: out/resume_agent.prompt
+
+
+### === inserted: rag/fusion/rerank toggles (src111_merge15) ===
+rerank:
+  dpp:
+    enabled: true
+    k: 12
+    noveltyWeight: 0.30
+
+score:
+  calibrator:
+    enabled: true
+    mode: ISOTONIC
+  mplaw:
+    enabled: true
+
+embed:
+  whiten:
+    zca:
+      enabled: true
+      rank: 64
+
+fusion:
+  fuser: TWPM_CVAR
+  twpm:
+    pMin: 1.0
+    pMax: 6.0
+  cvar:
+    alpha: 0.10
+
+guard:
+  final:
+    sigmoid:
+      enabled: true
+      k: 9.0
+      x0: 0.75
+  citation:
+    min: 3
+
+flow:
+  joiner:
+    enabled: true
+### === end: inserted ===
+
+# === merge15: planner / embedding / onnx toggles ===
+planner:
+  enabled: true
+embedding:
+  cache:
+    ttlMs: 600000
+onnx:
+  maxConcurrency: 4
+
+onnx:
+  concurrent:
+    max: 2
+  timeout-ms: 3000
+
+rag:
+  diversity:
+    enabled: true
+    lambda: 0.7
+  canonicalize-url: true
+  score-calibrator: minmax
+
+upstash:
+  singleflight:
+    enabled: true
+
+plan:
+  default: safe_autorun.v1.yaml
+probe:
+  search:
+    enabled: true

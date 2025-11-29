@@ -1,0 +1,17 @@
+# Baseline build/boot error patterns
+NoSuchBeanDefinitionException: .*OnnxRuntimeService
+NoSuchBeanDefinitionException: .*EmbeddingStore
+UnsatisfiedDependencyException
+BeanCreationException
+IllegalStateException: .*ONNX.*
+PlaceholderResolutionException
+Could not resolve placeholder
+Failed to bind properties
+FileNotFoundException: .*cross-encoder\.onnx
+
+# [2025-11-25] Missing Import Pattern
+symbol:\s+class\s+TimeoutException
+
+# [2025-11-26] LangChain4j Content.from(String, Map) mismatch
+incompatible types:\s+String cannot be converted to TextSegment
+illegal escape character

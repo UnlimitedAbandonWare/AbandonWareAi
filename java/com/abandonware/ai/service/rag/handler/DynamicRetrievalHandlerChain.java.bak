@@ -1,0 +1,45 @@
+package com.abandonware.ai.service.rag.handler;
+
+import com.abandonware.ai.service.rag.model.ContextSlice;
+import com.abandonware.ai.strategy.RetrievalOrderService;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Dynamic retrieval orchestrator. Produces standard {id,title,snippet,source,score,rank} slices.
+ */
+@org.springframework.stereotype.Component
+@lombok.RequiredArgsConstructor
+public class DynamicRetrievalHandlerChain {
+    private final com.abandonware.ai.agent.service.rag.bm25.Bm25LocalRetriever bm25Retriever;
+
+    @Value("${retrieval.order.policy:auto}")
+    private String policy;
+
+    private final RetrievalOrderService orderService;
+
+    public DynamicRetrievalHandlerChain(RetrievalOrderService orderService) {
+        this.orderService = orderService;
+    }
+
+    public List<ContextSlice> retrieve(String query) {
+        List<String> order = orderService.decide(policy, query);
+        // This is a placeholder: real implementation should fan out to concrete handlers (web/vector/kg)
+        List<ContextSlice> all = new ArrayList<>();
+        int rank = 1;
+        for (String src : order) {
+            ContextSlice cs = new ContextSlice();
+            cs.setId("dummy:"+src+":"+rank);
+            cs.setTitle("Result from " + src);
+            cs.setSnippet("...");
+            cs.setSource(src);
+            cs.setScore(1.0 / (rank + 1));
+            cs.setRank(rank++);
+            all.add(cs);
+        }
+        return all;
+    }
+}

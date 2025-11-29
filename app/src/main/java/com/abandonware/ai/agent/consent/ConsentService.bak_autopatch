@@ -1,0 +1,10 @@
+package com.abandonware.ai.agent.consent;
+
+import com.abandonware.ai.agent.tool.ToolScope;
+import java.util.Set;
+
+public interface ConsentService {
+    ConsentToken grant(String identity, Set<ToolScope> scopes, long ttlSeconds);
+    boolean has(ConsentToken token, ToolScope... required);
+    void ensureGranted(ConsentToken token, ToolScope[] required, ConsentContext ctx) throws ConsentRequiredException;
+}

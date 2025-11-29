@@ -1,0 +1,30 @@
+# Common Java/Gradle compile errors (regex)
+cannot find symbol
+error: incompatible types
+inference variable [A-Z]\w* has incompatible bounds
+incompatible types:\s+String cannot be converted to TextSegment
+package .* does not exist
+symbol:\s+class\s+.*
+symbol:\s+method\s+.*
+symbol:\s+method\s+search\(String\)
+# LMS websearch method rename
+method\s+searchSnippets\(String,int\)
+method\s+getKeyword\(\)
+class file for .* not found
+symbol:\s+class\s+TimeoutException
+# Lombok issues
+lombok.* not found
+# placeholder token to block
+\STUFF3_DISABLED\}
+DuplicateKeyException
+found duplicate key
+The dependencies of some of the beans in the application context form a cycle
+Requested bean is currently in creation: Is there an unresolvable circular reference
+
+# Javac lambda capture of non-final local variable
+local variables referenced from a lambda expression must be final or effectively final
+
+# Java parser errors for malformed switch/case
+orphaned case
+case, default, or '}' expected
+illegal escape character

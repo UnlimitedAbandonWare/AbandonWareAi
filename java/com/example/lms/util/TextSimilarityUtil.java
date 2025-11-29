@@ -1,10 +1,12 @@
 package com.example.lms.util;
 
 import org.springframework.stereotype.Component;
-
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+
+
+
 
 /**
  * ★ 초간단 Jaccard 유사도 계산기

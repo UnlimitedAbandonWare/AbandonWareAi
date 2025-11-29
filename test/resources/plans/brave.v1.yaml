@@ -1,0 +1,20 @@
+id: brave
+search:
+  webTopK: 15
+guard:
+  citationMin: 3
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

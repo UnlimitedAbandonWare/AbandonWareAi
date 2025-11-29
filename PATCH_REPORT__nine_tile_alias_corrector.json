@@ -1,0 +1,183 @@
+{
+  "duplicates_count": 184,
+  "top_duplicate_classes": [
+    [
+      "com.abandonware.ai.agent.contract.ValidationException",
+      5
+    ],
+    [
+      "com.abandonware.ai.agent.orchestrator.Orchestrator",
+      5
+    ],
+    [
+      "com.abandonware.ai.agent.room.RoomService",
+      5
+    ],
+    [
+      "com.nova.protocol.plan.PlanLoader",
+      5
+    ],
+    [
+      "com.example.lms.cfvm.Stage",
+      4
+    ],
+    [
+      "com.abandonware.ai.addons.budget.TimeBudgetFilter",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.cache.SingleFlightRegistry",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.complexity.ComplexityGatingCoordinator",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.complexity.ComplexityResult",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.complexity.ComplexityTag",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.complexity.QueryComplexityClassifier",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.complexity.RetrievalHints",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.config.AddonsAutoConfiguration",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.config.AddonsProperties",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.flow.FlowHealthScore",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.flow.FlowJoiner",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.flow.FlowStage",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.ocr.OcrDocument",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.ocr.OcrIndexingJob",
+      2
+    ],
+    [
+      "com.abandonware.ai.addons.ocr.OcrRetriever",
+      2
+    ]
+  ],
+  "dynamic_chain_files": [
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/service/rag/handler/DynamicRetrievalHandlerChain.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/service/rag/handler/DynamicRetrievalHandlerChain.java",
+    "/mnt/data/work_src111_merdwge15/src/test/java/com/example/lms/service/rag/DynamicRetrievalHandlerChainOrderTest.java"
+  ],
+  "self_ask_planner_files": [
+    "/mnt/data/work_src111_merdwge15/cfvm-raw/src/main/java/com/selfask/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/com/example/lms/service/planner/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/selfask/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/example/lms/service/rag/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/example/lms/service/rag/selfask/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/service/rag/planner/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/service/rag/selfask/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/strategy/service/selfask/SelfAskPlanner.java"
+  ],
+  "alias_candidates": [
+    "/mnt/data/work_src111_merdwge15/app/src/main/java/com/abandonware/ai/agent/observability/AgentMetrics.java",
+    "/mnt/data/work_src111_merdwge15/app/src/main/java/com/abandonware/ai/agent/orchestrator/Step.java",
+    "/mnt/data/work_src111_merdwge15/app/src/main/java/com/example/lms/config/aop/RagPipelineHooks.java",
+    "/mnt/data/work_src111_merdwge15/app/src/main/java/com/example/lms/service/rag/selfask/SubQuestion.java",
+    "/mnt/data/work_src111_merdwge15/app/src/main/java/com/example/lms/service/rag/selfask/SubQuestionType.java",
+    "/mnt/data/work_src111_merdwge15/app/src/main/java/com/example/lms/service/rag/selfask/HeuristicSubQuestionGenerator.java",
+    "/mnt/data/work_src111_merdwge15/cfvm-raw/src/main/java/com/alias/TileAliasCorrector.java",
+    "/mnt/data/work_src111_merdwge15/cfvm-raw/src/main/java/com/normalization/MpSpectrumNormalizer.java",
+    "/mnt/data/work_src111_merdwge15/extras/gap15-stubs_v1/src/main/java/com/abandonwareai/fusion/MpLawNormalizer.java",
+    "/mnt/data/work_src111_merdwge15/extras/gap15-stubs_v1/src/main/java/com/abandonwareai/nlp/alias/TileConceptResolver.java",
+    "/mnt/data/work_src111_merdwge15/extras/gap15-stubs_v1/src/main/java/com/abandonwareai/nlp/alias/TileDictionary.java",
+    "/mnt/data/work_src111_merdwge15/src/com/example/lms/service/planner/SelfAskPlanner.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/agent/service/plan/PlanLoader.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/alias/TileAliasCorrector.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/normalization/MpSpectrumNormalizer.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/service/rag/fusion/WeightedRRF.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/service/rag/fusion/FusionPipelineConfig.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/service/rag/fusion/MpSpectrumNormalizer.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/service/rag/fusion/MarchenkoPasturNormalizer.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/service/rag/fusion/MpLawCalibrator.java"
+  ],
+  "nine_tile_candidates": [
+    "/mnt/data/work_src111_merdwge15/app/src/main/java/com/example/lms/config/aop/RagPipelineHooks.java",
+    "/mnt/data/work_src111_merdwge15/cfvm-raw/src/main/java/com/alias/TileAliasCorrector.java",
+    "/mnt/data/work_src111_merdwge15/extras/gap15-stubs_v1/src/main/java/com/abandonwareai/nlp/alias/TileDictionary.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/alias/TileAliasCorrector.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonwareai/nlp/alias/TileDictionary.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/example/lms/alias/TileAliasCorrector.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/example/lms/config/AutoWiringConfig.java"
+  ],
+  "gradle_files_patched": [
+    "/mnt/data/work_src111_merdwge15/app/build.gradle.kts",
+    "/mnt/data/work_src111_merdwge15/cfvm-raw/build.gradle.kts",
+    "/mnt/data/work_src111_merdwge15/lms-core/build.gradle.kts"
+  ],
+  "error_patterns_found": [
+    [
+      "cannot find symbol",
+      95
+    ],
+    [
+      "Cannot find symbol",
+      3
+    ],
+    [
+      "package ... does not exist",
+      1
+    ],
+    [
+      "package service.rag.auth does not exist",
+      1
+    ],
+    [
+      "symbol:   class ChatService",
+      20
+    ],
+    [
+      "symbol: class ChatService",
+      2
+    ],
+    [
+      "Compilation failed; see the compiler error output",
+      4
+    ],
+    [
+      "package .* does not exist",
+      1
+    ],
+    [
+      "package lombok does not exist",
+      1
+    ]
+  ],
+  "patch_points_applied": [
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/abandonware/ai/service/rag/handler/DynamicRetrievalHandlerChain.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain.java",
+    "/mnt/data/work_src111_merdwge15/src/main/java/service/rag/handler/DynamicRetrievalHandlerChain.java",
+    "/mnt/data/work_src111_merdwge15/src/test/java/com/example/lms/service/rag/DynamicRetrievalHandlerChainOrderTest.java"
+  ],
+  "alias_java_path": "/mnt/data/work_/src/main/java/com/example/lms/config/alias/NineTileAliasCorrector.java",
+  "target_pkg": "com.example.lms.config.alias"
+}

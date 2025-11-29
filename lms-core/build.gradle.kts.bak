@@ -1,0 +1,98 @@
+plugins {
+    `java-library`
+}
+
+group = "com.example"
+version = "0.1.0"
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+    withSourcesJar()
+}
+
+val langchainVersion: String = System.getProperty("langchain.version")
+val springBootVersion: String = System.getProperty("spring.boot.version")
+    ?: System.getenv("SPRING_BOOT_VERSION")
+    ?: "3.1.5"
+    ?: System.getenv("LANGCHAIN_VERSION")
+    ?: "1.0.1"
+
+repositories {
+    mavenCentral()
+    maven { url = uri("https://repo.spring.io/release") }
+}
+
+dependencies {
+  testImplementation("org.apache.lucene:lucene-analyzers-nori:9.10.0")
+  testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+  testImplementation("org.mockito:mockito-junit-jupiter:5.12.0")
+  testImplementation("org.mockito:mockito-core:5.12.0")
+  testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+  implementation("org.apache.lucene:lucene-analyzers-nori:9.10.0")
+    // --- injected by build-fix ---
+    implementation("org.apache.lucene:lucene-core:9.9.2")
+    implementation("org.apache.lucene:lucene-analyzers-common:9.9.2")
+    implementation("org.apache.lucene:lucene-analyzers-nori:9.9.2")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml")
+
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
+
+    testCompileOnly("org.projectlombok:lombok:1.18.30")
+    testAnnotationProcessor("org.projectlombok:lombok:1.18.30")
+
+    implementation("net.sourceforge.tess4j:tess4j:5.10.0")
+
+    api("org.springframework.boot:spring-boot-starter")
+    api("org.springframework.boot:spring-boot-starter-web")
+    api("org.springframework.boot:spring-boot-starter-webflux")
+    implementation("com.fasterxml.jackson.core:jackson-databind")
+    implementation("org.slf4j:slf4j-api:2.0.13")
+    implementation("dev.langchain4j:langchain4j:$langchainVersion")
+    // optional spring starter for langchain4j, ignore if unavailable
+    implementation("dev.langchain4j:langchain4j-spring-boot-starter:$langchainVersion")
+
+    compileOnly("org.projectlombok:lombok:1.18.30")
+    annotationProcessor("org.projectlombok:lombok:1.18.30")
+
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
+}
+
+tasks.withType<Test> {
+    useJUnitPlatform()
+}
+
+// Map existing sources into this module
+sourceSets {
+    named("main") {
+        java {
+            setSrcDirs(listOf("../src/main/java"))
+        
+            exclude("com/example/lms/LmsApplication.java")
+        }
+        resources {
+            setSrcDirs(listOf("../src/main/resources"))
+        }
+    }
+    named("test") {
+        java {
+            setSrcDirs(listOf("../src/test/java"))
+        }
+        resources {
+            setSrcDirs(listOf("../src/test/resources"))
+        }
+    }
+}
+
+tasks.withType<JavaCompile> {
+    options.encoding = "UTF-8"
+}
+
+// === auto-added by patch: dependencies for Plan/Schema/YAML/Lucene ===
+dependencies {
+    implementation("com.fasterxml.jackson.core:jackson-databind")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml")
+    implementation("org.apache.lucene:lucene-core:9.9.2")
+    implementation("org.apache.lucene:lucene-analyzers-nori:9.9.2")
+}

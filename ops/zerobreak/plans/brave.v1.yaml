@@ -1,0 +1,57 @@
+id: brave.v1
+version: "1.0.0"
+description: >
+  강화 탐색 플랜. 넓은/깊은 회수와 핵심 응축 균형. Zero Break 보다는 보수적.
+activation:
+  require_signed_token: false
+  headers:
+    flag: X-Brave-Mode
+    plan: X-Plan-Id
+budget:
+  time_ms: 20000
+  cancel_signal_propagation: true
+concurrency:
+  reranker_max_parallel: 2
+  web_probe_parallel: 10
+retrieval:
+  policy: recency_first
+  k_allocation:
+    web_top_k: 18
+    vector_top_k: 10
+    kg_top_k: 6
+  whitelist_override: conditional
+expansion:
+  self_ask: 3
+  query_burst: "6-12"
+  extreme_z: "8-16"
+fusion:
+  rrf: weighted
+  delta_projection: true
+rerank:
+  pass1: bi_encoder_fast
+  pass2: onnx_cross_encoder_strict
+  pass2_fallback_on_budget: true
+safety:
+  citation_gate_min_sources: 3
+  pii_sanitizer: strict
+  answer_banner: "【안내: Brave(강화 탐색) 플랜 적용】"
+  final_sigmoid_threshold: 0.90
+telemetry:
+  sse_stream: true
+  trace_headers: [X-Request-Id, X-Session-Id]
+critic_loop:
+  max_attempts: 2
+  strategies: [swap_plate, reassign_k, rescore_calibration]
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+  vector:
+    enabled: true

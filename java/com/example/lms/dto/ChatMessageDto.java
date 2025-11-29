@@ -6,6 +6,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+
+
 /**
  * 채팅창 단일 메시지 DTO (프런트 JSON 1:1 매핑)
  */

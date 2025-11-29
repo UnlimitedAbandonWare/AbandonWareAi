@@ -1,0 +1,85 @@
+package service.rag.rerank;
+
+import java.util.*;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+/**
+ * Greedy DPP/MMR-style diversity reranker.
+ * Requires Object (with getScoreFrom(in.get(i)), getVector()) in classpath.
+ */
+@Component
+public class DppDiversityReranker {
+
+// --- AUTO PATCH: dynamic accessors to avoid hard dependency on Object ---
+@SuppressWarnings("unchecked")
+private <T> double getScoreFrom(T obj){
+    try {
+        try { return ((Number) obj.getClass().getMethod("getScore").invoke(obj)).doubleValue(); }
+        catch (NoSuchMethodException ex) { /* next */ }
+        try { return ((Number) obj.getClass().getMethod("score").invoke(obj)).doubleValue(); }
+        catch (NoSuchMethodException ex) { /* next */ }
+        try { return ((Number) obj.getClass().getField("score").get(obj)).doubleValue(); }
+        catch (NoSuchFieldException ex) { /* next */ }
+    } catch (Throwable t) {}
+    return 0.0;
+}
+@SuppressWarnings("unchecked")
+private <T> float[] getVectorFrom(T obj){
+    try {
+        try { Object v = obj.getClass().getMethod("getVector").invoke(obj);
+              if (v instanceof float[]) return (float[]) v;
+              if (v instanceof double[]) {
+                  double[] d=(double[]) v; float[] f=new float[d.length];
+                  for (int i=0;i<d.length;i++) f[i]=(float)d[i]; return f;
+              }
+        } catch (NoSuchMethodException ex) { /* next */ }
+        try { Object v = obj.getClass().getMethod("embedding").invoke(obj);
+              if (v instanceof float[]) return (float[]) v;
+        } catch (NoSuchMethodException ex) { /* next */ }
+        try { Object v = obj.getClass().getField("vector").get(obj);
+              if (v instanceof float[]) return (float[]) v;
+        } catch (NoSuchFieldException ex) { /* next */ }
+    } catch (Throwable t) {}
+    return null;
+}
+
+
+  @Value("${dpp.enabled:true}") private boolean enabled;
+  @Value("${dpp.k:8}") private int topK;
+  @Value("${dpp.lambda:0.55}") private double lambda; // 0..1 (rel vs novelty)
+
+  public <T> List<T> rerank(List<T> in) {
+    if (!enabled || in == null || in.size() <= 2) return in;
+    int k = Math.min(topK, in.size());
+    List<T> selected = new ArrayList<>();
+    boolean[] used = new boolean[in.size()];
+
+    for (int step = 0; step < k; step++) {
+      int best = -1; double bestScore = -1e9;
+      for (int i = 0; i < in.size(); i++) {
+        if (used[i]) continue;
+        double rel = in.get(i).getScoreFrom(in.get(i));
+        double maxSim = 0.0;
+        for (T s : selected) maxSim = Math.max(maxSim, cosine(in.get(i), s));
+        double score = lambda * rel - (1.0 - lambda) * maxSim;
+        if (score > bestScore) { bestScore = score; best = i; }
+      }
+      if (best < 0) break;
+      used[best] = true;
+      selected.add(in.get(best));
+    }
+    for (int i = 0; i < in.size(); i++) if (!used[i]) selected.add(in.get(i));
+    return selected;
+  }
+  private <T> double cosine(T a, T b) {
+    float[] x = a.getVector(), y = b.getVector();
+    if (x == null || y == null) return 0.0;
+    double dot=0,nx=0,ny=0; 
+    for (int i=0;i<Math.min(x.length, y.length);i++){
+      dot+=x[i]*y[i]; nx+=x[i]*x[i]; ny+=y[i]*y[i];
+    }
+    double denom = Math.sqrt(nx)*Math.sqrt(ny)+1e-9;
+    return denom == 0 ? 0.0 : dot/denom;
+  }
+}

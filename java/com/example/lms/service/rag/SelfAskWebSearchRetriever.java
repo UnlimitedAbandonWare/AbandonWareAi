@@ -2,39 +2,46 @@
 package com.example.lms.service.rag;
 
 import com.example.lms.service.NaverSearchService;
-
+import org.springframework.beans.factory.annotation.Qualifier;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
-
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
-import com.example.lms.service.rag.detector.GameDomainDetector;       // + 도메인 감지
 import org.springframework.util.StringUtils;
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.concurrent.*;                                        // 중복 정리: 한 번만 남김
 import jakarta.annotation.PreDestroy;
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+// SelfAskWebSearchRetriever.java
+
+
+import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
+import com.example.lms.service.rag.detector.GameDomainDetector;       // + 도메인 감지
+import com.example.lms.search.TypoNormalizer;                         // NEW: typo normalizer
+import java.util.concurrent.*;                                        // 중복 정리: 한 번만 남김
 @Component                          // ➍
 @RequiredArgsConstructor            // ➋ 모든 final 필드 주입
 public class SelfAskWebSearchRetriever implements ContentRetriever {
-
+    private static final Logger log = LoggerFactory.getLogger(SelfAskWebSearchRetriever.class);
     private final NaverSearchService searchSvc;
+    @Qualifier("localChatModel")
     private final ChatModel chatModel;
     @Qualifier("guardrailQueryPreprocessor")
     private final QueryContextPreprocessor preprocessor;
     private final GameDomainDetector domainDetector; // + GENSHIN 감지용
+
+    // Optional typo normalizer for hygiene. Injected if available.
+    @Autowired(required = false)
+    private TypoNormalizer typoNormalizer;
 
     /* 선택적 Tavily 폴백(존재 시에만 사용) */
     @Autowired(required = false)
@@ -42,7 +49,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     private ContentRetriever tavily;
     /* ---------- 튜닝 가능한 기본값(프로퍼티 주입) ---------- */
     @Value("${selfask.max-depth:2}")                private int maxDepth;                 // Self-Ask 재귀 깊이
-    @Value("${selfask.web-top-k:5}")                private int webTopK;                  // 키워드당 검색 스니펫 수
+    @Value("${selfask.web-top-k:8}")                private int webTopK;                  // 키워드당 검색 스니펫 수
     @Value("${selfask.overall-top-k:10}")           private int overallTopK;              // 최종 반환 상한
     @Value("${selfask.max-api-calls-per-query:8}")  private int maxApiCallsPerQuery;      // 질의당 최대 호출
     @Value("${selfask.followups-per-level:2}")      private int followupsPerLevel;        // 레벨별 추가 키워드
@@ -61,7 +68,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         if (!StringUtils.hasText(q)) return 1;
         int len = q.codePointCount(0, q.length());
         long spaces = q.chars().filter(ch -> ch == ' ').count();
-        boolean hasWh = q.matches(".*(누가|언제|어디|무엇|왜|어떻게|비교|차이|원리).*");
+        // vs (대소문자 무관) 도 비교/차이 질문의 한 형태이므로 패턴에 포함한다.
+        boolean hasWh = q.matches(".*(?i)(누가|언제|어디|무엇|왜|어떻게|비교|차이|원리|vs).*");
         int score = 0;
         if (len > 30) score++;
         if (spaces > 6) score++;
@@ -112,6 +120,10 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
 
         String qText = (query != null) ? query.text() : null;
+        // Apply typo normalization if configured
+        if (typoNormalizer != null && qText != null) {
+            qText = typoNormalizer.normalize(qText);
+        }
         // ① Guardrail: 오타 교정/금칙어/중복 정리 (중복 호출 제거 + NPE 가드)
         qText = (preprocessor != null) ? preprocessor.enrich(qText) : qText;
         if (!StringUtils.hasText(qText)) {
@@ -124,13 +136,17 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
         // 질의 복잡도 간단 판정
         boolean enableSelfAsk = qText.length() > 25
-                || qText.chars().filter(ch -> ch == ' ').count() > 3;
+                || qText.chars().filter(ch -> ch == ' ').count() > 3
+                // '비교', '차이' 또는 ' vs '가 포함되면 Self-Ask가 필요하다.
+                || qText.contains("비교")
+                || qText.contains("차이")
+                || qText.toLowerCase(Locale.ROOT).contains(" vs ");
         // 질의 복잡도 기반 동적 깊이(1..maxDepth)
         final int depthLimit = Math.max(1, Math.min(maxDepth, estimateDepthByComplexity(qText)));
 
-        /* 1‑B) Self‑Ask 조기 종료 결정 (품질 평가는 LLM 키워드 확장에서 수행) */
+        /* 1-B) Self-Ask 조기 종료 결정 (품질 평가는 LLM 키워드 확장에서 수행) */
         if (!enableSelfAsk) {
-            if (firstSnippets.isEmpty()) return List.of(Content.from("[검색 결과 없음]"));
+            if (firstSnippets.isEmpty()) return List.of();
             // 단순 질의면서 1차에서 충분히 많이 맞으면(=조기 종료)
             if (firstSnippets.size() >= firstHitStopThreshold) {
                 return firstSnippets.stream().limit(overallTopK).map(Content::from).toList();
@@ -202,7 +218,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                         .exceptionally(ex -> null)
                         .join();
             } catch (Exception ignore) {
-                log.debug("[SelfAsk] level={} 타임아웃 — partial merge 진행", depth);
+                log.debug("[SelfAsk] level={} 타임아웃 - partial merge 진행", depth);
             }
 
             // 결과 병합 및 다음 레벨 키워드 생성
@@ -235,7 +251,18 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         if (snippets.size() < overallTopK && tavily != null) {
             try {
                 int need = Math.max(0, overallTopK - snippets.size());
-                tavily.retrieve(Query.from(qText)).stream()
+                // [HARDENING] Always propagate existing query metadata (e.g. session sid) when
+                // constructing new Query objects for the Tavily fallback.  This ensures that
+                // downstream retrievers enforce per-session isolation and do not pollute
+                // transient or public namespaces.  When the original query has no metadata
+                // attached, the builder will accept a null and Tavily will treat it as
+                // __PRIVATE__ internally.  Avoid the deprecated Query.from API.
+                // [HARDENING] use builder API to propagate metadata and avoid deprecated Query.from
+                Query fallbackQuery = dev.langchain4j.rag.query.Query.builder()
+                        .text(qText)
+                        .metadata((query != null ? query.metadata() : null))
+                        .build();
+                tavily.retrieve(fallbackQuery).stream()
                         .map(Content::toString)
                         .filter(StringUtils::hasText)
                         .limit(need)
@@ -252,7 +279,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                         .map(Content::from)
                         .toList();
             }
-            return List.of(Content.from("[검색 결과 없음]"));
+            // No snippets found at all. Return an empty list instead of a placeholder to avoid polluting the vector store.
+            return java.util.List.of();
         }
         return snippets.stream()
                 .limit(overallTopK)
@@ -298,7 +326,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
     /** 하위 키워드(간단 확장) */
     /**
-     * Self‑Ask 하위 키워드를 LLM으로 1~2개 생성
+     * Self-Ask 하위 키워드를 LLM으로 1~2개 생성
      */
     private List<String> followUpKeywords(String parent) {
         if (!StringUtils.hasText(parent)) return List.of();
@@ -310,7 +338,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             )).aiMessage().text();
             return splitLines(reply).stream().limit(followupsPerLevel).toList();
         } catch (Exception e) {
-            log.warn("LLM follow‑up generation failed", e);
+            log.warn("LLM follow-up generation failed", e);
             return List.of();
         }
     }
@@ -359,7 +387,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             return Collections.emptyList();
         }
     }
-    /** LLM 호출 없이 간단 확장(최대 followupsPerLevel개) — 도메인 민감 */
+    /** LLM 호출 없이 간단 확장(최대 followupsPerLevel개) - 도메인 민감 */
     private List<String> heuristicFollowups(String parent) {
         if (!StringUtils.hasText(parent)) return List.of();
         boolean isGenshin = (domainDetector != null)
@@ -393,5 +421,30 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     }
 
 
+
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = (original.metadata() != null)
+                ? original.metadata()
+                : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        try {
+            return dev.langchain4j.rag.query.Query.builder()
+                    .text(original.text())
+                    .metadata(md)
+                    .build();
+        } catch (Throwable t) {
+            try {
+                // Fallback: 일부 환경에서만 존재할 수 있는 생성자(없으면 원본 반환)
+                var ctor = dev.langchain4j.rag.query.Query.class
+                        .getDeclaredConstructor(String.class, dev.langchain4j.data.document.Metadata.class);
+                ctor.setAccessible(true);
+                return ctor.newInstance(original.text(), md);
+            } catch (Throwable t2) {
+                return original;
+            }
+        }
+    }
 
 }

@@ -1,0 +1,43 @@
+groups:
+  - name: agent_alerts
+    rules:
+      - alert: AgentHighErrorBurn_2h
+        expr: (sum(rate(agent_steps_total{status="error"}[2h])) / sum(rate(agent_steps_total[2h]))) > (1 - 0.990) * 14.4
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "에이전트 오류 버닝(2h 고감도)"
+          description: "2시간 기준 에러 버닝율이 SLO(99.0%) 대비 임계 초과"
+      - alert: AgentHighErrorBurn_30m
+        expr: (sum(rate(agent_steps_total{status="error"}[30m])) / sum(rate(agent_steps_total[30m]))) > (1 - 0.990) * 6
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "에이전트 오류 버닝(30m 단기)"
+          description: "30분 기준 에러 버닝율 초과"
+      - alert: AgentLatencyP99High
+        expr: job:agent_step_latency_ms:p99 > 5000
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "에이전트 p99 지연 고"
+          description: "p99 단계 지연이 5초 초과(10m 연속)"
+      - alert: AgentBudgetBlocksSpike
+        expr: job:agent_budget_block_per_min > 30
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "예산 차단 급증"
+          description: "분당 BudgetGuard 차단이 30건 초과"
+      - alert: AgentDlqBacklog
+        expr: job:agent_dlq_depth > 100
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "DLQ 적체"
+          description: "DLQ 깊이가 100개 초과. 장애·외부 연동 점검 필요"
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

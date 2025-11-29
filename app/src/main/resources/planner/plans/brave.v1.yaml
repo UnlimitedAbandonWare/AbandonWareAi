@@ -1,0 +1,36 @@
+# brave.v1.yaml — recall-heavy plan
+version: 1
+name: brave.v1
+k-allocation: { web: 15, vector: 6, kg: 4 }
+modes:
+  extremez: { enabled: true, max-burst: 24 }
+gates:
+  autorun: { min-citations: 2, min-evidence: 2 }
+  citation: { min: 3 }
+flow:
+  - analyze
+  - selfask: { branching: "3way" }
+  - extremez
+  - retrieve:web
+  - retrieve:vector
+  - fuse:wpm+rrf+delta
+  - rerank:bi
+  - gate:cross-encoder-semaphore
+  - rerank:cross
+  - final:sigmoid
+  - build:prompt
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

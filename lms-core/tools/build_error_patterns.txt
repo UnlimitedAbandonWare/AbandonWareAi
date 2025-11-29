@@ -1,0 +1,18 @@
+# Common Java/Gradle compile errors (regex)
+cannot find symbol
+error: incompatible types
+inference variable [A-Z]\w* has incompatible bounds
+incompatible types:\s+String cannot be converted to TextSegment
+package .* does not exist
+symbol:\s+class\s+.*
+symbol:\s+method\s+.*
+symbol:\s+method\s+search\(String\)
+class file for .* not found
+symbol:\s+class\s+TimeoutException
+# Lombok issues
+lombok.* not found
+# placeholder token to block
+\STUFF3_DISABLED\}
+DuplicateKeyException
+found duplicate key
+illegal escape character

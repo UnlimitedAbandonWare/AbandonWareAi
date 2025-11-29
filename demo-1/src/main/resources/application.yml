@@ -1,0 +1,133 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+spring.config.import: "optional:application-secrets.yml, optional:application-proj-override.yml, ${spring.config.import:}"
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: "gemma3:27b"
+  api-key: dummy
+  # MERGED_DUP llm.chat-model :: chat-model: "gemma3:27b"
+
+  # MERGED_DUP llm.api-key :: api-key: dummy
+
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+fallback:
+  enabled: false
+zsys:
+  onnx:
+    enabled: true
+    device-id: 1
+    max-concurrency: 2
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+    threshold: 0.92
+  contextDiversity:
+    min: 0.35
+probe:
+  search:
+    enabled: true
+retrieval:
+  vector:
+    enabled: true
+onnx:
+  enabled: true
+  device: 1
+idle_train:
+  schedule: 0 30 0,3,5 * * *
+  soak_batch: 20
+  update_on_pass: true
+llmrouter:
+  models:
+    primary:
+      base-url: "http://localhost:11434/v1"
+      weight: 1.0
+    secondary:
+      base-url: "http://localhost:11434/v1"
+      weight: 0.0
+  cooldown-ms: 900000
+
+selfask:
+  enabled: false
+
+# === merge130: GPU orchestration & idle-learn toggles ===
+spring:
+  profiles:
+    group:
+      gpu-3090-3060:   [base]          # 현재: 3090 ×1 + 3060 ×1
+      gpu-3090-3060x2: [base]          # FUTURE: 3090 ×1 + 3060 ×2
+      # gpu-3060x2: [base]          # legacy/optional; not default
+# MERGED_DUP zsys :: zsys:
+  # gpu-profile: "3090_3060"   # default; alternative: 3090_3060x2 (future)
+  # llm:
+    # vllm:
+      # heavy:
+        # tensor-parallel-size: 1
+        # gpu-memory-utilization: 0.90
+        # max-model-len: 32768
+      # light:
+        # tensor-parallel-size: 1
+        # gpu-memory-utilization: 0.80
+        # max-model-len: 16384
+  # onnx:
+    # enabled: true
+    # device-id: 1     # ONNX on GPU1(3060) when available; respects CUDA_VISIBLE_DEVICES
+    # maxBatch: 2
+train_idle:
+  enabled: true
+autolearn:
+  enabled: true
+# MERGED_DUP llmrouter :: llmrouter:
+  # activeProfile: "${zsys.gpu-profile}"  # 3060x2 | 3090_3060
+# === FUTURE GPU profile trace (inactive, commented) ===
+# spring:
+#   profiles:
+#     group:
+#       gpu-3090-3060x2: [base]   # FUTURE: 1× RTX 3090 + 2× RTX 3060
+#
+# zsys:
+#   gpu-profile: "3090_3060"   # default (current); alternative FUTURE: 3090_3060x2
+#
+# Notes:
+# - Keep commented until a second RTX 3060 is physically installed.
+# - Do NOT change active profiles in this stage; this block is a trace only.
+# spring:
+  # config:
+    # import: "optional:classpath:application-llm.yaml"
+local-llm:
+  autostart: false
+  health-check-url: "http://localhost:8000/health"
+  health-check-timeout: 30s
+  start-command: "docker-compose -f vllm-compose.yml up -d"
+  enabled: true
+  base-url: http://localhost:11434/v1
+
+# MERGED_DUP onnx :: onnx:
+  # enabled: true
+  # gpu-id: 0
+  # max-concurrency: 2
+# 
+# zsys:
+  # onnx:
+    # enabled: true
+    # gpu-id: 0
+    # max-concurrency: 2
+
+# ===========# Web Search Providers Configuration
+# ============================================
+# ⚠️ 실제 API Key 값은 application-secrets.yml에 정의됩니다.
+gpt-search:
+  serpapi:
+    enabled: true
+    base-url: "https://serpapi.com/search.json"
+    timeout-ms: 5000
+  brave:
+    enabled: true
+    base-url: "https://api.search.brave.com/res/v1/web/search"
+    timeout-ms: 3000

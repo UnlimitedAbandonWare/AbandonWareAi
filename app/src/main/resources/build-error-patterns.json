@@ -1,0 +1,16 @@
+{
+  "patterns": [
+    {
+      "id": "java.generics.capture.mapof",
+      "regex": "incompatible types: no instance\\(s\\) of type variable\\(s\\) K,V exist so that Map<K,V> conforms to CAP#1",
+      "severity": "high",
+      "advice": "Map#getOrDefault를 와일드카드(Map<?,?>)에 사용할 때 default로 Map.of() 등 구체 제네릭을 넘기면 캡처 충돌 발생. instanceof로 꺼내고 기본값은 Collections.emptyMap()으로 처리하세요."
+    },
+    {
+      "id": "java.getOrDefault.primitive.default",
+      "regex": "incompatible types: (int|boolean) cannot be converted to CAP#1",
+      "severity": "high",
+      "advice": "Map<?,?>.getOrDefault(key, 10/true)와 같은 기본값은 제네릭 캡처와 충돌. 값을 꺼낸 후 타입 검사로 기본값을 적용하세요."
+    }
+  ]
+}

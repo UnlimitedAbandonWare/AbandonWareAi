@@ -4,8 +4,10 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
+
+
+
 
 /** 두 문장 조각의 상호 모순 정도를 0~1로 근사 */
 @Component

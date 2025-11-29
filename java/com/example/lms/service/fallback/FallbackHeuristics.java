@@ -1,10 +1,12 @@
 package com.example.lms.service.fallback;
 
 import org.springframework.util.StringUtils;
-
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+
+
+
 
 /**
  * 간단 휴리스틱:
@@ -18,7 +20,7 @@ public final class FallbackHeuristics {
     private static final Set<String> GENSHIN_MARKERS = Set.of("원신", "genshin");
     private static final Set<String> STAR_RAIL_MARKERS = Set.of("붕괴 스타레일", "star rail", "honkai star rail");
 
-    // 비도메인(게임 외) 문제어 예시 — 필요 시 확장
+    // 비도메인(게임 외) 문제어 예시 - 필요 시 확장
     private static final Set<String> NON_GAME_TERMS = Set.of(
             "에스코피에", "에스코피", "escoffier", "auguste escoffier"
     );

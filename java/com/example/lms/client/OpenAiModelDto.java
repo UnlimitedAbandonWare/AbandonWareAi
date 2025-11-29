@@ -1,15 +1,28 @@
 package com.example.lms.client;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 
 /**
  * OpenAI /v1/models 응답에서 각 모델 정보를 담는 DTO
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class OpenAiModelDto {
 
-    /** 모델 식별자 (예: "gpt-4", "o3" 등) */
+    /** 모델 식별자 (예: "qwen2.5-7b-instruct", "o3" 등) */
     private String id;
+    /** 소유 조직/주체 (응답의 owned_by) */
+    @JsonProperty("owned_by")
+    private String ownedBy;
 
+    public String getOwnedBy() {
+        return ownedBy;
+    }
+
+    public void setOwnedBy(String ownedBy) {
+        this.ownedBy = ownedBy;
+    }
     /** 생성 시각 (Unix epoch seconds) */
     private long created;
 

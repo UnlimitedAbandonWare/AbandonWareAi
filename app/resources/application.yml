@@ -1,0 +1,140 @@
+retrieval:
+  vector:
+    enabled: true
+  kalloc:
+    enabled: true
+    totalK: 32
+naver:
+  # [PATCH src111_merge15] NAVER Search API keys (Client ID : Secret)
+  keys: "${NAVER_KEYS:}"
+  fallback:
+    duckduckgo:
+      enabled: true
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 2500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+
+onnx:
+  enabled: true
+  pool:
+    gpu0:
+      size: 1
+    gpu1:
+      size: 1
+    maxConcurrent: 2
+  batch:
+    max: 16
+  model:
+    path: /models/cross-encoder.onnx
+probe:
+  search:
+    enabled: true
+  admin-token: ${PROBE_TOKEN:}
+upstash:
+  cache:
+    ttl-seconds: 3600
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+zsys:
+  request:
+    budget-ms: 2500
+  onnx:
+    max-concurrency: 2
+planner.enabled: true
+brave.enabled: true
+zero_break.enabled: false
+rerank.dpp.enabled: true
+fusion.wpm.enabled: true
+scoring.calibrator.enabled: true
+guard.pii.enabled: true
+zsys.timebudget.ms: 3500
+zsys.onnx.max-concurrency: 2
+cache.singleflight.enabled: true
+ocr.retriever.enabled: true
+quality:
+  gate:
+    k: 8.0
+    x0: 0.6
+    min-citations: 3
+guard:
+  error-break:
+    warn:
+      onnx-enabled: false
+      web-top-k: 8
+      official-sources-only: true
+    break:
+      onnx-enabled: false
+      web-top-k: 4
+      use-cache-only: true
+fusion:
+  url:
+    canonicalizer:
+      enabled: true
+rag:
+  rerank:
+    dpp:
+      enabled: true
+      lambda: 0.65
+    topKFast: 64
+    topKFinal: 12
+embedding:
+  cache:
+    enabled: true
+    ttl-hours: 4
+domains:
+  whitelist: gov.kr,go.kr,ac.kr,who.int,nature.com
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: "gemma3:27b"
+  api-key: dummy
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+fallback:
+  enabled: false
+selfask:
+  enabled: false
+
+# vLLM local server URL for LocalLlamaService
+vllm:
+  url: ${VLLM_URL:http://localhost:8002}
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+spring:
+  config:
+    import: "optional:classpath:application-llm.yaml"
+local-llm:
+  autostart: false
+  health-check-url: "http://localhost:8000/health"
+  health-check-timeout: 30s
+  start-command: "docker-compose -f vllm-compose.yml up -d"
+  enabled: true
+  base-url: http://localhost:11434/v1
+
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2

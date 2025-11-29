@@ -1,0 +1,56 @@
+id: safe_autorun.v1
+version: "1.0.0"
+description: >
+  평시 기본 플랜. 보수적 검색/확장, 엄격한 화이트리스트, 안정적 지연/비용 우선.
+activation:
+  require_signed_token: false
+  headers:
+    plan: X-Plan-Id
+budget:
+  time_ms: 18000
+  cancel_signal_propagation: true
+concurrency:
+  reranker_max_parallel: 1
+  web_probe_parallel: 6
+retrieval:
+  policy: recency_first
+  k_allocation:
+    web_top_k: 12
+    vector_top_k: 8
+    kg_top_k: 4
+  whitelist_override: off
+expansion:
+  self_ask: 1
+  query_burst: "3-6"
+  extreme_z: disabled
+fusion:
+  rrf: weighted
+  delta_projection: true
+rerank:
+  pass1: bi_encoder_fast
+  pass2: onnx_cross_encoder_strict
+  pass2_fallback_on_budget: true
+safety:
+  citation_gate_min_sources: 3
+  pii_sanitizer: strict
+  answer_banner: "【안내: Safe Autorun(평시) 플랜】"
+  final_sigmoid_threshold: 0.92
+telemetry:
+  sse_stream: true
+  trace_headers: [X-Request-Id, X-Session-Id]
+critic_loop:
+  max_attempts: 1
+  strategies: [reassign_k, rescore_calibration]
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+  vector:
+    enabled: true

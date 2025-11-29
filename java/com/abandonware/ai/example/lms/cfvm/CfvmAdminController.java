@@ -1,0 +1,39 @@
+package com.abandonware.ai.example.lms.cfvm;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+
+
+
+@RestController
+@RequestMapping("/internal/cfvm")
+@RequiredArgsConstructor
+public class CfvmAdminController {
+
+    private final CfvmRawService cfvm;
+    private final CfvmRawProperties props;
+
+    @GetMapping(value="/buffer", produces=MediaType.APPLICATION_JSON_VALUE)
+    public Map<String,Object> buffer(@RequestParam(required=false) String sid) {
+        String session = sid != null ? sid : CfvmRawService.currentSessionIdOr("global");
+        Map<String,Object> out = new HashMap<>();
+        out.put("sid", session);
+        out.put("slots", cfvm.buffer(session).snapshot());
+        out.put("weights", cfvm.weights(session));
+        out.put("enabled", props.isEnabled());
+        return out;
+    }
+
+    @PostMapping("/flush")
+    public Map<String,Object> flush(@RequestParam(required=false) String sid) {
+        String session = sid != null ? sid : CfvmRawService.currentSessionIdOr("global");
+        // re-create buffer
+        cfvm.buffer(session); // lazy put
+        return Map.of("sid", session, "ok", true);
+    }
+}

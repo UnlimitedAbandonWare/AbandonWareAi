@@ -3,15 +3,18 @@ package com.example.lms.tuning;
 import com.example.lms.service.config.HyperparameterService;
 import com.example.lms.strategy.StrategyPerformanceRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 import com.example.lms.tuning.StrategyWeightTuner; // NEW
 /** 매일 자정에 최근 성과를 바탕으로 하이퍼파라미터를 미세 조정 */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class DynamicHyperparameterTuner {
+    private static final Logger log = LoggerFactory.getLogger(DynamicHyperparameterTuner.class);
 
     private final HyperparameterService hp;
     private final StrategyPerformanceRepository perfRepo;

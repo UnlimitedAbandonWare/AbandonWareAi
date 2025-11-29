@@ -1,0 +1,66 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+spring.config.import: "optional:application-proj-override.yml, ${spring.config.import:}"
+# Spring Boot application configuration for :app module
+# Safe defaults; override in application-local.yml for local dev.
+spring:
+  application:
+    name: nova-app
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:default}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+# ONNX cross-encoder etc.
+onnx:
+  enabled: true
+
+# Retrievers, gates and scheduling
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+
+selfask:
+  enabled: false
+
+# Idle/Autolearn master toggles (default: off for safety)
+train_idle:
+  enabled: false
+autolearn:
+  enabled: false
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: "gemma3:27b"
+  api-key: dummy
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+fallback:
+  enabled: false
+
+# MERGED_DUP spring :: spring:
+  # config:
+    # import: "optional:classpath:application-llm.yaml"
+local-llm:
+  autostart: false
+  health-check-url: "http://localhost:8000/health"
+  health-check-timeout: 30s
+  start-command: "docker-compose -f vllm-compose.yml up -d"
+  enabled: true
+  base-url: http://localhost:11434/v1
+
+# MERGED_DUP onnx :: onnx:
+  # enabled: true
+  # gpu-id: 0
+  # max-concurrency: 2
+# 
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2

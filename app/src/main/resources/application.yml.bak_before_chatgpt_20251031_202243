@@ -1,0 +1,40 @@
+# Application toggles (P1 features)
+rerank:
+  dpp:
+    enabled: true
+    topK: 12
+    lambda: 0.7
+
+fusion:
+  calibrator: platt   # platt|identity
+  wpm:
+    enabled: true
+    p: 1.6
+  mp:
+    clamp: true
+    q: 0.25
+
+onnx:
+  enabled: true
+  concurrent:
+    max: 2
+  timeoutMs: 1800
+
+budget:
+  requestMs: 4500
+  hardStopMs: 5200
+
+guard:
+  citation:
+    minSources: 3
+    domains: official
+  finalSigmoid:
+    pass: 0.90
+  pii:
+    enabled: true
+
+guard:
+  finalSigmoid:
+    pass: 0.90
+  pii:
+    enabled: true

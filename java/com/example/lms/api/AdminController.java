@@ -2,30 +2,34 @@
 package com.example.lms.api;
 
 import com.example.lms.dto.FineTuningOptionsDto;
+import com.example.lms.dto.FineTuningJobDto;
 import com.example.lms.service.FineTuningService;
-import com.theokanning.openai.fine_tuning.FineTuningJob;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
-
-        import java.io.IOException;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+// (FineTuningJob import removed)
+
 
 /**
  * 관리자 전용 REST 컨트롤러 (최종 통합본)
  * - 파인튜닝 작업 생성, 목록 조회, 상태 확인 등 관리자 기능 제공
  * - '/api/admin/fine-tuning' 경로 기반, ADMIN 권한 필수
  */
-@Slf4j
 @RestController
 @RequestMapping("/api/admin/fine-tuning")
 @RequiredArgsConstructor
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminController {
+    private static final Logger log = LoggerFactory.getLogger(AdminController.class);
 
     private final FineTuningService fineTuningService;
 
@@ -68,7 +72,7 @@ public class AdminController {
      * 모든 파인튜닝 작업 목록 조회
      */
     @GetMapping("/jobs")
-    public ResponseEntity<List<FineTuningJob>> listJobs() {
+    public ResponseEntity<List<FineTuningJobDto>> listJobs() {
         return ResponseEntity.ok(fineTuningService.listFineTuningJobs());
     }
 
@@ -77,7 +81,7 @@ public class AdminController {
      */
     @GetMapping("/status/{jobId}")
     public ResponseEntity<?> checkStatus(@PathVariable String jobId) {
-        Optional<FineTuningJob> jobOptional = fineTuningService.checkJobStatus(jobId);
+        Optional<FineTuningJobDto> jobOptional = fineTuningService.checkJobStatus(jobId);
         return jobOptional
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.status(404).body(

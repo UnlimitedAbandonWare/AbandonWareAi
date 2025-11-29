@@ -1,6 +1,8 @@
 // src/main/java/com/example/lms/service/ModelFetchService.java
 package com.example.lms.service;
 
+
+import java.util.concurrent.atomic.AtomicBoolean;
 import com.example.lms.entity.ModelEntity;
 import com.example.lms.model.ModelInfo;
 import com.example.lms.repository.ModelEntityRepository;
@@ -8,18 +10,22 @@ import com.example.lms.repository.ModelInfoRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
-
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * OpenAI /v1/models 목록을 주기적으로 동기화하여
@@ -28,13 +34,18 @@ import java.util.stream.Collectors;
  * 두 테이블을 모두 **업서트(upsert) 방식**으로 갱신한다.
  */
 @EnableScheduling
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ModelFetchService {
+    private static final AtomicBoolean updating = new AtomicBoolean(false);
 
-    /** application.yml 의 openai.api.key 값을 주입 */
-    @Value("${openai.api.key}")
+    private static final Logger log = LoggerFactory.getLogger(ModelFetchService.class);
+
+    /** application.yml 의 openai.api.key 값을 주입.  When unset this falls
+     *  back to the OPENAI_API_KEY environment variable.  Do not fall back
+     *  to other vendor keys (e.g. GROQ_API_KEY) to prevent using
+     *  incompatible credentials. */
+    @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String openaiApiKey;
 
     private final ModelInfoRepository   modelInfoRepo;
@@ -49,8 +60,20 @@ public class ModelFetchService {
     @Scheduled(cron = "0 0 * * * *")
     @Transactional
     public void updateModelList() {
+        // Skip remote fetch in local provider mode
+        try {
+            String provider = System.getProperty("llm.provider", System.getenv("LLM_PROVIDER"));
+            if (provider != null && provider.toLowerCase().startsWith("local")) {
+                log.info("Local provider mode - skipping remote model fetch.");
+                return;
+            }
+        } catch (Throwable ignore) {}
+        
+        if (!updating.compareAndSet(false, true)) { return; }
+        try {
+
         if (openaiApiKey == null || openaiApiKey.isBlank()) {
-            log.error("[ModelFetch] OpenAI API Key 미설정 — application.yml 의 'openai.api.key' 확인 필요");
+            log.error("[ModelFetch] OpenAI API Key 미설정 - application.yml 의 'openai.api.key' 확인 필요");
             return;
         }
 
@@ -63,7 +86,7 @@ public class ModelFetchService {
             headers.setContentType(MediaType.APPLICATION_JSON);
 
             ResponseEntity<JsonNode> res = rest.exchange(
-                    "https://api.openai.com/v1/models",
+                    "http://localhost:11434/v1/models",
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
                     JsonNode.class);
@@ -96,9 +119,9 @@ public class ModelFetchService {
                 long   created  = m.path("created").asLong();
                 String ownedBy  = m.path("owned_by").asText(null);
 
-                // owner 필드는 NOT NULL 제약 — 비어 있으면 기본값 openai
+                // owner 필드는 NOT NULL 제약 - 비어 있으면 기본값 openai
                 if (ownedBy == null || ownedBy.isBlank()) {
-                    ownedBy = "openai";
+                    ownedBy = "local";
                 }
 
                 /* -------- ModelInfo (상세) -------- */
@@ -106,12 +129,13 @@ public class ModelFetchService {
                 info.setModelId(id);
                 info.setObjectType(objType);
                 info.setCreated(created);
-                info.setOwnedBy(ownedBy);
+                info.setOwnedBy((ownedBy) == null || (ownedBy).isBlank() ? "local" : (ownedBy));
                 infosToSave.add(info);
 
                 /* -------- ModelEntity (드롭다운용 요약) -------- */
                 ModelEntity entity = existingEntityMap.getOrDefault(id, new ModelEntity());
                 entity.setModelId(id);
+                entity.setOwner(ownedBy);
                 entitiesToSave.add(entity);
             }
 
@@ -121,16 +145,18 @@ public class ModelFetchService {
             modelInfoRepo.saveAll(infosToSave);
             modelEntityRepo.saveAll(entitiesToSave);
 
-            log.info("[ModelFetch] 동기화 완료 — {}개 모델 저장/업데이트", entitiesToSave.size());
+            log.info("[ModelFetch] 동기화 완료 - {}개 모델 저장/업데이트", entitiesToSave.size());
 
         } catch (Exception ex) {
             // 트랜잭션이 rollback 되며 예외가 전파됨
             log.error("[ModelFetch] 모델 목록 동기화 실패", ex);
         }
+        } finally { updating.set(false); }
     }
 
     /** 컨트롤러에서 호출: 저장된 모델 전부 반환 */
     public List<ModelEntity> getAllModels() {
         return modelEntityRepo.findAll();
     }
+
 }

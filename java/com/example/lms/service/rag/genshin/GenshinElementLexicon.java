@@ -2,10 +2,12 @@
 package com.example.lms.genshin;
 
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+
+
 
 @Component
 public class GenshinElementLexicon {
@@ -16,7 +18,7 @@ public class GenshinElementLexicon {
             entry("푸리나", "HYDRO"), entry("furina", "HYDRO"), entry("후리나", "HYDRO"),
             entry("다이루크", "PYRO"), entry("diluc", "PYRO"),
             entry("아를레키노", "PYRO"), entry("arlecchino", "PYRO")
-            // TODO: 필요 시 확장
+            // Note: extend this lexicon as necessary.
     );
 
     /** 텍스트에서 직접 등장하는 원소 키워드(ko/en) → 표준 원소코드 */

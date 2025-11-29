@@ -1,0 +1,27 @@
+
+# brave.v1.yaml — Nova Protocol: Brave Mode (plan DSL)
+name: brave.v1
+gates:
+  recallMax: true
+  citation:
+    min: 3
+chain:
+  - selfAsk:
+      branches: 3
+  - queryBurst:
+      min: 9
+      max: 18
+  - extremeZ:
+      min: 12
+      max: 24
+  - retrieval:
+      webTopK: 24
+      vectorTopK: 12
+  - fusion:
+      method: weightedRRF
+  - rerank:
+      biEncoder: true
+      crossEncoder: onnx
+safety:
+  whitelist: government|scholar|news
+  piiSanitizer: true

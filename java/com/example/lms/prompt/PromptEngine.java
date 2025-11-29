@@ -3,6 +3,8 @@ package com.example.lms.prompt;
 import dev.langchain4j.rag.content.Content;
 import java.util.List;
 
+
+
 public interface PromptEngine {
 
     // 최종 프롬프트 생성(핵심)

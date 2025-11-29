@@ -1,0 +1,23 @@
+id: brave
+desc: "탐색 증폭 모드(Brave). 인용/안전은 더 엄격"
+retrieval:
+  web:   { k: 12, recency_bias: true }
+  vector:{ k: 6 }
+expansion:
+  self_ask: 3
+  query_burst: 9
+gates:
+  citation: { min: 3, host_diversity: 2 }
+  pii: { enabled: true }
+  final_sigmoid: { pass9x: 0.92 }
+rerank:
+  bi_encoder: { enabled: true }
+  cross_encoder: { enabled: true, semaphore: 2 }
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+  vector:
+    enabled: true

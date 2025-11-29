@@ -1,0 +1,200 @@
+spring:
+  application:
+    name: kchat-agent
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  devtools:
+    restart:
+      enabled: true
+agent:
+  flows:
+    path: ${AGENT_FLOWS_PATH:}
+  models:
+    path: ${AGENT_MODELS_PATH:configs/models.manifest.yaml}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,loggers,threaddump,httpexchanges
+logging:
+  level:
+    root: INFO
+    com.abandonware.ai.agent: INFO
+consent:
+  redis:
+    enabled: ${CONSENT_REDIS_ENABLED:true}
+jobs:
+  redis: null
+openai:
+  base-url: ${OPENAI_BASE_URL:${OPENROUTER_BASE_URL:https://openrouter.ai/api}}
+  api:
+    key: ${OPENAI_API_KEY:${OPENROUTER_API_KEY:}}
+  http:
+    timeout-sec: ${OPENAI_TIMEOUT_SEC:120}
+    max-in-mem-mb: ${OPENAI_MAX_MEM_MB:30}
+  chat:
+    model:
+      a-default: ${LLM_DEFAULT_MODEL:}
+      moe: ${LLM_MOE_MODEL:}
+local-llm:
+  enabled: ${LOCAL_LLM_ENABLED:false}
+  base-url: ${LOCAL_LLM_BASE_URL:}/v1
+router:
+  moe:
+    tokens-threshold: ${ROUTER_MOE_TOKENS:280}
+    uncertainty-threshold: ${ROUTER_MOE_UNCERTAINTY:0.35}
+    web-evidence-threshold: ${ROUTER_MOE_WEB_EVIDENCE:0.55}
+    escalate-on-rigid-temp: ${ROUTER_MOE_ESCALATE_ON_RIGID_TEMP:true}
+---
+agent:
+  models:
+    path: ${AGENT_MODELS_PATH:classpath:/configs/models.manifest.yaml}
+---
+logging:
+  level:
+    com.example.lms.manifest: DEBUG
+retrieval:
+  kg:
+    half-life-days: 60
+    score:
+      weights: 0.25,0.45,0.20,0.10
+  fusion:
+    rrf:
+      k: 60
+      weights: w_web,w_sem,w_kg
+  kalloc:
+    enabled: true
+    policy: balanced
+    max-total-k: 24
+    min-per-source: 2
+    k-step: 4
+    recency-keywords:
+    - 최근
+    - 오늘
+    - 업데이트
+    - 발표
+    - 발매
+    - release
+diag:
+  nn:
+    gradient:
+      enabled: ${DIAG_NN_GRAD_ENABLED:false}
+      vanish-threshold: ${DIAG_NN_GRAD_VANISH_THRESHOLD:0.001}
+      alpha: ${DIAG_NN_GRAD_ALPHA:4.0}
+      beta: ${DIAG_NN_GRAD_BETA:0.0}
+      eps: ${DIAG_NN_GRAD_EPS:1e-12}
+agent:
+  prcyk:
+    enabled: true
+    weights:
+      P: 0.2
+      R: 0.25
+      C: 0.25
+      Y: 0.2
+      K: 0.1
+    thresholds:
+      degrade: 0.55
+      fallback: 0.35
+    penalties:
+      rdi: 0.15
+rag:
+  ocr:
+    enabled: true
+    minConfidence: 0.65
+    maxPages: 50
+    chunk:
+      maxChars: 1200
+      overlap: 120
+    rrf:
+      weight: 1.2
+  mp:
+    enabled: true
+    apply: true
+feature:
+  flowjoiner:
+    enabled: true
+  ocr:
+    enabled: false
+rate:
+  limit:
+    provider: upstash
+otel:
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+cfvm:
+  raw:
+    enabled: true
+    max-slots: 100
+    temperature: 0.8
+    reorder:
+      enabled: true
+  shape:
+    enabled: true
+    jb-scale-ms: 2000
+    toy:
+      id: '2.24'
+      threshold: 0.95
+cache:
+  singleflight:
+    enabled: true
+    timeout-ms: 15000
+    key-strategy: METHOD_AND_ARGS
+autorun:
+  preflight:
+    enabled: false
+    min-evidence: 4
+    min-authority-ratio: 0.6
+    rdi-threshold: -1
+    action-on-fail: degrade-then-noautorun
+
+# --- merge13x added keys ---
+zsys:
+  timeBudget:
+    ms: 0       # 0=off
+  reranker:
+    maxConcurrent: 3
+    tryAcquire:
+      ms: 50
+
+cache:
+  singleflight:
+    enabled: false
+    window:
+      ms: 200
+
+---
+selfask:
+  enabled: true
+  biTopN: 80
+  crossTopN: 24
+  temperature: 0.4
+
+retriever:
+  safe:
+    staleOnError: true
+    staleMaxAgeSeconds: 86400
+
+gate:
+  preflight:
+    enabled: true
+    minCitations: 2
+    enforceWhitelist: true
+
+singleflight:
+  enabled: true
+  maxWaitMs: 1800
+
+metrics:
+  ndcg:
+    enabled: true
+
+virtualPoint:
+  enabled: true
+
+retrieval:
+  k:
+    dynamic:
+      enabled: true
