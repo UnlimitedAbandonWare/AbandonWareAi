@@ -2,73 +2,105 @@ package com.example.lms.llm;
 
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 
 @Component
 public class DynamicChatModelFactory {
 
-    @Value("${openai.api.key:}")
-    private String openaiApiKey;
+    private static final Logger log = LoggerFactory.getLogger(DynamicChatModelFactory.class);
 
-    public ChatModel lc(String modelId, double temperature, double topP, Integer maxTokens) {
-        OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
-                .modelName(modelId)
-                .temperature(temperature)
-                .topP(topP);
+    @Value("${llm.base-url-gemma:http://localhost:11434/v1}")
+    private String baseUrlGemma;
+    @Value("${llm.base-url-qwen:http://localhost:11435/v1}")
+    private String baseUrlQwen;
+    @Value("${llm.api-key:}")
+    private String llmApiKey;
 
-        String key = StringUtils.hasText(openaiApiKey) ? openaiApiKey : System.getenv("OPENAI_API_KEY");
-        if (!StringUtils.hasText(key)) {
-            throw new IllegalStateException("OpenAI API key is missing. Set 'openai.api.key' or ENV OPENAI_API_KEY.");
+    private String normalizeBase(String url) {
+        if (url == null || url.isBlank()) return "http://localhost:11434/v1";
+        String base = url.trim();
+        if (!base.endsWith("/v1")) {
+            base = base.replaceAll("/+$", "") + "/v1";
         }
-        builder.apiKey(key);
-
-        if (maxTokens != null && maxTokens > 0) {
-            builder.maxTokens(maxTokens);
-        }
-        return builder.build();
+        return base;
     }
-
-    /**  추천(Recommender) 작업용 보수적 세팅(temperature ≤ 0.2, topP=1.0) */
-    public ChatModel lcWithPolicy(String intent,
-                                  String modelId,
-                                  double temperature,
-                                  double topP,
-                                  Integer maxTokens) {
-        if ("RECOMMENDATION".equalsIgnoreCase(intent)) {
-            temperature = Math.min(temperature, 0.2);
-            topP = 1.0;
+    private String classifyBackend(String modelName, String baseUrl) {
+        String baseLower = baseUrl == null ? "" : baseUrl.toLowerCase();
+        String modelLower = modelName == null ? "" : modelName.toLowerCase();
+        if (baseLower.contains("api.openai.com") || baseLower.contains("groq.com")) {
+            return "remote-openai";
         }
-        return lc(modelId, temperature, topP, maxTokens);
-    }
-
-    /** ✅ ChatModel 인스턴스에서 실제 modelName을 최대한 복원 */
-    public String effectiveModelName(ChatModel model) {
-        try {
-            // OpenAiChatModel (langchain4j) 우선
-            if (model instanceof OpenAiChatModel m) {
-                // 1) 공개 메서드
-                try {
-                    var meth = m.getClass().getDeclaredMethod("modelName");
-                    meth.setAccessible(true);
-                    Object v = meth.invoke(m);
-                    if (v != null) return v.toString();
-                } catch (NoSuchMethodException ignore) {}
-                // 2) 필드 리플렉션
-                try {
-                    var f = m.getClass().getDeclaredField("modelName");
-                    f.setAccessible(true);
-                    Object v = f.get(m);
-                    if (v != null) return v.toString();
-                } catch (NoSuchFieldException ignore) {}
+        if (baseLower.contains("localhost") || baseLower.contains("127.0.0.1")) {
+            if (modelLower.contains("qwen") || modelLower.contains("llama")) {
+                return "local-vllm-3060";
             }
-            // 기타 모델: toString() 내 표기가 있으면 사용
-            String s = String.valueOf(model);
-            if (s.contains("gpt-")) return s;
-            return model.getClass().getSimpleName();
-        } catch (Throwable t) {
-            return model.getClass().getSimpleName();
+            return "local-vllm-3090";
+        }
+        return "unknown";
+    }
+
+
+
+    /** OpenAI-compatible (Ollama 등) 베이스 URL로 ChatModel 생성 */
+    public ChatModel build(String modelName) {
+        String effectiveModel = (modelName == null || modelName.isBlank()) ? "gemma3:27b" : modelName;
+        String base;
+        if (effectiveModel.toLowerCase().contains("qwen")) {
+            base = normalizeBase(baseUrlQwen);
+        } else {
+            base = normalizeBase(baseUrlGemma);
+        }
+        String backendTag = classifyBackend(effectiveModel, base);
+        // MERGE_HOOK:PROJ_AGENT::BACKEND_PATH_LLM_BUILD
+        log.info("BACKEND_PATH: llm='{}', backend='{}', baseUrl='{}'", effectiveModel, backendTag, base);
+
+        try {
+            return OpenAiChatModel.builder()
+                    .baseUrl(base)
+                    .apiKey(llmApiKey == null ? "" : llmApiKey)
+                    .modelName(effectiveModel)
+                    .build();
+        } catch (Exception e) {
+            throw wrapConnect(e, base);
         }
     }
+
+    private RuntimeException wrapConnect(Exception e, String baseUrl) {
+        String m = "Failed to connect to local LLM at " + baseUrl +
+                " (check: Ollama process up? '/v1' suffix? firewall/port 11434/11435)";
+        log.warn(m + " - " + e.getMessage());
+        return new IllegalStateException(m, e);
+    }
+
+    /** Backward-compat factory: preserve legacy signature used by services.
+     *  Nullables are ignored; defaults come from model/server side. */
+    public ChatModel lc(String modelName, Double temperature, Double topP, Integer maxTokens) {
+        String effectiveModel = (modelName == null || modelName.isBlank()) ? "gemma3:27b" : modelName;
+        String base;
+        if (effectiveModel.toLowerCase().contains("qwen")) {
+            base = normalizeBase(baseUrlQwen);
+        } else {
+            base = normalizeBase(baseUrlGemma);
+        }
+        String backendTag = classifyBackend(effectiveModel, base);
+        // MERGE_HOOK:PROJ_AGENT::BACKEND_PATH_LLM_LC
+        log.info("BACKEND_PATH: llm='{}', backend='{}', baseUrl='{}'", effectiveModel, backendTag, base);
+
+        try {
+            var b = OpenAiChatModel.builder()
+                    .baseUrl(base)
+                    .apiKey(llmApiKey == null ? "" : llmApiKey)
+                    .modelName(effectiveModel);
+            if (temperature != null) { b = b.temperature(temperature); }
+            if (topP != null)       { b = b.topP(topP); }
+            if (maxTokens != null)  { b = b.maxTokens(maxTokens); }
+            return b.build();
+        } catch (Exception e) {
+            throw wrapConnect(e, base);
+        }
+    }
+    
 }

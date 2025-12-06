@@ -11,24 +11,33 @@ import com.example.lms.service.config.HyperparameterService;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
+
+
 @Component
 @RequiredArgsConstructor
 public class ContextOrchestrator {
+    private static final Logger log = LoggerFactory.getLogger(ContextOrchestrator.class);
 
     private final PromptEngine promptEngine;
     private final AuthorityScorer authorityScorer;
     private final ContradictionScorer contradictionScorer;
     private final ContextEnergyModel energyModel;
     private final HyperparameterService hp;
+
+    // ─ Anger Overdrive (optional beans) ─
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.overdrive.OverdriveGuard overdriveGuard;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.overdrive.AngerOverdriveNarrower overdriveNarrower;
+
 
     @Value("${orchestrator.max-docs:10}")
     private int maxDocs;
@@ -40,13 +49,16 @@ public class ContextOrchestrator {
     @Value("${orchestrator.max-docs.ultra:18}")
     private int maxDocsUltra;
 
-    @Value("${orchestrator.min-top-score:0.60}")
+    @Value("${orchestrator.min-top-score:0.35}")
     private double minTopScore;
     @Value("${orchestrator.energy.enabled:true}")
     private boolean energyBasedSelection;
 
     // '최신성' 요구 쿼리를 감지하기 위한 정규식
-    private static final Pattern TIMELY = Pattern.compile("(?i)(공지|업데이트|패치|스케줄|일정|news|update|patch|release)");
+    private static final Pattern TIMELY = Pattern.compile(
+            "(?i)(공지|업데이트|패치|스케줄|일정|"
+                    + "출시|출시일|발표|루머|소문|스펙|"
+                    + "leak|rumor|news|update|patch|release|spec|specs)");
 
     /**
      * 여러 정보 소스를 바탕으로 최종 컨텍스트를 조율하고, 동적 규칙을 포함하여 프롬프트를 생성합니다.
@@ -130,6 +142,16 @@ public class ContextOrchestrator {
                 .map(s -> s.content)
                 .collect(Collectors.toList());
 
+        // 3-A. (희소/저권위/모순) 조건 시 앵거 오버드라이브 발동 → 점군 압축 & 다단계 축소
+        if (overdriveGuard != null && overdriveNarrower != null) {
+            try {
+                if (overdriveGuard.shouldActivate(query, candidates)) {
+                    candidates = overdriveNarrower.narrow(query, candidates);
+                }
+            } catch (Exception ignored) { /* fail-soft */ }
+        }
+
+
         // 3-B. 에너지 기반 선택 (Authority/Redundancy/Contradiction/Recency 등)
         List<Content> finalDocs = energyBasedSelection
                 ? energyModel.selectByEnergy(
@@ -138,11 +160,32 @@ public class ContextOrchestrator {
                 Math.max(1, cap))
                 : candidates.stream().limit(Math.max(1, cap)).toList();
 
-        // 4. 안전장치: 가장 높은 점수가 기준 미달이면 신뢰할 수 없는 정보로 판단하고 차단
-        double topScore = uniq.values().stream().mapToDouble(Scored::score).max().orElse(0.0);
-        if (!hasMemory && topScore < minTopScore) {
-            log.warn("[Orchestrator] Top score ({}) is below the minimum threshold ({}). Returning '정보 없음'.",
-                    String.format("%.2f", topScore), minTopScore);
+        // 4. 안전장치: 점수 threshold (Web / TIMELY 쿼리에 따라 동적으로 완화)
+        double topScore = uniq.values().stream()
+                .mapToDouble(Scored::score)
+                .max()
+                .orElse(0.0);
+        // Web 컨텐츠가 섞여 있는지 확인
+        boolean hasWebSource = uniq.values().stream()
+                .anyMatch(s -> s.source() == Source.WEB);
+        // 시간 민감한(공지/출시/루머/스펙 등) 쿼리면 threshold를 더 완화
+        boolean timely = query != null && TIMELY.matcher(query).find();
+
+        // 기본은 구성 값(minTopScore)에서 시작
+        double effectiveThreshold = minTopScore;
+        // Web 결과가 있으면 더 낮은 threshold 허용 (예: 0.25)
+        if (hasWebSource) {
+            effectiveThreshold = Math.min(effectiveThreshold, 0.25);
+        }
+        // 시의성 있는 질문이면 한 번 더 완화 (예: 0.20)
+        if (timely) {
+            effectiveThreshold = Math.min(effectiveThreshold, 0.20);
+        }
+
+        // 메모리 컨텍스트가 전혀 없고, topScore가 threshold보다 낮으면 "정보 없음"으로 처리
+        if (!hasMemory && topScore < effectiveThreshold) {
+            log.warn("[Orchestrator] Top score ({}) is below threshold ({}). Returning '정보 없음'.",
+                    String.format("%.2f", topScore), effectiveThreshold);
             return "정보 없음";
         }
 
@@ -182,7 +225,41 @@ public class ContextOrchestrator {
             double baseScore = 1.0 / rank; // 순위가 높을수록 기본 점수가 높음
             double freshnessBonus = (wantsFresh && source == Source.WEB) ? 0.25 : 0.0; // 최신성 요구 시 웹 검색에 보너스
             double lengthPenalty = Math.max(0, (text.length() - 1200) / 1200.0); // 긴 텍스트에 약간의 페널티
-            double score = Math.max(0.0, Math.min(1.0, baseScore + freshnessBonus - 0.1 * lengthPenalty));
+
+            // 도메인 기반 authority 가중치 추가
+            double authorityBonus = 0.0;
+            if (c.metadata() != null) {
+                Object urlObj = c.metadata().get("url");
+                if (urlObj != null) {
+                    String url = urlObj.toString().toLowerCase(java.util.Locale.ROOT);
+
+                    // 🔹 공식 도메인 (최고 우선순위)
+                    if (url.contains("hoyoverse.com") || url.contains("hoyolab.com")
+                            || url.contains("mihoyo.com") || url.contains("playstation.com")) {
+                        authorityBonus = 0.40;
+                    }
+                    // 🔹 위키 사이트 (게임/서브컬처에서는 신뢰 가능)
+                    else if (url.contains("namu.wiki")
+                            || url.contains("wikipedia.org")
+                            || url.contains("fandom.com")
+                            || url.contains("gamedot.org")) {
+                        authorityBonus = 0.25;
+                    }
+                    // 🔹 대형 커뮤니티/뉴스
+                    else if (url.contains("inven.co.kr") || url.contains("ruliweb.com")
+                            || url.contains("dcinside.com") || url.contains("arca.live")) {
+                        authorityBonus = 0.10;
+                    }
+                    // 🔹 개인 블로그 (미세 보너스)
+                    else if (url.contains("blog.naver.com") || url.contains("tistory.com")
+                            || url.contains("kakao.com")) {
+                        authorityBonus = 0.05;
+                    }
+                }
+            }
+
+            double score = Math.max(0.0, Math.min(1.0,
+                    baseScore + freshnessBonus + authorityBonus - 0.1 * lengthPenalty));
 
             acc.add(new Scored(c, score, source));
         }

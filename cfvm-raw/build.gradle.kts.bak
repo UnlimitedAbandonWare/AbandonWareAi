@@ -1,0 +1,62 @@
+plugins {
+    `java-library`
+}
+
+val springBootVersion: String = System.getProperty("spring.boot.version")
+    ?: System.getenv("SPRING_BOOT_VERSION")
+    ?: "3.1.5"
+
+
+group = "com.example"
+version = "0.1.0"
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+    withSourcesJar()
+}
+
+dependencies {
+  testImplementation("org.apache.lucene:lucene-analyzers-nori:9.10.0")
+  testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+  testImplementation("org.springframework.boot:spring-boot-starter-test")
+  testImplementation("org.mockito:mockito-junit-jupiter:5.12.0")
+  testImplementation("org.mockito:mockito-core:5.12.0")
+  implementation("org.apache.lucene:lucene-analyzers-nori:9.10.0")
+
+// --- Added for local BM25 (Lucene) ---
+implementation("org.apache.lucene:lucene-core:9.9.2")
+implementation("org.apache.lucene:lucene-analyzers-nori:9.9.2")
+implementation("org.apache.lucene:lucene-queryparser:9.9.2")
+
+    // --- injected by build-fix ---
+    implementation("com.fasterxml.jackson.core:jackson-databind")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml")
+
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
+
+    implementation("org.springframework.boot:spring-boot-starter-aop")
+    api("org.springframework.boot:spring-boot-starter-web:3.1.5")
+    api("org.springframework.boot:spring-boot-starter-aop:3.1.5")
+    api("io.projectreactor:reactor-core:3.6.4")
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+
+    compileOnly("org.projectlombok:lombok:1.18.30")
+    annotationProcessor("org.projectlombok:lombok:1.18.30")
+
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+}
+
+tasks.withType(JavaCompile::class.java) {
+    options.encoding = "UTF-8"
+}
+
+tasks.test {
+    useJUnitPlatform()
+}
+
+// === auto-added by patch: dependencies for Plan/Schema/YAML/Lucene ===
+dependencies {
+    implementation("com.fasterxml.jackson.core:jackson-databind")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml")
+}

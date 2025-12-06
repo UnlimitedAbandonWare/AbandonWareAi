@@ -7,9 +7,11 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
 import java.util.Optional;
+
+
+
 
 @Repository
 public interface TranslationMemoryRepository extends JpaRepository<TranslationMemory, Long> {
@@ -101,7 +103,7 @@ public interface TranslationMemoryRepository extends JpaRepository<TranslationMe
         UPDATE translation_memory
            SET hit_count = hit_count + 1,
                last_used_at = NOW(),
-               score = GREATEST(score, :score)
+               score = GREATEST(COALESCE(score, 0), :score)
          WHERE source_hash = :hash
     """, nativeQuery = true)
     int incrementHitAndBumpLastUsed(@Param("hash") String hash,

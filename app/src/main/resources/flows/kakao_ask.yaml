@@ -1,0 +1,97 @@
+# kakao/ask — Mini Orchestrator Flow
+# 목적: 사용자의 질문을 RAG(+필요시 웹검색)로 답변하고, 권한이 있을 경우 Kakao로 전송
+# 플로우는 Plan → Retrieve → Critic → Synthesize → (Consent) → Send 순으로 동작
+# 변수: ${sessionId}, ${roomId}, ${topK}, ${language}
+id: "kakao/ask"
+version: "1.0.0"
+defaults:
+  objective: "Answer user's question and, if consented, send to Kakao."
+  language: "ko"
+  channel: "kakao"
+  sessionId: "${sessionId}"
+  roomId: "${roomId}"
+  topK: 6
+  budget:
+    max_tokens: 4000
+    max_cost_usd: 0.05
+
+steps:
+  - id: plan
+    type: PLAN
+    ref: "_planner"
+    params:
+      strategy: "RAG_FIRST_TIMELY_WEB"
+      disambiguation_max: 1
+
+- id: retrieve
+  type: TOOL
+  uses: "rag.retrieve"
+    when: ${ tools["rag.retrieve"].exists == true }
+  args:
+    topK: "${topK}"
+- id: retrieve_fallback
+  type: TOOL
+  uses: "rag.retrieve.fallback"
+  when: ${ tools["rag.retrieve"].exists != true }
+  - id: critic_coverage
+    type: CRITIC
+    ref: "safety.critic"
+    params:
+      min_evidence: 2
+      escalate_on_gap: true
+
+  - id: synth
+    type: SYNTH
+    ref: "writer.synth"
+    params:
+      style: "kakao_compact"
+      include_sources: true
+      outputs:
+        # synth 결과가 컨텍스트에 저장하는 키 (예: answer, sources_short)
+        answer_key: "answer"
+        sources_key: "sources_short"
+
+  # 주의: 조건 분기는 엔진에 따라 다릅니다. 여기서는 kakao.agent가 내부에서 스코프 점검/동의카드 생성까지 수행한다고 가정합니다.
+- id: trace_orchestration
+  type: TOOL
+  uses: "orchestration.trace"
+- id: send_to_kakao
+  type: TOOL
+  uses: "kakao.push"
+    when: ${ scopes["KAKAO_PUSH"].granted == true }
+  args:
+    roomId: "${roomId}"
+    text: |-
+      {{answer}}
+      ———
+      출처: {{sources_short}}
+- id: send_outbox
+  type: TOOL
+  uses: "kakao.push.outbox"
+  when: ${ scopes["KAKAO_PUSH"].granted != true }
+- id: notify_n8n
+  type: TOOL
+  uses: "n8n.notify"
+  args:
+    enabled: true
+    webhookUrl_key: "n8n_webhook_url"
+    payload:
+      flow: "kakao/ask"
+      sessionId: "${sessionId}"
+      roomId: "${roomId}"
+      answer_ref: "{{answer}}"
+      sources_ref: "{{sources_short}}"
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

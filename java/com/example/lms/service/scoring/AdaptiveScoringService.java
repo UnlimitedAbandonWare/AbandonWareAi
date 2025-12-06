@@ -7,6 +7,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
 import org.springframework.beans.factory.annotation.Value;
+
+
 @Service
 @RequiredArgsConstructor
 public class AdaptiveScoringService {

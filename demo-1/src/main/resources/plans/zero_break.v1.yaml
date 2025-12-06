@@ -1,0 +1,25 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: zero_break_v1
+description: "단일단계 신속 응답 플랜"
+steps:
+  - name: retrieve_web
+    tool: qa.retrieve
+    params: { sources: [web], web_top_k: 5 }
+  - name: fuse_results
+    tool: rank.fusion
+    params: { method: rrf }
+  - name: rerank_bi
+    tool: rank.bi_encoder
+  - name: apply_gates
+    tool: gate.aggregate
+    params:
+      - DomainWhitelist
+      - CitationGate: { min: 1 }
+      - AnswerSanitizer
+  - name: generate_answer
+    tool: qa.compose
+    params: { mode: "fast" }

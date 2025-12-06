@@ -1,9 +1,8 @@
 package com.example.lms.transform;
+
 import java.util.*;
 import java.util.Objects;
-
 import java.util.regex.Pattern;
-
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -21,9 +20,13 @@ import java.util.Set;
 import java.util.Arrays;
 import com.example.lms.search.SmartQueryPlanner;
 import com.example.lms.search.QueryHygieneFilter;
-import static com.example.lms.search.QueryHygieneFilter.sanitize;
 import com.example.lms.prompt.PromptContext;
+import com.example.lms.prompt.QueryKeywordPromptBuilder;
 import com.example.lms.service.rag.pre.CognitiveState;
+
+
+
+import static com.example.lms.search.QueryHygieneFilter.sanitize;
 
 /**
  * 쿼리 오타를 교정해 주는 Transformer
@@ -35,7 +38,14 @@ public class QueryTransformer {
 
     /** LLM 제안·힌트 개수 상한 */
     private static final int MAX_VARIANTS = 3;   // generateVariantsWithLLM() 한도
-    private static final int MAX_HINTS    = 2;   // ⬅️ LLM 힌트 축소(폭주 방지)
+    private static final int MAX_HINTS    = 4;   // LLM 힌트 상한 (configurable via search.llm.max-hints)
+
+    /**
+     * Centralised prompt builder used for constructing all LLM prompts. This avoids
+     * assembling raw strings in multiple locations and ensures a single source
+     * of truth for prompt wording.
+     */
+    private static final QueryKeywordPromptBuilder QUERY_KEYWORD_PROMPT_BUILDER = new QueryKeywordPromptBuilder();
 
     /* ────────────────────────────────────────
      * 0.  “원소 감지”  ― 쿼리 Intent Enum
@@ -59,7 +69,7 @@ public class QueryTransformer {
     /** “을지대학교” / “eulji” 등 원치 않는 단어 패턴 */
             private static final Pattern UNWANTED_WORD_PATTERN =
                         Pattern.compile("(?i)(을지대학교|eulji)");
-    /** site eulji ac kr … 형태 도메인‑스코프 프리픽스 */
+    /** site eulji ac kr /* ... *&#47; 형태 도메인-스코프 프리픽스 */
             private static final Pattern DOMAIN_SCOPE_PREFIX =
                         Pattern.compile("(?i)^\\s*(site\\s+)?\\S+\\s+ac\\s+kr\\b");
     /** 원문 보존 보호어: 원문에 있으면 금지어(오인어)로 변형하지 않도록 방어 */
@@ -67,13 +77,20 @@ public class QueryTransformer {
             "원신", Set.of("원숭이", "monkey")
     );
 
-    /* (선택) 프로젝트에서 유지할 소규모 오타 사전 – 빈맵이면 사용 안 함 */
+    /* (선택) 프로젝트에서 유지할 소규모 오타 사전 - 빈맵이면 사용 안 함 */
     private final Map<String,String> dict;
 
     private final ChatModel chatModel;
     private final HintExtractor hintExtractor;
     /** LLM 호출 결과를 캐시하여 동일한 요청에 대한 비용과 지연을 줄인다. */
     private final LoadingCache<String, String> llmCache;
+
+    // Unified noise clipper for cleaning intermediate strings.  Optional
+    // injection because QueryTransformer may be used outside of a Spring
+    // context during unit testing.  When null, no additional normalisation
+    // is applied.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.search.NoiseClipper noiseClipper;
 
 
     /* LLM이 생성할 동적 버프 1회 한도 */
@@ -82,6 +99,7 @@ public class QueryTransformer {
     public QueryTransformer(ChatModel chatModel) {
         this(chatModel, Map.of(), null);
     }
+    @org.springframework.beans.factory.annotation.Autowired   // ✅ 이 한 줄만 추가
     public QueryTransformer(ChatModel chatModel,
                             Map<String,String> customDict,
                             @Nullable HintExtractor hintExtractor) {
@@ -105,7 +123,12 @@ public class QueryTransformer {
     private String runLLM(String prompt) {
         try {
             return chatModel.chat(List.of(
-                    SystemMessage.from("간결하고 한 줄로만 응답하세요."),
+                    SystemMessage.from("""
+                        간결하고 한 줄로만 응답하세요.
+                        - 고유명사(인물, 캐릭터, 지역, 게임 요소 등)에 대해 **확실히 알지 못하는 속성**(원소, 무기, 직업, 조직, 소속, 능력 등)은 절대로 추측하거나 창작하지 마세요.
+                        - 모르는 경우 원문의 표현만 약간 정리하거나, 검색에 도움이 되는 **일반적인 키워드**만 제안하세요 (예: "정보", "설명", "능력", "스펙").
+                        - 존재하지 않는 조직명, 집단, 세계관 설정을 만들어내지 마세요.
+                        """),
                     UserMessage.from(prompt)
             )).aiMessage().text();
         } catch (Exception e) {
@@ -154,14 +177,8 @@ public class QueryTransformer {
     /** LLM 한 번 호출해 맞춤법을 교정한다 */
     private String correctWithLLM(String ctx, String q) {
         try {
-            /* + 프롬프트를 강화해 **교정된 문장만** 반환하도록 명시 */
-            String prompt = """
-                다음 문장의 맞춤법을 확인하고
-                ✱ 틀렸으면 **교정된 문장만 한 줄**,
-                ✱ 맞으면 **입력 문장을 그대로** 한 줄로 반환하세요.
-                설명(예: "틀렸습니다.", "올바른 표기:")은 절대로 넣지 마세요.
-                문장: "%s"
-                """.formatted(q);
+            // Build the correction prompt using the centralised prompt builder
+            String prompt = QUERY_KEYWORD_PROMPT_BUILDER.buildCorrectionPrompt(q);
 
             // 캐시를 먼저 조회하고 없으면 채운다.
             String ans = llmCache.get(prompt);
@@ -177,7 +194,7 @@ public class QueryTransformer {
         }
     }
 
-    /** LLM이 제시한 추가 검색어(최대 3개)를 반환 – 실패 시 빈 리스트 */
+    /** LLM이 제시한 추가 검색어(최대 3개)를 반환 - 실패 시 빈 리스트 */
     private List<String> generateVariantsWithLLM(String q) {
         return generateVariantsWithLLM(q, null);
     }
@@ -189,20 +206,9 @@ public class QueryTransformer {
         CognitiveState cs = ctx == null ? null : ctx.cognitiveState();
         if (cs == null) return generateVariantsWithLLM(baseQuery, ctx == null ? null : ctx.subject());
         String subject = ctx.subject();
-        // 추상도/증거유형/시간민감도에 맞춘 특화 프롬프트
-        String prompt = """
-            당신은 한국어 RAG 서브쿼리 생성기입니다.
-            다음 제약에 따라 **정확히 3개**의 키워드형 서브쿼리를 한 줄에 하나씩 만드세요.
-            [추상도=%s, 시간민감도=%s, 증거유형=%s, 복잡도=%s]
-            - 주제(anchor): "%s"
-            - 원문: "%s"
-            - 불필요한 설명/기호 금지, 쿼리만 출력
-            """.formatted(
-                cs.abstractionLevel(), cs.temporalSensitivity(),
-                String.join("/", cs.evidenceTypes()), cs.complexityBudget(),
-                Objects.toString(subject, "사용자 주제(추측 금지)"),
-                baseQuery
-        );
+        // Build the cognitive variants prompt via the prompt builder
+        String prompt = QUERY_KEYWORD_PROMPT_BUILDER
+                .buildCognitiveVariantsPrompt(cs, subject, baseQuery, MAX_VARIANTS);
         String ans = llmCache.get(prompt);
         if (ans == null || ans.isBlank()) {
             return generateVariantsWithLLM(baseQuery, subject);
@@ -219,38 +225,74 @@ public class QueryTransformer {
     }
 
     /** ✨ subject 앵커 지원 버전 */
-    private List<String> generateVariantsWithLLM(String q, @Nullable String subject) {
+        private List<String> generateVariantsWithLLM(String q, @Nullable String subject) {
         try {
-            String anchor = (subject == null || subject.isBlank())
-                    ? "the user's main topic (do NOT guess)"
-                    : subject;
-            String prompt = """
-            You are a Korean RAG query generator.
-            Create exactly **3** concise, keyword-style search queries (one per line).
-
-            RULES:
-            - **Anchor Focus**: Stay strictly on this subject → "%s".
-            - **No Acronym Expansion** without explicit evidence (e.g., 'DW' ≠ 'Deutsche Welle').
-            - Prefer terms relevant to the subject's likely domain (e.g., for academies: 수강후기, 커리큘럼, 위치, 등록).
-            - Output **only** queries, one per line. No bullets or explanations.
-
-            Original: "%s"
-            """.formatted(anchor, q);
+            // Build the keyword variants prompt using the prompt builder
+            String prompt = QUERY_KEYWORD_PROMPT_BUILDER
+                    .buildKeywordVariantsPrompt(q, subject, MAX_VARIANTS);
             String ans = llmCache.get(prompt);
             if (ans == null || ans.isBlank()) {
-                return List.of();
+                // LLM이 응답하지 못했으면 원문이라도 사용
+                return q == null || q.isBlank() ? List.of() : List.of(q);
             }
-            return Arrays.stream(ans.split("\\r?\\n"))
-                    .map(this::cleanUp)                       // 앞머리 제거·트림
+
+            List<String> raw = Arrays.stream(ans.split("\r?\n"))
+                    .map(this::cleanUp)
                     .filter(s -> s != null && !s.isBlank())
+                    .collect(Collectors.toList());
+
+            // ✨ 짧은 고유명사 기반 질의(예: "원신 마비카")인 경우,
+            //    - 원본 질의를 항상 포함하고
+            //    - 원문에 없던 위험 속성 키워드를 붙인 변이는 버린다.
+            if (isNamedEntityLike(q)) {
+                List<String> filtered = raw.stream()
+                        .filter(v -> isEntitySafeVariant(q, v))
+                        .collect(Collectors.toList());
+
+                if (filtered.isEmpty()) {
+                    // 모든 변이가 위험하면 원문만 사용
+                    return q == null || q.isBlank()
+                            ? List.of()
+                            : List.of(q.trim());
+                }
+
+                // 결과에 원문이 없으면 맨 앞에 추가
+                String base = q == null ? "" : q.trim();
+                boolean hasOriginal = !base.isEmpty() && filtered.stream()
+                        .anyMatch(v -> v.equalsIgnoreCase(base));
+
+                List<String> out = new ArrayList<>();
+                if (!base.isEmpty() && !hasOriginal) {
+                    out.add(base);
+                }
+                out.addAll(filtered);
+
+                // subject가 주어졌다면 subject 토큰과 전혀 겹치지 않는 변이는 제외
+                if (subject != null && !subject.isBlank()) {
+                    Set<String> subjTokens = tokens(subject);
+                    out = out.stream()
+                            .filter(s -> !Collections.disjoint(tokens(s), subjTokens))
+                            .collect(Collectors.toList());
+                }
+
+                return out.stream()
+                        .distinct()
+                        .limit(MAX_VARIANTS)
+                        .toList();
+            }
+
+            // 일반 질의의 경우: 기존 로직 유지 + subject 기반 필터링만 적용
+            return raw.stream()
                     // ✨ subject가 있으면, subject 토큰과 최소 하나는 겹치도록 필터링
                     .filter(s -> subject == null || !Collections.disjoint(tokens(s), tokens(subject)))
-                    .limit(MAX_VARIANTS)                      // 안전 상한
+                    .distinct()
+                    .limit(MAX_VARIANTS)
                     .toList();
         } catch (Exception e) {
-            return List.of();
+            return q == null || q.isBlank() ? List.of() : List.of(q);
         }
     }
+
 
     // ─────────────────────────────────────────────────────────────
     // 새 API: 사용자 질의 + GPT 답변에서 힌트를 섞어 검색용 다중 쿼리 생성
@@ -264,7 +306,7 @@ public class QueryTransformer {
     public List<String> transformEnhanced(String userPrompt,
                                           @Nullable String assistantAnswer,
                                           @Nullable String subject) {
-        /* ① “원소 감지” – Intent 분류 */
+        /* ① “원소 감지” - Intent 분류 */
         QueryIntent intent = classifyIntent(userPrompt);
         //  원본 질문 토큰을 미리 계산 -- 힌트 검증용
         Set<String> promptTokens = tokenize(userPrompt);
@@ -275,7 +317,7 @@ public class QueryTransformer {
         List<String> base = this.transform("", defaultString(userPrompt)).stream()
                 .map(q -> boostWithIntent(q, intent))
                 .toList();
-        /* ③ 복합 질문이면 “개화” – 세부 쿼리 분해 */
+        /* ③ 복합 질문이면 “개화” - 세부 쿼리 분해 */
         List<String> subQs = isComplex(userPrompt) ? generateSubQueries(userPrompt) : List.of();
         /* ④ GPT 답변에서 힌트 추출 → Intent 버프 붙여 정규화 */
         List<String> boosted =
@@ -294,7 +336,7 @@ public class QueryTransformer {
                 .flatMap(Collection::stream)
                 .map(this::cleanUp)
                 .filter(s -> s != null && !s.isBlank())
-                .filter(s -> !DOMAIN_SCOPE_PREFIX.matcher(s).find())          // domain‑scope 제거
+                .filter(s -> !DOMAIN_SCOPE_PREFIX.matcher(s).find())          // domain-scope 제거
                 .filter(s -> !UNWANTED_WORD_PATTERN.matcher(s).find()
                         || UNWANTED_WORD_PATTERN.matcher(userPrompt).find()) // 원문에 없으면 차단
                 // ✨ subject가 주어졌다면 subject 토큰과의 교집합이 있어야 함
@@ -323,9 +365,70 @@ public class QueryTransformer {
                 .collect(Collectors.toSet());
     }
 
+    /**
+     * 질문이 '짧은 고유명사 위주'인지 대략 판정한다.
+     * 예: "원신 마비카", "마비카 속성" 등은 true,
+     *     긴 설명형 질문이나 복합 문장은 false.
+     */
+    private boolean isNamedEntityLike(String q) {
+        if (q == null) return false;
+        String trimmed = q.strip();
+        if (trimmed.length() < 2) return false;
+
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        // 한국어 의문사/설명형 패턴이 섞여 있으면 일반 질문으로 취급
+        boolean hasWh = lower.contains("왜")
+                || lower.contains("어떻게")
+                || lower.contains("무엇")
+                || lower.contains("무슨")
+                || lower.contains("설명")
+                || lower.contains("알려줘")
+                || lower.startsWith("explain");
+
+        if (hasWh) return false;
+
+        Set<String> tokenSet = tokens(trimmed);
+        int tokenCount = tokenSet.size();
+        return tokenCount > 0 && tokenCount <= 3;
+    }
+
+    /**
+     * 원래 질의에 없던 위험 속성 키워드를 새로 붙였는지 검사한다.
+     * 예: 원본에 '번개'가 없는데 변이에만 '번개'가 있으면 false.
+     */
+    private boolean isEntitySafeVariant(String original, String variant) {
+        if (variant == null || variant.isBlank()) return false;
+        if (original == null) return true;
+
+        Set<String> origTokens = tokens(original);
+        Set<String> varTokens = tokens(variant);
+
+        List<String> risky = List.of(
+                "번개", "전기", "얼음", "바람", "물", "불", "빛", "어둠",
+                "성우", "더빙", "나레이터",
+                "비밀", "조직", "단체", "길드",
+                "원소", "속성", "직업", "클래스"
+        );
+
+        for (String r : risky) {
+            if (varTokens.contains(r) && !origTokens.contains(r)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+
+
     private String cleanUp(String s) {
         if (s == null) return null;
         String t = s;
+        // Apply unified noise clipping before removing prefixes and quotes.  This
+        // handles common polite suffixes and duplicates across multiple call
+        // sites.  When the clipper is not available the original string is used.
+        if (noiseClipper != null) {
+            t = noiseClipper.clip(t);
+        }
         t = CLEANUP_PREFIX_NUM.matcher(t).replaceFirst("");
         t = CLEANUP_PREFIX_BULLET.matcher(t).replaceFirst("");
         t = CLEANUP_META.matcher(t).replaceFirst("");
@@ -346,14 +449,9 @@ public class QueryTransformer {
     }
 
     private List<String> generateDynamicBuffs(String base, QueryIntent intent) {
-        String prompt = """
-            사용자가 "%s" 라는 주제로 검색하려고 합니다.
-            의도 카테고리: %s
-            검색 정확도를 높일 **추가 키워드**를 %d개까지 한국어로 제안해 주세요.
-            - 설명 없이 한 줄에 하나씩만 출력
-            - 불필요한 특수문자는 제외
-            """.formatted(base, intent, MAX_DYNAMIC_BUFFS);
-
+        // Build the intent buff prompt using the prompt builder
+        String prompt = QUERY_KEYWORD_PROMPT_BUILDER
+                .buildIntentBuffPrompt(base, intent, MAX_DYNAMIC_BUFFS);
         String ans = llmCache.get(prompt);
         if (ans == null || ans.isBlank()) return List.of();
 
@@ -372,7 +470,7 @@ public class QueryTransformer {
         boolean originalContainsUnwanted =
                 UNWANTED_WORD_PATTERN.matcher(original).find();
         return variants.stream()
-                // site eulji ac kr … 같은 변형 제거
+                // site eulji ac kr /* ... */ 같은 변형 제거
                 .filter(v -> !DOMAIN_SCOPE_PREFIX.matcher(v).find())
                 // “을지대학교” 키워드가 원문에 없으면 제외
                 .filter(v -> originalContainsUnwanted
@@ -400,15 +498,12 @@ public class QueryTransformer {
      * ────────────────────────────────────────*/
     private QueryIntent classifyIntent(String query) {
         if (query == null || query.isBlank()) return QueryIntent.GENERAL_KNOWLEDGE;
-        // 알파벳·숫자 혼합 모델명(K8Plus 등)이 포함되면 제품‑스펙으로 우선 분류
+        // 알파벳·숫자 혼합 모델명(K8Plus 등)이 포함되면 제품-스펙으로 우선 분류
         if (COMPOUND_TOKEN.matcher(query).find()) {
             return QueryIntent.PRODUCT_SPEC;
         }
-        String prompt = String.format("""
-            다음 사용자 질문을 아래 카테고리 중 하나로 분류해줘.
-            [PRODUCT_SPEC, LOCATION_RECOMMEND, TECHNICAL_HOW_TO, PERSON_LOOKUP, GENERAL_KNOWLEDGE]
-            질문: "%s"
-            카테고리:""", query);
+        // Build the classification prompt using the prompt builder
+        String prompt = QUERY_KEYWORD_PROMPT_BUILDER.buildIntentClassificationPrompt(query);
         String result = llmCache.get(prompt);
         if (result == null || result.isBlank()) return QueryIntent.GENERAL_KNOWLEDGE;
         try {
@@ -430,12 +525,8 @@ public class QueryTransformer {
     }
 
     private List<String> generateSubQueries(String question) {
-        String prompt = """
-            다음 복합 질문을 3개의 구체적인 탐색 질문으로 분해해서
-            한 줄에 하나씩만 출력해 줘. 설명은 넣지 마.
-            질문: "%s"
-            세부 질문:
-            """.formatted(question);
+        // Build the sub queries prompt using the prompt builder
+        String prompt = QUERY_KEYWORD_PROMPT_BUILDER.buildSubQueriesPrompt(question);
         String ans = llmCache.get(prompt);
         if (ans == null || ans.isBlank()) return List.of();
         return Arrays.stream(ans.split("\\r?\\n"))

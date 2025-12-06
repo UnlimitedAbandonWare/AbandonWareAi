@@ -1,0 +1,70 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.3.4'
+    id 'io.spring.dependency-management' version '1.1.6'
+}
+
+group = 'com.abandonwareai.nova'
+version = '0.1.0'
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+    implementation("dev.langchain4j:langchain4j-open-ai:1.0.1")
+
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // Scheduling is included in starter, but we explicitly add annotations support
+    implementation 'org.springframework.boot:spring-boot-starter-aop'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+\1mainClass = 'com.example.lms.LmsApplication'
+}
+
+
+tasks.register("checkLangchain4jVersionPurity") {
+    doLast {
+        val bad = configurations.flatMap { it.dependencies }
+            .filter { (it.group ?: "") == "dev.langchain4j" }
+            .filter { (it.version ?: "") != "1.0.1" }
+            .map { "${'$'}{it.group}:${'$'}{it.name}:${'$'}{it.version}" }
+        if (bad.isNotEmpty()) {
+            throw GradleException("LangChain4j version purity violated: " + bad.joinToString(", "))
+        }
+    }
+}
+tasks.named("check") { dependsOn("checkLangchain4jVersionPurity") }
+
+
+configurations.all {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "dev.langchain4j" && requested.version != "1.0.1") {
+            useVersion("1.0.1")
+        }
+    }
+}
+
+bootRun {
+    mainClass = 'com.example.lms.LmsApplication'
+}
+
+
+bootJar {
+    mainClass = 'com.example.lms.LmsApplication'
+}

@@ -3,9 +3,11 @@ package com.example.lms.service.rag.rerank;
 
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.stream.Collectors;
+
+
+
 
 /** 질의-문서 토큰 교집합 기반 경량 1차 랭커 구현 */
 @Component

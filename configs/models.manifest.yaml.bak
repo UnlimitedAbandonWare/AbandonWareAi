@@ -1,0 +1,57 @@
+version: "2025-09-30"
+
+# Bindings used by the router / bridge
+bindings:
+  default: "gpt-4o-mini"
+  moe:     "anthropic/claude-3.5-sonnet"
+
+aliases:
+  vision: "gpt-4o-mini"
+  cheap:  "deepseek/deepseek-chat"
+
+models:
+  - id: "gpt-4o-mini"
+    provider: "openai"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${OPENAI_COMPAT_BASE_URL:https://openrouter.ai/api/v1}"
+      key_env:  "${OPENAI_API_KEY:${OPENROUTER_API_KEY:}}"
+    capabilities: [chat, tool_use, vision]
+    ctx: 128000
+    price: {in: 0.0003, out: 0.0015}
+    tags: [default, balanced]
+
+  - id: "anthropic/claude-3.5-sonnet"
+    provider: "anthropic"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${OPENAI_COMPAT_BASE_URL:https://openrouter.ai/api/v1}"
+      key_env:  "${OPENROUTER_API_KEY:${OPENAI_API_KEY:}}"
+    capabilities: [chat, reasoning, long_context]
+    ctx: 200000
+    price: {in: 0.003, out: 0.015}
+    tags: [moe, reasoning, high_tier]
+
+  - id: "deepseek/deepseek-chat"
+    provider: "deepseek"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${OPENAI_COMPAT_BASE_URL:https://openrouter.ai/api/v1}"
+      key_env:  "${OPENROUTER_API_KEY:${OPENAI_API_KEY:}}"
+    capabilities: [chat, reasoning]
+    ctx: 32000
+    price: {in: 0.00014, out: 0.00028}
+    tags: [cheap, reasoning]
+
+  - id: "groq/llama-3.1-70b-instruct"
+    provider: "groq"
+    endpoint:
+      type: "openai_compat"
+      base_url: "https://api.groq.com/openai/v1"
+      key_env:  "${GROQ_API_KEY:}"
+    capabilities: [chat, tool_use]
+    ctx: 131072
+    price: {}
+    tags: [balanced, alt_provider]
+
+# NineTile alias corrector toggle

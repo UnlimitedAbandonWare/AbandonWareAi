@@ -1,14 +1,16 @@
 package com.example.lms.service.reinforcement;
 
 import com.example.lms.entity.TranslationMemory;
-
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
+
+
+
 /**
- * <h2>RewardScoringEngine – Unified Edition ({스터프18}+{스터프19})</h2>
+ * <h2>RewardScoringEngine - Unified Edition ({스터프18}+{스터프19})</h2>
  *
  * <p>🔧 2025-08-01 Hot-Patch (보르다 결합 지원)
  * <ul>
@@ -49,7 +51,7 @@ public final class RewardScoringEngine {
 
     /* ────── Policy Plumbing ────── */
 
-    /** Pure-function contract – trivial to unit-test. */
+    /** Pure-function contract - trivial to unit-test. */
     public interface RewardPolicy {
         double compute(TranslationMemory mem, String queryText, double similarity);
     }
@@ -76,7 +78,7 @@ public final class RewardScoringEngine {
 
     /* ────── Concrete Policies ────── */
 
-    /** 1️⃣ Similarity – clamps to [SIMILARITY_FLOOR, 1]. */
+    /** 1️⃣ Similarity - clamps to [SIMILARITY_FLOOR, 1]. */
     public static class SimilarityPolicy implements RewardPolicy {
         @Override public double compute(TranslationMemory m, String q, double sim) {
             if (sim < 0) return 0;                         // similarity unknown
@@ -85,7 +87,7 @@ public final class RewardScoringEngine {
         }
     }
 
-    /** 2️⃣ Hit-Count – logistic popularity curve. */
+    /** 2️⃣ Hit-Count - logistic popularity curve. */
     public static class HitCountPolicy implements RewardPolicy {
         private final double k;
         public HitCountPolicy(double k) { this.k = k; }
@@ -94,7 +96,7 @@ public final class RewardScoringEngine {
         }
     }
 
-    /** 3️⃣ Recency – exponential decay with configurable half-life. */
+    /** 3️⃣ Recency - exponential decay with configurable half-life. */
     public static class RecencyPolicy implements RewardPolicy {
         private final double lambdaPerDay;
         public RecencyPolicy(Duration halfLife) {
@@ -144,7 +146,7 @@ public final class RewardScoringEngine {
         private double kSig = 0.25;
         private Duration halfLife = Duration.ofDays(14);
 
-        /* ✨ NEW – allow the tuner to disable weight normalisation temporarily */
+        /* ✨ NEW - allow the tuner to disable weight normalisation temporarily */
         private boolean normaliseWeights = true;
 
         private final List<CompositePolicy.Weighted> extraPolicies = new ArrayList<>();

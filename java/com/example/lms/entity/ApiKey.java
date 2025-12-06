@@ -11,6 +11,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+
+
 /**
  * Google 번역 API 키 & 일일 문자 한도 관리용 엔티티
  */

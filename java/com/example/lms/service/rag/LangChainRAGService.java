@@ -1,262 +1,104 @@
 package com.example.lms.service.rag;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.UserMessage;
 
-import java.lang.reflect.Method;
-import com.example.lms.service.MemoryReinforcementService;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.rag.content.Content;
-import dev.langchain4j.rag.content.retriever.ContentRetriever;
-import dev.langchain4j.rag.query.Query;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-
-import lombok.extern.slf4j.Slf4j;
-import com.example.lms.service.rag.guard.EvidenceGate;
-import lombok.RequiredArgsConstructor;
-import com.example.lms.service.rag.pre.QueryContextPreprocessor;
-import com.example.lms.prompt.PromptBuilder;
-import com.example.lms.prompt.PromptContext;
-import com.example.lms.guard.AnswerSanitizer;
-import java.util.Set;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.annotation.Qualifier;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
+import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
+import com.example.lms.llm.NoopEmbeddingModel;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
+import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
-import java.util.Optional;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import java.time.Duration;
-
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
-import java.util.concurrent.atomic.AtomicInteger;
-//검색
-@Slf4j
 @Service
-@RequiredArgsConstructor
 public class LangChainRAGService {
-    /** Unified metadata key – 모든 서비스가 동일 키 사용 */
-    public static final String META_SID = "sid";   // ← ChatService & NaverSearchService 와 통일
-    /** sid 필터: null 또는 "*"는 공용으로 간주하여 통과 */
-    private boolean passesSid(Map<String, Object> md, String currentSid) {
-        String sid = Optional.ofNullable(md.get(META_SID)).map(String::valueOf).orElse(null);
-        if (sid == null || "*".equals(sid)) return true;                // 공용 허용
-        return currentSid != null && currentSid.equals(sid);            // 동일 세션만 허용
+
+    private static final Logger log = LoggerFactory.getLogger(LangChainRAGService.class);
+
+    // 다른 서비스(ChatService, HybridRetriever 등)에서 참조하는 상수 정의
+    public static final String META_SID = "sid";
+
+    private final EmbeddingModel embeddingModel;
+    private final EmbeddingStore<TextSegment> embeddingStore;
+
+    public LangChainRAGService(EmbeddingModel em, EmbeddingStore<TextSegment> es) {
+        this.embeddingModel = em;
+        this.embeddingStore = es;
     }
 
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> toMap(Object meta) {
+    @PostConstruct
+    public void logVectorState() {
         try {
-            Method m = meta.getClass().getMethod("asMap");
-            return (Map<String, Object>) m.invoke(meta);
-        } catch (NoSuchMethodException e) {
-            try {
-                Method m = meta.getClass().getMethod("map");
-                return (Map<String, Object>) m.invoke(meta);
-            } catch (Exception ex) {
-                return Map.of();
-            }
-        } catch (Exception ex) {
-            return Map.of();
+            log.info("[RAG] EmbeddingStore initialized: {}", embeddingStore.getClass().getSimpleName());
+            log.info("[RAG] EmbeddingModel type: {}", embeddingModel.getClass().getSimpleName());
+        } catch (Exception e) {
+            log.warn("[RAG] logVectorState failed: {}", e.getMessage());
         }
     }
-
-    @Qualifier("utilityChatModel")
-    private final ChatModel                   chatModel; // 기본
-    private final com.example.lms.model.ModelRouter modelRouter; // ★ NEW
-
-    @Qualifier("moeChatModel")
-    private final ChatModel                   moeChatModel;
-    private final EmbeddingModel              embeddingModel;
-    private final EmbeddingStore<TextSegment> embeddingStore;
-    private final MemoryReinforcementService  memorySvc;
-    private final QueryContextPreprocessor    preprocessor;   //  의도/도메인/원소 제약 주입원
-    private final PromptBuilder               promptBuilder;
-    private final AnswerSanitizer             answerSanitizer;
-    private final EvidenceGate                evidenceGate;   // ✅ 주입
 
     /**
-     * 대화 기록을 제한된 크기로 유지하기 위해 Caffeine LRU 캐시를 사용한다.
-     * 세션별 히스토리는 100개 항목까지만 보존하며, 마지막 사용 시점을 기준으로 만료된다.
+     * HybridRetriever 등 다른 컴포넌트와의 호환성을 위해 ContentRetriever 변환 제공.
+     * 1.0.1 버전의 표준 구현체인 EmbeddingStoreContentRetriever를 사용합니다.
      */
-    private final Cache<String, String> conversationMemory =
-            Caffeine.newBuilder()
-                    .maximumSize(100)
-                    .expireAfterAccess(Duration.ofHours(6))
-                    .build();
-
-    @Value("${rag.top-k:3}")
-    private int topK;
-    // Use a higher default threshold to suppress low‑quality matches
-    @Value("${rag.min-score:0.8}")
-    private double minScore;
-    // (-) 구(舊) 직접 구현 삭제
-    //     → 아래 getAnswerInternal(...)  퍼사드 3종만 유지
-
-    /** 벡터스토어에서 RAG 컨텍스트 검색 */
-    private List<String> retrieveRagContext(String query, String sessionId) {
-        Embedding queryEmbedding = embeddingModel.embed(query).content();
-        EmbeddingSearchRequest req = EmbeddingSearchRequest.builder()
-                .queryEmbedding(queryEmbedding)
-                .maxResults(topK)
-                .minScore(minScore)
-                .build();
-
-        EmbeddingSearchResult<TextSegment> res = embeddingStore.search(req);
-        return filterMatchesToString(res, sessionId);
-    }
-
-
-
-    /** 동일 로직을 ContentRetriever 형태로 노출 */
     public ContentRetriever asContentRetriever(String indexName) {
-        return (Query q) -> {
-            // ☑ META_SID 사용으로 세션 오염 차단
-            String sid = Optional.ofNullable(q.metadata())
-                    .map(meta -> toMap(meta).get(META_SID))
-                    .map(Object::toString)
-                    .orElse(null);
+        // indexName은 사용하는 VectorStore 구현체에 따라 다를 수 있으나,
+        // 여기서는 기본 Store를 래핑하여 반환합니다.
+        return EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(embeddingStore)
+                .embeddingModel(embeddingModel)
+                .maxResults(5) // 기본값 설정 (필요시 조정)
+                .minScore(0.6)
+                .build();
+    }
 
-            EmbeddingSearchRequest req = EmbeddingSearchRequest.builder()
-                    .queryEmbedding(embeddingModel.embed(q.text()).content())
-                    .maxResults(topK)
-                    .minScore(minScore)
+    public List<String> retrieveRagContext(String query, String sid) {
+        try {
+            // 벡터 기능 OFF 상태 빠른 탈출
+            if (embeddingModel instanceof NoopEmbeddingModel) {
+                log.info("[RAG] EmbeddingModel is NoopEmbeddingModel; skipping vector search");
+                return java.util.Collections.emptyList();
+            }
+
+            // 1. 질문 임베딩
+            Embedding emb = embeddingModel.embed(query).content();
+            if (emb == null || emb.vector() == null || emb.vector().length == 0) {
+                log.warn("[RAG] empty embedding returned; skipping vector search");
+                return java.util.Collections.emptyList();
+            }
+
+            // 2. 검색 요청 객체 생성 (LangChain4j 1.0.x 스타일)
+            EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
+                    .queryEmbedding(emb)
+                    .maxResults(5)
+                    .minScore(0.6) // 유사도 임계값
+                    // .filter(MetadataFilterBuilder.metadataKey(META_SID).isEqualTo(sid)) // 메타데이터 필터링이 필요하면 주석 해제
                     .build();
 
-            EmbeddingSearchResult<TextSegment> res = embeddingStore.search(req);
-            return filterMatchesToContent(res, sid);
-        };
-    }
+            // 3. 검색 수행
+            EmbeddingSearchResult<TextSegment> result = embeddingStore.search(request);
 
-    /** helper: session‑filtered matches to String with fallback */
-    private List<String> filterMatchesToString(EmbeddingSearchResult<TextSegment> res, String sessionId) {
-        var safeMatches = java.util.Optional.ofNullable(res.matches())
-                .orElse(java.util.Collections.emptyList());
-        int total = safeMatches.size();
-        List<String> matches = safeMatches.stream()
-                .filter(m -> passesSid(toMap(m.embedded().metadata()), sessionId))
-                .map(match -> match.embedded().text())
-                .collect(Collectors.toList());
-        if (log.isDebugEnabled()) {
-            log.debug("[RAG] vector matches: total={}, afterSid={}", total, matches.size());
+            if (result.matches().isEmpty()) {
+                log.debug("[RAG] Vector 0 matches sid={}", sid);
+            }
+
+            List<String> out = new ArrayList<>();
+            for (EmbeddingMatch<TextSegment> match : result.matches()) {
+                out.add(match.embedded().text());
+            }
+            return out;
+
+        } catch (Exception e) {
+            log.warn("[RAG] retrieve error {}", e.getMessage());
+            return Collections.emptyList();
         }
-        return matches;
-    }
-// 기존 필드/생성자 유지 (utilityChatModel 주입)
-
-    // + 퍼사드: 외부에서 모델 오버라이드
-    public String getAnswerWithModel(String query, String sessionId, ChatModel override) {
-        return getAnswerInternal(query, sessionId, null, override);
-    }
-
-    // 기존 오버로드 유지 (동작은 내부 공통으로 위임)
-    public String getAnswer(String query, String sessionId) {
-        return getAnswerInternal(query, sessionId, null, null);
-    }
-
-    public String getAnswer(String query, String sessionId, String externalContext) {
-        return getAnswerInternal(query, sessionId, externalContext, null);
-    }
-
-    // + 공통 내부 구현: override가 있으면 그 모델 사용
-    private String getAnswerInternal(String query, String sessionId, String externalContext,
-                                     ChatModel override) {
-        // ── 의도 추정
-        //  의도·제약 계산 (없으면 빈 셋/GENERAL)
-        // ── 모델 라우팅(override 우선)
-
-
-        // ── 의도 추정 (한 번만 선언)
-        final String intent = (preprocessor != null) ? preprocessor.inferIntent(query) : "GENERAL";
-        // ── 모델 라우팅(override 우선)
-        ChatModel use = (override != null) ? override : modelRouter.route(intent);
-        log.debug("▶ RAG 시작 session={}, query={}", sessionId, query);
-
-        // 1) 자료 수집
-        List<String> ragSnippets = retrieveRagContext(query, sessionId);
-        String history = conversationMemory.asMap().getOrDefault(sessionId, "No history yet.");
-
-        // ── Evidence Gate: PAIRING/RECOMMENDATION에서 증거 부족 시 LLM 호출 차단
-        int minEv = (org.springframework.util.StringUtils.hasText(externalContext)) ? 2 : 1;
-        boolean ok = evidenceGate.hasSufficientCoverage(query, ragSnippets, externalContext, minEv);
-        if (("PAIRING".equalsIgnoreCase(intent) || "RECOMMENDATION".equalsIgnoreCase(intent)) && !ok) {
-            return "정보 없음";
-        }
-
-        // 2) 컨텍스트 조립
-        var ragContent = ragSnippets.stream().map(dev.langchain4j.rag.content.Content::from).toList();
-        var webContent = org.springframework.util.StringUtils.hasText(externalContext)
-                ? java.util.Arrays.stream(externalContext.split("\\r?\\n"))
-                .map(String::trim).filter(s -> !s.isEmpty())
-                .map(dev.langchain4j.rag.content.Content::from).toList()
-                : java.util.List.<dev.langchain4j.rag.content.Content>of();
-
-        // 교체
-        final String domain = (preprocessor != null) ? preprocessor.detectDomain(query) : "";
-        final java.util.Map<String, java.util.Set<String>> rules =
-                (preprocessor != null) ? preprocessor.getInteractionRules(query) : java.util.Map.of();
-
-        PromptContext ctx = PromptContext.builder()
-                .web(webContent)
-                .rag(ragContent)
-                .memory("")
-                .history(history)
-                .domain(domain)
-                .intent(intent)
-                .interactionRules(rules)
-                .build();
-        String instructions = promptBuilder.buildInstructions(ctx);
-        String body = promptBuilder.build(ctx)+ "\n### QUESTION\n" + query;
-
-        // 3) 모델 라우팅(override > 의도별 선택)
-        String answer = use.chat(java.util.List.of(
-                SystemMessage.from(instructions),
-                UserMessage.from(body)
-        )).aiMessage().text();
-
-
-        // LangChain4j 1.0.1: chat(List<ChatMessage>) → AiMessage.text()
-
-        // 4) 산출물 가드(금지 요소 컷/정정)
-        answer = answerSanitizer.sanitize(answer, ctx);
-
-        java.util.concurrent.atomic.AtomicInteger rank = new java.util.concurrent.atomic.AtomicInteger(1);
-        for (String snippet : ragSnippets) {
-            memorySvc.reinforceWithSnippet(sessionId, query, snippet, "RAG", 1.0 / rank.getAndIncrement());
-        }
-
-        conversationMemory.asMap().merge(
-                sessionId,
-                "User: " + query + "\nAssistant: " + answer,
-                (oldV, newV) -> (oldV == null ? "" : oldV + "\n") + newV
-        );
-
-        log.debug("◀ RAG 완료 session={}, answer len={}", sessionId, answer.length());
-        return answer;
-    }
-
-    private List<Content> filterMatchesToContent(EmbeddingSearchResult<TextSegment> res, String sessionId) {
-        var safeMatches = java.util.Optional.ofNullable(res.matches())
-                .orElse(java.util.Collections.emptyList());
-        int total = safeMatches.size();
-        List<Content> list = safeMatches.stream()
-                .filter(m -> passesSid(toMap(m.embedded().metadata()), sessionId))
-                .map(m -> Content.from(m.embedded().text()))
-                .collect(Collectors.toList());
-        if (log.isDebugEnabled()) {
-            log.debug("[RAG] vector contents: total={}, afterSid={}", total, list.size());
-        }
-        return list;
     }
 }

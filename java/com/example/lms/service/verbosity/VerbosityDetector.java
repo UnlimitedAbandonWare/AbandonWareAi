@@ -2,9 +2,11 @@ package com.example.lms.service.verbosity;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.regex.Pattern;
+
+
+
 
 @Component
 public class VerbosityDetector {
@@ -19,10 +21,10 @@ public class VerbosityDetector {
     @Value("${abandonware.answer.detail.min-words.deep:600}")    private int minDeep;
     @Value("${abandonware.answer.detail.min-words.ultra:1000}")  private int minUltra;
 
-    @Value("${abandonware.answer.token-out.brief:512}")   private int tokBrief;
-    @Value("${abandonware.answer.token-out.standard:1024}")private int tokStd;
-    @Value("${abandonware.answer.token-out.deep:2048}")    private int tokDeep;
-    @Value("${abandonware.answer.token-out.ultra:3072}")   private int tokUltra;
+    @Value("${abandonware.answer.token-out.brief:800}")   private int tokBrief;
+    @Value("${abandonware.answer.token-out.standard:1000}")private int tokStd;
+    @Value("${abandonware.answer.token-out.deep:1500}")    private int tokDeep;
+    @Value("${abandonware.answer.token-out.ultra:2200}")   private int tokUltra;
 
     public VerbosityProfile detect(String query) {
         String hint = "standard";

@@ -1,0 +1,45 @@
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ} %-5level [%X{sid} %X{trace}] %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- NDJSON file appender: one file per day, retained for one week -->
+  <appender name="TRACE_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>logs/trace.ndjson</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>logs/trace.%d{yyyy-MM-dd}.ndjson</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+      <providers>
+        <timestamp/>
+        <message/>
+      </providers>
+    </encoder>
+  </appender>
+
+  <!-- Dedicated logger for structured trace events -->
+  <logger name="TRACE_JSON" level="INFO" additivity="false">
+    <appender-ref ref="TRACE_FILE"/>
+  </logger>
+
+  <!-- Reduce log verbosity for common frameworks and hide sensitive headers -->
+  <logger name="org.springframework.security" level="INFO"/>
+  <logger name="org.springframework.web.servlet.DispatcherServlet" level="INFO"/>
+  <logger name="org.hibernate.SQL" level="WARN"/>
+  <logger name="org.hibernate.type.descriptor.sql" level="WARN"/>
+  <logger name="com.example.lms" level="INFO"/>
+
+  <turboFilter class="ch.qos.logback.classic.turbo.MDCFilter">
+    <MDCKey>Authorization</MDCKey>
+    <Value>.*</Value>
+    <OnMatch>DENY</OnMatch>
+  </turboFilter>
+
+  <!-- Default root logger configuration -->
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

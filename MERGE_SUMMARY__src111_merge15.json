@@ -1,0 +1,25 @@
+{
+  "base_zip": "src111_merge15 - 2025-11-03T141528.347.zip",
+  "source_zip_considered": "src111_merge15 - 2025-11-03T135604.430.zip",
+  "only_in_source_skipped": [
+    "patches/src111_merge12x (1).zip",
+    "src/main/java/com/example/lms/service/config/health/CancellationSignal.java",
+    "src/main/java/com/example/lms/service/config/health/HealthScore.java",
+    "src/main/lms-src-legacy_20250905T0100.zip",
+    "src/main/resources/application-patch.properties",
+    "src/main/resources/plans/brave_v1.yaml",
+    "src/main/resources/plans/safe_autorun_v1.yaml"
+  ],
+  "only_in_base": [
+    "BUILD_PATCH_APPLIED__2025-11-03.md",
+    "app/src/main/java_clean/com/example/lms/config/WebConfig.java",
+    "app/src/main/java_clean/com/example/lms/service/fusion/RerankCanonicalizer.java",
+    "app/src/main/java_clean/com/example/lms/service/score/ScoreCalibrator.java"
+  ],
+  "merged_files": [],
+  "notes": [
+    "No files from source zip were merged because they are backups/legacy/duplicates.",
+    "Added RUNME_agent.md to improve Agent Mode automation success."
+  ],
+  "generated_at": "2025-11-03T08:16:17.854722Z"
+}

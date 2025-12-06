@@ -1,24 +1,46 @@
 package com.example.lms.service.rag.handler;
 
 import com.example.lms.service.rag.SelfAskWebSearchRetriever;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 
-@Slf4j @RequiredArgsConstructor
+@Slf4j
+@RequiredArgsConstructor
 public class SelfAskHandler extends AbstractRetrievalHandler {
+
     private final SelfAskWebSearchRetriever retriever;
+
     @Override
     protected boolean doHandle(Query q, List<Content> acc) {
         try {
             acc.addAll(retriever.retrieve(q));
-            return true;                    // 다음 핸들러도 시도
+            // 항상 다음 핸들러도 시도한다.
+            return true;
         } catch (Exception e) {
-            log.warn("[SelfAsk] 실패 – 패스", e);
+            log.warn("[SelfAsk] 실패 - 패스", e);
+            // 실패해도 체인은 계속 진행된다.
             return true;
         }
+    }
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(
+            dev.langchain4j.rag.query.Query original,
+            String sessionKey
+    ) {
+        var md = original.metadata() != null
+                ? original.metadata()
+                : dev.langchain4j.data.document.Metadata.from(
+                        java.util.Map.of(
+                                com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                sessionKey
+                        ));
+        // LangChain4j 1.0.x 에서는 (text, metadata)를 받는 public 생성자를 제공하므로,
+        // 빌더/리플렉션 없이 직접 새 Query를 만들어 사용할 수 있다.
+        return new dev.langchain4j.rag.query.Query(original.text(), md);
     }
 }

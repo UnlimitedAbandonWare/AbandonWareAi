@@ -1,0 +1,37 @@
+# merge130 profile: gpu-3090-3060
+llmrouter:
+  profiles:
+    3090_3060:
+      models:
+        light:  { base-url: "http://localhost:8002", weight: 0.55, tag: "GPU1-3060" }
+        mid:    { base-url: "http://localhost:8001", weight: 0.10, tag: "GPU1-3060" }
+        heavy:  { base-url: "http://localhost:8000", weight: 0.35, tag: "GPU0-3090" }
+zsys:
+  onnx:
+    device-id: 1
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: gemma3:27b
+
+  api-key: dummy
+fallback:
+  enabled: false
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false

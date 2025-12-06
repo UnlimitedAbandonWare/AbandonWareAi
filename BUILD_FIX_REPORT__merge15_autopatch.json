@@ -1,0 +1,37 @@
+{
+  "summary": "Autopatch applied to resolve common Spring bean name conflicts and align with error pattern registry.",
+  "changes": [
+    [
+      "TraceFilter",
+      "/mnt/data/workdir_src111_merge15_new/src111_merge15/lms-core/src/main/java/com/abandonware/ai/web/TraceFilter.java",
+      "abTraceFilter"
+    ],
+    [
+      "TraceFilter",
+      "/mnt/data/workdir_src111_merge15_new/src111_merge15/src/main/java/com/example/lms/web/TraceFilter.java",
+      "exTraceFilter"
+    ],
+    [
+      "TraceFilter",
+      "/mnt/data/workdir_src111_merge15_new/src111_merge15/src/main/java/com/abandonware/ai/web/TraceFilter.java",
+      "abTraceFilter"
+    ],
+    [
+      "RequestIdHeaderFilter",
+      "/mnt/data/workdir_src111_merge15_new/src111_merge15/lms-core/src/main/java/com/abandonware/ai/trace/RequestIdHeaderFilter.java",
+      "abRequestIdHeaderFilter"
+    ],
+    [
+      "RequestIdHeaderFilter",
+      "/mnt/data/workdir_src111_merge15_new/src111_merge15/src/main/java/com/example/lms/trace/RequestIdHeaderFilter.java",
+      "exRequestIdHeaderFilter"
+    ],
+    [
+      "RequestIdHeaderFilter",
+      "/mnt/data/workdir_src111_merge15_new/src111_merge15/src/main/java/com/abandonware/ai/trace/RequestIdHeaderFilter.java",
+      "abRequestIdHeaderFilter"
+    ]
+  ],
+  "timestamp": "2025-10-27T00:32:36Z",
+  "engine_registry": "1.2.0"
+}

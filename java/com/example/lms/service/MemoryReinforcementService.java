@@ -1,7 +1,10 @@
 package com.example.lms.service;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.util.Locale;
 import java.util.regex.Pattern;
 import com.example.lms.service.VectorStoreService;
-
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.repository.TranslationMemoryRepository;
 import com.example.lms.service.reinforcement.RewardScoringEngine;
@@ -9,29 +12,40 @@ import com.example.lms.service.reinforcement.SnippetPruner;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import jakarta.annotation.PostConstruct;
-import lombok.extern.slf4j.Slf4j;
-import java.time.Duration;                    // ★ NEW
-import java.time.LocalDateTime;              // ★ NEW
 import org.springframework.beans.factory.annotation.Value;
-
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
-
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
-
 import org.springframework.data.repository.query.Param;
+import java.util.List;
+
+
+import java.time.Duration;                    // ★ NEW
+import java.time.LocalDateTime;              // ★ NEW
+
+
+
 import java.lang.reflect.Method;                 // NEW
 import java.nio.charset.StandardCharsets;       // NEW
 import java.security.MessageDigest;             // NEW
-import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException; // ⬅️ 누락 import 추가
-@Slf4j
+import org.springframework.beans.factory.annotation.Autowired;
+import com.example.lms.guard.GuardProfile;
+import com.example.lms.guard.GuardProfileProps;
 @Service
 @Transactional
 public class MemoryReinforcementService {
+    @Value("${jammini.memory.progressive:true}")
+    private boolean progressiveMemoryMode;
+
+    @Autowired
+    private GuardProfileProps guardProfileProps;
+
+    private static final Logger log = LoggerFactory.getLogger(MemoryReinforcementService.class);
+
 
     // ===== [볼츠만/담금질 상수] =====
     private static final double W_SIM  = 1.0;
@@ -47,11 +61,29 @@ public class MemoryReinforcementService {
     @Value("${memory.reinforce.score.low-quality-threshold:0.3}")
     private double lowScoreCutoff;
 
+    // Reinforcement mode: CONSERVATIVE | EXPLORE (기본값: CONSERVATIVE)
+    @Value("${memory.reinforce.mode:CONSERVATIVE}")
+    private String reinforcementMode;
+
+
     // ⬅️ 누락된 길이 정책 필드 추가
     @Value("${memory.snippet.min-length:40}")
     private int minContentLength;
     @Value("${memory.snippet.max-length:4000}")
     private int maxContentLength;
+
+    // Citation gate mode: STRICT | SOFT (기본값: SOFT)
+    @Value("${memory.citation.gate-mode:SOFT}")
+    private String citationGateMode;
+
+    // 최소 인용 마커 개수 (예: [W1], [V2], '출처:' 등)
+    @Value("${memory.citation.min-evidence-markers:1}")
+    private int minEvidenceMarkers;
+
+    @Value("${memory.enabled:false}")
+    private boolean memoryEnabled;
+
+
 
     /* ─────────────── DI ─────────────── */
     private final TranslationMemoryRepository memoryRepository;
@@ -103,12 +135,16 @@ public class MemoryReinforcementService {
                                      double score,
                                      String hash) {
 
+        // When no existing record is found, construct a new TranslationMemory with the
+        // computed source hash.  Using a lambda avoids relying on a Lombok-generated
+        // no-arg constructor that may not be present if annotation processing fails.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
-                .orElseGet(TranslationMemory::new);
+                .orElseGet(() -> new TranslationMemory(hash));
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
-            tm.setSessionId((sid == null || sid.isBlank()) ? "*" : sid);
+            // [HARDENING] use __TRANSIENT__ instead of wildcard for unknown session
+            tm.setSessionId((sid == null || sid.isBlank()) ? "__TRANSIENT__" : sid);
             // 존재하는 수치 필드만 안전하게 초기화
             tm.setHitCount(0);
             tm.setSuccessCount(0);
@@ -122,14 +158,18 @@ public class MemoryReinforcementService {
             tm.setSourceTag(sourceTag);
         }
 
-        // 관측 1회
+        
+        // 점수는 0.0 ~ 1.0 범위로 클램프해서 엔티티에 반영
+        double clampedScore = reward(score);
+        tm.setScore(clampedScore);
+// 관측 1회
         tm.setHitCount(tm.getHitCount() + 1);
-        if (score >= 0.5) tm.setSuccessCount(tm.getSuccessCount() + 1);
+        if (clampedScore >= 0.5) tm.setSuccessCount(tm.getSuccessCount() + 1);
         else              tm.setFailureCount(tm.getFailureCount() + 1);
 
         // Q-value: 지수이동평균(EMA) 형태로 업데이트 (0.2 반영률)
         double prevQ = tm.getQValue();
-        tm.setQValue(prevQ + 0.2 * (reward(score) - prevQ));
+        tm.setQValue(prevQ + 0.2 * (clampedScore - prevQ));
 
         // 에너지/온도 계산 및 반영
         double energy = this.computeBoltzmannEnergy(tm);        // ★ CHG
@@ -211,6 +251,12 @@ public class MemoryReinforcementService {
                               String messageContent,
                               boolean positive,
                               String correctedText) {
+        // [Jammini No-Memory Guard]
+        if (!memoryEnabled) {
+            log.debug("[Memory] Disabled. Skipping applyFeedback for session {}", sessionId);
+            return;
+        }
+
         // 0) 가드
         if (!StringUtils.hasText(messageContent)) {
             log.debug("[Feedback] empty message → skip");
@@ -227,7 +273,7 @@ public class MemoryReinforcementService {
 
         try {
             // (기존 긍/부정 점수 업데이트 로직)
-            // ... upsertViaRepository(sid, ...), incrementHitCountBySourceHash(...) 등 기존 구현 유지 ...
+            // /* ... */ upsertViaRepository(sid, /* ... */), incrementHitCountBySourceHash(/* ... */) 등 기존 구현 유지 /* ... */
 
             // 핵심: 에너지/온도 갱신
             updateEnergyAndTemperature(msgHash);
@@ -315,6 +361,12 @@ public class MemoryReinforcementService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = DataIntegrityViolationException.class)
     public void reinforceWithSnippet(TranslationMemory t) {
+        // [Jammini No-Memory Guard]
+        if (!memoryEnabled) {
+            log.debug("[Memory] Disabled. Skipping reinforcement for TranslationMemory entry");
+            return;
+        }
+
         try {
             // 0) 안전 추출
             String content = tryGetString(t, "getContent", "getText", "getBody");
@@ -375,18 +427,186 @@ public class MemoryReinforcementService {
                                      String snippet,
                                      String sourceTag,
                                      double score) {
-        if (!StringUtils.hasText(snippet)) return;
-        //  +과적합 방지 1: 저품질 컷오프
-        if (score < lowScoreCutoff || !shouldStore(snippet)) {
-            log.debug("[Reinforce] skip store (score < cutoff or bad snippet). score={}, cutoff={}", score, lowScoreCutoff);
+        // [Jammini No-Memory Guard]
+        if (!memoryEnabled) {
+            log.debug("[Memory] Disabled. Skipping reinforcement for session {}", sessionId);
             return;
         }
-        String sid  = StringUtils.hasText(sessionId) ? sessionId : "*";
+
+        // 신규 GuardProfile 기반 메모리 비활성화 모드
+        GuardProfile profile = guardProfileProps.currentProfile();
+        if (profile == GuardProfile.PROFILE_FREE) {
+            log.debug("[MEMORY_GATE] FREE profile → reinforcement disabled for session {}", sessionId);
+            return;
+        }
+
+        if (!StringUtils.hasText(snippet)) return;
+        // ⓵ [NO_EVIDENCE] 또는 "정보 없음" 패턴 스킵
+        String trimmedSnippet = snippet.trim();
+        if ("[NO_EVIDENCE]".equals(trimmedSnippet)) {
+            log.debug("[MEMORY] Skipping [NO_EVIDENCE] snippet for session {}", sessionId);
+            return;
+        }
+        // Skip evidence-list style fallbacks produced by the guard. These answers
+        // already summarise web search snippets and should not be reinforced as
+        // long-term assistant knowledge.
+        String lowerSnippet = trimmedSnippet.toLowerCase(Locale.ROOT);
+        if (trimmedSnippet.contains("### 검색 결과 요약")
+                || lowerSnippet.contains("커뮤니티/위키에서 다음 정보를 찾았습니다")
+                || lowerSnippet.contains("검색된 자료를 바탕으로 정리했으나")
+                || trimmedSnippet.startsWith("아래 근거를 바탕으로 가능한 사실만 정리합니다")) {
+            log.debug("[MEMORY] Skipping evidence-list style snippet for session {}", sessionId);
+            return;
+        }
+        // [SOFTENED POLICY]
+        // looksWeak() is now advisory only. We log a warning but proceed with storage.
+        // Rationale: In practice, many valid game/subculture answers (e.g., "Furina is a 5-star...")
+        // were incorrectly classified as weak, causing memory loss and repeated "no information" loops.
+        //
+        // Future improvement: Add domain-specific weak detection (medical/legal vs. pop culture).
+        boolean weak = com.example.lms.service.guard.EvidenceAwareGuard.looksWeak(trimmedSnippet);
+        if (weak) {
+            log.debug("[MEMORY] Snippet looked weak but will be stored anyway for session {} " +
+                    "(relaxed policy for subculture/game content)", sessionId);
+            // Continue to storage logic below.
+        }
+        // ═══════════════════════════════════════════════════════════
+        // GATE 1: Negative Answer Filter (부정 응답 차단)
+        //  - 단순 거절 vs 회복형 답변을 구분
+        // ═══════════════════════════════════════════════════════════
+        boolean hasNegative   = hasNegativeAnswerSignal(trimmedSnippet);
+        boolean hasRecovery   = hasRecoverySignal(trimmedSnippet);
+        if (hasNegative && !hasRecovery) {
+            // 순수한 거절/부정 답변 → 학습에서 제외
+            log.info("[MEMORY_GATE] Blocking simple negative/uncertain answer from reinforcement: '{}'",
+                    safeTrunc(trimmedSnippet, 100));
+            return;
+        }
+        if (hasNegative && hasRecovery) {
+            // 🔥 [시선1 패치] 증거 있으면 패널티 제거
+            boolean hasEvidence = (sourceTag != null &&
+                    !sourceTag.equalsIgnoreCase("TEXT"));
+
+            double penalty = hasEvidence ? 1.0 : 0.95;  // 🔥 0.90 → 0.95 (없을 때)
+            try {
+                penalty = hp.getDouble("memory.reinforce.recovered-penalty", penalty);
+            } catch (Exception ignore) { }
+
+            score = score * penalty;
+            log.info("[MEMORY_GATE] Allowing recovered answer with penalty (x{}). " +
+                    "hasEvidence={}, snippet='{}'",
+                    String.format(Locale.ROOT, "%.2f", penalty),
+                    hasEvidence,
+                    safeTrunc(trimmedSnippet, 120));
+        }
+
+// ═══════════════════════════════════════════════════════════
+        // GATE 2: Citation Validation (출처 검증)
+        //  - STRICT 모드: 인용 신호가 없으면 차단
+        //  - SOFT   모드: 인용 신호가 없으면 점수를 낮춰 약하게만 강화
+        // ═══════════════════════════════════════════════════════════
+        if ("ASSISTANT".equals(sourceTag) || "AI_GENERATED".equals(sourceTag)) {
+            String snippetLower = snippet.toLowerCase();
+
+            boolean hasHttpLink =
+                    snippet.contains("http://") || snippet.contains("https://");
+
+            // [W1], [V2], [D3] 와 같은 인용 마커 또는 '출처:' / 'source:' 텍스트를 넓게 인정
+            boolean hasEvidenceMarker =
+                    snippet.matches("(?s).*\\[(W|V|D)\\d+].*") ||
+                    snippetLower.contains("출처:") ||
+                    snippetLower.contains("source:");
+
+            boolean hasCitationSignal = hasHttpLink || hasEvidenceMarker;
+
+            String mode = (citationGateMode == null ? "SOFT" : citationGateMode);
+
+            // 현재 GuardProfile 확인 (FREE 프로파일은 reinforceWithSnippet 초입에서 이미 차단)
+            GuardProfile profileForCitation = guardProfileProps.currentProfile();
+
+            // STRICT 모드 + ProgressiveMemory 비활성일 때만 기존 차단 로직 유지
+            if ("STRICT".equalsIgnoreCase(mode) && !progressiveMemoryMode) {
+                if (!hasCitationSignal) {
+                    log.warn("[MEMORY_GATE] Blocking ASSISTANT answer without any citation signal (STRICT mode). snippet='{}'",
+                            safeTrunc(snippet, 120));
+                    return;
+                }
+                log.info("[MEMORY_GATE] citation signal detected (STRICT mode) → allowing reinforcement");
+            } else {
+                // 서브컬처/게임 도메인 감지 (sourceTag 또는 snippet 내용 기반)
+                boolean isSubculture = (sourceTag != null && sourceTag.toLowerCase(Locale.ROOT).contains("game"))
+                        || trimmedSnippet.toLowerCase(Locale.ROOT).matches(".*(원신|genshin|마비카|푸리나|캐릭터|게임|애니|만화).*");
+
+                // HARD 모드: 일반 도메인에만 적용, 서브컬처는 완화
+                if (!hasCitationSignal && !isSubculture) {
+                    if (progressiveMemoryMode) {
+                        // Progressive + PROFILE_MEMORY: citation 없더라도 페널티만 주고 저장
+                        log.info("[MEMORY_GATE] Progressive: no citation signal but storing anyway (may apply score penalty).");
+                    } else {
+                        log.info("[MEMORY_GATE] HARD mode: missing explicit citation → skip reinforcement");
+                        return;
+                    }
+                } else if (!hasCitationSignal && isSubculture) {
+                    log.info("[MEMORY_GATE] Subculture domain: allowing reinforcement without citation (relaxed policy)");
+                    // 점수 감쇠 없이 그대로 진행
+                } else {
+                    log.info("[MEMORY_GATE] HARD/SOFT mode: citation signal detected → normal scoring");
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // GATE 3: Score Threshold (모드 기반 조정)
+        //  - CONSERVATIVE: 기존 로직 유지
+        //  - EXPLORE:
+        //      * 서브컬처/게임/위키 스타일 질의 → 점수와 citation 부족에 관계없이 대부분 저장
+        //      * 일반 도메인 → score >= lowScoreCutoff 일 때만 저장
+        // ═══════════════════════════════════════════════════════════
+        String modeForReinforce = reinforcementMode == null ? "CONSERVATIVE" : reinforcementMode;
+        boolean exploreMode = "EXPLORE".equalsIgnoreCase(modeForReinforce);
+
+        boolean isSubcultureDomain =
+                (sourceTag != null && sourceTag.toLowerCase(Locale.ROOT).contains("game")) ||
+                trimmedSnippet.toLowerCase(Locale.ROOT).matches(
+                        ".*(원신|genshin|마비카|푸리나|캐릭터|게임|애니|만화|위키|나무위키|" +
+                                "hoyo|hoyoverse|스냅드래곤|chipset|리뷰|벤치마크|블로그).*"
+                );
+        if (!exploreMode) {
+            // 🔥 서브컬처도 낮은 컷오프 적용
+            double effectiveCutoff = isSubcultureDomain
+                    ? Math.min(lowScoreCutoff, 0.15)  // 🔥 0.3 → 0.15
+                    : lowScoreCutoff;
+
+            if (score < effectiveCutoff || !shouldStore(snippet)) {
+                log.debug("[Reinforce] skip store (score < cutoff or bad snippet). " +
+                        "score={}, cutoff={}", score, effectiveCutoff);
+                return;
+            }
+        } else {
+            if (!isSubcultureDomain) {
+                if (score < lowScoreCutoff || !shouldStore(snippet)) {
+                    log.debug("[Reinforce][EXPLORE] skip store (non-subculture, score < cutoff or bad snippet). score={}, cutoff={}", score, lowScoreCutoff);
+                    return;
+                }
+            } else {
+                // EXPLORE + Subculture: 길이가 너무 짧은 경우만 차단하고 나머지는 저장
+                if (trimmedSnippet.length() < Math.max(10, minContentLength / 2)) {
+                    log.debug("[Reinforce][EXPLORE] skip very short subculture snippet. len={}, minLen={}",
+                            trimmedSnippet.length(), minContentLength);
+                    return;
+                }
+                log.info("[Reinforce][EXPLORE] subculture snippet accepted even with low score. score={}, cutoff={}",
+                        score, lowScoreCutoff);
+            }
+        }
+        // [HARDENING] normalize null/blank to __TRANSIENT__
+        String sid  = StringUtils.hasText(sessionId) ? sessionId : "__TRANSIENT__";
         String hash = sha1(snippet);
 
         // 기존 레코드 조회 or 새로 생성
+        // When no record exists, construct a new TranslationMemory with the current snippet's hash.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
-                .orElseGet(TranslationMemory::new);
+                .orElseGet(() -> new TranslationMemory(hash));
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
@@ -398,9 +618,13 @@ public class MemoryReinforcementService {
             tm.setCosineSimilarity(0.0);
         }
 
-        // 간단 규칙: score 기준 성공/실패 카운트
+        
+        // score를 0~1로 클램프하고 엔티티에 저장
+        double clampedScore = reward(score);
+        tm.setScore(clampedScore);
+// 간단 규칙: score 기준 성공/실패 카운트
         tm.setHitCount((tm.getHitCount() == null ? 0 : tm.getHitCount()) + 1);
-        boolean success = score >= 0.5;
+        boolean success = clampedScore >= 0.5;
         if (success) {
             tm.setSuccessCount(tm.getSuccessCount() + 1);
         } else {
@@ -408,9 +632,9 @@ public class MemoryReinforcementService {
         }
 
         // Q-value 업데이트(0~1로 클램프)
-        double q = Math.max(0.0, Math.min(1.0, score));
+        double q = Math.max(0.0, Math.min(1.0, clampedScore));
         tm.setQValue(q);
-// + 검증 단계에서 전달된 신뢰도(있다면) 반영 — 없으면 q로 초기화
+// + 검증 단계에서 전달된 신뢰도(있다면) 반영 - 없으면 q로 초기화
         if (tm.getConfidenceScore() == null) {
             tm.setConfidenceScore(q);
         } else {
@@ -439,7 +663,7 @@ public class MemoryReinforcementService {
             }
         } catch (Exception ignore) {}
         // + 벡터 색인 큐에 적재(예외 무시)
-        try { vectorStoreService.enqueue(sessionId != null ? sessionId : "*", snippet); } catch (Exception ignore) {}
+        try { vectorStoreService.enqueue(sessionId != null ? sessionId : "__TRANSIENT__", snippet); } catch (Exception ignore) {}
     }
 
     /**
@@ -474,8 +698,9 @@ public class MemoryReinforcementService {
      */
     public void reinforceMemoryWithText(String text) {
         if (!StringUtils.hasText(text)) return;
-        // 세션 미상 → 공용("*")으로 적재, 보수적 점수 0.5
-        reinforceWithSnippet("*", "", text, "TEXT", 0.5);
+        // 세션 미상 → 공용(__TRANSIENT__)으로 적재, 보수적 점수 0.5 [HARDENING]
+        // [HARDENING] unknown session -> __TRANSIENT__
+        reinforceWithSnippet("__TRANSIENT__", "", text, "TEXT", 0.5);
     }
 
     /* ────────────── 호환 유틸 ────────────── */
@@ -536,19 +761,21 @@ public class MemoryReinforcementService {
     }
     /* ====================== Missing helpers (added) ====================== */
 
-    /** 세션키 정규화: 숫자면 chat- 접두, 없으면 "*" */
+    /** 세션키 정규화: 숫자면 chat- 접두, 없으면 "__TRANSIENT__" */ // [HARDENING]
     private static String normalizeSessionId(String sessionId) {
-        if (!StringUtils.hasText(sessionId)) return "*";
+        // [HARDENING] return __TRANSIENT__ when no session id
+        if (!StringUtils.hasText(sessionId)) return "__TRANSIENT__";
         String s = sessionId.trim();
         if (s.startsWith("chat-")) return s;
         if (s.matches("\\d+")) return "chat-" + s;
         return s;
     }
 
-    /** “안정적인” 세션키 판단: 공용(*) | chat- 접두 | 6자 이상 영숫자/대시 */
+    /** “안정적인” 세션키 판단: chat- 접두 또는 6자 이상 영숫자/대시; '*' 및 __TRANSIENT__ are unstable */ // [HARDENING]
     private static boolean isStableSid(String sid) {
         if (!StringUtils.hasText(sid)) return false;
-        if ("*".equals(sid)) return true;
+        // [HARDENING] __TRANSIENT__ is not considered stable; we avoid wildcard '*'
+        if ("__TRANSIENT__".equals(sid)) return false;
         if (sid.startsWith("chat-")) return true;
         return Pattern.compile("^[A-Za-z0-9\\-]{6,}$").matcher(sid).matches();
     }
@@ -571,13 +798,78 @@ public class MemoryReinforcementService {
         return true;
     }
 
+
+    
+    /**
+     * 문장 내 부정/거절 신호가 있는지 단순 감지.
+     */
+    private boolean hasNegativeAnswerSignal(String text) {
+        if (text == null) return false;
+        String lower = text.toLowerCase(Locale.ROOT);
+        return lower.contains("죄송합니다")
+                || lower.contains("정보가 없")
+                || lower.contains("찾을 수 없")
+                || lower.contains("모르겠습니다")
+                || lower.contains("확실하지 않")
+                || lower.contains("언어 모델")
+                || lower.contains("i'm sorry")
+                || lower.contains("no information")
+                || lower.contains("don't know");
+    }
+
+    /**
+     * 부정 서두 이후에 유용한 정보가 이어지는지(회복 신호) 감지.
+     * - 접속사/전환 키워드 + 일정 길이 이상일 때 true.
+     */
+    private boolean hasRecoverySignal(String text) {
+        if (text == null) return false;
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean hasConjunction =
+                   lower.contains("하지만")
+                || lower.contains("그러나")
+                || lower.contains("다만")
+                || lower.contains("한편")
+                || lower.contains("참고로")
+                || lower.contains("반면")
+                || lower.contains("however")
+                || lower.contains("but ")
+                || lower.contains("on the other hand");
+        boolean hasInformativeKeyword =
+                   lower.contains("루머")
+                || lower.contains("소문")
+                || lower.contains("예상")
+                || lower.contains("전망")
+                || lower.contains("보도")
+                || lower.contains("따르면")
+                || lower.contains("according to")
+                || lower.contains("rumor")
+                || lower.contains("leak");
+        int len = lower.length();
+        // 너무 짧으면 단순 거절로 간주
+        boolean longEnough = len >= 150;
+        return (hasConjunction || hasInformativeKeyword) && longEnough;
+    }
+
+/** Helper: 문자열을 안전하게 자르기 */
+    private static String safeTrunc(String s, int max) {
+        if (s == null) {
+            return "null";
+        }
+        if (s.length() <= max) {
+            return s;
+        }
+        return s.substring(0, max) + "...";
+    }
+
     /* =========================================================
      *  이하, 기존 서비스 내부 유틸/메서드 유지
-     *  - normalizeSessionId(...)
-     *  - isStableSid(...)
-     *  - storageHashFromSnippet(...)
-     *  - upsertViaRepository(...)
-     *  - reward(...)
+     *  - normalizeSessionId(/* ... *&#47;)
+     *  - isStableSid(/* ... *&#47;)
+     *  - storageHashFromSnippet(/* ... *&#47;)
+     *  - upsertViaRepository(/* ... *&#47;)
+     *  - reward(/* ... *&#47;)
      *  - etc.
      * ========================================================= */
 }
+
+// PATCH_MARKER: MemoryReinforcementService updated per latest spec.

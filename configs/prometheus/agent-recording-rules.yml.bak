@@ -1,0 +1,25 @@
+groups:
+  - name: agent_recordings
+    interval: 30s
+    rules:
+      - record: job:agent_step_latency_ms:p50
+        expr: histogram_quantile(0.5, sum by (le) (rate(agent_step_latency_ms_bucket[5m])))
+      - record: job:agent_step_latency_ms:p90
+        expr: histogram_quantile(0.9, sum by (le) (rate(agent_step_latency_ms_bucket[5m])))
+      - record: job:agent_step_latency_ms:p99
+        expr: histogram_quantile(0.99, sum by (le) (rate(agent_step_latency_ms_bucket[5m])))
+      - record: job:agent_tool_calls_per_min
+        expr: sum(rate(agent_tool_calls_total[5m])) * 60
+      - record: job:agent_step_error_rate
+        expr: sum(rate(agent_steps_total{status="error"}[5m])) / sum(rate(agent_steps_total[5m]))
+      - record: job:agent_budget_block_per_min
+        expr: sum(rate(agent_budget_block_total[5m])) * 60
+      - record: job:agent_consent_required_per_min
+        expr: sum(rate(agent_consent_required_total[5m])) * 60
+      - record: job:agent_dlq_depth
+        expr: sum(agent_dlq_depth)
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true

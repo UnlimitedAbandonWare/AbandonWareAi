@@ -5,6 +5,8 @@ import com.example.lms.domain.enums.RulePhase;
 import jakarta.persistence.*;
 import lombok.*;
 
+
+
 @Entity
 @Table(name = "translation_rules")      // RULE 은 DB 예약어라 다르게 지정
 @Getter @Setter

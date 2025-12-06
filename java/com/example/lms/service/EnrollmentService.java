@@ -1,7 +1,8 @@
 // 파일 경로:
-// C:\Users\dw-019\eclipse-workspace\demo-1\src\main\java\com\example\lms\service\EnrollmentService.java
+// C:\Users\\dw-019\eclipse-workspace\\demo-1\\src\main\java\com\example\lms\\service\EnrollmentService.java
 
 package com.example.lms.service;
+
 import com.example.lms.service.CourseService;
 import com.example.lms.service.StudentService;
 import com.example.lms.domain.Course;
@@ -10,8 +11,9 @@ import com.example.lms.domain.Enrollment;
 import com.example.lms.repository.EnrollmentRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
+
+
 
 /**
  * Enrollment 관련 비즈니스 로직 처리
