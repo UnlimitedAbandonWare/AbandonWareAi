@@ -1,0 +1,86 @@
+{
+  "trace": [
+    {
+      "step": "PLAN",
+      "tool": null,
+      "duration_ms": 12,
+      "input": {
+        "text": "안녕?"
+      },
+      "output": {
+        "query": "안녕?"
+      }
+    },
+    {
+      "step": "TOOL",
+      "tool": "rag.retrieve",
+      "duration_ms": 34,
+      "input": {
+        "query": "안녕?",
+        "topK": 10
+      },
+      "output": {
+        "results": [
+          {
+            "snippet": "...",
+            "score": 0.85
+          }
+        ]
+      }
+    },
+    {
+      "step": "CRITIC",
+      "tool": null,
+      "duration_ms": 5,
+      "input": {
+        "results": [
+          {
+            "snippet": "...",
+            "score": 0.85
+          }
+        ]
+      },
+      "output": {
+        "accepted": true
+      }
+    },
+    {
+      "step": "SYNTH",
+      "tool": null,
+      "duration_ms": 7,
+      "input": {
+        "results": [
+          {
+            "snippet": "...",
+            "score": 0.85
+          }
+        ]
+      },
+      "output": {
+        "answer": "안녕하세요! 무엇을 도와드릴까요?",
+        "sources_short": "[1]"
+      }
+    },
+    {
+      "step": "TOOL",
+      "tool": "kakao.push",
+      "duration_ms": 20,
+      "input": {
+        "roomId": "r-123",
+        "text": "안녕하세요! 무엇을 도와드릴까요?\n———\n출처: [1]"
+      },
+      "output": {
+        "roomId": "r-123",
+        "sent": true
+      }
+    }
+  ],
+  "result": {
+    "answer": "안녕하세요! 무엇을 도와드릴까요?",
+    "sources_short": "[1]",
+    "kakao.push": {
+      "roomId": "r-123",
+      "sent": true
+    }
+  }
+}

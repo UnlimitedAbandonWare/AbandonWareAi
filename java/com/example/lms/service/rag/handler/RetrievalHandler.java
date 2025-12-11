@@ -4,6 +4,8 @@ import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
 import java.util.List;
 
+
+
 /**
  * 책임 연쇄 패턴(Chain of Responsibility)을 위한 리트리버 핸들러 함수형 인터페이스입니다.
  * <p>

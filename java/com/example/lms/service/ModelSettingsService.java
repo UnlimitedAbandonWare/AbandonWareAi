@@ -4,17 +4,19 @@ import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.repository.ModelEntityRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.Optional;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+import java.util.Locale;
+
 import org.springframework.util.StringUtils; // ✨ [추가] StringUtils import
 
-import java.util.Optional;
-
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ModelSettingsService {
+    private static final Logger log = LoggerFactory.getLogger(ModelSettingsService.class);
 
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;
@@ -24,13 +26,20 @@ public class ModelSettingsService {
      * @param modelId 저장할 모델 ID
      */
     @Transactional
-    public void changeCurrentModel(String modelId) {
-        // 1. [개선] StringUtils.hasText()로 입력값 검증을 더 깔끔하게 처리
-        if (!StringUtils.hasText(modelId)) {
-            throw new IllegalArgumentException("모델 ID가 비어 있습니다.");
-        }
+public void changeCurrentModel(String modelId) {
+    // 1. [개선] StringUtils.hasText()로 입력값 검증을 더 깔끔하게 처리
+    if (!StringUtils.hasText(modelId)) {
+        throw new IllegalArgumentException("모델 ID가 비어 있습니다.");
+    }
 
-        // 2. 저장 전, DB의 'models' 테이블에 해당 ID가 존재하는지 먼저 확인
+    // 1-1. 임베딩/레거시 전용 모델을 기본 채팅 모델로 사용하는 것 차단
+    String lower = modelId.toLowerCase(Locale.ROOT);
+    if (lower.equals("babbage-002") || lower.contains("embedding")) {
+        log.warn("[ModelSettings] '{}' is embedding/legacy model; refusing to set as default chat model", modelId);
+        throw new IllegalArgumentException("임베딩/레거시 전용 모델은 기본 채팅 모델로 사용할 수 없습니다.");
+    }
+
+// 2. 저장 전, DB의 'models' 테이블에 해당 ID가 존재하는지 먼저 확인
         if (!modelRepo.existsById(modelId)) {
             log.warn("존재하지 않는 모델 ID로 변경 시도: {}", modelId);
             throw new IllegalArgumentException("선택한 모델 \"" + modelId + "\" 는 등록되지 않은 모델입니다.");

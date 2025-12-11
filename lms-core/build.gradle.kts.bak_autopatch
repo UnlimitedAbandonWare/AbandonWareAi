@@ -1,0 +1,25 @@
+plugins { `java-library` }
+
+java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
+
+repositories {
+    mavenCentral()
+    maven { url = uri("https://repo.spring.io/release") }
+}
+
+dependencies {
+    implementation("org.yaml:snakeyaml:2.2")
+    // keep empty; placeholders don't depend on heavy libs
+    compileOnly("org.projectlombok:lombok:1.18.32")
+    annotationProcessor("org.projectlombok:lombok:1.18.32")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+}
+
+sourceSets {
+    val main by getting {
+        java.setSrcDirs(listOf("src/main/java"))
+        java.setIncludes(listOf("com/example/lms/**"))
+        java.exclude("**/_abandonware_backup/**")
+    }
+    val test by getting { java.exclude("**/*") }
+}

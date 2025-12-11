@@ -1,0 +1,17 @@
+{
+  "build_system": {
+    "maven": false,
+    "gradle": true,
+    "settings_gradle": true
+  },
+  "gradle_status": null,
+  "gradle_kts_status": [
+    true,
+    "patched"
+  ],
+  "maven_status": null,
+  "_hits_count": 13,
+  "baseline_patterns_counts": {
+    "cannot_find_symbol": 8
+  }
+}

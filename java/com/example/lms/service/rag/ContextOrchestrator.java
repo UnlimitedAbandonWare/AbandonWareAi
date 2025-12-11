@@ -8,27 +8,39 @@ import com.example.lms.service.rag.energy.ContradictionScorer;
 import com.example.lms.service.rag.energy.ContextEnergyModel;
 import com.example.lms.service.rag.auth.AuthorityScorer;
 import com.example.lms.service.config.HyperparameterService;
+import com.example.lms.service.rag.query.QueryAnalysisResult;
+import com.example.lms.service.rag.query.QueryAnalysisService;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class ContextOrchestrator {
+    private static final Logger log = LoggerFactory.getLogger(ContextOrchestrator.class);
 
     private final PromptEngine promptEngine;
     private final AuthorityScorer authorityScorer;
     private final ContradictionScorer contradictionScorer;
     private final ContextEnergyModel energyModel;
     private final HyperparameterService hp;
+
+    // ─ LLM 기반 쿼리 분석 서비스 (전탐사 모드 지원) ─
+    @Autowired(required = false)
+    private QueryAnalysisService queryAnalysisService;
+
+    // ─ Anger Overdrive (optional beans) ─
+    @Autowired(required = false)
+    private com.example.lms.service.rag.overdrive.OverdriveGuard overdriveGuard;
+    @Autowired(required = false)
+    private com.example.lms.service.rag.overdrive.AngerOverdriveNarrower overdriveNarrower;
 
     @Value("${orchestrator.max-docs:10}")
     private int maxDocs;
@@ -40,13 +52,15 @@ public class ContextOrchestrator {
     @Value("${orchestrator.max-docs.ultra:18}")
     private int maxDocsUltra;
 
-    @Value("${orchestrator.min-top-score:0.60}")
+    @Value("${orchestrator.min-top-score:0.35}")
     private double minTopScore;
     @Value("${orchestrator.energy.enabled:true}")
     private boolean energyBasedSelection;
 
-    // '최신성' 요구 쿼리를 감지하기 위한 정규식
-    private static final Pattern TIMELY = Pattern.compile("(?i)(공지|업데이트|패치|스케줄|일정|news|update|patch|release)");
+    @Value("${orchestrator.exploration-threshold:0.10}")
+    private double explorationThreshold;
+
+    // [REMOVED] TIMELY 정규식 패턴 제거 - LLM 분석으로 대체됨
 
     /**
      * 여러 정보 소스를 바탕으로 최종 컨텍스트를 조율하고, 동적 규칙을 포함하여 프롬프트를 생성합니다.
@@ -54,21 +68,22 @@ public class ContextOrchestrator {
      */
     /** Verbosity-aware + Memory-aware (메모리 단독도 허용) */
     public String orchestrate(String query,
-                              List<Content> vectorResults,
-                              List<Content> webResults,
-                              Map<String, Set<String>> interactionRules) {
+            List<Content> vectorResults,
+            List<Content> webResults,
+            Map<String, Set<String>> interactionRules) {
         return orchestrate(query, vectorResults, webResults, interactionRules, null, null);
     }
+
     /**
      * Verbosity-aware 오케스트레이션
      * - Verbosity(deep/ultra)에 따라 상위 문서 캡 확장
      * - Verbosity 신호를 PromptContext에 전파(섹션/최소길이/토큰 버짓/대상/인용스타일)
      */
     public String orchestrate(String query,
-                              List<Content> vectorResults,
-                              List<Content> webResults,
-                              Map<String, Set<String>> interactionRules,
-                              VerbosityProfile profile) {
+            List<Content> vectorResults,
+            List<Content> webResults,
+            Map<String, Set<String>> interactionRules,
+            VerbosityProfile profile) {
         return orchestrate(query, vectorResults, webResults, interactionRules, profile, null);
     }
 
@@ -76,14 +91,34 @@ public class ContextOrchestrator {
      * Verbosity-aware + Memory-aware 오케스트레이션 (메모리 단독도 허용)
      */
     public String orchestrate(String query,
-                              List<Content> vectorResults,
-                              List<Content> webResults,
-                              Map<String, Set<String>> interactionRules,
-                              VerbosityProfile profile,
-                              String memoryCtx) {
+            List<Content> vectorResults,
+            List<Content> webResults,
+            Map<String, Set<String>> interactionRules,
+            VerbosityProfile profile,
+            String memoryCtx) {
+
+        // Step 0. LLM 형태소 분석 수행 (전탐사 모드 판단용)
+        QueryAnalysisResult analysis = null;
+        if (queryAnalysisService != null && query != null && !query.isBlank()) {
+            try {
+                analysis = queryAnalysisService.analyze(query);
+                log.info("[Orchestrator] Query Analysis: intent={}, entities={}, wantsFresh={}, isExploration={}",
+                        analysis.intent(), analysis.entities(), analysis.wantsFresh(), analysis.isExploration());
+            } catch (Exception e) {
+                log.warn("[Orchestrator] Query analysis failed, using fallback: {}", e.getMessage());
+            }
+        }
+
+        if (shouldPrioritizeWebResults(webResults, vectorResults)) {
+            log.info("[Orchestrator] Fresh web results detected. Deprioritizing stale RAG chunks.");
+            vectorResults = (vectorResults == null) ? java.util.List.of() : new java.util.ArrayList<>();
+        }
 
         List<Scored> pool = new ArrayList<>();
-        boolean wantsFresh = query != null && TIMELY.matcher(query).find();
+
+        // [MODIFIED] LLM 분석 결과 기반 wantsFresh 결정
+        boolean wantsFresh = (analysis != null) ? analysis.wantsFresh() : false;
+        boolean isExploration = (analysis != null) ? analysis.isExploration() : false;
 
         // 1. 각 소스별 결과를 점수화하여 풀(pool)에 추가
         addAll(pool, vectorResults, wantsFresh, Source.VECTOR);
@@ -108,7 +143,8 @@ public class ContextOrchestrator {
                     .build();
             return promptEngine.createPrompt(ctx);
         }
-        if (pool.isEmpty()) return "정보 없음";
+        if (pool.isEmpty())
+            return "정보 없음";
 
         // 2. 텍스트 내용 기반으로 중복 제거
         LinkedHashMap<String, Scored> uniq = new LinkedHashMap<>();
@@ -130,19 +166,55 @@ public class ContextOrchestrator {
                 .map(s -> s.content)
                 .collect(Collectors.toList());
 
+        // 3-A. (희소/저권위/모순) 조건 시 앵거 오버드라이브 발동 → 점군 압축 & 다단계 축소
+        if (overdriveGuard != null && overdriveNarrower != null) {
+            try {
+                if (overdriveGuard.shouldActivate(query, candidates)) {
+                    candidates = overdriveNarrower.narrow(query, candidates);
+                }
+            } catch (Exception ignored) {
+                /* fail-soft */ }
+        }
+
         // 3-B. 에너지 기반 선택 (Authority/Redundancy/Contradiction/Recency 등)
         List<Content> finalDocs = energyBasedSelection
                 ? energyModel.selectByEnergy(
-                Optional.ofNullable(query).orElse(""),
-                candidates,
-                Math.max(1, cap))
+                        Optional.ofNullable(query).orElse(""),
+                        candidates,
+                        Math.max(1, cap))
                 : candidates.stream().limit(Math.max(1, cap)).toList();
 
-        // 4. 안전장치: 가장 높은 점수가 기준 미달이면 신뢰할 수 없는 정보로 판단하고 차단
-        double topScore = uniq.values().stream().mapToDouble(Scored::score).max().orElse(0.0);
-        if (!hasMemory && topScore < minTopScore) {
-            log.warn("[Orchestrator] Top score ({}) is below the minimum threshold ({}). Returning '정보 없음'.",
-                    String.format("%.2f", topScore), minTopScore);
+        // 4. 안전장치: 점수 threshold (LLM 분석 기반 동적 계산)
+        double topScore = uniq.values().stream()
+                .mapToDouble(Scored::score)
+                .max()
+                .orElse(0.0);
+        // Web 컨텐츠가 섞여 있는지 확인
+        boolean hasWebSource = uniq.values().stream()
+                .anyMatch(s -> s.source() == Source.WEB);
+
+        // [MODIFIED] LLM 분석 결과 기반 동적 Threshold 계산
+        double baseThreshold = (analysis != null)
+                ? analysis.getDynamicThreshold()
+                : minTopScore;
+
+        double effectiveThreshold = baseThreshold;
+
+        // Web 소스가 있으면 추가 완화
+        if (hasWebSource) {
+            effectiveThreshold = Math.min(effectiveThreshold, baseThreshold - 0.05);
+        }
+
+        // 전탐사 모드면 최대한 완화 (explorationThreshold까지)
+        if (isExploration) {
+            effectiveThreshold = Math.min(effectiveThreshold, explorationThreshold);
+            log.info("[Orchestrator] Exploration mode activated. Threshold lowered to {}", effectiveThreshold);
+        }
+
+        // 메모리 컨텍스트가 전혀 없고, topScore가 threshold보다 낮으면 "정보 없음"으로 처리
+        if (!hasMemory && topScore < effectiveThreshold) {
+            log.warn("[Orchestrator] Top score ({}) is below threshold ({}). Returning '정보 없음'.",
+                    String.format("%.2f", topScore), effectiveThreshold);
             return "정보 없음";
         }
 
@@ -168,21 +240,91 @@ public class ContextOrchestrator {
     }
 
     /**
+     * 시선3: 웹이 더 신선하면 RAG 캐시보다 웹 우선 사용.
+     * - 삼성 공식 / 서비스 / 나무위키 등 신선한 웹 결과가 충분하면
+     *   오래된 벡터 결과보다 웹 컨텐츠를 우선 사용하도록 힌트를 준다.
+     */
+    private boolean shouldPrioritizeWebResults(java.util.List<Content> webResults,
+                                               java.util.List<Content> vectorResults) {
+        if (webResults == null || webResults.isEmpty()) {
+            return false;
+        }
+
+        boolean hasOfficialSource = webResults.stream().anyMatch(r -> {
+            String text = Optional.ofNullable(r.textSegment())
+                    .map(TextSegment::text)
+                    .orElse("")
+                    .toLowerCase(java.util.Locale.ROOT);
+            return text.contains("samsung.com")
+                    || text.contains("samsungsvc.co.kr")
+                    || text.contains("namu.wiki");
+        });
+
+        boolean sufficientWebHits = webResults.size() >= 3;
+
+        // 간단한 연도 패턴 기반 신선도 감지
+        boolean isFresh = webResults.stream().anyMatch(r -> {
+            String text = Optional.ofNullable(r.textSegment())
+                    .map(TextSegment::text)
+                    .orElse("");
+            return text.matches(".*202[4-5].*|.*202[4-5]년.*");
+        });
+
+        return hasOfficialSource || (sufficientWebHits && isFresh);
+    }
+
+    /**
      * 점수화된 컨텐츠 목록을 누적기에 추가합니다.
      */
     private void addAll(List<Scored> acc, List<Content> src, boolean wantsFresh, Source source) {
-        if (src == null || src.isEmpty()) return;
+        if (src == null || src.isEmpty())
+            return;
 
         int rank = 0;
         for (Content c : src) {
             rank++;
             String text = Optional.ofNullable(c.textSegment()).map(TextSegment::text).orElse(c.toString());
-            if (text == null || text.isBlank()) continue;
+            if (text == null || text.isBlank())
+                continue;
 
             double baseScore = 1.0 / rank; // 순위가 높을수록 기본 점수가 높음
             double freshnessBonus = (wantsFresh && source == Source.WEB) ? 0.25 : 0.0; // 최신성 요구 시 웹 검색에 보너스
             double lengthPenalty = Math.max(0, (text.length() - 1200) / 1200.0); // 긴 텍스트에 약간의 페널티
-            double score = Math.max(0.0, Math.min(1.0, baseScore + freshnessBonus - 0.1 * lengthPenalty));
+
+            // 도메인 기반 authority 가중치 추가
+            double authorityBonus = 0.0;
+            if (c.metadata() != null) {
+                Object urlObj = c.metadata().get("url");
+                if (urlObj != null) {
+                    String url = urlObj.toString().toLowerCase(java.util.Locale.ROOT);
+
+                    // 🔹 공식 도메인 (최고 우선순위)
+                    if (url.contains("hoyoverse.com") || url.contains("hoyolab.com")
+                            || url.contains("mihoyo.com") || url.contains("playstation.com")) {
+                        authorityBonus = 0.40;
+                    }
+                    // 🔹 위키 사이트 (게임/서브컬처에서는 신뢰 가능)
+                    else if (url.contains("namu.wiki")
+                            || url.contains("wikipedia.org")
+                            || url.contains("fandom.com")
+                            || url.contains("gamedot.org")) {
+                        authorityBonus = 0.25;
+                    }
+                    // 🔹 대형 커뮤니티/뉴스
+                    else if (url.contains("inven.co.kr") || url.contains("ruliweb.com")
+                            || url.contains("dcinside.com") || url.contains("arca.live")) {
+                        authorityBonus = 0.10;
+                    }
+                    // 🔹 개인 블로그 (미세 보너스)
+                    else if (url.contains("blog.naver.com") || url.contains("tistory.com")
+                            || url.contains("kakao.com")) {
+                        authorityBonus = 0.05;
+                    }
+                }
+            }
+
+            double score = Math.max(0.0, Math.min(1.0,
+                    baseScore + freshnessBonus + authorityBonus - 0.1 * lengthPenalty));
 
             acc.add(new Scored(c, score, source));
         }

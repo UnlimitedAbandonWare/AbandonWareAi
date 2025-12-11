@@ -1,0 +1,20 @@
+rootProject.name = "src111_merge15"
+
+// Keep only stable modules; include optional ones conditionally
+include("app")
+if (file('demo-1').exists()) include('demo-1')
+if (file('cfvm-raw').exists()) include('cfvm-raw')
+if (file('lms-core').exists()) include('lms-core')
+
+// lms-core is included as an optional subproject when present.
+// demo-1/app can also consume an external lms-core JAR via -PlmsJar if you prefer that mode.
+apply from: "gradle/buildErrorGuard.gradle.kts"
+
+// Exclude abandoned/backup sources
+sourceSets {
+    main {
+        java {
+            exclude '**/_abandonware_backup/**', '**/java_clean/**', 'extras/**', 'backup/**'
+        }
+    }
+}

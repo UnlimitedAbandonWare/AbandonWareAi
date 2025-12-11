@@ -1,0 +1,34 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+name: AP11_FINANCE_SPECIAL
+version: '1'
+params:
+  domain: finance
+  officialSourcesOnly: true
+  web_top_k: 20
+chain:
+- alias_correct
+- retrieve_web_official
+- retrieve_vector
+- fuse_grandas
+- rerank_cross
+- gate_citation
+- final_sigmoid
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

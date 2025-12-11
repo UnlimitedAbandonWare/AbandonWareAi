@@ -1,0 +1,80 @@
+// Spring Boot application build file — cleaned & normalized (Kotlin DSL)
+plugins {
+    id("org.springframework.boot") version "3.3.3"
+    id("io.spring.dependency-management") version "1.1.5"
+    java
+}
+
+java {
+    toolchain { languageVersion.set(JavaLanguageVersion.of(21)) }
+}
+
+repositories {
+    mavenCentral()
+    maven { url = uri("https://repo.spring.io/release") }
+}
+
+dependencies {
+    runtimeOnly("com.github.tjake:jlama-core:+")
+    implementation(project(":lms-core"))
+    implementation(project(":cfvm-raw"))
+
+    // Spring Boot starters
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
+
+    // Jackson / YAML
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.17.2")
+    implementation("org.yaml:snakeyaml:2.2")
+
+    // Lucene (BM25)
+    implementation("org.apache.lucene:lucene-core:9.9.2")
+    implementation("org.apache.lucene:lucene-queryparser:9.9.2")
+    implementation("org.apache.lucene:lucene-analyzers-common:9.9.2")
+
+    // OpenTelemetry (optional)
+    implementation("io.opentelemetry:opentelemetry-api:1.43.0")
+    implementation("io.opentelemetry:opentelemetry-sdk:1.43.0")
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp:1.43.0")
+
+    // Neo4j (optional)
+    implementation("org.neo4j.driver:neo4j-java-driver:5.23.0")
+
+    // Lombok (compileOnly / annotationProcessor)
+    compileOnly("org.projectlombok:lombok:1.18.32")
+    annotationProcessor("org.projectlombok:lombok:1.18.32")
+
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+}
+
+tasks.withType<JavaCompile> {
+    options.encoding = "UTF-8"
+    options.compilerArgs.add("-parameters")
+}
+
+tasks.test {
+    useJUnitPlatform()
+}
+
+
+dependencies {
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
+
+    // ONNX Runtime & optional tokenizer
+    implementation("ai.onnxruntime:onnxruntime:1.18.0")
+    implementation("ai.djl:api:0.26.0")
+    implementation("ai.djl.huggingface:tokenizers:0.26.0")
+
+    // OCR (optional at runtime; we use reflection)
+    runtimeOnly("net.sourceforge.tess4j:tess4j:5.11.0")
+    runtimeOnly("org.slf4j:slf4j-simple:2.0.12")
+
+    compileOnly("org.projectlombok:lombok:1.18.32")
+    annotationProcessor("org.projectlombok:lombok:1.18.32")
+
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+}

@@ -1,0 +1,27 @@
+*** project/src/demo-1/src/main/java/com/abandonware/ai/agent/Demo1Application.java (NEW) ***
++ @SpringBootApplication entrypoint for demo-1.
+
+*** project/src/demo-1/src/main/java/com/abandonware/ai/agent/infra/TraceFilter.java (NEW) ***
++ MDC propagation of X-Request-Id and X-Session-Id.
+
+*** project/src/demo-1/src/main/java/com/abandonware/ai/agent/config/WebInfraConfig.java ***
+- @Value("{zsys.onnx.max-concurrency:2}")
++ @Value("${zsys.onnx.max-concurrency:2}")
+
+*** project/src/demo-1/src/main/resources/application.yml (REPLACED) ***
++ Added retrieval/web/onnx/gate/probe/telemetry settings.
+
+*** project/src/demo-1/src/main/resources/logback-spring.xml (NEW) ***
++ Logging pattern with [sessionId/requestId].
+
+*** project/src/demo-1/src/main/resources/plans/brave.v1.yaml (NEW) ***
++ Orchestration DSL plan.
+
+*** project/src/demo-1/src/main/resources/prompts.manifest.yaml (NEW) ***
++ Manifest for PromptBuilder.
+
+*** project/src/demo-1/build.gradle.kts (NEW) ***
++ Spring Boot 3 + LangChain4j 1.0.1 + ONNX + Upstash dependencies.
+
+*** project/src/demo-1/src/main/java/com/abandonware/ai/agent/infra/singleflight/SingleFlight*.java (NEW) ***
++ Annotation and Aspect for single-flight dedupe.

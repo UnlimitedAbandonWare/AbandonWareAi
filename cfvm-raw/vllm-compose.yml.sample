@@ -1,0 +1,29 @@
+version: "3.8"
+services:
+  vllm_gemma:
+    image: vllm/vllm-openai:latest
+    container_name: vllm_gemma
+    command: >
+      --model google/gemma-2-9b-it
+      --host 0.0.0.0
+      --port 8000
+      --max-num-seqs 32
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models
+    restart: unless-stopped
+
+  vllm_light:
+    image: vllm/vllm-openai:latest
+    container_name: vllm_light
+    command: >
+      --model meta-llama/Llama-3.1-8B-Instruct
+      --host 0.0.0.0
+      --port 8001
+      --max-num-seqs 32
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./models:/models
+    restart: unless-stopped

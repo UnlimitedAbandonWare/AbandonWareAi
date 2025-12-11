@@ -1,0 +1,23 @@
+{
+  "timestamp_utc": "2025-10-29T03:20:17.837527Z",
+  "applied_fixes": [
+    {
+      "pattern": "KOTLIN_DSL_PLACEHOLDER",
+      "signature": "... present in build.gradle.kts",
+      "file": "app/build.gradle.kts",
+      "action": "rewrite_minimal_valid_dsl"
+    },
+    {
+      "pattern": "SCOPE_TOO_WIDE",
+      "signature": "compiles entire com/example/lms/** tree (contains stubs)",
+      "file": "app/build.gradle.kts",
+      "action": "narrow_includes_to_AppApplication_only"
+    }
+  ],
+  "kept_artifacts": [
+    "BUILD_PATTERN_SUMMARY.md",
+    "BUILD_PATTERN_RUN.md",
+    "DUPLICATE_CLASS_REPORT.md"
+  ],
+  "notes": "Further source expansion should follow a widen-and-fix loop with analyze_build_output.py"
+}

@@ -3,8 +3,10 @@ package com.example.lms.repository;
 
 import com.example.lms.domain.TranslationSample;
 import org.springframework.data.jpa.repository.JpaRepository;
-
 import java.util.List;
+
+
+
 
 /**
  * 번역 샘플 로그 테이블 접근용 JPA Repository
@@ -12,7 +14,7 @@ import java.util.List;
  *  ▒ 주요 용도 ▒
  *   ① 운영중 로그 적재 (save)
  *   ② 관리자 화면(Paging) 조회
- *   ③ 오프라인/배치 학습 – 사람이 교정한 레코드만 뽑기
+ *   ③ 오프라인/배치 학습 - 사람이 교정한 레코드만 뽑기
  */
 public interface SampleRepository extends JpaRepository<TranslationSample, Long> {
 

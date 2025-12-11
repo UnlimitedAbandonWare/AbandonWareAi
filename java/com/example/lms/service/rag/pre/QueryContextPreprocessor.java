@@ -4,6 +4,8 @@ package com.example.lms.service.rag.pre;
 import java.util.Locale;
 import java.util.Set;
 import java.util.Map;
+
+
 /**
  * 검색 전 쿼리를 고유명사 추출 및 지역/도메인 맥락 주입을 통해 강화(enrich)하는 전처리기.
  * - enrich(String): 필수 계약

@@ -1,0 +1,77 @@
+{
+  "updated_at": "2025-10-31T19:51:17.675162Z",
+  "aggregated_counts": {
+    "java.cannot_find_symbol": 1201,
+    "java.package_does_not_exist": 81,
+    "java.incompatible_types": 47,
+    "gradle.build_failed": 55,
+    "gradle.dependency_resolution": 2,
+    "java.class_interface_expected": 0,
+    "java.illegal_escape_character": 4,
+    "maven.build_failure": 0,
+    "lombok.missing": 0
+  },
+  "examples": {
+    "java.cannot_find_symbol": [
+      "- Split `OcrModels.java` into `Rect.java`, `OcrSpan.java`, `OcrChunk.java` to satisfy Java's one-public-type-per-file rule.\n- Enabled Lombok annotation processing in `lms-core` (and tests) to restore getters/setters, constructors, and `@Slf4j` loggers.\n- These address the cascading 'cannot find symbol get*/set*' and 'log' errors across shared sources compiled by `lms-core`.\n\n",
+      "2025-10-18-compileJava.log: ... :compileJava...",
+      "BUILD_ERROR__latest.txt: ... \u2014 2025-10-17]..."
+    ],
+    "gradle.build_failed": [
+      "3 errors\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:",
+      "2025-10-18-bootRun.log: ...sed by: java.lang.IllegalArgumentException: Invalid boolean value [{probe.search.enabled:false}]...",
+      "2025-10-18-compileJava.log: ...            ^..."
+    ],
+    "java.package_does_not_exist": [
+      "\nDetected patterns:\n- PACKAGE_NOT_FOUND \u2014 e.g., `package com.fasterxml.jackson.dataformat.yaml does not exist`, `package com.networknt.schema does not exist`, `package org.springframework.data.redis.core does not exist`, `package org.springframework.kafka.* does not exist`, `package io.micrometer.* does not exist`, `package io.opentelemetry.* does not exist`, `package org.apache.lucene.analysis.ko does not exist`.\n- MISSING_SYMBOL \u2014 e.g., `cannot find symbol JsonSchema`, `cannot find symbol StringRedisTemplate`, `cannot find symbol KafkaTemplate`, `cannot find symbol NewTopic`, `cannot find symbol Tracer`, `cannot find symbol NoriTokenizer`, `cannot find symbol PlanLoader/Plan`.\n- (No hits) DUPLICATE_CLASS / ILLEGAL_START / CLASS_EXPECTED / OVERRIDE_MISMATCH in this excerpt."
+    ],
+    "java.incompatible_types": [
+      "    \"> Task :compileJava FAILED\\nC:\\\\AbandonWare\\\\demo-1\\\\demo-1\\\\src\\\\main\\\\java\\\\com\\\\example\\\\lms\\\\api\\\\ChatApiController.java:11: error: cannot find symbol\\nimport com.example.lms.service.ChatService;\",\n    \"^\\nC:\\\\AbandonWare\\\\demo-1\\\\demo-1\\\\src\\\\main\\\\java\\\\com\\\\example\\\\lms\\\\api\\\\ChatApiController.java:11: error: cannot find symbol\\nimport com.example.lms.service.ChatService;\",\n    \"cannot find symbol log (ChatApiController \ub4f1)\\tLombok \ubbf8\uc801\uc6a9/\uc911\ubcf5 \uc815\uc758\\t@Slf4j\ub85c \ud1b5\uc77c(\uc911\ubcf5 Logger import \uc81c\uac70), \ud544\uc694 \uc2dc \uc218\ub3d9 Logger \ud55c \uc904 \ub300\uc548 \uc8fc\uc11d\\ncannot find symbol ChatService (\ucee8\ud2b8\ub864\ub7ec/\ud578\ub4e4\ub7ec)\\t\uc778\ud130\ud398\uc774\uc2a4 \ud30c\uc77c \uacbd\ub85c \ubd80\uc7ac\\tdemo-1/.../service/ChatService.java \uc9c1\uc811 \ucd94\uac00\\nincompatible types: ChatOrchestrator.ChatResult -> ChatService.ChatResult\\t\ubc18\ud658\ud0c0\uc785 \ubd88\uc77c\uce58\\ttoServiceResult(...) \uc5b4\ub311\ud130\ub85c \ubcc0\ud658 \ud6c4 \ubc18\ud658\",\n    \"interface expected here (ChatServiceImpl implements ChatService)\\tChatService\uac00 \ud074\ub798\uc2a4(\ub808\uac70\uc2dc)\ub85c \ub0a8\uc544\uc788\ub358 \ucda9\ub3cc\\t\ub808\uac70\uc2dc\ub97c legacy/ChatServiceLegacy\ub85c \uc774\ub3d9/\uac1c\uba85 + \uc778\ud130\ud398\uc774\uc2a4 \ub3c4\uc785\\ncannot find symbol log (ChatApiController \ub4f1)\\tLombok \ubbf8\uc801\uc6a9/\uc911\ubcf5 \uc815\uc758\\t@Slf4j\ub85c \ud1b5\uc77c(\uc911\ubcf5 Logger import \uc81c\uac70), \ud544\uc694 \uc2dc \uc218\ub3d9 Logger \ud55c \uc904 \ub300\uc548 \uc8fc\uc11d\\ncannot find symbol ChatService (\ucee8\ud2b8\ub864\ub7ec/\ud578\ub4e4\ub7ec)\\t\uc778\ud130\ud398\uc774\uc2a4 \ud30c\uc77c \uacbd\ub85c \ubd80\uc7ac\\tdemo-1/.../service/ChatService.java \uc9c1\uc811 \ucd94\uac00\",\n    \"\u201c\ube4c\ub4dc \uc5d0\ub7ec \ud328\ud134 \uba54\ubaa8\ub9ac\u201d \uc801\uc6a9 \uc694\uc57d\\n\ud328\ud134 \uac10\uc9c0: \uc11c\ube44\uc2a4 \uc778\ud130\ud398\uc774\uc2a4 \uc720\uc2e4 \u2192 \uc804 \uacc4\uce35\uc5d0\uc11c cannot find symbol \ub2e4\ubc1c\\n\","
+    ],
+    "gradle.dependency_resolution": [
+      "    actions: [ensure_spring_boot_plugin]\n  - id: maven_central_missing\n    when: \"Could not resolve all files for configuration|Could not find org\\.projectlombok:lombok\"\n    actions: [ensure_maven_central_repo]\n  - id: javax_jakarta_mismatch"
+    ],
+    "java.class_interface_expected": [],
+    "java.illegal_escape_character": [
+      "BUILD_ERROR__latest.txt: ...[RAW BUILD LOG SNIPPET \u2014 2025-10-17]..."
+    ],
+    "maven.build_failure": [],
+    "lombok.missing": []
+  },
+  "sources": [
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T212538.720/BUILD_ERROR__latest.txt",
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T212538.720/analysis/build_error_report.json",
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T212538.720/build-logs/2025-10-18-bootRun.log",
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T212538.720/build-logs/2025-10-18-compileJava.log",
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T230127.003/BUILD_ERROR__latest.txt",
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T230127.003/analysis/build_error_report.json",
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T230127.003/build-logs/2025-10-18-bootRun.log",
+    "/mnt/data/ingest_src111_merge15_-_2025-10-31T230127.003/build-logs/2025-10-18-compileJava.log",
+    "/mnt/data/ingest_src111_merge15_-_2025-11-01T043642.378/BUILD_ERROR__latest.txt",
+    "/mnt/data/ingest_src111_merge15_-_2025-11-01T043642.378/analysis/build_error_report.json",
+    "/mnt/data/ingest_src111_merge15_-_2025-11-01T043642.378/build-logs/2025-10-18-bootRun.log",
+    "/mnt/data/ingest_src111_merge15_-_2025-11-01T043642.378/build-logs/2025-10-18-compileJava.log",
+    "/mnt/data/src111_merge15 - 2025-10-19T234609.085.zip",
+    "/mnt/data/src111_merge15 - 2025-10-20T025122.421.zip",
+    "/mnt/data/src111_merge15 - 2025-10-20T092643.198.zip",
+    "/mnt/data/src111_merge15 - 2025-10-20T134617.846.zip",
+    "/mnt/data/src111_mergsae15 (2).zip",
+    "/mnt/data/src111_mx.zip",
+    "/mnt/data/work_mod_src111_merge15/BUILD_ERROR__latest.txt",
+    "/mnt/data/work_mod_src111_merge15/analysis/build_error_report.json",
+    "/mnt/data/work_mod_src111_merge15/build-logs/2025-10-18-bootRun.log",
+    "/mnt/data/work_mod_src111_merge15/build-logs/2025-10-18-compileJava.log"
+  ],
+  "auto_fixers": [
+    "regex_single_escape_normalization",
+    "package_before_import_reorder",
+    "bm25_import_injection"
+  ],
+  "fixesApplied": {
+    "java.duplicate_class": "Narrowed sourceSets to java_clean",
+    "gradle.build_failed": "Removed root java toolchain block",
+    "java.illegal_escape_character": "java_clean normalized regex tokens",
+    "java.cannot_find_symbol": "Excluded legacy BM25 & heavy ONNX impls from compilation"
+  },
+  "timestamp": "2025-11-01T204955Z"
+}

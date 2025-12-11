@@ -1,0 +1,10 @@
+{
+  "scanned_at": "2025-11-02T00:28:20.880813Z",
+  "patterns": {
+    "(?i)cannot\\s+find\\s+symbol": 3944,
+    "(?i)package\\s+[\\w\\.]+\\s+does\\s+not\\s+exist": 502,
+    "(?i)duplicate\\s+class": 195,
+    "(?i)incompatible\\s+types": 136,
+    "(?i)compilation\\s+failed": 60
+  }
+}

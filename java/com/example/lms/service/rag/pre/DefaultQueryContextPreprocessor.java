@@ -1,21 +1,23 @@
 package com.example.lms.service.rag.pre;
-import org.springframework.context.annotation.Primary;   // ✅ 추가
 
 import org.openkoreantext.processor.OpenKoreanTextProcessorJava;
 import org.openkoreantext.processor.tokenizer.KoreanTokenizer.KoreanToken;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import scala.collection.Seq;
-
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.context.annotation.Primary;   // ✅ 추가
+
+
+
+
 /**
  * 간단한 NER  위치 주입 전처리기 구현.
- * – Open‑Korean‑Text로 고유명사(NNP) 토큰을 감지해 분해를 방지.<br>
- * – 지역성 명사 사전에 매칭되면 {@code user.default-location} 값을 선행 키워드로 삽입.
+ * - Open-Korean-Text로 고유명사(NNP) 토큰을 감지해 분해를 방지.<br>
+ * - 지역성 명사 사전에 매칭되면 {@code user.default-location} 값을 선행 키워드로 삽입.
  */
 
 @Primary

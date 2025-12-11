@@ -7,12 +7,11 @@ import com.example.lms.domain.ChatSession;
 import com.example.lms.repository.AdministratorRepository;
 import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.ChatSessionRepository;
+import com.example.lms.service.guard.EvidenceAwareGuard;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -20,37 +19,89 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+import com.example.lms.domain.enums.MemoryProfile;
 
 @Service
 @Primary
 @RequiredArgsConstructor
-@Slf4j
 public class ChatHistoryServiceImpl implements ChatHistoryService {
+    private static final Logger log = LoggerFactory.getLogger(ChatHistoryServiceImpl.class);
 
     private final ChatSessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final AdministratorRepository administratorRepository;
 
-    /* -------------------- META PREFIXES -------------------- */
-    private static final String TRACE_META_PREFIX          = "⎔TRACE⎔";
-    private static final String TRACE_META_PREFIX_B64      = "⎔TRACE64⎔";
-    private static final String LEGACY_TRACE_META_PREFIX_Q = "?TRACE?";
+    private final com.example.lms.web.ClientOwnerKeyResolver ownerKeyResolver;
+    @org.springframework.beans.factory.annotation.Value("${history.skip-weak-assistant:false}")
+    private boolean skipWeakAssistant;
 
-    /* =======================================================
+    // MERGE_HOOK:PROJ_AGENT::JAMMINI_PROJECTION_V1
+    // [NEW] IP 해싱용 Salt (게스트 세션 식별 강화용)
+    private static final String GUEST_IP_SALT = "jammini-projection-salt-v1";
+
+    // [NEW] 게스트 판별 헬퍼
+    private boolean isGuest(String username) {
+        return username == null
+                || username.isBlank()
+                || "anonymousUser".equals(username);
+    }
+
+    // [NEW] 게스트 ownerKey 생성 로직 (쿠키 → IP 해시 → UUID 순)
+    private String resolveGuestOwnerKey(String fallbackIp) {
+        // 1) 쿠키 기반 ownerKey 시도
+        try {
+            String cookieKey = ownerKeyResolver.ownerKey();
+            if (cookieKey != null && !cookieKey.isBlank()) {
+                return cookieKey;
+            }
+        } catch (RuntimeException e) {
+            log.debug("ownerKeyResolver 실패: {}", e.getMessage());
+        }
+
+        // 2) IP 해시 기반 ownerKey 시도
+        if (fallbackIp != null
+                && !fallbackIp.isBlank()
+                && !"unknown".equalsIgnoreCase(fallbackIp)) {
+            try {
+                return com.example.lms.util.HashUtil.sha256(fallbackIp + GUEST_IP_SALT);
+            } catch (Exception ignore) {
+                // 해시 실패 시 다음 단계로 폴백
+            }
+        }
+
+        // 3) 최후 수단: 랜덤 UUID
+        return java.util.UUID.randomUUID().toString();
+    }
+
+    /* -------------------- META PREFIXES -------------------- */
+    private static final String TRACE_META_PREFIX = "⎔TRACE⎔";
+    private static final String TRACE_META_PREFIX_B64 = "⎔TRACE64⎔";
+    private static final String LEGACY_TRACE_META_PREFIX_Q = "?TRACE?";
+    // Prefix for understanding summary meta.
+    private static final String USUM_META_PREFIX = "⎔USUM⎔";
+
+    /*
+     * =======================================================
      * HTML 차단 정책
-     *  - TRACE 메타(위 3종)는 무조건 저장
-     *  - 그 외 system 메시지의 '의도치 않은 생 HTML'만 차단
-     * ======================================================= */
+     * - TRACE 메타(위 3종)는 무조건 저장
+     * - 그 외 system 메시지의 '의도치 않은 생 HTML'만 차단
+     * =======================================================
+     */
     private static boolean isTraceMeta(String content) {
-        if (content == null) return false;
+        if (content == null)
+            return false;
         return content.startsWith(TRACE_META_PREFIX)
                 || content.startsWith(TRACE_META_PREFIX_B64)
-                || content.startsWith(LEGACY_TRACE_META_PREFIX_Q);
+                || content.startsWith(LEGACY_TRACE_META_PREFIX_Q)
+                || content.startsWith(USUM_META_PREFIX);
     }
 
     /** 아주 느슨한 생 HTML 감지 (TRACE 메타는 선별에서 이미 제외) */
     private static boolean looksLikeRawHtml(String content) {
-        if (content == null || content.isBlank()) return false;
+        if (content == null || content.isBlank())
+            return false;
         String c = content;
         return c.contains("<div") || c.contains("<span")
                 || c.contains("<table") || c.contains("<a ")
@@ -77,15 +128,34 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
 
     @Override
     @Transactional
-    public Optional<ChatSession> startNewSession(String firstMessage, String username) {
-        Administrator admin = administratorRepository.findByUsername(username)
-                .orElseThrow(() -> new IllegalArgumentException("관리자를 찾을 수 없습니다: " + username));
+    // MERGE_HOOK:PROJ_AGENT::JAMMINI_PROJECTION_V1
+    public Optional<ChatSession> startNewSession(String firstMessage, String username, String clientIp) {
+        // Allow both admin-owned and guest sessions.
+        String safe = java.util.Objects.toString(firstMessage, "");
+        String title = safe.length() > 20 ? safe.substring(0, 20) + "/* ... */" : safe;
 
-        String safe = Objects.toString(firstMessage, "");
-        String title = safe.length() > 20 ? safe.substring(0, 20) + "..." : safe;
+        ChatSession session;
 
-        ChatSession session = sessionRepository.save(new ChatSession(title, admin));
-        log.info("{} 관리자가 세션을 시작했습니다. title='{}' (id={})", username, title, session.getId());
+        if (isGuest(username)) {
+            // 게스트 세션: 쿠키 → IP 해시 → UUID 순으로 ownerKey 결정
+            String ownerKey = resolveGuestOwnerKey(clientIp);
+
+            session = new ChatSession(title);
+            session.setOwnerKey(ownerKey);
+            session.setOwnerType("ANON");
+            session = sessionRepository.save(session);
+
+            String masked = (ownerKey == null)
+                    ? "null"
+                    : ownerKey.substring(0, Math.min(8, ownerKey.length())) + "...";
+            log.info("익명 게스트 세션 시작 (Hybrid): ownerKey={} title='{}' (id={})",
+                    masked, title, session.getId());
+        } else {
+            Administrator admin = administratorRepository.findByUsername(username)
+                    .orElseThrow(() -> new IllegalArgumentException("관리자를 찾을 수 없습니다: " + username));
+            session = sessionRepository.save(new ChatSession(title, admin));
+            log.info("{} 관리자가 세션을 시작했습니다. title='{}' (id={})", username, title, session.getId());
+        }
 
         // 첫 사용자 메시지 즉시 저장
         save(new ChatMessage(session, "user", safe));
@@ -116,10 +186,24 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
             return;
         }
 
+        // Skip weak assistant drafts like "정보 없음" when toggle is on
+        try {
+            if (skipWeakAssistant && "assistant".equals(r)) {
+                // 진짜 템플릿 거절만 스킵
+                if (EvidenceAwareGuard.looksStructurallyEmpty(c)
+                        && EvidenceAwareGuard.looksNoEvidenceTemplate(c)) {
+                    log.debug("[History] No-evidence template suppressed → skip persist (session {})", sessionId);
+                    return;
+                }
+            }
+        } catch (Throwable ignore) {
+            // defensive: guard에서 예외가 나더라도 히스토리 저장은 막지 않는다.
+        }
+
         // 1) TRACE 메타(system)면 무조건 저장
         if ("system".equals(r) && isTraceMeta(c)) {
             save(sessionId, r, c);
-            log.debug("세션 {}: system TRACE 메타 저장 ({} bytes)", sessionId, c.length());
+            log.debug("세션 {}: system meta 저장 ({} bytes)", sessionId, c.length());
             return;
         }
 
@@ -145,14 +229,59 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     @Override
     @Transactional(readOnly = true)
     public List<ChatSession> getSessionsForUser(String username) {
-        return sessionRepository.findByAdministrator_UsernameOrderByCreatedAtDesc(username);
+        // 레거시 호출은 IP 정보를 모름 → null 전달
+        return getSessionsForUser(username, null);
     }
 
-    @Override
+    // MERGE_HOOK:PROJ_AGENT::JAMMINI_PROJECTION_V1
     @Transactional(readOnly = true)
+    public List<ChatSession> getSessionsForUser(String username, String clientIp) {
+        // 로그인 사용자 (관리자 포함)
+        if (!isGuest(username)) {
+            return sessionRepository.findByAdministrator_UsernameOrderByCreatedAtDesc(username);
+        }
+
+        java.util.Set<String> keys = new java.util.LinkedHashSet<>();
+
+        // A) 쿠키 ownerKey
+        try {
+            String cookieKey = ownerKeyResolver.ownerKey();
+            if (cookieKey != null && !cookieKey.isBlank()) {
+                keys.add(cookieKey);
+            }
+        } catch (RuntimeException e) {
+            log.debug("Guest cookie resolution failed: {}", e.toString());
+        }
+
+        // B) IP 해시 기반 ownerKey (쿠키 생성 전 세션 포함)
+        if (clientIp != null
+                && !clientIp.isBlank()
+                && !"unknown".equalsIgnoreCase(clientIp)) {
+            try {
+                keys.add(com.example.lms.util.HashUtil.sha256(clientIp + GUEST_IP_SALT));
+            } catch (Exception e) {
+                log.debug("Guest IP hash failed: {}", e.toString());
+            }
+        }
+
+        if (keys.isEmpty()) {
+            log.debug("getSessionsForUser: no ownerKey candidates for anonymous user");
+            return java.util.List.of();
+        }
+
+        log.debug("getSessionsForUser (guest): keys={}", keys);
+
+        java.util.List<ChatSession> sessions = sessionRepository.findByOwnerKeyInOrderByCreatedAtDesc(keys);
+        sessions.sort(java.util.Comparator.comparing(ChatSession::getCreatedAt).reversed());
+        return sessions;
+    }
+
     public ChatSession getSessionWithMessages(Long id) {
-        ChatSession session = sessionRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("세션을 찾을 수 없습니다: " + id));
+        ChatSession session = sessionRepository.findById(id).orElse(null);
+        if (session == null) {
+            log.warn("getSessionWithMessages: session {} not found; returning null", id);
+            return null;
+        }
 
         // createdAt ASC 보장 (동률 시 id ASC)
         List<ChatMessage> list = messageRepository.findBySessionIdOrderByCreatedAtAsc(id);
@@ -175,7 +304,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     @Override
     @Transactional(readOnly = true)
     public List<String> getFormattedRecentHistory(Long sessionId, int limit) {
-        if (sessionId == null) return List.of();
+        if (sessionId == null)
+            return List.of();
         List<ChatMessage> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
         int from = Math.max(0, all.size() - Math.max(1, limit));
         return all.subList(from, all.size()).stream()
@@ -193,10 +323,54 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     @Override
     @Transactional(readOnly = true)
     public Optional<String> getLastAssistantMessage(Long sessionId) {
-        if (sessionId == null) return Optional.empty();
+        if (sessionId == null)
+            return Optional.empty();
         return messageRepository
                 .findTopBySessionIdAndRoleOrderByCreatedAtDesc(sessionId, "assistant")
                 .or(() -> messageRepository.findTopBySessionIdAndRoleOrderByIdDesc(sessionId, "assistant"))
                 .map(ChatMessage::getContent);
     }
+
+    @Override
+    public Optional<ChatSession> startNewSession(
+            String firstMessage,
+            String username,
+            String clientIp,
+            String preResolvedOwnerKey,
+            MemoryProfile memoryProfile) {
+        // NOTE:
+        // 기존 3-파라미터 버전(startNewSession(String, String, String))은
+        // 세션 생성에 필요한 모든 부가 로직(관리자 세션, 게스트 세션, 제목 생성 등)을
+        // 이미 포함하고 있다. MoE / SSE 호환을 위해 ownerKey와 MemoryProfile만
+        // 명시적으로 덮어쓰되, 나머지 동작은 그대로 재사용한다.
+        Optional<ChatSession> base = startNewSession(firstMessage, username, clientIp);
+        if (base.isEmpty()) {
+            return base;
+        }
+
+        ChatSession session = base.get();
+        boolean dirty = false;
+
+        // 1) ownerKey 우선 적용 (요청 진입 시에 선취한 값)
+        if (preResolvedOwnerKey != null && !preResolvedOwnerKey.isBlank()) {
+            String trimmed = preResolvedOwnerKey.trim();
+            if (!trimmed.equals(session.getOwnerKey())) {
+                session.setOwnerKey(trimmed);
+                dirty = true;
+            }
+        }
+
+        // 2) MemoryProfile 메타데이터 저장 (없으면 STRICT 로 간주)
+        if (memoryProfile != null && memoryProfile != session.getMemoryProfile()) {
+            session.setMemoryProfile(memoryProfile);
+            dirty = true;
+        }
+
+        if (dirty) {
+            session = sessionRepository.save(session);
+        }
+
+        return Optional.of(session);
+    }
+
 }

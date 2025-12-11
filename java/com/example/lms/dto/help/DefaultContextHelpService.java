@@ -1,19 +1,22 @@
 package com.example.lms.service.help;
 
 import com.example.lms.dto.help.ContextHelpRequest;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-
 import java.util.Locale;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+
 
 /**
  * 최소 동작 보장용 기본 구현.
  * {스터프1}의 시스템 설명을 요약해 UI 요소별로 맥락 도움말을 제공합니다.
  */
-@Slf4j
 @Service
 public class DefaultContextHelpService implements ContextHelpService {
+    private static final Logger log = LoggerFactory.getLogger(DefaultContextHelpService.class);
 
         @Override
         public String getHelpFor(ContextHelpRequest request) {

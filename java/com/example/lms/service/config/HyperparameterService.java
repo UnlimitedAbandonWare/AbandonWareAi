@@ -4,13 +4,16 @@ import com.example.lms.domain.Hyperparameter;
 import com.example.lms.repository.HyperparameterRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * DB에 저장된 하이퍼파라미터를 메모리 캐시에 로드하여 애플리케이션 전반에 제공합니다.
@@ -21,8 +24,8 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class HyperparameterService {
+    private static final Logger log = LoggerFactory.getLogger(HyperparameterService.class);
 
     private final HyperparameterRepository hyperparameterRepo;
     private final Map<String, Double> paramCache = new ConcurrentHashMap<>();
@@ -30,7 +33,7 @@ public class HyperparameterService {
     @PostConstruct
     @Transactional(readOnly = true)
     public void init() {
-        log.info("DB로부터 모든 하이퍼파라미터를 로딩합니다...");
+        log.info("DB로부터 모든 하이퍼파라미터를 로딩합니다/* ... *&#47;");
         loadAll();
     }
 
@@ -139,7 +142,8 @@ public class HyperparameterService {
      */
     public double getRerankSynergyWeight() {
         String sys = System.getProperty("rerank.synergy-weight");
-        String env = (sys == null ? System.getenv("RERANK_SYNERGY_WEIGHT") : null);
+        // Avoid direct environment access; fall back to system properties instead
+        String env = (sys == null ? System.getProperty("RERANK_SYNERGY_WEIGHT") : null);
         String raw = (sys != null ? sys : env);
         try {
             return (raw == null) ? 1.0 : Double.parseDouble(raw);

@@ -2,9 +2,11 @@
 package com.example.lms.service.rag.rerank;
 
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.regex.Pattern;
+
+
+
 
 /**
  * RELATIONSHIP_* 규칙과 문서 텍스트를 비교하여 점수 델타를 계산합니다.

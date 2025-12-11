@@ -1,5 +1,6 @@
 package com.example.lms.domain.enums;
 
+
 /**
  * 컨텍스트 출처의 신뢰도 수준을 정의합니다.
  * <p>

@@ -1,0 +1,49 @@
+plugins {
+    id("org.springframework.boot") version "3.3.3"
+    id("io.spring.dependency-management") version "1.1.5"
+    java
+}
+
+group = "com.example.lms"
+version = "0.0.1-SNAPSHOT"
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url = uri("https://repo.spring.io/release") }
+}
+
+dependencies {
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    // Optional: logging
+    implementation("org.slf4j:slf4j-api:2.0.12")
+
+    // Lombok (compile-time only)
+    compileOnly("org.projectlombok:lombok:1.18.32")
+    annotationProcessor("org.projectlombok:lombok:1.18.32")
+
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+}
+
+tasks.withType<Test> {
+    useJUnitPlatform()
+}
+
+sourceSets {
+    val main by getting {
+        java.setSrcDirs(listOf("src/main/java_clean"))
+        resources.setSrcDirs(listOf("src/main/resources"))
+    }
+    val test by getting {
+        java.setSrcDirs(emptyList<String>())
+        resources.setSrcDirs(emptyList<String>())
+    }
+}
+
+// Keep bootJar as default artifact

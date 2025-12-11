@@ -2,7 +2,7 @@
 package com.example.lms.service;
 
 import com.example.lms.client.GTranslateClient;
-import com.example.lms.client.GeminiClient;
+import com.example.lms.learning.gemini.GeminiClient;
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.domain.TranslationSample;
 import com.example.lms.domain.enums.RulePhase;
@@ -24,20 +24,23 @@ import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
-
 import java.text.DecimalFormat;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 번역 요청 전 과정을 오케스트레이션하는 서비스.
@@ -47,9 +50,9 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 @RefreshScope
 public class AdaptiveTranslationService {
+    private static final Logger log = LoggerFactory.getLogger(AdaptiveTranslationService.class);
 
     /* ──────────────────────────────── 주입 의존성 ──────────────────────────────── */
     private final RuleEngine ruleEngine;
@@ -81,7 +84,7 @@ public class AdaptiveTranslationService {
 
     /* 코사인 유사도 Threshold(동적) */
     private volatile double similarityThreshold = 0.85;
-    // ===== Temperature tuning (3‑phase central‑difference) =====
+    // ===== Temperature tuning (3-phase central-difference) =====
     private volatile double tCenter;                   // 기준 온도
     private volatile int     tempTuningPhase = 0;      // 0:probe → 1:-probe → 2:update
     private volatile Double  ewmaPlus = null;
@@ -99,7 +102,7 @@ public class AdaptiveTranslationService {
                     .waitDuration(Duration.ofMillis(200))
                     .build());
 
-    /* ═══════════════════ 초기화 – DB persistance ═══════════════════ */
+    /* ═══════════════════ 초기화 - DB persistance ═══════════════════ */
     @PostConstruct
     void loadPersisted() {
         boltzmannTemperature = configRepo.findDouble("boltzmannTemperature")
@@ -245,7 +248,7 @@ public class AdaptiveTranslationService {
         return exp.length - 1;
     }
 
-    /* ═════════════ 스케줄러 – Threshold & T 튜닝 ═════════════ */
+    /* ═════════════ 스케줄러 - Threshold & T 튜닝 ═════════════ */
 
     /** similarityThreshold ±2 % 랜덤 워크 */
     @Scheduled(fixedRate = 3_600_000)
@@ -257,7 +260,7 @@ public class AdaptiveTranslationService {
         log.info("🔄 similarityThreshold → {}", DF.format(similarityThreshold));
     }
 
-    /** 실측 EWMA 기반 3‑phase 중앙 차분 T 튜닝 */
+    /** 실측 EWMA 기반 3-phase 중앙 차분 T 튜닝 */
     @Scheduled(fixedRate = 7_200_000, initialDelay = 1_800_000)
     public synchronized void tuneTemperature() {
         switch (tempTuningPhase) {
@@ -266,7 +269,7 @@ public class AdaptiveTranslationService {
                 boltzmannTemperature = tPlus;
                 configRepo.save("boltzmannTemperature", boltzmannTemperature);
                 tempTuningPhase = 1;
-                log.info("🔎 [TUNE‑T] probe+ → T={}", DF.format(boltzmannTemperature));
+                log.info("🔎 [TUNE-T] probe+ → T={}", DF.format(boltzmannTemperature));
             }
             case 1 -> { // +측정, -probe
                 ewmaPlus = metrics.getRewardEwma(); // EWMA 실측
@@ -274,7 +277,7 @@ public class AdaptiveTranslationService {
                 boltzmannTemperature = tMinus;
                 configRepo.save("boltzmannTemperature", boltzmannTemperature);
                 tempTuningPhase = 2;
-                log.info("🔎 [TUNE‑T] probe‑ → T={}", DF.format(boltzmannTemperature));
+                log.info("🔎 [TUNE-T] probe- → T={}", DF.format(boltzmannTemperature));
             }
             default -> { // 2: -측정, 중앙값 업데이트
                 ewmaMinus = metrics.getRewardEwma(); // EWMA 실측

@@ -1,0 +1,36 @@
+package com.abandonware.ai.agent.consent;
+
+import com.abandonware.ai.agent.tool.ToolScope;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class BasicConsentService implements ConsentService {
+    private final Map<String, ConsentToken> tokens = new ConcurrentHashMap<>();
+
+    @Override
+    public ConsentToken grant(String identity, Set<ToolScope> scopes, long ttlSeconds) {
+        ConsentToken t = new ConsentToken(identity, scopes, ttlSeconds);
+        tokens.put(t.id(), t);
+        return t;
+    }
+
+    @Override
+    public boolean has(ConsentToken token, ToolScope... required) {
+        if (token == null || token.expired()) return false;
+        Set<ToolScope> have = token.scopes();
+        for (ToolScope r : required) {
+            if (!have.contains(r)) return false;
+        }
+        return true;
+    }
+
+    @Override
+    public void ensureGranted(ConsentToken token, ToolScope[] required, ConsentContext ctx) {
+        if (token == null || token.expired()) {
+            throw new ConsentRequiredException(required == null ? List.of() : Arrays.asList(required));
+        }
+        if (!has(token, required)) {
+            throw new ConsentRequiredException(Arrays.asList(required));
+        }
+    }
+}

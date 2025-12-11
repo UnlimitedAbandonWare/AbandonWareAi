@@ -3,6 +3,8 @@ package com.example.lms.domain.knowledge;
 import jakarta.persistence.*;
 import lombok.*;
 
+
+
 @Entity
 @Getter
 @Setter
