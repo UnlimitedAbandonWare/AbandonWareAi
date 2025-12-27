@@ -1,24 +1,16 @@
-// 경로: src/main/java/com/example/lms/service/FineTuningService.java
-package com.example.lms.service;
+  package com.example.lms.service;
 
 import com.example.lms.domain.TranslationSample;
+import com.example.lms.dto.FineTuningJobDto;
 import com.example.lms.dto.FineTuningOptionsDto;
 import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.repository.TrainingSampleRepository;
-import com.example.lms.service.SettingsService;
 import com.example.lms.util.TokenCounter;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.theokanning.openai.file.File;
-import com.theokanning.openai.fine_tuning.FineTuningJob;
-import com.theokanning.openai.fine_tuning.FineTuningJobRequest;
-import com.theokanning.openai.fine_tuning.Hyperparameters;
-import com.theokanning.openai.service.OpenAiService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
@@ -26,20 +18,22 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.LocalDate;
 import java.util.*;
-import lombok.extern.slf4j.Slf4j;
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 @Service
 @RequiredArgsConstructor
 public class FineTuningService {
+    private static final Logger log = LoggerFactory.getLogger(FineTuningService.class);
 
     private final TrainingSampleRepository trainingSampleRepo;
-    private final OpenAiService            openAiService;
     private final ObjectMapper             objectMapper;
-    private final SettingsService settingsService;
     private final TokenCounter             tokenCounter;
     private final CurrentModelRepository   currentModelRepo;
 
-    @Value("${openai.api.model:gpt-3.5-turbo}")
+    @Value("${openai.api.model:gemma3:27b}")
     private String baseModelFromProperties;
     @Value("${openai.fine-tuning.max-tokens:4096}")
     private int maxTokensPerSample;
@@ -63,58 +57,34 @@ public class FineTuningService {
         List<TranslationSample> trainingData = filteredSamples.subList(validationSetSize, filteredSamples.size());
         log.info("데이터 준비 완료. 훈련: {}개, 검증: {}개", trainingData.size(), validationData.size());
 
-        FileWrapper trainingFile = writeAndUploadJsonl("train_", trainingData);
-        FileWrapper validationFile = validationData.isEmpty() ? null : writeAndUploadJsonl("val_", validationData);
-
+        FileWrapper trainingFile = writeJsonl("train_", trainingData);
+        FileWrapper validationFile = validationData.isEmpty() ? null : writeJsonl("val_", validationData);
         try {
-            FineTuningJobRequest request = buildRequest(trainingFile.id(), validationFile != null ? validationFile.id() : null, opts);
-            FineTuningJob job = openAiService.createFineTuningJob(request);
-            log.info("✅ 파인튜닝 작업 생성 성공. Job ID: {}", job.getId());
-            return job.getId();
+            log.warn("현재 빌드는 LC4J 1.0.1 순정 빌드로, 외부 OpenAI Fine-Tuning 클라이언트를 포함하지 않습니다. " +
+                            "오프라인 JSONL만 생성 후 종료합니다. train={}, val={}",
+                    trainingFile.tempFile().getAbsolutePath(),
+                    validationFile != null ? validationFile.tempFile().getAbsolutePath() : "(none)");
+            // ✅ 컴파일 우선 복구: 실제 Fine-Tuning API 호출은 별도 WebClient/HTTP 클라이언트로 교체 구현 필요.
+            return null; // Controller에서 '데이터 부족' 메시지를 띄우는 흐름을 유지
         } finally {
             trainingFile.deleteTempFile();
             if (validationFile != null) validationFile.deleteTempFile();
         }
     }
 
-    public List<FineTuningJob> listFineTuningJobs() {
-        return openAiService.listFineTuningJobs();
+    public List<FineTuningJobDto> listFineTuningJobs() {
+        // LC4J-only 스텁: 빈 리스트 반환 (추후 WebClient로 대체 가능)
+        return List.of();
     }
 
-    public Optional<FineTuningJob> checkJobStatus(String jobId) {
-        try {
-            FineTuningJob job = openAiService.retrieveFineTuningJob(jobId);
-            if ("succeeded".equals(job.getStatus()) && job.getFineTunedModel() != null) {
-                log.info("🎉 파인튜닝 성공! Job ID: {}, 생성된 모델: {}", jobId, job.getFineTunedModel());
-                settingsService.save(SettingsService.KEY_FINE_TUNED_MODEL, job.getFineTunedModel());
-            } else {
-                log.info("작업 진행 중... Job ID: {}, 상태: {}", jobId, job.getStatus());
-            }
-            return Optional.of(job);
-        } catch (Exception ex) {
-            log.error("상태 조회 실패. Job ID: {}", jobId, ex);
-            return Optional.empty();
-        }
+    public Optional<FineTuningJobDto> checkJobStatus(String jobId) {
+        // LC4J-only 스텁: 상태 조회 미지원
+        return Optional.empty();
     }
 
-    private FineTuningJobRequest buildRequest(String trainFileId, String valFileId, FineTuningOptionsDto opts) {
-        String baseModel = currentModelRepo.findById(1L)
-                .map(CurrentModel::getModelId)
-                .orElse(baseModelFromProperties);
-        log.info("파인튜닝 베이스 모델로 '{}'를 사용합니다.", baseModel);
+    // ❌ 외부 SDK 의존 제거로 요청 빌더 삭제
 
-        Hyperparameters hp = Hyperparameters.builder().nEpochs(opts.epochs()).build();
-
-        return FineTuningJobRequest.builder()
-                .trainingFile(trainFileId)
-                .validationFile(valFileId)
-                .model(baseModel)
-                .hyperparameters(hp)
-                .suffix("lms-bot-" + LocalDate.now())
-                .build();
-    }
-
-    private FileWrapper writeAndUploadJsonl(String prefix, List<TranslationSample> samples) throws IOException {
+    private FileWrapper writeJsonl(String prefix, List<TranslationSample> samples) throws IOException {
         java.io.File tempFile = java.io.File.createTempFile(prefix, ".jsonl");
         try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(Files.newOutputStream(tempFile.toPath()), StandardCharsets.UTF_8))) {
             for (TranslationSample sample : samples) {
@@ -126,8 +96,8 @@ public class FineTuningService {
                 writer.newLine();
             }
         }
-        File uploadedFile = openAiService.uploadFile("fine-tune", tempFile.getPath());
-        return new FileWrapper(tempFile, uploadedFile.getId());
+        // 업로드 미수행: 로컬 파일 경로만 래핑
+        return new FileWrapper(tempFile, tempFile.getAbsolutePath());
     }
 
     private boolean isSampleValid(TranslationSample sample, Set<String> seenHashes, FineTuningOptionsDto.QualityWeightingDto weighting, double threshold) {

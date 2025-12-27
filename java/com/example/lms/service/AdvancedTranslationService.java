@@ -3,9 +3,11 @@ package com.example.lms.service;
 
 import com.example.lms.domain.enums.RulePhase;
 import com.example.lms.service.RuleEngine;
-import com.example.lms.service.translator.BasicTranslator;   // ✅ 새 위치로 import
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
+
+import com.example.lms.service.translator.BasicTranslator;   // ✅ 새 위치로 import
 
 /**
  * 1) 규칙 엔진 전·후처리 + 2) 실제 번역기(BasicTranslator) 호출을 조합한 고급 번역 서비스.

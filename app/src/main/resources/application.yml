@@ -1,0 +1,96 @@
+spring.config.import: optional:application-proj-override.yml, ${spring.config.import:}
+spring:
+  application:
+    name: nova-app
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:default}
+server:
+  port: ${SERVER_PORT:8080}
+onnx:
+  enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 1
+  finalSigmoid:
+    enabled: true
+    k: 8.0
+    x0: 0.0
+    threshold: 0.1
+  contextDiversity:
+    min: 0.1
+selfask:
+  enabled: false
+train_idle:
+  enabled: false
+autolearn:
+  enabled: false
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: gemma3:27b
+  api-key: dummy
+fallback:
+  enabled: false
+local-llm:
+  autostart: false
+  health-check-url: http://localhost:8000/health
+  health-check-timeout: 30s
+  start-command: docker-compose -f vllm-compose.yml up -d
+  enabled: true
+  base-url: http://localhost:11434/v1
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+jammini:
+  guard:
+    mode: aggressive
+    profile: PROFILE_MEMORY
+    evidence:
+      mode: RELAXED
+      min-coverage: 0.35
+      allow-no-citation-for:
+        - GAME
+        - SUBCULTURE
+        - LONGTAIL_PERSON
+  memory:
+    enabled: true
+    low-guardrail: true
+    progressive: true
+  rag:
+    flush:
+      enabled: true
+      min-results: 3
+      aggressive-top-k: 32
+    mode-default: BALANCED
+
+verifier:
+  coverage:
+    threshold:
+      default: 0.2
+      high-risk: 0.4
+websearch:
+naver:
+  filters:
+    enable-domain-filter: true
+    domain-policy: boost
+  patch-query:
+    official-domains:
+    - hoyoverse.com
+    - hoyolab.com
+    - playlostark.com
+    - playoverwatch.com
+    - playvalorant.com
+    - leagueoflegends.com
+    community-domains:
+    - inven.co.kr
+    - namu.wiki
+    - arca.live
+
+gpt-search:
+  soak:
+    enabled: true
+  hybrid:
+    primary: BRAVE

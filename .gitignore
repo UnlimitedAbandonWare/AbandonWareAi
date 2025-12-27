@@ -1,9 +1,131 @@
-# application.properties 파일 제외
-/src/main/resources/application.properties
-/src/main/resources/application-ultra.properties
-# keystore 파일 제외 (나중에 필요할 수 있으니 추가)
-*.p12
+# .gitignore — src111_SAmerge15 (generated on 2025-10-23 06:04 UTC)
+# 목적: API 키/프라이빗 키/환경설정 비밀값이 Git에 올라가지 않도록 방지.
+# 사용법(중요):
+#  1) 이 파일을 저장한 후, 이미 추적 중인 비밀 파일은 다음으로 인덱스에서 제거하세요:
+#     git rm --cached <파일경로>   # 워킹카피는 그대로 유지됨
+#  2) 만약 실제 키가 커밋/푸시되었다면 즉시 '키 회전' 후, 히스토리에서 제거하세요 (예: git filter-repo 또는 BFG).
+#  3) 로컬 전용 값은 .env(.local) 등으로 분리하고, 템플릿은 *.example 형태로 커밋하세요.
+#  4) 추가 안전장치(선택): git-secrets / detect-secrets / pre-commit 훅으로 키 패턴 차단.
+
+# --- 1) 환경 변수/시크릿 파일 ---
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+.envrc
+# --- 2) Spring Boot/YAML 비밀 프로필 ---
+src/main/resources/application-secrets.yml
+src/main/resources/application-prod.yml
+src/main/resources/application-dev.yml
+src/main/resources/application-local.yml
+app/src/main/resources/application-prod.yml
+# 환경별 비밀 프로필은 기본적으로 제외합니다(예: -dev, -prod, -local).
+src/main/resources/application-*.yml
+src/main/resources/application-*.yaml
+src/main/resources/application-*.properties
+app/src/main/resources/application-*.yml
+app/src/main/resources/application-*.yaml
+app/src/main/resources/application-*.properties
+!src/main/resources/application-example.yml
+!src/main/resources/application-features-example.yml
+!app/src/main/resources/application-addons-example.yml
+!app/src/main/resources/application-features-example.yml
+!app/src/main/resources/application-nova-example.properties
+# 필요시 다음도 제외(비밀 포함시만):
+# src/main/resources/application.yml
+# app/src/main/resources/application.yml
+# src/main/resources/bootstrap.properties
+# --- 3) 키/인증서/스토어(파일 확장자) ---
 *.jks
-/resources
-/resources
-*.properties
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.der
+*.crt
+*.cer
+# 스캔 검출: 레포 내 키스토어 파일
+src/main/resources/keystore.p12
+# --- 4) 방어적 캐치올(설정 파일에 한정) ---
+**/*secret*.yml
+**/*secret*.yaml
+**/*secret*.properties
+**/*secret*.json
+**/*credential*.yml
+**/*credential*.yaml
+**/*credential*.json
+**/*token*.yml
+**/*token*.yaml
+**/*token*.json
+**/*api[-_]*key*.yml
+**/*api[-_]*key*.yaml
+**/*api[-_]*key*.json
+!**/*example*.yml
+!**/*example*.yaml
+!**/*sample*.yml
+!**/*sample*.yaml
+# --- 5) 빌드 산출물/캐시(Gradle/Java) ---
+.gradle/
+**/.gradle/
+build/
+**/build/
+out/
+**/out/
+target/
+*.class
+*.log
+# --- 6) IDE/OS 잡파일 ---
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+# --- 7) 보안 체크 참고(주석) ---
+# 커밋 전 점검:
+#  - git status          # 신규/변경 파일 확인
+#  - git diff -w         # 값 노출 여부 확인(특히 yml/properties)
+#  - git secrets --scan  # git-secrets 사용 시
+# 과거 노출 정리:
+#  - pipx run detect-secrets scan > .secrets.baseline && pre-commit 설치 권장
+#  - git filter-repo --replace-text <(echo 'BEGIN PRIVATE KEY==>***REDACTED***')  # 예시
+# Updated by GPT-5 Pro on 2025-10-23 07:10 UTC — hardened for safe Git publishing
+# --- [HOTFIX] Secrets guard: block concrete config files with real keys ---
+# Found real-looking keys under src/main/resources/application.properties.
+# These must not be tracked; ignore concrete files and commit *.example templates only.
+src/main/resources/application.properties
+app/src/main/resources/application.properties
+src/main/resources/bootstrap.properties
+app/src/main/resources/bootstrap.properties
+# Per-developer or secret suffixes:
+**/*.local.properties
+**/*.secret.properties
+**/*.local.yml
+**/*.secret.yml
+# Defensive: prod/machine profile copies (keep *-example* files tracked):
+src/main/resources/application-machine.yml
+app/src/main/resources/application-machine.yml
+!**/*example*.properties
+# === Secret & credentials hard block ===
+!.env.*.sample
+# Spring secret props
+/src/main/resources/application.properties
+/src/main/resources/bootstrap.properties
+/src/main/resources/*.jks
+/src/main/resources/*.keystore
+/src/main/resources/*.p12
+/src/main/resources/*.pfx
+/src/main/resources/*.pem
+/src/main/resources/*.key
+# App profile configs (commit only templates)
+/app/src/main/resources/application-*.yml
+/app/src/main/resources/application-*.yaml
+/app/src/main/resources/application-*.properties
+!/app/src/main/resources/*example*.*
+!/app/src/main/resources/*sample*.*
+# Generic sensitive patterns
+/**/*secret*.*
+/**/*token*.*
+/**/*credential*.*
+/**/*api[-_]*key*.*

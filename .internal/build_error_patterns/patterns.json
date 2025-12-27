@@ -1,0 +1,157 @@
+{
+  "version": "1.0",
+  "captured_at": "now",
+  "patterns": [
+    {
+      "id": "MISSING_IMPORT__SERVICE_BACKUP",
+      "match": {
+        "contains": [
+          "cannot find symbol",
+          "ChatService__backup_pre_interface.java",
+          "QueryTransformer",
+          "QueryCorrectionService"
+        ]
+      },
+      "fix": [
+        "Add import com.example.lms.transform.QueryTransformer;",
+        "Add import com.example.lms.service.correction.QueryCorrectionService;",
+        "Ensure import org.springframework.beans.factory.annotation.Qualifier;"
+      ]
+    },
+    {
+      "id": "LOMBOK_BUILDER_DEFAULT_WITHOUT_BUILDER",
+      "severity": "warning",
+      "hint": "Add @Builder or remove @Builder.Default on classes using it."
+    },
+    {
+      "id": "fix-missing-findbugs-annotations-and-lombok",
+      "title": "Add FindBugs annotations (compileOnly) and Lombok (compileOnly+annotationProcessor)",
+      "severity": "blocker",
+      "match_any": [
+        "(package\\s+edu\\.umd\\.cs\\.findbugs\\.annotations\\s+does\\s+not\\s+exist)",
+        "(package\\s+lombok\\s+does\\s+not\\s+exist|cannot\\s+find\\s+symbol\\s+@\\w+\\s*builder|\\bLombok\\b)"
+      ],
+      "actions": [
+        {
+          "type": "patch_gradle",
+          "targets": [
+            "**/build.gradle",
+            "**/build.gradle.kts"
+          ],
+          "inject": {
+            "groovy": [
+              "compileOnly 'org.projectlombok:lombok:1.18.34'",
+              "annotationProcessor 'org.projectlombok:lombok:1.18.34'",
+              "testCompileOnly 'org.projectlombok:lombok:1.18.34'",
+              "testAnnotationProcessor 'org.projectlombok:lombok:1.18.34'",
+              "compileOnly 'com.google.code.findbugs:annotations:3.0.1'"
+            ],
+            "kts": [
+              "compileOnly(\"org.projectlombok:lombok:1.18.34\")",
+              "annotationProcessor(\"org.projectlombok:lombok:1.18.34\")",
+              "testCompileOnly(\"org.projectlombok:lombok:1.18.34\")",
+              "testAnnotationProcessor(\"org.projectlombok:lombok:1.18.34\")",
+              "compileOnly(\"com.google.code.findbugs:annotations:3.0.1\")"
+            ]
+          }
+        }
+      ],
+      "notes": "Mitigates : missing FindBugs annotations; ensures Lombok processing is enabled."
+    },
+    {
+      "id": "MAIN_CLASS_NOT_FOUND_bootRun",
+      "title": "Spring Boot main class not found / bootRun",
+      "severity": "blocker",
+      "match_any": [
+        "Error: Could not find or load main class",
+        "java.lang.ClassNotFoundException: com.example.lms.LmsApplication"
+      ],
+      "suggest": [
+        "Create @SpringBootApplication class: com.example.lms.LmsApplication",
+        "Set springBoot.mainClass to com.example.lms.LmsApplication",
+        "Use Java toolchain 17 for compatibility with runtime"
+      ],
+      "kts_fixes": [
+        "springBoot { mainClass.set(\"com.example.lms.LmsApplication\") }",
+        "tasks.withType<org.springframework.boot.gradle.tasks.bundling.BootJar> { mainClass.set(\"com.example.lms.LmsApplication\") }"
+      ],
+      "actions": [
+        "./gradlew :app:clean :app:bootJar",
+        "./gradlew :app:bootRun --no-daemon"
+      ],
+      "notes": "Pattern added by src111_merge15 patch to eliminate bootRun main-class failures and  leakage."
+    },
+    {
+      "id": "STRIP_STUFF3_DISABLED_MARKER",
+      "match": {
+        "contains_any": [
+          "STUFF3_DISABLED",
+          "STUFF3_DISABLED",
+          "STUFF3_DISABLED"
+        ]
+      },
+      "action": {
+        "type": "sanitize",
+        "strategy": "strip_marker"
+      },
+      "notes": "Strip non-fatal STUFF3_DISABLED/STUFF3_DISABLED placeholders at guard stage."
+    },
+    {
+      "id": "MISSING_CLASS_DPP",
+      "match": {
+        "contains_all": [
+          "cannot find symbol",
+          "class DppDiversityReranker"
+        ]
+      },
+      "fix": [
+        "Create com.example.lms.service.rag.rerank.DppDiversityReranker with Config(lambda,k) and rerank(List, String, int).",
+        "Fix FQCN in UnifiedRagOrchestrator: com.example.lms.service.rag.rerank.DppDiversityReranker"
+      ],
+      "notes": "Auto-suggest creation of the missing reranker and package path typo."
+    },
+    {
+      "id": "TREE_SERIALIZER_ESCAPE",
+      "match": {
+        "contains_any": [
+          "TreeSerializer.java",
+          "illegal character",
+          "unclosed string literal"
+        ]
+      },
+      "fix": [
+        "Use escape for quotes: s.replace(\"\\\"\", \"\\\\\\\"\") and replace newlines to space."
+      ]
+    },
+    {
+      "id": "CHATWORKFLOW_LOG_DEBUG_QUOTE_TYPO",
+      "match": {
+        "contains_all": [
+          "ChatWorkflow.java",
+          "error: ')' expected",
+          "[Domain] query="
+        ]
+      },
+      "fix": [
+        "ChatWorkflow.java에서 log.debug 문자열을 하나의 문자열로 유지해야 합니다. 예) log.debug(\"[Domain] query={}, category={}, domain={}, profile={}\", ...).",
+        "query= 뒤에 잘못 들어간 따옴표(\")를 제거하거나, 따옴표가 필요하다면 Java 문자열 안에서 \\\" 처럼 이스케이프 처리하세요.",
+        "재발 방지: gradle/buildErrorGuard.gradle.kts의 preflightFixes에 query=\\\"{}\\\", → query={}, 자동 교정 규칙을 추가하는 방식도 유효합니다."
+      ],
+      "notes": "SLF4J placeholder에 잘못된 따옴표 삽입으로 Java parser error가 발생하는 패턴. (demo-1 ChatWorkflow 661라인 케이스)"
+    },
+    {
+      "id": "MISSING_IMPORT__TimeoutException",
+      "match": {
+        "contains_all": [
+          "cannot find symbol",
+          "class TimeoutException"
+        ]
+      },
+      "fix": [
+        "해당 소스 파일 상단에 'import java.util.concurrent.TimeoutException;'를 추가하세요.",
+        "Reactor/WebClient 타임아웃을 처리하는 코드라면, TimeoutException 유형이 올바른지 확인하세요."
+      ],
+      "notes": "demo-1 NaverSearchService.isRetryable() 빌드 오류(TimeoutException 미임포트)에서 추출된 패턴."
+    }
+  ]
+}

@@ -1,40 +1,109 @@
 package com.example.lms.service.rag;
 
-import com.example.lms.service.NaverSearchService;
+import com.example.lms.search.provider.WebSearchProvider;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import java.util.List;
-import java.util.regex.Pattern;             /* 🔴 NEW */
 import com.example.lms.service.rag.filter.GenericDocClassifier;
-@Slf4j
-@RequiredArgsConstructor
+import com.example.lms.service.rag.detector.GameDomainDetector;
+import com.example.lms.service.rag.filter.EducationDocClassifier;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+import java.util.regex.Pattern; /* 🔴 NEW */
+
 @org.springframework.stereotype.Component
 public class WebSearchRetriever implements ContentRetriever {
-    private final NaverSearchService searchSvc;
+
+    private static final Logger log = LoggerFactory.getLogger(WebSearchRetriever.class);
+    private final WebSearchProvider webSearchProvider;
+    /**
+     * Aggregate web search across multiple providers. This component fans
+     * out to the configured {@link com.acme.aicore.domain.ports.WebSearchProvider}
+     * implementations (Bing/Naver/Brave) in priority order and merges the
+     * results. When present it allows the web retrieval stage to fall
+     * back to additional providers when the primary Naver results are
+     * insufficient. It is optional and may be null when no providers
+     * are configured.
+     */
+    private final com.acme.aicore.adapters.search.CachedWebSearch multiSearch;
     // 스프링 프로퍼티로 주입(생성자 주입의 int 빈 문제 회피)
     @org.springframework.beans.factory.annotation.Value("${rag.search.top-k:5}")
     private int topK;
     private final com.example.lms.service.rag.extract.PageContentScraper pageScraper;
-    private static final int MIN_SNIPPETS = 2;
-    //  도메인 신뢰도 점수로 정렬 가중
+    // 최소 3개 이상의 스니펫을 유지해 LLM 컨텍스트를 풍부하게 한다.
+    private static final int MIN_SNIPPETS = 3;
+    // 도메인 신뢰도 점수로 정렬 가중
     private final com.example.lms.service.rag.auth.AuthorityScorer authorityScorer;
-    private final GenericDocClassifier genericClassifier = new GenericDocClassifier();
+    // 범용 판정기는 주입받아 도메인별로 동작하도록 한다.
+    private final GenericDocClassifier genericClassifier;
+    // 질의 도메인 추정기
+    private final com.example.lms.service.rag.detector.GameDomainDetector domainDetector;
+    // 교육 토픽 분류기: 교육 도메인일 때 스니펫 필터링에 사용된다.
+    private final com.example.lms.service.rag.filter.EducationDocClassifier educationClassifier;
     private static final Pattern META_TAG = Pattern.compile("\\[[^\\]]+\\]");
     private static final Pattern TIME_TAG = Pattern.compile("\\b\\d{1,2}:\\d{2}\\b");
     /* 🔵 봇/캡차 페이지 힌트 */
-    /* DuckDuckGo 등에서 반환되는 캡차/봇 차단 힌트 제거용 */
+    /* 등에서 반환되는 캡차/봇 차단 힌트 제거용 */
     private static final Pattern CAPTCHA_HINT = Pattern.compile(
-            "(?i)(captcha|are you (a )?robot|unusual\\s*traffic|verify you are human|duckduckgo\\.com/captcha|bots\\s*use\\s*duckduckgo)");
-    private static String normalize(String raw) {        /* 🔴 NEW */
-        if (raw == null) return "";
+            "(?i)(captcha|are you (a )?robot|unusual\\s*traffic|verify you are human|\\.com/captcha|bots\\s*use\\s*)");
+
+    public WebSearchRetriever(
+            WebSearchProvider webSearchProvider,
+            com.acme.aicore.adapters.search.CachedWebSearch multiSearch,
+            com.example.lms.service.rag.extract.PageContentScraper pageScraper,
+            com.example.lms.service.rag.auth.AuthorityScorer authorityScorer,
+            GenericDocClassifier genericClassifier,
+            com.example.lms.service.rag.detector.GameDomainDetector domainDetector,
+            com.example.lms.service.rag.filter.EducationDocClassifier educationClassifier) {
+        this.webSearchProvider = webSearchProvider;
+        this.multiSearch = multiSearch;
+        this.pageScraper = pageScraper;
+        this.authorityScorer = authorityScorer;
+        this.genericClassifier = genericClassifier;
+        this.domainDetector = domainDetector;
+        this.educationClassifier = educationClassifier;
+    }
+
+    private static String normalize(String raw) { /* 🔴 NEW */
+        if (raw == null)
+            return "";
 
         String s = META_TAG.matcher(raw).replaceAll("");
         s = TIME_TAG.matcher(s).replaceAll("");
         return s.replace("\n", " ").trim();
+    }
+
+    /**
+     * Extract a version token from the query string. A version is defined
+     * as two numeric components separated by a dot or middot character. If
+     * no such token is present, {@code null} is returned.
+     *
+     * @param q the query text
+     * @return the extracted version (e.g. "5.8") or null
+     */
+    private static String extractVersion(String q) {
+        if (q == null)
+            return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)[\\.·](\\d+)").matcher(q);
+        return m.find() ? (m.group(1) + "." + m.group(2)) : null;
+    }
+
+    /**
+     * Build a regex that matches the exact version token in text. Dots in
+     * the version are replaced with a character class that matches dot or
+     * middot to handle variations in punctuation. Anchors ensure that
+     * longer numbers containing the version as a substring are not falsely
+     * matched.
+     *
+     * @param v the version string (e.g. "5.8")
+     * @return a compiled regex pattern matching the exact token
+     */
+    private static java.util.regex.Pattern versionRegex(String v) {
+        String core = v.replace(".", "[\\.·\\s]");
+        return java.util.regex.Pattern.compile("(?<!\\d)" + core + "(?!\\d)");
     }
 
     /* ✅ 선호 도메인: 제거가 아닌 '우선 정렬'만 수행 */
@@ -43,8 +112,8 @@ public class WebSearchRetriever implements ContentRetriever {
             "genshin.hoyoverse.com", "hoyoverse.com", "hoyolab.com",
             "wikipedia.org", "eulji.ac.kr", "ac.kr", "go.kr",
             // 한국 커뮤니티·블로그(삭제 X, 단지 후순위)
-            "namu.wiki", "blog.naver.com"
-    );
+            "namu.wiki", "blog.naver.com");
+
     private static boolean containsPreferred(String s) {
         return PREFERRED.stream().anyMatch(s::contains);
     }
@@ -52,42 +121,152 @@ public class WebSearchRetriever implements ContentRetriever {
     @Override
     public List<Content> retrieve(Query query) {
         String normalized = normalize(query != null ? query.text() : "");
-        // 1) 1차 수집: topK*2 → 중복/정렬 후 topK
-        List<String> first = searchSvc.searchSnippets(normalized, Math.max(topK, 1) * 2)
-                .stream()
-                .filter(s -> !CAPTCHA_HINT.matcher(s).find())  // 🔒 캡차 노이즈 컷
-                .toList();
+        // 쿼리 도메인 추정: null 가능성을 고려하여 GENERAL 기본값 사용
+        String domain = domainDetector != null ? domainDetector.detect(normalized) : "GENERAL";
+        boolean isGeneral = "GENERAL".equalsIgnoreCase(domain);
+
+        java.util.Map<String, Object> meta = toMetaMap(query);
+        int reqTopK = metaInt(meta, "webTopK", this.topK);
+        long webBudgetMs = metaLong(meta, "webBudgetMs", -1L);
+        boolean allowWeb = metaBool(meta, "allowWeb", true);
+        if (!allowWeb) {
+            return java.util.Collections.emptyList();
+        }
+
+        int k = Math.max(reqTopK, MIN_SNIPPETS);
+        int maxAttempts = (webBudgetMs > 0 ? (webBudgetMs <= 1500 ? 1 : (webBudgetMs <= 3000 ? 2 : 3)) : 3);
+
+        // Extract a version token from the query. When present, enforce that
+        // each snippet contains the exact version. This helps prevent
+        // contamination from neighbouring versions (e.g. 5.7 or 5.9) when the
+        // user asks about a specific patch.
+        String ver = extractVersion(normalized);
+        java.util.regex.Pattern must = (ver != null) ? versionRegex(ver) : null;
+        // 1) 1차 수집: (prefetch가 있으면 재사용) → 없으면 topK*2 → 중복/정렬 후 topK
+        boolean usedPrefetched = false;
+        List<String> first = null;
+        Object pq = meta.get("prefetch.web.query");
+        Object ps = meta.get("prefetch.web.snippets");
+        if (pq != null && ps instanceof java.util.List<?> raw) {
+            String keyNorm = normalize(String.valueOf(pq));
+            if (!keyNorm.isBlank() && keyNorm.equals(normalized)) {
+                java.util.List<String> out = new java.util.ArrayList<>();
+                for (Object o : raw) {
+                    if (o == null)
+                        continue;
+                    String s = String.valueOf(o).trim();
+                    if (!s.isBlank())
+                        out.add(s);
+                }
+                if (!out.isEmpty()) {
+                    usedPrefetched = true;
+                    first = out;
+                }
+            }
+        }
+        if (!usedPrefetched) {
+            first = searchWithAggressiveRetry(
+                    normalized,
+                    k * 2,
+                    must,
+                    maxAttempts,
+                    webBudgetMs);
+        }
+
+        // 🚀 Fan-out to additional providers via CachedWebSearch. When the
+        // primary Naver results are fewer than the desired count, fetch
+        // supplementary snippets from other providers (e.g. Bing/Brave). The
+        // CachedWebSearch component merges provider responses according to
+        // provider priorities and caches the result. Failures are
+        // intentionally swallowed to avoid impacting the main retrieval.
+        List<String> supplemental = java.util.Collections.emptyList();
+        // Only fan-out when the primary provider returned fewer than the desired count.
+        if (!usedPrefetched && multiSearch != null && (first == null || first.size() < k)) {
+            try {
+                var q = new com.acme.aicore.domain.model.WebSearchQuery(normalized);
+                // [Patch] Limit fanout to two providers (Naver, Brave) and
+                // allow up to 5 seconds to account for network variability.
+                var bundle = multiSearch.searchMulti(q, 2)
+                        .block(java.time.Duration
+                                .ofMillis(webBudgetMs > 0 ? Math.min(5000L, Math.max(600L, webBudgetMs)) : 5000L));
+                if (bundle != null && bundle.docs() != null) {
+                    supplemental = bundle.docs().stream()
+                            .map(d -> {
+                                String core = (d.title() + " - " + d.snippet()).trim();
+                                return core.isBlank() ? d.url() : core;
+                            })
+                            .filter(s -> s != null && !s.isBlank())
+                            .toList();
+                }
+            } catch (Exception e) {
+                // ignore errors; supplemental remains empty
+            }
+        }
+
+        // Prepend the supplemental results to the primary list, ensuring
+        // duplicates are removed while preserving order. This prioritises
+        // provider results before applying ranking heuristics below. Only
+        // the first (topK*2) snippets are considered to limit memory usage.
+        if (supplemental != null && !supplemental.isEmpty()) {
+            java.util.LinkedHashSet<String> combined = new java.util.LinkedHashSet<>();
+            combined.addAll(supplemental);
+            combined.addAll(first);
+            first = combined.stream().limit(k * 2).toList();
+        }
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] first raw={} (q='{}')", first.size(), normalized);
         }
-        // 선호+ 도메인  Authority 가중 정렬(삭제 아님)
+        // 선호+ 도메인 Authority 가중 정렬(삭제 아님). 범용 페널티는 GENERAL/EDUCATION 도메인에서는 제거
         List<String> ranked = first.stream()
                 .distinct()
                 .sorted((a, b) -> {
-                    double aw = authorityScorer.weightFor(extractUrl(a)) - genericClassifier.penalty(a);
-                    double bw = authorityScorer.weightFor(extractUrl(b)) - genericClassifier.penalty(b);
+                    double aw = authorityScorer.weightFor(extractUrl(a))
+                            - (isGeneral ? 0.0 : genericClassifier.penalty(a, domain));
+                    double bw = authorityScorer.weightFor(extractUrl(b))
+                            - (isGeneral ? 0.0 : genericClassifier.penalty(b, domain));
                     int cmp = Double.compare(bw, aw); // high first (penalty 반영)
-                    if (cmp != 0) return cmp;
+                    if (cmp != 0)
+                        return cmp;
                     // 동률이면 선호 도메인 우선
                     return Boolean.compare(containsPreferred(b), containsPreferred(a));
                 })
-                .limit(topK)
+                .limit(k)
                 .toList();
-        // 과도하게 범용인 결과는 컷
-        ranked = ranked.stream()
-                .filter(s -> !genericClassifier.isGenericSnippet(s))
-                .limit(topK)
-                .toList();
+        // 범용 스니펫 컷: 도메인 특화(예: GENSHIN/EDU)에서만 적용
+        if (!isGeneral) {
+            ranked = ranked.stream()
+                    .filter(s -> !genericClassifier.isGenericSnippet(s, domain))
+                    .limit(k)
+                    .toList();
+        }
 
         // 2) 폴백: 지나친 공손어/호칭 정리
-        List<String> fallback = ranked.size() >= MIN_SNIPPETS ? List.of()
-                : searchSvc.searchSnippets(normalized.replace("교수님", "교수").replace("님",""), topK);
+        List<String> fallback = (usedPrefetched || ranked.size() >= MIN_SNIPPETS) ? List.of()
+                : webSearchProvider.search(normalized.replace("교수님", "교수").replace("님", ""), k);
 
         List<String> finalSnippets = java.util.stream.Stream.of(ranked, fallback)
                 .flatMap(java.util.Collection::stream)
                 .distinct()
-                .limit(topK)
+                .limit(k)
                 .toList();
+
+        // If the detected domain is EDUCATION, apply an education topic filter
+        // to remove snippets that are unrelated to education/academy topics. This
+        // leverages the EducationDocClassifier to detect whether a snippet is
+        // genuinely about education. Without this filter generic or noise
+        // snippets from pet or automotive sites may contaminate the retrieval.
+        if ("EDUCATION".equalsIgnoreCase(domain) && educationClassifier != null) {
+            finalSnippets = finalSnippets.stream()
+                    .filter(s -> {
+                        try {
+                            return educationClassifier.isEducation(s);
+                        } catch (Exception e) {
+                            return true;
+                        }
+                    })
+                    .limit(k)
+                    .toList();
+        }
 
         if (log.isDebugEnabled()) {
             log.debug("[WebSearchRetriever] selected={} (topK={})", finalSnippets.size(), topK);
@@ -95,13 +274,13 @@ public class WebSearchRetriever implements ContentRetriever {
         // 3) 각 결과의 URL 본문을 읽어 ‘질문-유사도’로 핵심 문단 추출
         java.util.List<Content> out = new java.util.ArrayList<>();
         for (String s : finalSnippets) {
-            String url = extractUrl(s);   // ⬅️ 없던 util 메서드 추가(아래)
+            String url = extractUrl(s); // ⬅️ 없던 util 메서드 추가(아래)
             if (url == null || CAPTCHA_HINT.matcher(s).find()) { // 🔒 의심 라인 스킵
                 out.add(Content.from(s)); // URL 없음 → 기존 스니펫 사용
                 continue;
             }
             try {
-                String body = pageScraper.fetchText(url, /*timeoutMs*/6000);
+                String body = pageScraper.fetchText(url, /* timeoutMs */6000);
                 // SnippetPruner는 (String, String) 시그니처만 존재 → 단일 결과로 처리
                 // 🔵 우리 쪽 간단 딥 스니펫 추출(임베딩 없이 키워드/길이 기반)
                 String picked = pickByHeuristic(query.text(), body, 480);
@@ -115,16 +294,184 @@ public class WebSearchRetriever implements ContentRetriever {
                 out.add(Content.from(s));
             }
         }
-        return out.stream().limit(topK).toList();
+        return out.stream().limit(k).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<String, Object> toMetaMap(Query query) {
+        if (query == null || query.metadata() == null)
+            return java.util.Collections.emptyMap();
+        Object meta = query.metadata();
+        if (meta instanceof java.util.Map<?, ?> raw) {
+            java.util.Map<String, Object> out = new java.util.HashMap<>();
+            for (java.util.Map.Entry<?, ?> e : raw.entrySet()) {
+                if (e.getKey() != null)
+                    out.put(String.valueOf(e.getKey()), e.getValue());
+            }
+            return out;
+        }
+        try {
+            java.lang.reflect.Method m = meta.getClass().getMethod("asMap");
+            Object v = m.invoke(meta);
+            if (v instanceof java.util.Map<?, ?> m2) {
+                java.util.Map<String, Object> out = new java.util.HashMap<>();
+                for (java.util.Map.Entry<?, ?> e : m2.entrySet()) {
+                    if (e.getKey() != null)
+                        out.put(String.valueOf(e.getKey()), e.getValue());
+                }
+                return out;
+            }
+        } catch (NoSuchMethodException ignore) {
+            try {
+                java.lang.reflect.Method m = meta.getClass().getMethod("map");
+                Object v = m.invoke(meta);
+                if (v instanceof java.util.Map<?, ?> m2) {
+                    java.util.Map<String, Object> out = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m2.entrySet()) {
+                        if (e.getKey() != null)
+                            out.put(String.valueOf(e.getKey()), e.getValue());
+                    }
+                    return out;
+                }
+            } catch (Exception ignore2) {
+                return java.util.Collections.emptyMap();
+            }
+        } catch (Exception ignore) {
+            return java.util.Collections.emptyMap();
+        }
+        return java.util.Collections.emptyMap();
+    }
+
+    private static int metaInt(java.util.Map<String, Object> meta, String key, int def) {
+        if (meta == null)
+            return def;
+        Object v = meta.get(key);
+        if (v instanceof Number n)
+            return n.intValue();
+        if (v instanceof String s) {
+            try {
+                return Integer.parseInt(s.trim());
+            } catch (Exception ignore) {
+            }
+        }
+        return def;
+    }
+
+    private static long metaLong(java.util.Map<String, Object> meta, String key, long def) {
+        if (meta == null)
+            return def;
+        Object v = meta.get(key);
+        if (v instanceof Number n)
+            return n.longValue();
+        if (v instanceof String s) {
+            try {
+                return Long.parseLong(s.trim());
+            } catch (Exception ignore) {
+            }
+        }
+        return def;
+    }
+
+    private static boolean metaBool(java.util.Map<String, Object> meta, String key, boolean def) {
+        if (meta == null)
+            return def;
+        Object v = meta.get(key);
+        if (v instanceof Boolean b)
+            return b;
+        if (v instanceof Number n)
+            return n.intValue() != 0;
+        if (v instanceof String s) {
+            String t = s.trim().toLowerCase();
+            if (t.equals("true") || t.equals("1") || t.equals("yes"))
+                return true;
+            if (t.equals("false") || t.equals("0") || t.equals("no"))
+                return false;
+        }
+        return def;
+    }
+
+    /**
+     * [ECO-FIX v3.0] Aggressive Persistence Loop
+     * 네이버/외부 검색이 타임아웃(3초) 또는 일시적 장애로 0건을 줄 때,
+     * 포기하지 않고 최대 3회까지 재시도하여 결과를 확보하는 루프입니다.
+     * 캡차/버전/태그 필터를 미리 적용해 "실질 유효 결과" 기준으로 성공을 판정합니다.
+     */
+    private List<String> searchWithAggressiveRetry(String query, int k, java.util.regex.Pattern mustVersion,
+            int maxAttempts, long budgetMs) {
+        int attempts = Math.max(1, maxAttempts);
+        long backoffMs = 300L; // 시도 간 짧은 대기
+        final long deadlineMs = (budgetMs > 0 ? System.currentTimeMillis() + budgetMs : Long.MAX_VALUE);
+
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            if (System.currentTimeMillis() > deadlineMs) {
+                log.warn("⚠️ [WebSearch] budget exhausted ({}ms). Stop retrying. query='{}'", budgetMs, query);
+                break;
+            }
+
+            long start = System.currentTimeMillis();
+            try {
+                List<String> rawResults = webSearchProvider.search(query, k);
+
+                if (rawResults != null && !rawResults.isEmpty()) {
+                    List<String> valid = rawResults.stream()
+                            .filter(s -> !CAPTCHA_HINT.matcher(s).find())
+                            .filter(s -> mustVersion == null || mustVersion.matcher(s).find())
+                            .filter(s -> {
+                                String url = extractUrl(s);
+                                if (url == null)
+                                    return true;
+                                String lower = url.toLowerCase();
+                                return !(lower.contains("/tag/") || lower.contains("?tag="));
+                            })
+                            .toList();
+
+                    if (!valid.isEmpty()) {
+                        if (attempt > 1) {
+                            log.info("✅ [WebSearch] Retry success on attempt {}/{} ({}ms). Found {} valid items.",
+                                    attempt, attempts, System.currentTimeMillis() - start, valid.size());
+                        }
+                        return valid;
+                    } else {
+                        log.warn(
+                                "⚠️ [WebSearch] Attempt {}/{} had results but all filtered out (Captcha/Version/Tag). Retrying...",
+                                attempt, attempts);
+                    }
+                } else {
+                    log.warn("⚠️ [WebSearch] Attempt {}/{} returned 0 results. Retrying...", attempt, attempts);
+                }
+            } catch (Exception e) {
+                log.warn("🔥 [WebSearch] Attempt {}/{} error: {}. Retrying...",
+                        attempt, attempts, e.getMessage());
+            }
+
+            if (attempt < attempts) {
+                try {
+                    long remain = deadlineMs - System.currentTimeMillis();
+                    if (remain <= 0) {
+                        break;
+                    }
+                    Thread.sleep(Math.min(backoffMs, remain));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        log.error("❌ [WebSearch] All {} attempts failed or produced no valid results for query='{}'. Returning empty.",
+                attempts, query);
+        return java.util.Collections.emptyList();
     }
 
     // ── NEW: 스니펫 문자열에서 URL을 뽑아내는 간단 파서(프로젝트 전반 동일 규칙과 일치)
     private static String extractUrl(String text) {
-        if (text == null) return null;
+        if (text == null)
+            return null;
         int a = text.indexOf("href=\"");
         if (a >= 0) {
             int s = a + 6, e = text.indexOf('"', s);
-            if (e > s) return text.substring(s, e);
+            if (e > s)
+                return text.substring(s, e);
         }
         int http = text.indexOf("http");
         if (http >= 0) {
@@ -133,30 +480,41 @@ public class WebSearchRetriever implements ContentRetriever {
         }
         return null;
     }
+
     // ── NEW: SnippetPruner 없이도 동작하는 경량 딥 스니펫 추출기
     private static String pickByHeuristic(String q, String body, int maxLen) {
-        if (body == null || body.isBlank()) return "";
-        if (q == null) q = "";
+        if (body == null || body.isBlank())
+            return "";
+        if (q == null)
+            q = "";
         String[] toks = q.toLowerCase().split("\\s+");
         String[] sents = body.split("(?<=[\\.\\?\\!。！？])\\s+");
         String best = "";
         int bestScore = -1;
         for (String s : sents) {
-            if (s == null || s.isBlank()) continue;
+            if (s == null || s.isBlank())
+                continue;
             String ls = s.toLowerCase();
             int score = 0;
             for (String t : toks) {
-                if (t.isBlank()) continue;
-                if (ls.contains(t)) score += 2;      // 질의 토큰 포함 가중
+                if (t.isBlank())
+                    continue;
+                if (ls.contains(t))
+                    score += 2; // 질의 토큰 포함 가중
             }
-            score += Math.min(s.length(), 300) / 60;   // 문장 길이 가중(너무 짧은 문장 패널티)
-            if (score > bestScore) { bestScore = score; best = s.trim(); }
+            score += Math.min(s.length(), 300) / 60; // 문장 길이 가중(너무 짧은 문장 패널티)
+            if (score > bestScore) {
+                bestScore = score;
+                best = s.trim();
+            }
         }
         if (best.isEmpty()) {
             best = body.length() > maxLen ? body.substring(0, maxLen) : body;
         } else if (best.length() > maxLen) {
-            best = best.substring(0, maxLen) + "…";
+            best = best.substring(0, maxLen) + "/* ... *&#47;";
         }
         return best;
     }
 }
+
+// PATCH_MARKER: WebSearchRetriever updated per latest spec.

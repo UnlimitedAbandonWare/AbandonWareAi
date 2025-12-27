@@ -6,6 +6,8 @@ import com.example.lms.domain.Student;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.Optional;
 
+
+
 /**
  * 학생 엔티티 조회 및 저장소
  */

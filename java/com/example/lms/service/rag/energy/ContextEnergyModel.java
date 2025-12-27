@@ -5,10 +5,12 @@ import com.example.lms.service.rag.auth.AuthorityScorer;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+
+
 
 /** 컨텍스트 집합의 총 에너지를 최소화하도록 선택 */
 @Component
@@ -112,12 +114,17 @@ public class ContextEnergyModel {
         var m = YEAR.matcher(t);
         int max = -1;
         while (m.find()) {
-            try { max = Math.max(max, Integer.parseInt(m.group())); } catch (Exception ignore) {}
+            try {
+                max = Math.max(max, Integer.parseInt(m.group()));
+            } catch (Exception ignore) {
+            }
         }
         if (max < 0) return 0.0;
         int year = java.time.Year.now().getValue();
         int age = Math.max(0, year - max);
-        return Math.exp(-age / 3.0); // 3년 반감 근사
+        // 최신(최근) 연도일수록 가중치를 강화한다. 기존 지수 감쇠 결과에 보너스 계수(1.5)를 곱한다.
+        double base = Math.exp(-age / 3.0);
+        return base * 1.5;
     }
 
     private static String extractUrl(String text) {

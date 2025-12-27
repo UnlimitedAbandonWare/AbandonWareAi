@@ -1,0 +1,1 @@
+Test templates suggested in assistant output; add concrete tests as needed.

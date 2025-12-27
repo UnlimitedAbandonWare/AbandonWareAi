@@ -1,0 +1,104 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+retrieval:
+  vector:
+    enabled: true
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  provider: local
+  base-url-gemma: http://localhost:11434/v1
+  base-url-qwen:  http://localhost:11435/v1
+  api-key: dummy
+  models:
+    gemma3_27b:
+      name: gemma3:27b
+      gpu: rtx3090
+      max-context: 8192
+    qwen3_8b:
+      name: qwen2.5-7b-instruct
+      gpu: rtx3060
+      max-context: 4096
+    qwen3_vl_8b:
+      name: qwen3-vl:8b
+      gpu: rtx3060
+      vision-enabled: true
+      max-context: 4096
+
+# --- GPT-5 Pro patch block ---
+  route:
+    tp:
+      endpoints:
+        - id: g3090
+          url: http://localhost:11434/v1
+          weight: 0.7
+        - id: g3060
+          url: http://localhost:11435/v1
+          weight: 0.3
+
+# --- GPT-5 Pro patch block ---
+  base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+vector:
+  routing:
+    min-per-store: 1
+    topics:
+      default:
+        pinecone: 1.0
+        upstash: 1.0
+
+vector:
+  upstash:
+    enabled: true
+    url: ${UPSTASH_VECTOR_URL:}
+    token: ${UPSTASH_VECTOR_TOKEN:}
+    index: rag
+
+# --- GPT-5 Pro patch block ---
+abandonware:
+  reranker:
+    backend: onnx-runtime
+    onnx:
+      enabled: true
+      execution-provider: cuda
+      model-path: file:/opt/models/cross-encoder.onnx
+      intra-op-threads: 4
+      inter-op-threads: 2
+      batch-size: 16
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false

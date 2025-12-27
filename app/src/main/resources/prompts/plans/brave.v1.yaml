@@ -1,0 +1,30 @@
+id: brave
+sequence:
+  - step: analyze
+    method: self_ask
+  - step: retrieve
+    handler: DynamicRetrievalHandlerChain
+    params:
+      use_web: true
+      use_vector: true
+      use_kg: true
+      total_k: 12
+      allocator: tail_power_mean_cvar
+  - step: fuse
+    method: weighted_rrf
+  - step: rerank1
+    method: bi_encoder
+  - step: rerank2
+    method: cross_encoder_onnx
+gates:
+  - type: CitationGate
+    min_sources: 3
+  - type: FinalSigmoidGate
+    k: 12.0
+    x0: 0.0
+attenuation:
+  temperature_decay: true
+  retry_decay: 0.8
+
+guard:
+  profile: PROFILE_MEMORY

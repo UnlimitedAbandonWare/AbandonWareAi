@@ -3,17 +3,20 @@ package com.example.lms.service.rag.handler;
 
 import com.example.lms.service.MemoryReinforcementService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * 답변을 항상 장기 메모리에 강화 저장합니다.
  * ChatService에서 세션키와 함께 호출합니다.
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MemoryWriteInterceptor {
+    private static final Logger log = LoggerFactory.getLogger(MemoryWriteInterceptor.class);
 
     private final MemoryReinforcementService memorySvc;
 

@@ -1,5 +1,6 @@
 package com.example.lms.service.rag;
 
+
 /**
  * 쿼리의 복잡도를 분류하는 전략을 정의하는 인터페이스입니다.
  * <p>

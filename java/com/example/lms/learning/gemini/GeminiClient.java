@@ -1,4 +1,4 @@
-package com.example.lms.client;
+package com.example.lms.learning.gemini;
 
 import com.example.lms.dto.learning.KnowledgeDelta;
 import com.example.lms.dto.learning.LearningEvent;
@@ -6,17 +6,21 @@ import com.example.lms.dto.learning.LearningExampleRow;
 import com.example.lms.dto.learning.TuningJobRequest;
 import com.example.lms.dto.learning.TuningJobStatus;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * 통합 Gemini 클라이언트.
@@ -25,8 +29,8 @@ import java.util.Map;
  */
 @Component("geminiClient")
 @RequiredArgsConstructor
-@Slf4j
 public class GeminiClient {
+    private static final Logger log = LoggerFactory.getLogger(GeminiClient.class);
 
     /** 전역 WebClient.Builder 주입 */
     private final WebClient.Builder webClientBuilder;
@@ -36,7 +40,7 @@ public class GeminiClient {
     private String apiKey;
 
     /*───────────────────────────────────────────────────────────────────
-     * 1) 번역/텍스트 생성 – Public REST (generateContent)
+     * 1) 번역/텍스트 생성 - Public REST (generateContent)
      *───────────────────────────────────────────────────────────────────*/
     public Mono<String> translate(String text, String srcLang, String tgtLang) {
         String prompt = "Translate the following text from %s to %s: %s"
@@ -60,6 +64,11 @@ public class GeminiClient {
                         }""".formatted(e.getMessage())));
     }
 
+    // Base hook: Decorator에서 오버라이드, 기본은 no-op
+    public List<String> keywordVariants(String cleaned, String anchor, int cap) {
+        return java.util.Collections.emptyList();
+    }
+
     private Mono<GeminiResponse> postToGemini(String prompt) {
         WebClient client = webClientBuilder
                 .baseUrl("https://generativelanguage.googleapis.com")
@@ -79,15 +88,16 @@ public class GeminiClient {
     }
 
     private String toPrettyJson(GeminiResponse r) {
-        return """
-               {
-                 "ok"  : true,
-                 "data": "%s"
-               }""".formatted(r.candidates().get(0).content().parts().get(0).text());
+        String text = r.candidates().get(0).content().parts().get(0).text();
+        ObjectMapper om = new ObjectMapper();
+        ObjectNode node = om.createObjectNode();
+        node.put("ok", true);
+        node.put("data", text); // 자동 이스케이프
+        return node.toPrettyString();
     }
 
     /*───────────────────────────────────────────────────────────────────
-     * 2) 학습 파이프라인용 스텁 – SDK 연동 전까지 빈 결과 반환
+     * 2) 학습 파이프라인용 스텁 - SDK 연동 전까지 빈 결과 반환
      *    (필요 시 google-genai SDK로 구현 교체)
      *───────────────────────────────────────────────────────────────────*/
     public KnowledgeDelta curate(LearningEvent event, String model, Duration timeout) {

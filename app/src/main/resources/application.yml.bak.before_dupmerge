@@ -1,0 +1,170 @@
+openai:
+  api:
+    model: ${OPENAI_API_MODEL:${OPENAI_MODEL:gpt-5-mini}}
+  chat:
+    model-high-tier: ${OPENAI_CHAT_MODEL_HIGH_TIER:${openai.api.model}}
+    model-low-tier: ${OPENAI_CHAT_MODEL_LOW_TIER:${openai.api.model}}
+onnx:
+  enabled: true
+  pool:
+    gpu0:
+      size: 1
+    gpu1:
+      size: 1
+    maxConcurrent: 2
+  batch:
+    max: 16
+  model:
+    path: /models/cross-encoder.onnx
+retrieval:
+  kalloc:
+    enabled: true
+    totalK: 32
+  vector:
+    enabled: true
+embedding:
+  cache:
+    enabled: true
+    ttl-hours: 4
+fusion:
+  url:
+    canonicalizer:
+      enabled: true
+domains:
+  whitelist: gov.kr,go.kr,ac.kr,who.int,nature.com
+probe:
+  search:
+    enabled: false
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+
+nineTile:
+  enabled: true
+  min-confidence: 0.62
+
+
+# --- MERGE16 LLM Local Router & Naver/ONNX gates ---
+llm:
+  provider: openai
+  route:
+    mode: auto            # auto|tp|rp
+    base-url: http://127.0.0.1:8000/v1
+    rp:
+      endpoints:
+        - name: gpu0
+          url: http://127.0.0.1:8001/v1
+        - name: gpu1
+          url: http://127.0.0.1:8002/v1
+  model: llama3-8b-instruct
+  api-key: sk-local
+
+naver:
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 2500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+
+zsys:
+  onnx:
+    max-concurrency: 2
+
+# --- expert-open defaults ---
+
+nova:
+  expert-open:
+    enabled: false
+    timeout-ms: 3000
+    max-pages: 3
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+probe:
+  search:
+    enabled: true
+
+
+# -- injected defaults (merge carefully) --
+retrieval:
+  vector:
+    enabled: true
+naver:
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 2500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+upstash:
+  cache:
+    ttl-seconds: 3600
+onnx:
+  enabled: true
+zsys:
+  onnx:
+    max-concurrency: 2
+probe:
+  search:
+    enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+plugin:
+  image:
+    enabled: false
+
+retrieval:
+  vector:
+    enabled: true
+naver:
+  hedge:
+    enabled: true
+    delay-ms: 120
+  search:
+    timeout-ms: 2500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+onnx:
+  enabled: true
+probe:
+  search:
+    enabled: true
+upstash:
+  cache:
+    ttl-seconds: 3600
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0

@@ -1,0 +1,20 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: autolearn.v1
+description: |
+  Idle auto-learn loop plan skeleton. Normal -> Brave fallback -> record.
+steps:
+  - name: normal
+    action: chat
+    mode: normal
+    on_fail: brave
+  - name: brave
+    action: chat
+    mode: brave
+    on_success: record
+    on_fail: end
+  - name: record
+    action: dataset.append

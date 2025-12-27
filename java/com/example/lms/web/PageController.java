@@ -7,7 +7,6 @@ import com.example.lms.repository.CurrentModelRepository;
 import com.example.lms.repository.ModelEntityRepository;
 import com.example.lms.service.ModelSettingsService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Controller;
@@ -16,28 +15,32 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
-
 import java.util.Comparator;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
- * PageController – 전역/관리자 페이지 + 모델 관리 통합 (2025-06-29 최종본)
+ * PageController - 전역/관리자 페이지 + 모델 관리 통합 (2025-06-29 최종본)
  * -------------------------------------------------------------------------
  * • 홈, 대시보드, 챗 UI, 모델 설정, 관리자 페이지까지 모두 담당하는 단일 컨트롤러.
  * • 중복되던 모델 데이터 준비 로직을 'prepareModelData' 헬퍼 메서드로 통합하여 재사용.
  * • 모델 저장은 ModelSettingsService로 위임하여 비즈니스 로직을 명확히 분리.
  * • DB에 current_model이 없을 때 application.properties의 기본 모델로 안전하게 폴백.
  */
-@Slf4j
 @Controller
 @RequiredArgsConstructor
 public class PageController {
+    private static final Logger log = LoggerFactory.getLogger(PageController.class);
 
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;
     private final ModelSettingsService   modelSettingsService;
 
-    //@Value("${openai.api.model:gpt-3.5-turbo}")
+    //@Value("${openai.api.model:gemma3:27b}")
     private String defaultModel;
 
     /* ========================= 공통 로직 (Private Helper) ========================= */

@@ -6,8 +6,10 @@ import com.example.lms.domain.Status;
 import com.example.lms.domain.Student;
 import jakarta.persistence.*;
 import lombok.*;
-
 import java.time.LocalDate;
+
+
+
 
 @Entity
 @Table(name = "attendances")

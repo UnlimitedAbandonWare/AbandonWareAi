@@ -1,0 +1,102 @@
+package com.example.lms.web.filter;
+
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.MDC;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.UUID;
+
+/**
+ * ✅ UAW 미구현 축 보강:
+ * <ul>
+ *   <li>GuardContextHolder가 비어있는 요청 경로에서도 기본 GuardContext를 주입해 NPE 방지</li>
+ *   <li>x-request-id / sessionId MDC 상관관계 키로 로그 추적성 확보</li>
+ * </ul>
+ *
+ * <p>
+ * 주의: ThreadLocal 누수(스레드풀 재사용 시 컨텍스트 오염)를 방지하기 위해,
+ * 이 필터가 생성한 GuardContext는 반드시 finally 에서 clear() 합니다.
+ * </p>
+ */
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE + 10)
+public class GuardContextInitFilter extends OncePerRequestFilter {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
+
+        // 1) request correlation id (없으면 생성)
+        String rid = firstNonBlank(
+                request.getHeader("x-request-id"),
+                request.getHeader("X-Request-Id"),
+                request.getHeader("x-correlation-id"),
+                request.getHeader("X-Correlation-Id")
+        );
+        if (!StringUtils.hasText(rid)) {
+            rid = UUID.randomUUID().toString();
+        }
+
+        // 2) MDC 주입 (기존 값 있으면 덮어쓰지 않음)
+        boolean putRid = false;
+        if (!StringUtils.hasText(MDC.get("x-request-id"))) {
+            MDC.put("x-request-id", rid);
+            putRid = true;
+        }
+        boolean putSession = false;
+        if (!StringUtils.hasText(MDC.get("sessionId"))) {
+            // Prefer a real session id header when present; otherwise fall back to request correlation id.
+            String sid = firstNonBlank(
+                    request.getHeader("X-Session-Id"),
+                    request.getHeader("x-session-id"),
+                    request.getHeader("X-SessionId"),
+                    request.getHeader("x-sessionid")
+            );
+            MDC.put("sessionId", StringUtils.hasText(sid) ? sid : rid);
+            putSession = true;
+        }
+
+        // 3) GuardContext 기본 주입 (없을 때만)
+        boolean created = false;
+        if (GuardContextHolder.get() == null) {
+            GuardContextHolder.set(GuardContext.defaultContext());
+            created = true;
+        }
+
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            if (created) {
+                GuardContextHolder.clear();
+            }
+            if (putSession) {
+                MDC.remove("sessionId");
+            }
+            if (putRid) {
+                MDC.remove("x-request-id");
+            }
+        }
+    }
+
+    private static String firstNonBlank(String... xs) {
+        if (xs == null) {
+            return null;
+        }
+        for (String x : xs) {
+            if (StringUtils.hasText(x)) {
+                return x;
+            }
+        }
+        return null;
+    }
+}

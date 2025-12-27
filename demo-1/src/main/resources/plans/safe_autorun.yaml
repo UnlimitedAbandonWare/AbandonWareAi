@@ -1,0 +1,16 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: safe_autorun
+steps:
+  - task: RetrieveWeb
+  - task: RetrieveVector
+  - task: RetrieveKG
+  - task: FusionRRF
+  - task: BiEncoderRerank
+  - task: CrossEncoderRerank
+  - task: FinalSigmoidGate
+  - task: CitationGate
+  - task: AnswerSanitizer

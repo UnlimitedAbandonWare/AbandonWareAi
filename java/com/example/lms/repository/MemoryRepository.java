@@ -6,11 +6,13 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
-import java.util.List;      // 👈 추가
 import java.util.Optional;
 
+
+import java.util.List;      // 👈 추가
+
 /**
- * Translation‑Memory(TMX) 전용 Repository.
+ * Translation-Memory(TMX) 전용 Repository.
  *
  *  ▸ 단순 조회(findBySourceHash) + 동시성 안전한 hitCount 증가(incrementHitCountBySourceHash)
  *  ▸ "읽기 → 증가 → 쓰기" 패턴을 피하고 DB 레벨에서 한 번의 UPDATE 로 처리한다.
@@ -30,7 +32,7 @@ public interface MemoryRepository extends JpaRepository<TranslationMemory, Long>
      *  • <b>@Modifying</b>  : SELECT 가 아닌 DML(UPDATE) 쿼리임을 Spring Data 에 알림<br>
      *  • <b>@Transactional</b> : 트랜잭션 내에서 실행하지 않으면 JPA flush 가 되지 않으므로 필수
      * </p>
-     * @param hash SHA‑256 해시(64자)
+     * @param hash SHA-256 해시(64자)
      * @return 영향 받은 row 수 (정상적으로는 0 또는 1)
      */
     @Transactional

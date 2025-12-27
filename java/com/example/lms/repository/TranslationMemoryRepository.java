@@ -2,14 +2,18 @@ package com.example.lms.repository;
 
 import com.example.lms.entity.TranslationMemory;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
 import java.util.Optional;
+
+
+
 
 @Repository
 public interface TranslationMemoryRepository extends JpaRepository<TranslationMemory, Long> {
@@ -18,6 +22,11 @@ public interface TranslationMemoryRepository extends JpaRepository<TranslationMe
      * sourceHash로 단건 조회
      */
     Optional<TranslationMemory> findBySourceHash(String sourceHash);
+
+    Page<TranslationMemory> findByStatusOrderByCreatedAtAsc(TranslationMemory.MemoryStatus status, Pageable pageable);
+
+    // lazy bootstrap용: sid 후보들에서 상위 N개만 가져오기
+    Page<TranslationMemory> findBySessionIdIn(List<String> sessionIds, Pageable pageable);
 
     /**
      * 에너지가 설정된 전체 레코드 중 상위 10개 조회
@@ -101,7 +110,7 @@ public interface TranslationMemoryRepository extends JpaRepository<TranslationMe
         UPDATE translation_memory
            SET hit_count = hit_count + 1,
                last_used_at = NOW(),
-               score = GREATEST(score, :score)
+               score = GREATEST(COALESCE(score, 0), :score)
          WHERE source_hash = :hash
     """, nativeQuery = true)
     int incrementHitAndBumpLastUsed(@Param("hash") String hash,
