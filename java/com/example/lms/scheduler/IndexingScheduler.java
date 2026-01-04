@@ -3,21 +3,25 @@ package com.example.lms.scheduler;
 
 import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.VectorStoreService;
+import com.example.lms.service.VectorMetaKeys;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import dev.langchain4j.data.document.Metadata;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 주기적으로 새 문서를 불러와 벡터 스토어에 추가하는 스케줄러입니다.
@@ -29,10 +33,17 @@ import dev.langchain4j.data.document.Metadata;
  * <p>문서는 메타데이터(예: source, url, fetchedAt 등)를 포함한 상태로 생성하고,
  * 분할된 세그먼트는 임베딩 후 EmbeddingStore에 저장합니다.</p>
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class IndexingScheduler {
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.ocr.OcrService ocr;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.EmbeddingStoreManager embeddingStoreManager;
+
+
+    private static final Logger log = LoggerFactory.getLogger(IndexingScheduler.class);
 
     private final EmbeddingModel              embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -41,7 +52,7 @@ public class IndexingScheduler {
     // Inject VectorStoreService to reuse buffering logic instead of direct addAll()
     private final VectorStoreService          vectorStoreService;
 
-    /** 동시 실행 안전 – AtomicReference */
+    /** 동시 실행 안전 - AtomicReference */
     private final java.util.concurrent.atomic.AtomicReference<LocalDateTime> lastFetchTime =
             new java.util.concurrent.atomic.AtomicReference<>(LocalDateTime.now().minusHours(1));
 
@@ -50,7 +61,7 @@ public class IndexingScheduler {
     public void scheduleIndexing() {
 
         LocalDateTime from = lastFetchTime.get();
-        log.info("[Indexing] 시작 – lastFetchTime={}", from);
+        log.info("[Indexing] 시작 - lastFetchTime={}", from);
 
         List<Document> newDocs = documentFetcher.fetchNewDocumentsSince(from);
         if (newDocs == null || newDocs.isEmpty()) {
@@ -81,15 +92,23 @@ public class IndexingScheduler {
         try {
             // Use VectorStoreService to enqueue segments for embedding & upload
             for (TextSegment seg : segments) {
-                vectorStoreService.enqueue("0", seg.text());
+                // Attach standard vector-store metadata for contamination tracking.
+                // NOTE: Do not use Map.of() here because future meta fields might be nullable.
+                java.util.Map<String, Object> extra = new java.util.HashMap<>();
+                extra.put(VectorMetaKeys.META_SOURCE_TAG, "WEB");
+                extra.put(VectorMetaKeys.META_ORIGIN, "WEB");
+                extra.put(VectorMetaKeys.META_VERIFIED, "true");
+                extra.put("source", "CRAWLER");
+                extra.put("fetchedAt", LocalDateTime.now().toString());
+                vectorStoreService.enqueue("0", seg.text(), extra);
             }
             // Trigger flush explicitly to upload immediately
             vectorStoreService.flush();
         } catch (Exception e) {
-            log.warn("[Indexing] 벡터 스토어 적재 실패 – {}", e.getMessage());
+            log.warn("[Indexing] 벡터 스토어 적재 실패 - {}", e.getMessage());
         }
 
-        // Reinforce snippets into long‑term memory with max score
+        // Reinforce snippets into long-term memory with max score
         segments.forEach(seg -> memorySvc.reinforceWithSnippet(
                 "0", null, seg.text(), "WEB", 1.0));
 
@@ -112,4 +131,18 @@ public class IndexingScheduler {
          */
         List<Document> fetchNewDocumentsSince(LocalDateTime lastFetchTime);
     }
+
+    @org.springframework.scheduling.annotation.Scheduled(cron="${indexing.ocr.cron:0 */10 * * * *}")
+    public void runOcrIndexing() {
+        try {
+            if (ocr == null || embeddingStoreManager == null) return;
+            java.lang.reflect.Method mScan = ocr.getClass().getMethod("scanNewImages");
+            java.util.List spans = (java.util.List) mScan.invoke(ocr);
+            java.lang.reflect.Method mChunk = ocr.getClass().getMethod("chunk", java.util.List.class);
+            java.util.List chunks = (java.util.List) mChunk.invoke(ocr, spans);
+            java.lang.reflect.Method mUpsert = embeddingStoreManager.getClass().getMethod("embedAndUpsert", java.util.List.class);
+            mUpsert.invoke(embeddingStoreManager, chunks);
+        } catch (Throwable t) { }
+    }
+
 }

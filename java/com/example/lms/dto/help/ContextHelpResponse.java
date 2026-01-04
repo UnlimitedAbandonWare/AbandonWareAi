@@ -1,5 +1,6 @@
 package com.example.lms.dto.help;
 
+
 /** 프런트(chat.js)가 content 또는 message 중 하나를 사용하므로 둘 다 제공합니다. */
 public class ContextHelpResponse {
         private String content;

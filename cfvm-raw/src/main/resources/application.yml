@@ -1,0 +1,96 @@
+spring.config.import: optional:application-proj-override.yml, ${spring.config.import:}
+retrieval:
+  vector:
+    enabled: true
+naver:
+  search:
+    timeout-ms: 2500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+  filters:
+    enable-domain-filter: true
+    domain-policy: boost
+  patch-query:
+    official-domains:
+    - hoyoverse.com
+    - hoyolab.com
+    - playlostark.com
+    - playoverwatch.com
+    - playvalorant.com
+    - leagueoflegends.com
+    community-domains:
+    - inven.co.kr
+    - namu.wiki
+    - arca.live
+upstash:
+  cache:
+    ttl-seconds: 3600
+onnx:
+  enabled: true
+zsys:
+  onnx:
+    max-concurrency: 2
+probe:
+  search:
+    enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 1
+  finalSigmoid:
+    enabled: true
+    k: 8.0
+    x0: 0.0
+    threshold: 0.1
+  contextDiversity:
+    min: 0.1
+plugin:
+  image:
+    enabled: false
+routing:
+  tokens:
+    light_max: 1600
+    mistral_max: 2400
+  citation:
+    force_heavy: true
+  code:
+    light_max: 1200
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: gemma3:27b
+  api-key: dummy
+fallback:
+  enabled: false
+selfask:
+  enabled: false
+train_idle:
+  enabled: true
+autolearn:
+  enabled: true
+spring:
+  config:
+    import: optional:classpath:application-llm.yaml
+local-llm:
+  autostart: false
+  health-check-url: http://localhost:8000/health
+  health-check-timeout: 30s
+  start-command: docker-compose -f vllm-compose.yml up -d
+  enabled: true
+  base-url: http://localhost:11434/v1
+jammini:
+  guard:
+    mode: aggressive
+    profile: PROFILE_MEMORY
+  memory:
+    enabled: true
+    low-guardrail: true
+    progressive: true
+verifier:
+  coverage:
+    threshold:
+      default: 0.2
+      high-risk: 0.4
+websearch:

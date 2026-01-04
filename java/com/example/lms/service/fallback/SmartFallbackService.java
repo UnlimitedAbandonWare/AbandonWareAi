@@ -1,31 +1,38 @@
 
         package com.example.lms.service.fallback;
 
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.util.List;
-
-// Knowledge gap logging and domain/subject resolution
 import com.example.lms.agent.KnowledgeGapLogger;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.service.subject.SubjectResolver;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
+
+
+
+// Knowledge gap logging and domain/subject resolution
 @Service
 @RequiredArgsConstructor
 public class SmartFallbackService {
+    private static final Logger log = LoggerFactory.getLogger(SmartFallbackService.class);
 
-    private final ObjectProvider<OpenAiService> openAiProvider;
+    /**
+     * Lazily provide a ChatModel for fallback generation.  We use an
+     * ObjectProvider so that the fallback service does not eagerly
+     * initialize an expensive LLM client on startup.  When no ChatModel
+     * is available, the service falls back to a template-based response.
+     */
+    private final ObjectProvider<ChatModel> chatModelProvider;
 
     // Knowledge gap logging dependencies.  These are optional and will be null if the corresponding
     // beans are not defined in the Spring context.  They allow the fallback service to record
@@ -36,7 +43,7 @@ public class SmartFallbackService {
 
     @Value("${fallback.enabled:true}")
     private boolean enabled;
-    @Value("${fallback.model:gpt-4o-mini}")
+    @Value("${fallback.model:gemma3:27b}")
     private String model;
     @Value("${fallback.temperature:0.2}")
     private double temperature;
@@ -63,8 +70,8 @@ public class SmartFallbackService {
 
         List<String> candidates = FallbackHeuristics.suggestAlternatives(det.domain(), det.wrongTerm());
 
-        OpenAiService openAi = openAiProvider.getIfAvailable();
-        if (openAi == null) return templateFallback(det, candidates, userQuery); // 안전 템플릿
+        ChatModel llm = chatModelProvider.getIfAvailable();
+        if (llm == null) return templateFallback(det, candidates, userQuery); // 안전 템플릿
 
         String system = """
                 너는 컨텍스트가 부족한 상황에서 사용자 의도를 정중히 바로잡는 한국어 어시스턴트다.
@@ -92,29 +99,19 @@ public class SmartFallbackService {
         );
 
         try {
-            ChatCompletionRequest req = ChatCompletionRequest.builder()
-                    .model(model)
-                    .messages(List.of(
-                            new ChatMessage(ChatMessageRole.SYSTEM.value(), system),
-                            new ChatMessage(ChatMessageRole.USER.value(), user)
-                    ))
-                    .temperature(temperature)
-                    .topP(topP)
-                    .maxTokens(maxTokens)
-                    .build();
-
-            String out = openAi.createChatCompletion(req)
-                    .getChoices().get(0).getMessage().getContent();
+            String prompt = system + "\n" + user;
+            var res = llm.chat(UserMessage.from(prompt));
+            String out = (res == null || res.aiMessage() == null) ? null : res.aiMessage().text();
             return (out == null || out.isBlank()) ? templateFallback(det, candidates, userQuery) : out.trim();
         } catch (Exception e) {
-            log.debug("[SmartFallback] OpenAI 호출 실패 → 템플릿 폴백 사용: {}", e.toString());
+            log.debug("[SmartFallback] ChatModel 호출 실패 → 템플릿 폴백 사용: {}", e.toString());
             return templateFallback(det, candidates, userQuery);
         }
     }
 
     /**
      * 상세 결과를 돌려주는 신규 API.
-     * 기존 maybeSuggest(...) 로부터 제안 텍스트를 얻고,
+     * 기존 maybeSuggest(/* ... *&#47;) 로부터 제안 텍스트를 얻고,
      * 컨텍스트 부족/제안 존재 여부를 바탕으로 isFallback을 산출.
      */
     public FallbackResult maybeSuggestDetailed(String query,

@@ -1,0 +1,40 @@
+# Baseline build/boot error patterns
+NoSuchBeanDefinitionException: .*OnnxRuntimeService
+NoSuchBeanDefinitionException: .*EmbeddingStore
+UnsatisfiedDependencyException
+BeanCreationException
+IllegalStateException: .*ONNX.*
+PlaceholderResolutionException
+Could not resolve placeholder
+Failed to bind properties
+FileNotFoundException: .*cross-encoder\.onnx
+
+# [2025-11-25] Missing Import Pattern
+symbol:\s+class\s+TimeoutException
+
+# [2025-11-26] LangChain4j Content.from(String, Map) mismatch
+incompatible types:\s+String cannot be converted to TextSegment
+illegal escape character
+# Auto-added parser error patterns (javac parser errors from aggregated logs)
+illegal start of type
+invalid method declaration; return type required
+class, interface, enum, or record expected
+
+
+# ---- AUTO: stuff3_missing_helpers ----
+# Pattern: Gradle Java compile error for missing DomainWhitelist / HybridRetriever helper methods.
+# Trigger when build log contains all of:
+#   - "HybridRetriever.java"
+#   - "DomainWhitelist.java"
+#   - "error: cannot find symbol"
+#   - one of: "extractUrl(String)", "extractHost(String)", "isCommunity(String)", "isBanned(String)"
+# Suggested fix: implement extractUrl in HybridRetriever and helper methods (extractHost, isOfficial(host), isCommunity, isBanned) in DomainWhitelist.
+
+# ---- AUTO: stuff3_unified_rag_orchestrator_lc4j_shim ----
+# Pattern: Gradle Java compile error for UnifiedRagOrchestrator / RAG orchestrator using legacy LangChain4j Query/metadata APIs.
+# Trigger when build log contains all of:
+#   - "UnifiedRagOrchestrator.java"
+#   - "error: cannot find symbol"
+#   - "Query.from(req.query)"
+#   - "Map<ContentMetadata,Object> cannot be converted to Metadata"
+# Suggested fix: update UnifiedRagOrchestrator to call `new Query(req.query)`, treat `Content.metadata()` as a Map, and add an slf4j `log` field.

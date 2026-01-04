@@ -1,0 +1,4 @@
+cluster,avg_count,avg_slope,top_category
+0,0.9710982658959537,-0.30346820809248554,config/runtime
+1,4.121212121212121,2.191919191919192,config/runtime
+2,13.4,9.8,config/runtime

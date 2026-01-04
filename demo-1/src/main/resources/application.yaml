@@ -1,0 +1,79 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+spring.config.import: "optional:application-proj-override.yml, ${spring.config.import:}"
+server:
+  port: 8090
+
+logging:
+  level:
+    root: INFO
+    com.abandonwareai.nova: DEBUG
+
+idle:
+  pollMillis: 45000
+  quietMillis: 60000
+  maxCpuLoad: 0.50
+  plan:
+    rotate: "brave,hypernova,zero_break,safe_autorun"
+  dataset:
+    path: "build/idle/train_rag.jsonl"
+    minContextDiversity: 0.35
+    allowRuleBreak: false
+  gates:
+    minCitations: 3
+    minSigmoid: 0.50
+
+# Idle LLM routing: local only
+idle.llm.engine: "local-llamacpp"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+spring:
+  config:
+    import: "optional:classpath:application-llm.yaml"
+local-llm:
+  autostart: false
+  health-check-url: "http://localhost:8000/health"
+  health-check-timeout: 30s
+  start-command: "docker-compose -f vllm-compose.yml up -d"
+  enabled: true
+  base-url: http://localhost:11434/v1
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  api-key: dummy
+  chat-model: gemma3:27b
+
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false

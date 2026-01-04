@@ -1,13 +1,14 @@
 package com.example.lms.repository;
-import java.util.List;
 
+import java.util.List;
 import com.example.lms.domain.ChatMessage;
 import org.springframework.data.jpa.repository.JpaRepository;
-
+import org.springframework.data.domain.Pageable;
 import java.util.Optional;
 
-import org.springframework.data.jpa.repository.JpaRepository;
-import com.example.lms.domain.ChatMessage;
+
+
+
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
     List<ChatMessage> findBySessionId(Long sessionId);
@@ -23,4 +24,11 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
     Optional<ChatMessage> findTopBySessionIdAndRoleOrderByCreatedAtDesc(Long sessionId, String role);
 
     Optional<ChatMessage> findTopBySessionIdAndRoleOrderByIdDesc(Long sessionId, String role);
+
+
+    java.util.List<com.example.lms.domain.ChatMessage> findByRoleOrderByIdDesc(String role, Pageable pageable);
+
+
+    java.util.Optional<com.example.lms.domain.ChatMessage> findTopByOrderByCreatedAtDesc();
+
 }

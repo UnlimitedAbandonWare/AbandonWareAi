@@ -2,6 +2,9 @@ package com.example.lms.service.disambiguation;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
+import java.util.Map;
+
+
 
 /**
  * 사용자의 모호한 질의를 재작성하고 해소한 결과를 담는 DTO입니다.
@@ -55,4 +58,19 @@ public class DisambiguationResult {
         String c = confidence.trim().toLowerCase();
         return c.contains("high") || c.contains("confident") || c.contains("sure");
     }
+
+
+    /** ELECTRONICS, ANIMAL, REAL_ESTATE, DEV_TOPIC, EDUCATION, GAME, GENERAL 등 */
+    private String detectedCategory;
+
+    /** 메인 대상 객체 (예: "Galaxy Fold", "강아지 사료", "Spring Boot 프로젝트") */
+    private String targetObject;
+
+    /** 자유로운 key-value 속성들 (brand, action, color, price_range, framework, language 등) */
+    private Map<String, String> attributes = java.util.Collections.emptyMap();
+
+    /** GENERAL_SEARCH, SPECIFIC_ITEM, HOW_TO, DEBUGGING, OPINION … */
+    private String queryIntent;
+
+
 }

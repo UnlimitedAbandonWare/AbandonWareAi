@@ -5,12 +5,14 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+
+
 
 /**
  * PromptEngine 인터페이스의 기본 구현체.
@@ -109,10 +111,10 @@ public class DefaultPromptEngine implements PromptEngine {
     }
 
     /**
-     * [기존] 문자열을 최대 길이에 맞춰 자르고 "…"를 붙입니다.
+     * [기존] 문자열을 최대 길이에 맞춰 자르고 "/* ... *&#47;"를 붙입니다.
      */
     private String trim(String s, int maxLength) {
         if (s == null) return "";
-        return s.length() > maxLength ? s.substring(0, maxLength) + "…" : s;
+        return s.length() > maxLength ? s.substring(0, maxLength) + "/* ... *&#47;" : s;
     }
 }

@@ -1,0 +1,32 @@
+# Common Java/Gradle compile errors (regex)
+cannot find symbol
+error: incompatible types
+inference variable [A-Z]\w* has incompatible bounds
+incompatible types:\s+String cannot be converted to TextSegment
+package .* does not exist
+symbol:\s+class\s+.*
+symbol:\s+method\s+.*
+symbol:\s+method\s+search\(String\)
+class file for .* not found
+symbol:\s+class\s+TimeoutException
+# Lombok issues
+lombok.* not found
+# placeholder token to block
+\STUFF3_DISABLED\}
+DuplicateKeyException
+found duplicate key
+illegal escape character
+# Auto-added parser error patterns (javac parser errors from aggregated logs)
+illegal start of type
+invalid method declaration; return type required
+class, interface, enum, or record expected
+
+
+# ---- AUTO: stuff3_missing_helpers ----
+# Pattern: Gradle Java compile error for missing DomainWhitelist / HybridRetriever helper methods.
+# Trigger when build log contains all of:
+#   - "HybridRetriever.java"
+#   - "DomainWhitelist.java"
+#   - "error: cannot find symbol"
+#   - one of: "extractUrl(String)", "extractHost(String)", "isCommunity(String)", "isBanned(String)"
+# Suggested fix: implement extractUrl in HybridRetriever and helper methods (extractHost, isOfficial(host), isCommunity, isBanned) in DomainWhitelist.

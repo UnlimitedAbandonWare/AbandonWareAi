@@ -1,0 +1,3 @@
+
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=com.nova.protocol.autoconfig.NovaNextAutoConfiguration,\
+  com.nova.protocol.config.NovaProtocolConfig
