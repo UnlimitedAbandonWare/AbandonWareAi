@@ -5,13 +5,16 @@ import com.example.lms.domain.TranslationRule;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.service.TranslationTrainingService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.CollectionUtils;
 import org.springframework.web.bind.annotation.*;
-
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+
 
 /**
  * ① POST  /api/translate/train   : 채팅 히스토리를 규칙으로 학습
@@ -20,8 +23,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/translate")
 @RequiredArgsConstructor
-@Slf4j
 public class TranslateController {
+    private static final Logger log = LoggerFactory.getLogger(TranslateController.class);
 
     private final TranslationTrainingService trainingService;
 

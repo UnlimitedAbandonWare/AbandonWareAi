@@ -1,0 +1,126 @@
+# JamminiMemory.atomic.yaml — ops toggles unified
+# NOTE: merge these keys by name into your application.yml (do not blind-overwrite secrets)
+
+llmrouter:
+  enabled: true
+  models:
+    light:  { base-url: http://localhost:8002, weight: 0.45 }
+    gemma:  { base-url: http://localhost:8000, weight: 0.30 }
+    mistral:{ base-url: http://localhost:8001, weight: 0.25 }
+# cooldown example:
+# llmrouter.cooldown-ms: 20000
+
+onnx:
+  enabled: true
+
+probe:
+  search:
+    enabled: true  # /api/probe/search
+
+gate:
+  citation:
+    enabled: true
+    min: 2
+  finalSigmoid:
+    enabled: true
+    k: 9.0
+    x0: -0.5
+
+upstash:
+  cache:
+    ttl-seconds: 900
+
+trace:
+  headers:
+    request-id: X-Request-Id
+    session-id: X-Session-Id
+
+telemetry:
+  sse:
+    enabled: true
+
+# --- ORIGINAL (from Tool_A) ---
+meta:
+  id: jammini_memory
+  version: "1.1.0"
+  updated: "2025-11-05"
+  note: "src111_merge15 기반 추가기능 원자 메모리 (운영지향, 비밀값 제외)"
+apis:
+  soak_test:
+    endpoint: "GET /internal/soak/run?k=10&topic=all|genshin|default"
+    impl: ["service/soak/SoakTestService.java","api/internal/SoakApiController.java","service/soak/SoakQueryProvider.java"]
+    returns: "hit/grounding/latency JSON"
+  search_probe:
+    endpoint: "POST /api/probe/search"
+    params: ["useWeb","useRag","officialSourcesOnly","webTopK","intent"]
+    impl: ["probe/SearchProbeController.java","probe/SearchProbeService.java","probe/dto/*"]
+    toggles: ["probe.search.enabled","probe.admin-token"]
+retrieval:
+  vector:
+    impl: ["vector/FederatedEmbeddingStore.java","config/FederatedVectorStoreConfig.java"]
+    routing: "vector/TopicRoutingSettings.java"
+    toggles: ["retrieval.vector.enabled"]
+  chain_ordering:
+    impl: ["service/rag/handler/DynamicRetrievalHandlerChain.java","strategy/RetrievalOrderService.java","service/rag/handler/KnowledgeGraphHandler.java"]
+    notes: "Self-Ask/Analyze 이후 KG까지 포함한 동적 오더링"
+rerank:
+  bi_encoder: "service/rag/BiEncoderReranker.java"
+  cross_encoder_onnx:
+    impl: ["service/onnx/OnnxRuntimeService.java","service/onnx/OnnxCrossEncoderReranker.java"]
+    toggles: ["onnx.enabled"]
+  fusion:
+    impl: ["service/rag/fusion/RrfFusion.java","rag/fusion/WeightedRRF.java"]
+infra:
+  cache_web_upstash:
+    impl: ["infra/upstash/UpstashBackedWebCache.java","infra/upstash/UpstashRateLimiter.java","config/WebInfraConfig.java"]
+    settings: ["upstash.cache.ttl-seconds","naver.search.cache.*"]
+  domain_whitelist:
+    impl: ["service/rag/auth/DomainProfileLoader.java","service/rag/auth/DomainWhitelist.java"]
+    settings: ["naver.filters.domain-allowlist.*"]
+  tracing:
+    impl: ["trace/RequestIdHeaderFilter.java","web/TraceFilter.java","trace/TraceContext.java"]
+    headers: ["X-Request-Id","X-Session-Id"]
+  telemetry_sse:
+    impl: ["telemetry/SseEventPublisher.java","telemetry/LoggingSseEventPublisher.java","config/TelemetryConfig.java"]
+naver_web_search:
+  impl: ["service/NaverSearchService.java","service/rag/AnalyzeWebSearchRetriever.java"]
+  settings: ["naver.search.timeout-ms","naver.search.web-top-k"]
+translation:
+  adaptive:
+    endpoint: "POST /api/adaptive-translate"
+    impl: ["service/AdaptiveTranslationService.java","controller/AdaptiveTranslateController.java"]
+  rules:
+    endpoints: ["/api/translate/train","/api/translate/rules"]
+    impl: ["api/TranslateController.java","service/TranslationTrainingService.java","domain/TranslationRule.java"]
+learning:
+  gemini_curation:
+    impl: ["learning/gemini/GeminiCurationService.java","LearningWriteInterceptor.java","GeminiCurationPromptBuilder.java"]
+    fallback: "MemoryReinforcementService"
+  schedulers:
+    knowledge_curation: "agent/KnowledgeCurationScheduler.java"
+    gemini_batch: "learning/gemini/GeminiBatchService.java"
+indexing:
+  scheduler: "scheduler/IndexingScheduler.java"
+  embedding_manager: "service/EmbeddingStoreManager.java"
+safety:
+  answer_sanitizer:
+    impl: ["guard/AnswerSanitizer.java","guard/GenshinRecommendationSanitizer.java"]
+tools:
+  manifest_example: "app/resources/docs/tool_manifest__kchat_gpt_pro.json"
+  web_search_tool: "integrations/TavilyWebSearchRetriever.java"
+context_contract:
+  format: "{id, title, snippet, source, score, rank}"
+  used_in: "service/rag/*"
+ocr:
+  impl: ["service/ocr/OcrService.java","service/ocr/BasicTesseractOcrService.java","OcrSpan.java","OcrChunk.java","app//OcrTesseractReflect.java"]
+hooks:
+  bootstrap:
+    endpoint: "GET /bootstrap"
+    impl: ["api/SessionBootstrapController.java"]
+  n8n_webhook:
+    endpoint: "POST /hooks/n8n"
+    impl: ["api/N8nWebhookController.java","integrations/n8n/SignatureVerifier.java","jobs/JobService.java"]
+    result: "401 if bad signature; 202 + jobId if accepted"
+  image_plugin:
+    endpoint: "POST /api/image-plugin"
+    impl: ["plugin/image/ImageGenerationPluginController.java","plugin/image/OpenAiImageService.java"]

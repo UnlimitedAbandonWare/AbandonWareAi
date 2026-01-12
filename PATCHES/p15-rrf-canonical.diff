@@ -1,0 +1,5 @@
+*** a/service/rag/fusion/RrfFusion.java
+--- b/service/rag/fusion/RrfFusion.java
+@@
+-  // TODO: simple merge
++  // Canonicalize URL and hash snippet to deduplicate near-duplicates.

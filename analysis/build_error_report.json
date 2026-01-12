@@ -1,0 +1,84 @@
+{
+  "timestamp": "2025-10-29T03:45:45.395168Z",
+  "overall_risk": 0.475,
+  "patterns": {
+    "gradle_build_failed": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "gradle_task_failed": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "dependency_resolve_failed": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_symbol_not_found": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_package_missing": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_classfile_not_found": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_compilation_failed": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_illegal_start": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_incompatible_types": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_unreachable_statement": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "lombok_missing": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "java_version_mismatch": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "regex_backref_stray": {
+      "count": 0,
+      "severity": 0.2689
+    },
+    "regex_single_escape_suspect": {
+      "count": 3,
+      "severity": 0.475,
+      "files": [
+        {
+          "path": "BUILD_PATTERN_REPORT.md",
+          "hits": 1
+        },
+        {
+          "path": "BUILD_FIX_REPORT__2025-10-17.md",
+          "hits": 1
+        },
+        {
+          "path": "src/com/example/lms/service/guard/PIISanitizer.java",
+          "hits": 1
+        }
+      ]
+    }
+  },
+  "log_file": "BUILD_LOG.txt",
+  "meta": {
+    "repo_root": "/mnt/data/src111_merge15",
+    "project_root": "/mnt/data/src111_merge15",
+    "build_exit_code": null,
+    "java_home": null,
+    "gradle_args": "build -x test"
+  }
+}

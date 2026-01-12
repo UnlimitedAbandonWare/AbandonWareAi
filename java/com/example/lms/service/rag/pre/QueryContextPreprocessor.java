@@ -4,6 +4,8 @@ package com.example.lms.service.rag.pre;
 import java.util.Locale;
 import java.util.Set;
 import java.util.Map;
+
+
 /**
  * 검색 전 쿼리를 고유명사 추출 및 지역/도메인 맥락 주입을 통해 강화(enrich)하는 전처리기.
  * - enrich(String): 필수 계약
@@ -18,6 +20,22 @@ public interface QueryContextPreprocessor {
      * @return 강화된 쿼리 문자열
      */
     String enrich(String original);
+
+    /**
+     * Meta-aware enrichment hook.
+     *
+     * <p>By default, implementations can ignore {@code meta} and behave like
+     * {@link #enrich(String)}. Callers may provide metadata such as purpose
+     * (e.g. web-search query vs. internal prompt-building) so that certain
+     * preprocessors can apply privacy boundaries more precisely.</p>
+     *
+     * @param original original query text
+     * @param meta     mutable metadata map (may be empty)
+     * @return enriched query text
+     */
+    default String enrich(String original, Map<String, Object> meta) {
+        return enrich(original);
+    }
 
     /**
      * 쿼리에서 특정 도메인을 감지합니다. (기본값: "GENERAL")

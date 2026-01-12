@@ -4,24 +4,27 @@ import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
+import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
+
+
 @Component("tavilyWebSearchRetriever")
 @ConditionalOnProperty(prefix = "tavily", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class TavilyWebSearchRetriever implements ContentRetriever {
+    private static final Logger log = LoggerFactory.getLogger(TavilyWebSearchRetriever.class);
 
     private final WebClient.Builder http;
 
@@ -61,12 +64,17 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
                         log.debug("[Tavily] call failed: {}", e.toString());
                         return Mono.empty();
                     })
+                    // Execute the HTTP call on an elastic scheduler to avoid
+                    // blocking reactive event loop threads.  The downstream
+                    // block() remains synchronous, but the network I/O
+                    // happens off the event loop.
+                    .subscribeOn(Schedulers.boundedElastic())
                     .block();
 
             if (resp == null) return List.of();
 
             List<Content> out = new ArrayList<>();
-            Object results = resp.get("results"); // each: {title,url,content/snippet,...}
+            Object results = resp.get("results"); // each: {title,url,content/snippet,/* ... */}
             if (results instanceof List<?> list) {
                 for (Object o : list) {
                     if (o instanceof Map<?, ?> m) {

@@ -1,7 +1,9 @@
 package com.example.lms.service.rag;
-import java.util.stream.Collectors;  // Collectors 임포트
+
 import java.util.List;
 import dev.langchain4j.rag.content.Content;
+
+import java.util.stream.Collectors;  // Collectors 임포트
 
 public class SearchContext {
     private List<Content> contents;

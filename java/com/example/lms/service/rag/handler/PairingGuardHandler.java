@@ -2,24 +2,25 @@
 package com.example.lms.service.rag.handler;
 
 import com.example.lms.prompt.PromptContext;
-import com.example.lms.search.SmartQueryPlanner;
+import com.example.lms.service.routing.plan.RoutingPlanService;
 import com.example.lms.service.rag.policy.PairingPolicy;
 import com.example.lms.service.rag.pre.QueryContextPreprocessor;
 import com.example.lms.service.subject.SubjectResolver;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
+
 @RequiredArgsConstructor
 public class PairingGuardHandler extends AbstractRetrievalHandler {
+    private static final Logger log = LoggerFactory.getLogger(PairingGuardHandler.class);
 
     private final QueryContextPreprocessor preprocessor;
     private final SubjectResolver subjectResolver;   // ← 통합 버전으로 교체
-    private final SmartQueryPlanner planner;
+    private final RoutingPlanService planner;
     private final PairingPolicy policy;
 
     @Override
@@ -48,7 +49,7 @@ public class PairingGuardHandler extends AbstractRetrievalHandler {
         log.debug("[PairingGuard] intent=PAIRING, domain={}, subject='{}', anchored={}",
                 domain, subject, anchored);
 
-        // 여기서 실제 검색 실행/컨텍스트 주입은 상위 체인 설계에 맞춰 계속…
+        // 여기서 실제 검색 실행/컨텍스트 주입은 상위 체인 설계에 맞춰 계속/* ... */
         return true;
     }
 }

@@ -1,0 +1,28 @@
+--- src/main/java/com/abandonware/ai/agent/service/rag/bm25/Bm25IndexService.java (old)
++++ src/main/java/com/abandonware/ai/agent/service/rag/bm25/Bm25IndexService.java (new)
+@@ -1,7 +1,6 @@
+ package com.abandonware.ai.agent.service.rag.bm25;
+ 
+ import org.apache.lucene.analysis.Analyzer;
+-import org.apache.lucene.analysis.ko.NoriAnalyzer;
+ import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.document.Document;
+ import org.apache.lucene.document.Field;
+@@ -67,10 +66,14 @@
+     }
+ 
+ private Analyzer createAnalyzer(String name) {
++    if (!"nori".equalsIgnoreCase(name)) {
++        return new StandardAnalyzer();
++    }
+     try {
+-        if ("nori".equalsIgnoreCase(name)) {
+-            return new NoriAnalyzer();
+-        }
++        Class<?> clazz = Class.forName("org.apache.lucene.analysis.ko.NoriAnalyzer");
++        java.lang.reflect.Constructor<?> ctor = clazz.getDeclaredConstructor();
++        Object instance = ctor.newInstance();
++        return (Analyzer) instance;
+     } catch (Throwable ignore) { /* analyzer not on classpath */ }
+     return new StandardAnalyzer();
+ }

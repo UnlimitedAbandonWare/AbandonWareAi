@@ -1,0 +1,94 @@
+probe:
+  search:
+    enabled: true
+admin-token: secret123
+n8n:
+  webhook:
+    secret: testsecret
+rerank:
+  dpp:
+    enabled: true
+    k: 12
+    noveltyWeight: 0.3
+score:
+  calibrator:
+    enabled: true
+    mode: ISOTONIC
+  mplaw:
+    enabled: true
+embed:
+  whiten:
+    zca:
+      enabled: true
+      rank: 64
+fusion:
+  fuser: TWPM_CVAR
+  twpm:
+    pMin: 1.0
+    pMax: 6.0
+  cvar:
+    alpha: 0.1
+guard:
+  final:
+    sigmoid:
+      enabled: true
+      k: 9.0
+      x0: 0.75
+  citation:
+    min: 3
+flow:
+  joiner:
+    enabled: true
+onnx:
+  concurrent:
+    max: 2
+  timeout-ms: 3000
+  enabled: true
+budget:
+  request-time-ms: 3500
+naver:
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+ocr:
+  enabled: true
+  min-confidence: 0.78
+retrieval:
+  vector:
+    enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: dummy
+  chat-model: gemma3:27b
+
+  provider: local
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true

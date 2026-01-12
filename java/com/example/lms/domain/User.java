@@ -4,6 +4,8 @@ package com.example.lms.domain;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
+
+
 @Entity
 @Table(name = "users", uniqueConstraints = @UniqueConstraint(columnNames = "username"))
 public class User {

@@ -1,0 +1,33 @@
+{
+  "title": "K‑CHAT Agent Overview",
+  "uid": "kchat-agent-overview",
+  "schemaVersion": 37,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Tool Invocations",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(agent_tool_invocations_total)",
+          "legendFormat": "Total"
+        }
+      ],
+      "datasource": null
+    },
+    {
+      "type": "stat",
+      "title": "Agent Steps",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(agent_steps_total)",
+          "legendFormat": "Total"
+        }
+      ],
+      "datasource": null
+    }
+  ]
+}

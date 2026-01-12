@@ -3,6 +3,8 @@ package com.example.lms.prompt;
 import dev.langchain4j.rag.content.Content;
 import java.util.List;
 
+
+
 public interface PromptEngine {
 
     // 최종 프롬프트 생성(핵심)
@@ -10,10 +12,11 @@ public interface PromptEngine {
 
     // 레코드 기반 컨텍스트로부터 프롬프트 생성(안전한 기본 구현)
     default String createPrompt(PromptContext ctx) {
-        List<Content> docs = (ctx == null)
-                ? List.of()
-                : ((ctx.rag() == null || ctx.rag().isEmpty()) ? ctx.web() : ctx.rag());
-        return createPrompt("", docs);
+        // Null-safe: ctx.web/ctx.rag may be null in mixed caller environments.
+        List<Content> web = (ctx != null && ctx.web() != null) ? ctx.web() : List.of();
+        List<Content> rag = (ctx != null && ctx.rag() != null) ? ctx.rag() : List.of();
+        List<Content> docs = !rag.isEmpty() ? rag : web;
+        return createPrompt("", docs == null ? List.of() : docs);
     }
 
     // 필요시 지시문/본문을 따로 빌드하는 헬퍼도 여기에 선언 가능

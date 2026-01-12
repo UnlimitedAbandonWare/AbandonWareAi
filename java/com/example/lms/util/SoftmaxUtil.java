@@ -2,6 +2,8 @@ package com.example.lms.util;
 
 import java.util.concurrent.ThreadLocalRandom;
 
+
+
 /**
  * 수치적으로 안정적인 Softmax 계산과 확률 기반 샘플링을 제공하는 유틸리티 클래스입니다.
  * <p>

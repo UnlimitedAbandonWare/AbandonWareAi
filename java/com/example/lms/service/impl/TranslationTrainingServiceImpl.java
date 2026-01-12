@@ -4,18 +4,22 @@ import com.example.lms.domain.TranslationRule;
 import com.example.lms.domain.enums.RulePhase;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.repository.RuleRepository;
+import org.apache.commons.codec.digest.DigestUtils;
 import com.example.lms.service.TranslationTrainingService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class TranslationTrainingServiceImpl implements TranslationTrainingService {
+    private static final Logger log = LoggerFactory.getLogger(TranslationTrainingServiceImpl.class);
 
     // [수정] RuleRepository 의존성 주입
     private final RuleRepository ruleRepository;
@@ -51,7 +55,14 @@ public class TranslationTrainingServiceImpl implements TranslationTrainingServic
 
             ruleRepository.save(rule);
             learned++;
-            log.info("🆕 rule learned: '{}' → '{}'", rule.getPattern(), rule.getReplacement());
+            // Avoid logging raw user/assistant content (PII/secret risk). Use hashes instead.
+            String pHash = DigestUtils.sha256Hex(rule.getPattern());
+            String rHash = DigestUtils.sha256Hex(rule.getReplacement());
+            log.debug("🆕 rule learned: patternLen={} replLen={} patternHash={} replHash={}",
+                    rule.getPattern() == null ? 0 : rule.getPattern().length(),
+                    rule.getReplacement() == null ? 0 : rule.getReplacement().length(),
+                    pHash.substring(0, 12),
+                    rHash.substring(0, 12));
         }
         return learned;
     }
@@ -59,7 +70,7 @@ public class TranslationTrainingServiceImpl implements TranslationTrainingServic
     @Override
     @Transactional
     public int learnFromCorrectedSamples() {
-        // TODO: 사용자가 수정한 번역 샘플을 DB 에서 읽어 규칙화
+        // Implementation shim: load user-corrected translation samples from the DB for regularization.
         return 0;
     }
 

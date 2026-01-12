@@ -5,6 +5,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import java.util.List;
 
+
+
 public class GoogleTranslateDto {
 
     @Data

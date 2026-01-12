@@ -2,9 +2,7 @@
 package com.example.lms.boot;
 
 import jakarta.annotation.PostConstruct;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-
 import java.io.InputStream;
 import java.net.URL;
 import java.util.Enumeration;
@@ -12,6 +10,11 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * LangChain4j 버전 순도를 부팅 시 강제 확인한다.
@@ -21,9 +24,10 @@ import java.util.jar.Manifest;
  * 혼재 예) 0.2.x + 1.0.x 가 동시에 classpath에 존재할 때
  *  -> IllegalStateException 을 던져 애플리케이션 부팅 중단.
  */
-@Slf4j
 @Component
 public class StartupVersionPurityCheck {
+    private static final Logger log = LoggerFactory.getLogger(StartupVersionPurityCheck.class);
+
 
     /** LangChain4j 고정 버전 접두사 */
     private static final String EXPECTED_PREFIX = "1.0.1";
