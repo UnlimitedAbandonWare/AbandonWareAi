@@ -8,6 +8,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import java.time.LocalDateTime;
 
+
+
 /**
  * 도서 대여 정보를 나타내는 JPA 엔티티.
  * 명시적인 테이블/컬럼명과 시퀀스 기반 ID 생성을 사용합니다.

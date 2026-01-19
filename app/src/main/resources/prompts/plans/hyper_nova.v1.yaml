@@ -1,0 +1,26 @@
+id: hyper_nova
+sequence:
+  - step: analyze
+    method: self_ask
+  - step: expand
+    method: extreme_z
+    params:
+      branches: 12
+  - step: retrieve
+    handler: DynamicRetrievalHandlerChain
+    params:
+      use_web: true
+      use_vector: true
+      use_kg: true
+      total_k: 24
+  - step: fuse
+    method: weighted_rrf
+  - step: rerank1
+    method: bi_encoder
+  - step: rerank2
+    method: cross_encoder_onnx
+gates:
+  - type: CitationGate
+    min_sources: 3
+attenuation:
+  temperature_schedule: [0.7, 0.5, 0.2]

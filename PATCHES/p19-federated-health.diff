@@ -1,0 +1,5 @@
+*** a/vector/FederatedEmbeddingStore.java
+--- b/vector/FederatedEmbeddingStore.java
+@@
+-  // TODO: route by topic
++  // Health-aware routing: degrade unhealthy backends to weight 0, gradual recovery.

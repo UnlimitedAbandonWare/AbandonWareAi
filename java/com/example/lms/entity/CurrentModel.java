@@ -9,6 +9,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+
+
 /**
  * 애플리케이션에서 현재 선택된 모델 ID를 한 건만 저장하는 테이블용 엔티티
  */

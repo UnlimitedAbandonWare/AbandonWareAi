@@ -1,0 +1,8 @@
+// build.gradle (Groovy DSL)
+//
+// Compatibility shim:
+// This subproject is maintained in Kotlin DSL (build.gradle.kts).
+// The Groovy build file is kept only to avoid accidental breakage when
+// Gradle defaults to build.gradle in standalone usage.
+
+apply from: "build.gradle.kts"

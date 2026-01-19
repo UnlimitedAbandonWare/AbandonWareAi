@@ -1,17 +1,23 @@
 // src/main/java/com/example/lms/search/QueryExpander.java
 package com.example.lms.search;
 
+import com.example.lms.service.guard.GuardContextHolder;
+
 import dev.langchain4j.model.chat.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * ─────────────────────────────────────────────────────────
@@ -24,11 +30,12 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class QueryExpander {
+    private static final Logger log = LoggerFactory.getLogger(QueryExpander.class);
 
     private final KeyTermMiner        miner;
-    private final ChatModel           chatModel;
+    @Qualifier("exploreChatModel")
+    private final ChatModel exploreChatModel;
     private final LlmKeywordSanitizer sanitizer;              // △ NEW
 
     /* BM25 파라미터 */
@@ -42,6 +49,8 @@ public class QueryExpander {
         당신은 검색어 보조 생성기입니다.
         다음 질문을 더 구체적으로 검색할 때 유용할 **한국어 키워드형 질의** 1-2개만 제안하세요.
         - 한 줄에 하나, 문장·설명·접두사 없이 **키워드만** 출력
+        - **인물/캐릭터/지역 등에 대해, 질문에 없는 원소/무기/조직/세계관 설정을 새로 만들지 마세요.**
+        - **확실하지 않은 정보(속성, 직업, 연도 등)는 포함하지 말고, 중립적인 키워드만 사용하세요.**
         질문: %s
         """;
 
@@ -73,11 +82,18 @@ public class QueryExpander {
 
         /* ② LLM 초안(1-2줄) */
         List<String> llmLines = List.of();
-        try {
-            String reply = chatModel.chat(LLM_PROMPT.formatted(original));
-            llmLines = splitLines(reply);
-        } catch (Exception e) {
-            log.warn("[QueryExpander] LLM 초안 생성 실패: {}", e.toString());
+        var gctx = GuardContextHolder.get();
+        boolean forceNoLlm = gctx != null && (gctx.isSensitiveTopic() || gctx.planBool("memory.forceOff", false));
+        if (!forceNoLlm) {
+            try {
+                String reply = exploreChatModel.chat(java.util.List.of(dev.langchain4j.data.message.UserMessage.from(LLM_PROMPT.formatted(original))))
+                        .aiMessage().text();
+                llmLines = splitLines(reply);
+            } catch (Exception e) {
+                log.warn("[QueryExpander] LLM 초안 생성 실패: {}", e.toString());
+            }
+        } else {
+            log.debug("[QueryExpander] sensitive/forceOff -> skip LLM expansion");
         }
 
         /* ③ Self-Check 필터   ★ */

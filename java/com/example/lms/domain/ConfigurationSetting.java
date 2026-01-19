@@ -1,14 +1,8 @@
-package com.example.lms.domain; // 메인 패키지를 'domain'으로 지정
+package com.example.lms.domain; 
+import lombok.*;
+import jakarta.persistence.*;
+// 메인 패키지를 'domain'으로 지정
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
-import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
 
 /**
  * 'configuration_settings' 테이블과 매핑되는 JPA 엔티티.

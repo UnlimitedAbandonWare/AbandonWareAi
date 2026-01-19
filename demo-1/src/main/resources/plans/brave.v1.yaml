@@ -1,0 +1,35 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: brave_v1
+description: "심층 검색 + 엄격한 근거 검증 플랜"
+steps:
+  - name: analyze_intent
+    tool: qa.selfask
+  - name: retrieve_hybrid
+    tool: qa.retrieve
+    params: { sources: [web, vector, kg], web_top_k: 10, vector_top_k: 5, kg_top_k: 3 }
+  - name: fuse_results
+    tool: rank.fusion
+    params: { method: weighted_rrf, weights: {web: 0.5, vector: 0.3, kg: 0.2} }
+  - name: rerank_bi
+    tool: rank.bi_encoder
+  - name: rerank_cross
+    tool: rank.cross_encoder
+    params: { max_concurrency: 2, device: 1 }
+  - name: apply_gates
+    tool: gate.aggregate
+    params:
+      - DomainWhitelist
+      - CitationGate: { min: 3 }
+      - FinalSigmoidGate: { threshold: 0.92 }
+      - ContextDiversityGate: { min_ratio: 0.35 }
+      - AnswerSanitizer
+  - name: generate_answer
+    tool: qa.compose
+    params: { mode: "detailed" }
+
+guard:
+  profile: PROFILE_MEMORY

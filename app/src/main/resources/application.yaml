@@ -1,0 +1,104 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+spring.config.import: "optional:application-proj-override.yml, ${spring.config.import:}"
+# ---- auto-injected optimization profile ----
+retrieval:
+  vector:
+    enabled: true
+
+naver:
+  # [PATCH src111_merge15] NAVER Search API keys (Client ID : Secret)
+  keys: "${NAVER_KEYS:}"
+  search:
+    timeout-ms: 2500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+onnx:
+  enabled: true
+
+probe:
+  search:
+    enabled: false
+
+upstash:
+  cache:
+    ttl-seconds: 3600
+
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+
+zsys:
+  onnx:
+    max-concurrency: 2
+
+# Example domain whitelist
+# MERGED_DUP naver :: naver:
+  # filters:
+    # domain-allowlist:
+      # official: ["go.kr", "edu"]
+# 
+routing:
+  tokens:
+    light_max: 1600
+    mistral_max: 2400
+  citation:
+    force_heavy: true
+  code:
+    light_max: 1200
+
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: dummy
+  chat-model: gemma3:27b
+
+  provider: local
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+spring:
+  config:
+    import: "optional:classpath:application-llm.yaml"
+local-llm:
+  autostart: false
+  health-check-url: "http://localhost:8000/health"
+  health-check-timeout: 30s
+  start-command: "docker-compose -f vllm-compose.yml up -d"
+  enabled: true
+  base-url: http://localhost:11434/v1
+
+# MERGED_DUP onnx :: onnx:
+  # enabled: true
+  # gpu-id: 0
+  # max-concurrency: 2
+# 
+# zsys:
+  # onnx:
+    # enabled: true
+    # gpu-id: 0
+    # max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true

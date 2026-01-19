@@ -1,0 +1,42 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+retrieval:
+  vector:
+    enabled: true
+onnx:
+  enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  api-key: dummy
+  models:
+    gemma3_27b:
+      name: gemma3:27b
+      gpu: rtx3090
+      max-context: 8192
+    qwen3_8b:
+      name: qwen3:8b
+      gpu: rtx3060
+      max-context: 4096
+    qwen3_vl_8b:
+      name: qwen3-vl:8b
+      gpu: rtx3060
+      vision-enabled: true
+      max-context: 4096
