@@ -2,45 +2,44 @@ package com.example.lms.service.rag.extract;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
-import java.util.stream.Collectors;
+
+
 
 @Component
 public class PageContentScraper {
+    @Value("${search.budget.per-page-ms:3500}")
+    private int defaultPerPageMs;
 
     /**
      * URL의 HTML을 받아 본문 텍스트만 최대 길이로 깔끔히 반환.
      */
-    public String fetchText(String url, int timeoutMs) throws Exception {
-        Document doc = Jsoup.connect(url)
-                .ignoreContentType(true)
-                .userAgent("Mozilla/5.0 (RAG/DeepSnippet)")
-                .timeout(Math.max(3000, timeoutMs))
-                .get();
+    public String fetchText(String url) {
+        return fetchText(url, defaultPerPageMs);
+    }
 
-        // 메타/스크립트 제거
-        doc.select("script,noscript,style,header,footer,nav,aside").remove();
-
-        // 본문 후보(블로그/커뮤니티 가중)
-        Elements bodies = doc.select("article, main, #content, .post, .entry-content, .article, .post-body, .content");
-        if (bodies.isEmpty()) bodies = doc.body().children();
-
-        String text = bodies.stream()
-                .map(Element::text)
-                .collect(Collectors.joining("\n"))
-                .replace("\u00A0", " ")
-                .replaceAll("\\s{2,}", " ")
-                .trim();
-
-        // 안전 길이 제한
-        if (text.length() > 24000) {
-            text = new String(text.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
-            text = text.substring(0, 24000);
+    /**
+     * Fetches the text contents of the given URL within a configurable timeout.
+     * When the timeout is reached or any error occurs, this method returns
+     * {@code null} to signal that the caller should continue gracefully.
+     *
+     * @param url       the page URL to scrape
+     * @param perPageMs the timeout in milliseconds applied to the request
+     * @return the extracted and trimmed text, or {@code null} if the page could not be fetched
+     */
+    public String fetchText(String url, int perPageMs) {
+        try {
+            Document doc = Jsoup.connect(url)
+                    .userAgent("Mozilla/5.0 (compatible; AbandonWareBot/1.0)")
+                    .timeout(Math.max(1000, perPageMs))
+                    .get();
+            String text = doc.text();
+            return (text != null) ? text.strip() : null;
+        } catch (Exception e) {
+            // Allow partial success by returning null on any failure
+            return null;
         }
-        return text;
     }
 }

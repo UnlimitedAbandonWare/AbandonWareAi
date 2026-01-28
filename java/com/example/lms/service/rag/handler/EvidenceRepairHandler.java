@@ -1,46 +1,84 @@
-// src/main/java/com/example/lms/service/rag/handler/EvidenceRepairHandler.java
 package com.example.lms.service.rag.handler;
 
 import com.example.lms.service.rag.WebSearchRetriever;
 import com.example.lms.service.subject.SubjectResolver;
 import dev.langchain4j.rag.content.Content;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import java.util.*;
+import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-import java.util.List;
 
-/**
- * 앞선 단계에서 증거가 빈약할 때, 주제 앵커를 강제 포함한 1회 재검색으로 보강.
- */
-@Slf4j
-@RequiredArgsConstructor
-public class EvidenceRepairHandler extends AbstractRetrievalHandler {
+public class EvidenceRepairHandler implements ContentRetriever {
+    private static final Logger log = LoggerFactory.getLogger(EvidenceRepairHandler.class);
 
     private final WebSearchRetriever web;
     private final SubjectResolver subjectResolver;
-    private final String domain;
-    private final String preferredDomainsCsv; // 예: "*.ac.kr,*.go.kr,*.or.kr"
+    private final String domain;               // application.yml: retrieval.repair.domain
+    private final String preferredDomains;
+// application.yml: retrieval.repair.preferred-domains (comma-separated)
+
+    public EvidenceRepairHandler(WebSearchRetriever web,
+                                 SubjectResolver subjectResolver,
+                                 String domain,
+                                 String preferredDomains) {
+        this.web = web;
+        this.subjectResolver = subjectResolver;
+        this.domain = domain;
+        this.preferredDomains = preferredDomains;
+    }
 
     @Override
-    protected boolean doHandle(Query q, List<Content> acc) {
+    public List<Content> retrieve(Query query) {
+        if (query == null) return List.of();
         try {
-            String text = q.text() == null ? "" : q.text().trim();
-            String subject = subjectResolver.resolve(text, domain).orElse("");
-            if (subject.isBlank()) return true;
+            List<Content> items = web.retrieve(query);
+            if (items == null || items.isEmpty()) return List.of();
 
-            // 앵커 고정 쿼리 구성
-            String anchored = subject + " " + text;
-            if (preferredDomainsCsv != null && !preferredDomainsCsv.isBlank()) {
-                for (String d : preferredDomainsCsv.split(",")) {
-                    String dom = d.trim();
-                    if (!dom.isEmpty()) anchored += " site:" + dom;
-                }
+            // 도메인/선호도메인 우대 정렬 (있을 때만)
+            List<String> pref = parseCsv(preferredDomains);
+            if ((domain == null || domain.isBlank()) && pref.isEmpty()) {
+                return items;
             }
-            acc.addAll(web.retrieve(Query.from(anchored)));
+            return prioritize(items, pref, domain);
         } catch (Exception e) {
-            log.debug("[EvidenceRepair] skip: {}", e.toString());
+            log.warn("[Repair] retrieve failed; returning empty list", e);
+            return List.of(); // 체인은 절대 크래시하지 않음
         }
-        return false; // 말단에서 종료
+    }
+
+    private static List<String> parseCsv(String csv) {
+        if (csv == null || csv.isBlank()) return List.of();
+        return Arrays.stream(csv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    private static List<Content> prioritize(List<Content> items, List<String> preferred, String domain) {
+        if ((preferred == null || preferred.isEmpty()) && (domain == null || domain.isBlank())) return items;
+        return items.stream()
+                .sorted((a, b) -> Integer.compare(score(textOf(b), preferred, domain),
+                        score(textOf(a), preferred, domain)))
+                .collect(Collectors.toList());
+    }
+
+    private static String textOf(Content c) {
+        if (c == null) return "";
+        var ts = c.textSegment();
+        return (ts != null) ? ts.text() : c.toString();
+    }
+
+    private static int score(String text, List<String> preferred, String domain) {
+        int s = 0;
+        if (domain != null && !domain.isBlank() && text.contains(domain)) s += 2;
+        if (preferred != null) {
+            for (String d : preferred) {
+                if (!d.isBlank() && text.contains(d)) s += 1;
+            }
+        }
+        return s;
     }
 }

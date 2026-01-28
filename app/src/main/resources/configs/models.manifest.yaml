@@ -1,0 +1,43 @@
+bindings:
+  default: gemma3:27b
+  moe: "anthropic/claude-3.5-sonnet"
+aliases:
+  cheap: "deepseek/deepseek-chat"
+  vision: "gpt-4"
+models:
+  - id: "anthropic/claude-3.5-sonnet"
+    endpoint:
+      type: openai_compat
+      base_url: "${OPENAI_COMPAT_BASE_URL:https://openrouter.ai/api/v1}"
+      key_env: "${OPENROUTER_API_KEY:${OPENAI_API_KEY:}}"
+    capabilities: [chat, reasoning, long_context]
+  - id: "deepseek/deepseek-chat"
+    endpoint:
+      type: openai_compat
+      base_url: "${OPENAI_COMPAT_BASE_URL:https://openrouter.ai/api/v1}"
+      key_env: "${OPENROUTER_API_KEY:${OPENAI_API_KEY:}}"
+    capabilities: [chat]
+  - id: "gpt-4"
+    endpoint:
+      type: openai_compat
+      base_url: "${OPENAI_COMPAT_BASE_URL:https://api.openai.com/v1}"
+      key_env: "${OPENAI_API_KEY:}"
+    capabilities: [chat, vision]
+routing:
+  rules:
+    - when: { headerEquals: { "X-Brave-Mode": "on" } }
+      use: "anthropic/claude-3.5-sonnet"
+    - when: { default: gemma3:27b
+      use: "cheap"
+
+# AUTO-PATCH: moved 'probe' block to application.yml; keeping it here caused SnakeYAML bean mapping failure
+# probe:
+#   search:
+#     enabled: false
+#   admin-token: ''
+# 
+# 
+# AUTO-PATCH: moved 'retrieval' block to application.yml; keeping it here caused SnakeYAML bean mapping failure
+# retrieval:
+#   vector:
+#     enabled: true

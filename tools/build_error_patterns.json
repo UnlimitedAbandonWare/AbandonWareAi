@@ -1,0 +1,81 @@
+[
+  {
+    "id": "yaml.duplicate_key",
+    "regex": "DuplicateKeyException|found duplicate key (\\w+)",
+    "severity": "error",
+    "explain": "YAML에 동일한 키가 두 번 선언되었습니다.",
+    "fix_hint": "application*.yml에서 중복 키를 병합하거나 삭제하세요. (예: guard: 섹션 1개로 통합)"
+  },
+  {
+    "id": "gradle.nonzero_exit",
+    "regex": "finished with non-zero exit value",
+    "severity": "error",
+    "explain": "Gradle 작업이 비정상 종료.",
+    "fix_hint": "상위 에러를 먼저 해결하세요. (예: YAML 구문, Bean 주입, 포트 충돌 등)"
+  },
+  {
+    "id": "spring.bean_creation",
+    "regex": "BeanCreationException|UnsatisfiedDependencyException|NoSuchBeanDefinitionException",
+    "severity": "error",
+    "explain": "스프링 빈 생성/주입 실패.",
+    "fix_hint": "구성 클래스/프로필/컴포넌트 스캔을 확인하세요."
+  },
+  {
+    "id": "java.class_not_found",
+    "regex": "NoClassDefFoundError|ClassNotFoundException",
+    "severity": "error",
+    "explain": "클래스 로드 실패.",
+    "fix_hint": "의존성 또는 클래스 경로를 확인하세요."
+  },
+  {
+    "id": "yaml.syntax",
+    "regex": "mapping values are not allowed here|could not find expected ':'",
+    "severity": "error",
+    "explain": "YAML 구문 오류.",
+    "fix_hint": "들여쓰기/콜론/탭 사용을 점검하세요."
+  },
+  {
+    "id": "java.missing_timeout_import",
+    "regex": "symbol:\\s+class\\s+TimeoutException",
+    "severity": "error",
+    "explain": "TimeoutException 클래스를 찾을 수 없습니다 (임포트 누락 가능성 높음).",
+    "fix_hint": "해당 소스 파일 상단에 'import java.util.concurrent.TimeoutException;'를 추가하고, 타임아웃 예외 처리가 의도한 동작인지 확인하세요."
+  },
+  {
+    "id": "java.illegal_escape_character",
+    "regex": "error:\\s+illegal\\s+escape\\s+character",
+    "severity": "error",
+    "explain": "Java 소스 코드에서 문자열 리터럴 안의 정규식 이스케이프가 잘못되어 컴파일이 실패했습니다.",
+    "fix_hint": "문제 라인의 문자열에서 정규식 기호 앞의 역슬래시를 두 번으로 늘리세요. 예: \"Inc\\\\.\" → Java 코드에서는 \"Inc\\\\\\\\.\" 처럼 작성해야 합니다 (Pattern.replaceAll 사용 시)."
+  },
+  {
+    "id": "java.slf4j_placeholder_quote_typo",
+    "regex": "\\[Domain\\]\\s+query=\"\\{\\}\\\",\\s*category=",
+    "severity": "error",
+    "explain": "SLF4J 로그 포맷 문자열에 따옴표(\")를 잘못 넣어 Java 구문 오류가 발생했습니다 (문자열이 중간에 닫혀버림).",
+    "fix_hint": "ChatWorkflow.java의 log.debug(\"[Domain] query=...\")에서 query= 뒤의 불필요한 따옴표를 제거하여 하나의 문자열로 만드세요. 예: [Domain] query={}, category={}, domain={}, profile={}"
+  },
+  {
+    "id": "stuff3_missing_helpers",
+    "description": "Gradle Java compile error: missing helper methods in DomainWhitelist / HybridRetriever (extractUrl, extractHost, isCommunity, isBanned).",
+    "category": "java-compile",
+    "match": {
+      "contains": [
+        "HybridRetriever.java",
+        "DomainWhitelist.java",
+        "error: cannot find symbol",
+        "extractUrl(String)",
+        "extractHost(String)",
+        "isCommunity(String)",
+        "isBanned(String)"
+      ]
+    }
+  },
+  {
+    "id": "java.naver_keys_csv_reassigned",
+    "regex": "error:\\s+variable\\s+naverKeysCsv\\s+might already have been assigned",
+    "severity": "error",
+    "explain": "NaverSearchService.java 생성자에서 final로 선언된 naverKeysCsv 필드에 값을 두 번 대입하려다가 발생한 컴파일 오류입니다.",
+    "fix_hint": "com.example.lms.service.patch.NaverSearchService 및 동일 클래스를 열어 naverKeysCsv 필드 선언의 final 키워드를 제거하고, CSV 파싱 실패 시 fallback 브리지 로직이 this.naverKeysCsv를 다시 설정할 수 있도록 수정하세요."
+  }
+]

@@ -6,21 +6,22 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
-
 import java.time.LocalDateTime;
+
+
+
 
 /**
  * 번역 샘플 & 교정 데이터 & 학습 로그 통합 엔티티
  *
  *  • sourceHash  : 중복 검출 및 빠른 조회
  *  • corrected   : 사람이 교정한 문장 (nullable)
- *  • qError      : 품질 지표(0‒1)  ┐
+ *  • qError      : 품질 지표(0-1)  ┐
  *  • similarity  : TM 선정 당시 코사인 유사도 ┘  --► 새로 추가
  */
 @Entity
 @Table(
-        name = "translation_samples",
-        indexes = @Index(name = "idx_sample_source_hash", columnList = "sourceHash", unique = true)
+        name = "translation_samples"
 )
 @Getter @Setter
 @NoArgsConstructor
@@ -38,7 +39,7 @@ public class TranslationSample {
     private String tgtLang;           // e.g. "en"
 
     @Enumerated(EnumType.STRING)
-    private TranslationRoute route;   // GT, GEMINI, MEMORY …
+    private TranslationRoute route;   // GT, GEMINI, MEMORY /* ... */
 
     /* ─────────── 본문 & 해시 ─────────── */
     @Lob
@@ -51,15 +52,22 @@ public class TranslationSample {
     @Lob
     private String corrected;         // 사람이 교정한 최종 결과 (nullable)
 
-    /** SHA-256(sourceText) – 64 chars */
+    /** SHA-256(sourceText) - 64 chars */
     @Column(length = 64, nullable = false, unique = true)
     private String sourceHash;
 
     /* ─────────── 품질 / 통계 ─────────── */
-    private Double qError;            // 품질 오차(0‒1)
+    private Double qError;            // 품질 오차(0-1)
 
     /** ✨ TM 선정 시 코사인 유사도 (없으면 null) */
     private Double similarity;
+
+    /** 학습 배치가 반영된 시각 (NULL이면 아직 학습 미반영) */
+    private LocalDateTime trainedAt;
+
+    /** Soak 등 자동 수집 데이터의 검수 필요 플래그 */
+    @Builder.Default
+    private boolean needsReview = false;
 
     /* ─────────── 메타 데이터 ─────────── */
     @CreationTimestamp

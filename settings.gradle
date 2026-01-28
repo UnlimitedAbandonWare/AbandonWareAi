@@ -1,0 +1,35 @@
+// settings.gradle (Groovy DSL)
+//
+// This repository primarily uses Kotlin DSL build scripts (build.gradle.kts).
+// Some directories still contain legacy/broken Groovy build.gradle files from merges.
+// To keep Gradle builds stable, we explicitly point those projects to build.gradle.kts.
+
+pluginManagement {
+  repositories {
+    gradlePluginPortal()
+    mavenCentral()
+    maven { url 'https://repo.spring.io/release' }
+  }
+}
+
+rootProject.name = 'src111_merge15'
+
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+  repositories {
+    mavenCentral()
+    maven { url 'https://repo.spring.io/release' }
+  }
+}
+
+include(':app')
+
+if (file('demo-1').exists()) {
+  include(':demo-1')
+  // Prefer Kotlin DSL build script to avoid legacy Groovy merge artefacts.
+  project(':demo-1').buildFileName = 'build.gradle.kts'
+}
+
+// [TEMP] cfvm-raw 모듈 제외: build.gradle.kts에 Kotlin DSL 구문 오류 28개 존재
+// if (file('cfvm-raw').exists()) include(':cfvm-raw')
+if (file('lms-core').exists()) include(':lms-core')

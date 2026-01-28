@@ -2,6 +2,8 @@ package com.example.lms.dto.learning;
 
 import java.util.List;
 
+
+
 /**
  * Represents the structured knowledge output from Gemini. It includes lists of
  * triples, induced rules, aliases, memory snippets and protected terms.

@@ -2,11 +2,14 @@ package com.example.lms.scoring;
 
 import lombok.Builder;
 import lombok.Value;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-
 import java.util.*;
 import java.util.regex.Pattern;
+
+
+
 
 /**
  * 컨텍스트에 대한 '사실성/품질/신규성'을 간단히 추정하는 경량 스코어러.
@@ -16,21 +19,61 @@ import java.util.regex.Pattern;
  * 점수는 0~1 사이로 반환.
  */
 @Component
+@RequiredArgsConstructor
 public class ContextualScorer {
 
-    @Value @Builder
+    /**
+     * Path alignment scorer injected to adjust contextual scores based on the
+     * similarity between previously observed navigation paths and the current
+     * predicted path. When null, no multiplier is applied.
+     */
+    private final PathAlignedScorer pathAlignedScorer;
+
+    @Value
+    @Builder
     public static class ScoreReport {
         double factuality;
         double quality;
         double novelty;
-        public double overall() { return Math.max(0, Math.min(1, 0.5*factuality + 0.35*quality + 0.15*novelty)); }
+        /** The multiplier applied based on path alignment. */
+        double pathMultiplier;
+        public double overall() {
+            double base = 0.5 * factuality + 0.35 * quality + 0.15 * novelty;
+            // Bound the result to [0,1] after applying the multiplier. A missing multiplier defaults to 1.0.
+            double multiplier = (pathMultiplier > 0) ? pathMultiplier : 1.0;
+            return Math.max(0.0, Math.min(1.0, base * multiplier));
+        }
     }
 
     public ScoreReport score(String question, String unifiedContext, String answer) {
+        return score(question, unifiedContext, answer, List.of(), List.of());
+    }
+
+    /**
+     * Score the answer taking into account a predicted path and historic path information.
+     *
+     * @param question       the user question
+     * @param unifiedContext the unified context provided to the model
+     * @param answer         the generated answer
+     * @param pastPath       a flattened historic path sequence
+     * @param predictedPath  the path predicted for the current turn
+     * @return a ScoreReport containing individual metrics and the overall score
+     */
+    public ScoreReport score(String question, String unifiedContext, String answer,
+                             List<String> pastPath, List<String> predictedPath) {
         double factuality = groundingScore(unifiedContext, answer, 2);
         double quality    = qualityScore(answer);
         double novelty    = noveltyScore(question, answer);
-        return ScoreReport.builder().factuality(factuality).quality(quality).novelty(novelty).build();
+        double multiplier = 1.0;
+        if (pathAlignedScorer != null) {
+            multiplier = pathAlignedScorer.score(pastPath, predictedPath);
+        }
+        return ScoreReport.builder()
+                .factuality(factuality)
+                .quality(quality)
+                .novelty(novelty)
+                .pathMultiplier(multiplier)
+                .build();
     }
 
     /* --- 내부 휴리스틱 --- */

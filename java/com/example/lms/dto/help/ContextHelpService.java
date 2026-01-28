@@ -1,4 +1,4 @@
-package com.example.lms.service.help;
+package com.example.lms.dto.help;
 
 import com.example.lms.dto.help.ContextHelpRequest;
 

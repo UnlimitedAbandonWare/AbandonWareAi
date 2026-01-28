@@ -5,8 +5,16 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+
+
+/**
+ * @deprecated This controller is retained only for backward compatibility.  The
+ * PKI upload functionality is now handled exclusively by {@link PkiValidationController}.
+ * To avoid conflicting endpoints the base mapping has been changed to a dummy path.
+ */
+@Deprecated
 @RestController
-@RequestMapping("/.well-known/pki-validation")
+@RequestMapping("/deprecated/file-upload-controller")
 public class FileUploadController {
 
     private final FileStorage fileStorage;

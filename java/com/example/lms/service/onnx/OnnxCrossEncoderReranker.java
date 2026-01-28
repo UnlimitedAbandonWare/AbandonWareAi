@@ -1,125 +1,231 @@
 package com.example.lms.service.onnx;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
+import com.abandonware.ai.addons.onnx.OnnxSemaphoreGate;
+import com.example.lms.infra.resilience.FaultMaskingLayerMonitor;
+import com.example.lms.infra.resilience.NightmareBreaker;
+import com.example.lms.infra.resilience.NightmareBreaker.FailureKind;
+import com.example.lms.infra.resilience.NightmareKeys;
+import com.example.lms.search.TraceStore;
 import com.example.lms.service.rag.rerank.CrossEncoderReranker;
-import dev.langchain4j.data.document.Document;
 import dev.langchain4j.rag.content.Content;
-import jakarta.annotation.Nullable;
-import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.stereotype.Service;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
- * A cross‑encoder reranker backed by a local ONNX runtime.
- * Bean registration is handled centrally in RerankerConfig.
+ * ONNX Cross-Encoder reranker (fail-soft).
+ *
+ * <p>
+ * - Uses {@link OnnxRuntimeService#scorePair(String, String)} for scoring.
+ * - Respects request time budget (if installed via {@link TimeBudgetContext}).
+ * - Optional concurrency gate via {@link OnnxSemaphoreGate} (if provided by
+ * Addons auto-config).
+ * - Records failures to {@link NightmareBreaker} /
+ * {@link FaultMaskingLayerMonitor} when available.
+ * </p>
  */
-@RequiredArgsConstructor
+@Service("onnxCrossEncoderReranker")
+@ConditionalOnBean(OnnxRuntimeService.class)
 public class OnnxCrossEncoderReranker implements CrossEncoderReranker {
+
+    private static final Logger log = LoggerFactory.getLogger(OnnxCrossEncoderReranker.class);
 
     private final OnnxRuntimeService onnx;
 
-    /*
-     * ---------------------------- Internal API (AbandonWare) ----------------------------
-     */
+    @Value("${onnx.enabled:true}")
+    private boolean enabled;
+
+    @Autowired(required = false)
+    private OnnxSemaphoreGate onnxGate;
+
+    @Autowired(required = false)
+    private NightmareBreaker nightmareBreaker;
+
+    @Autowired(required = false)
+    private FaultMaskingLayerMonitor faultMaskingLayerMonitor;
+
+    public OnnxCrossEncoderReranker(OnnxRuntimeService onnx) {
+        this.onnx = onnx;
+    }
 
     @Override
     public List<Content> rerank(String query, List<Content> candidates, int topN) {
-        if (candidates == null || candidates.isEmpty() || query == null || query.isBlank()) {
-            return Collections.emptyList();
+        if (candidates == null || candidates.isEmpty()) {
+            return candidates;
         }
-        int n = candidates.size();
-        int k = Math.max(1, Math.min(topN, n));
-        // Extract plain text from each candidate
-        String[] docs = new String[n];
-        for (int i = 0; i < n; i++) {
-            Content c = candidates.get(i);
-            String text;
-            if (c.textSegment() != null) {
-                text = c.textSegment().text();
-            } else {
-                text = String.valueOf(c);
+
+        int k = normalizeTopN(topN, candidates.size());
+
+        // hard disable / not ready => stable trim
+        if (!enabled) {
+            TraceStore.put("rerank.onnx.enabled", false);
+            return limitStable(candidates, k);
+        }
+        if (onnx == null || !onnx.available()) {
+            TraceStore.put("rerank.onnx.ready", false);
+            return limitStable(candidates, k);
+        }
+
+        TimeBudget tb = TimeBudgetContext.get();
+        if (tb != null && tb.expired()) {
+            TraceStore.append("rerank.skip", "onnx:budget_expired");
+            return limitStable(candidates, k);
+        }
+
+        final String q = (query == null) ? "" : query;
+        long startedNs = System.nanoTime();
+        AtomicInteger scoredPairs = new AtomicInteger(0);
+
+        try {
+            if (onnxGate != null) {
+                return onnxGate.withPermit(
+                        () -> doRerank(q, candidates, k, tb, scoredPairs),
+                        () -> {
+                            TraceStore.append("rerank.skip", "onnx:gate");
+                            return limitStable(candidates, k);
+                        });
             }
-            docs[i] = (text == null ? "" : text);
-        }
-        float[][] scores = onnx.predict(new String[]{query}, docs);
-        float[] row = scores.length > 0 ? scores[0] : new float[n];
-        List<Integer> indices = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) indices.add(i);
-        indices.sort((i1, i2) -> Float.compare(row[i2], row[i1]));
-        List<Content> result = new ArrayList<>(k);
-        for (int i = 0; i < k; i++) {
-            result.add(candidates.get(indices.get(i)));
-        }
-        return result;
-    }
+            return doRerank(q, candidates, k, tb, scoredPairs);
+        } catch (Throwable t) {
+            recordFailure(t, "rerank");
+            TraceStore.append("rerank.fail", summarize(t));
+            return limitStable(candidates, k);
+        } finally {
+            long elapsedMs = (System.nanoTime() - startedNs) / 1_000_000L;
+            TraceStore.put("rerank.onnx.ms", elapsedMs);
 
-    @Override
-    public List<Content> rerank(String query, List<Content> candidates) {
-        if (candidates == null) return Collections.emptyList();
-        return rerank(query, candidates, candidates.size());
-    }
-    /*
-     * ---------------------------- LangChain4j 호환 시그니처(선택적) ----------------------------
-     * 외부에서 직접 호출할 수 있도록 유지하지만, 인터페이스 구현은 강제하지 않습니다.
-     */
-
-
-    public List<Document> rerank(List<Document> documents, String query) {
-        return rerank(documents, query, documents == null ? 0 : documents.size());
-    }
-
-
-    public List<Document> rerank(List<Document> documents, String query, int topK) {
-        if (documents == null || documents.isEmpty() || query == null || query.isBlank()) {
-            return Collections.emptyList();
-        }
-        int n = documents.size();
-        int k = Math.max(1, Math.min(topK, n));
-        // Build a list of document texts
-        String[] docs = new String[n];
-        for (int i = 0; i < n; i++) {
-            docs[i] = extractText(documents.get(i));
-        }
-        float[][] scores = onnx.predict(new String[]{query}, docs);
-        float[] row = scores.length > 0 ? scores[0] : new float[n];
-        List<Integer> indices = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) indices.add(i);
-        indices.sort((i1, i2) -> Float.compare(row[i2], row[i1]));
-        List<Document> result = new ArrayList<>(k);
-        for (int i = 0; i < k; i++) {
-            result.add(documents.get(indices.get(i)));
-        }
-        return result;
-    }
-
-    /**
-     * Extract textual content from an arbitrary Document instance. The LangChain4j
-     * {@link Document} interface exposes a {@code text()} method. Should that
-     * method be unavailable (e.g., when a proxy implementation is used), this
-     * helper falls back to common conventions such as {@code getText()},
-     * {@code getContent()} or the {@code toString()} representation.
-     *
-     * @param doc the document to convert to plain text
-     * @return the extracted text, never {@code null}
-     */
-    private String extractText(@Nullable Object doc) {
-        if (doc == null) {
-            return "";
-        }
-        // Try known accessor methods via reflection
-        for (String methodName : new String[]{"text", "getText", "getContent", "content"}) {
-            try {
-                Method m = doc.getClass().getMethod(methodName);
-                Object res = m.invoke(doc);
-                if (res instanceof String) {
-                    return (String) res;
+            // Mark success only when we actually ran scorePair at least once.
+            if (scoredPairs.get() > 0 && nightmareBreaker != null) {
+                try {
+                    nightmareBreaker.recordSuccess(NightmareKeys.RERANK_ONNX, elapsedMs);
+                } catch (Throwable ignore) {
                 }
-            } catch (Exception ignored) {
-                // ignore and try next
             }
         }
-        return doc.toString();
+    }
+
+    private List<Content> doRerank(
+            String query,
+            List<Content> candidates,
+            int topN,
+            TimeBudget tb,
+            AtomicInteger scoredPairs) {
+        if (tb != null && tb.remainingMillis() < 30) {
+            TraceStore.append("rerank.skip", "onnx:budget_low");
+            return limitStable(candidates, topN);
+        }
+
+        List<Scored> scored = new ArrayList<>(candidates.size());
+        for (int i = 0; i < candidates.size(); i++) {
+            if (tb != null && tb.remainingMillis() < 30) {
+                TraceStore.append("rerank.skip", "onnx:budget_exhausted");
+                return limitStable(candidates, topN);
+            }
+
+            Content c = candidates.get(i);
+            String doc = safeContentText(c);
+
+            float s = 0f;
+            try {
+                s = (float) onnx.scorePair(query, doc);
+                scoredPairs.incrementAndGet();
+            } catch (Throwable t) {
+                // scorePair can throw if tokenizer/runtime not ready; degrade gracefully.
+                recordFailure(t, "scorePair");
+                s = 0f;
+            }
+            scored.add(new Scored(i, c, s));
+        }
+
+        scored.sort(Comparator
+                .comparingDouble(Scored::score).reversed()
+                .thenComparingInt(Scored::idx));
+
+        int k = Math.min(topN, scored.size());
+        List<Content> out = new ArrayList<>(k);
+        for (int i = 0; i < k; i++) {
+            out.add(scored.get(i).content);
+        }
+        return out;
+    }
+
+    private void recordFailure(Throwable t, String note) {
+        try {
+            if (faultMaskingLayerMonitor != null) {
+                faultMaskingLayerMonitor.record(NightmareKeys.RERANK_ONNX, t, note);
+            }
+        } catch (Throwable ignore) {
+        }
+
+        try {
+            if (nightmareBreaker != null) {
+                FailureKind kind = NightmareBreaker.classify(t);
+                nightmareBreaker.recordFailure(NightmareKeys.RERANK_ONNX, kind, t, note);
+            }
+        } catch (Throwable ignore) {
+        }
+
+        try {
+            log.warn("[RERANK_ONNX] fail-soft note={} err={}", note, summarize(t));
+        } catch (Throwable ignore) {
+        }
+    }
+
+    private static String safeContentText(Content c) {
+        if (c == null)
+            return "";
+        try {
+            if (c.textSegment() != null && c.textSegment().text() != null) {
+                return c.textSegment().text();
+            }
+        } catch (Throwable ignore) {
+        }
+        return String.valueOf(c);
+    }
+
+    private static int normalizeTopN(int topN, int size) {
+        if (size <= 0)
+            return 0;
+        if (topN <= 0)
+            return size;
+        return Math.min(topN, size);
+    }
+
+    private static List<Content> limitStable(List<Content> in, int topN) {
+        if (in == null || in.isEmpty())
+            return in;
+        int k = normalizeTopN(topN, in.size());
+        if (k >= in.size())
+            return in;
+        return new ArrayList<>(in.subList(0, k));
+    }
+
+    private static String summarize(Throwable t) {
+        if (t == null)
+            return "";
+        Throwable root = t;
+        int guard = 0;
+        while (root.getCause() != null && root.getCause() != root && guard++ < 12) {
+            root = root.getCause();
+        }
+        String msg = root.getMessage();
+        if (msg == null)
+            msg = "";
+        msg = msg.replace('\n', ' ').replace('\r', ' ').trim();
+        String name = root.getClass().getSimpleName();
+        return msg.isBlank() ? name : (name + ": " + msg);
+    }
+
+    private record Scored(int idx, Content content, float score) {
     }
 }

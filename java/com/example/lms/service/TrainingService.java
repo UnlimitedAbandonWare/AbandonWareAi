@@ -1,45 +1,51 @@
 package com.example.lms.service;
 
 import com.example.lms.domain.TrainingJob;
-import com.example.lms.entity.TranslationMemory;
 import com.example.lms.domain.TranslationSample;
-import com.example.lms.domain.enums.TranslationRoute;
+import com.example.lms.entity.TranslationMemory;
 import com.example.lms.repository.MemoryRepository;
 import com.example.lms.repository.SampleRepository;
 import com.example.lms.repository.TrainingJobRepository;
+import com.example.lms.service.reinforcement.RewardScoringEngine;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
-
 import java.time.LocalDateTime;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class TrainingService {
+    private static final Logger log = LoggerFactory.getLogger(TrainingService.class);
 
     private final SampleRepository sampleRepo;
     private final MemoryRepository memoryRepo;
     private final TrainingJobRepository jobRepo;
 
-    // TODO: 내일 실제 연산식을 구현할 유사도 측정 서비스
+    // Unified reward policy (single entrypoint).
+    private final RewardScoringEngine rewardEngine = RewardScoringEngine.DEFAULT;
+
+    // Implementation shim: implement the similarity measurement service using the actual computation.
     // private final SimilarityService similarityService;
 
-    private static final int PAGE_SIZE = 1000; // 한 번에 처리할 데이터 양
+    private static final int PAGE_SIZE = 500; // 한 번에 처리할 데이터 양 (JPA batch + flush friendly)
 
     /** 학습 시작 → Job ID 반환 */
     public Long startTraining() {
         TrainingJob job = new TrainingJob();
         job.setStartedAt(LocalDateTime.now());
         job.setStatus("RUNNING");
-        job.setTotal(sampleRepo.count());
+        job.setTotal(sampleRepo.countByCorrectedIsNotNullAndTrainedAtIsNull());
         jobRepo.save(job);
 
         // 비동기 수행
@@ -63,38 +69,84 @@ public class TrainingService {
 
             Page<TranslationSample> page;
             do {
-                page = sampleRepo.findAll(pageable);
-                for (TranslationSample sample : page.getContent()) {
+                // Train only "valuable" samples: user-corrected and not yet trained.
+                page = sampleRepo.findByCorrectedIsNotNullAndTrainedAtIsNull(pageable);
+                List<TranslationSample> samples = page.getContent();
+                if (samples == null || samples.isEmpty()) {
+                    pageable = page.nextPageable();
+                    continue;
+                }
+
+                // N+1 제거: bulk load translation_memory by source_hash
+                Set<String> hashes = new LinkedHashSet<>();
+                for (TranslationSample s : samples) {
+                    if (s != null && s.getSourceHash() != null && !s.getSourceHash().isBlank()) {
+                        hashes.add(s.getSourceHash());
+                    }
+                }
+
+                Map<String, TranslationMemory> memByHash = new HashMap<>();
+                if (!hashes.isEmpty()) {
+                    for (TranslationMemory m : memoryRepo.findBySourceHashIn(hashes)) {
+                        if (m != null && m.getSourceHash() != null) {
+                            memByHash.put(m.getSourceHash(), m);
+                        }
+                    }
+                }
+
+                LocalDateTime trainedAt = LocalDateTime.now();
+                List<TranslationMemory> toSaveMem = new ArrayList<>(samples.size());
+                List<TranslationSample> toSaveSamples = new ArrayList<>(samples.size());
+
+                for (TranslationSample sample : samples) {
+                    if (sample == null) continue;
+
                     processed++;
-                    TranslationMemory tm = memoryRepo.findBySourceHash(sample.getSourceHash())
-                            .orElseGet(() -> new TranslationMemory(sample.getSourceHash()));
 
-                    // =======================================================================
-                    //      ▼▼▼ [고도화] 정교화된 보상 함수(Reward Function) 적용 ▼▼▼
-                    // =======================================================================
+                    String h = sample.getSourceHash();
+                    if (h == null || h.isBlank()) continue;
 
-                    double similarityScore = 0.95; // 임시값
+                    TranslationMemory tm = memByHash.get(h);
+                    if (tm == null) {
+                        tm = new TranslationMemory(h);
+                        memByHash.put(h, tm);
+                    }
 
-                    double newReward = calculateReward(sample, similarityScore);
+                    // Similarity placeholder 제거:
+                    // 1) sample.similarity 사용
+                    // 2) 없으면 qError 기반 대체: similarity = 1 - clamp(qError)
+                    double similarityScore = resolveSimilarity(sample);
 
-                    tm.setCorrected(sample.getTranslated());
+                    // Reward policy 단일화: RewardScoringEngine에 위임
+                    double reward = rewardEngine.score(tm, sample.getSourceText(), similarityScore);
+
+                    // Apply learning signal to memory
+                    // - corrected: 사람이 교정한 결과만 반영
+                    tm.setCorrected(sample.getCorrected());
                     tm.setCosineSimilarity(similarityScore);
+                    tm.applyReward(reward);
 
-                    int n = tm.getHitCount();
-                    double currentMeanReward = tm.getRewardMean();
-                    double newMeanReward = (currentMeanReward * n + newReward) / (n + 1);
+                    // Mark sample as trained (idempotent)
+                    sample.setTrainedAt(trainedAt);
 
-                    tm.setRewardMean(newMeanReward);
-                    tm.setQValue(newMeanReward);
-                    tm.setHitCount(n + 1);
+                    toSaveMem.add(tm);
+                    toSaveSamples.add(sample);
+                }
 
-                    memoryRepo.save(tm);
+                // batch-friendly writes
+                if (!toSaveMem.isEmpty()) {
+                    memoryRepo.saveAll(toSaveMem);
+                    memoryRepo.flush();
+                }
+                if (!toSaveSamples.isEmpty()) {
+                    sampleRepo.saveAll(toSaveSamples);
+                    sampleRepo.flush();
                 }
 
                 if (processed % (PAGE_SIZE * 5) == 0) {
                     job.setProcessed(processed);
                     jobRepo.save(job);
-                    log.info("... Job #{} 진행 중: {} / {}", jobId, processed, job.getTotal());
+                    log.info("/* ... *&#47; Job #{} 진행 중: {} / {}", jobId, processed, job.getTotal());
                 }
                 pageable = page.nextPageable();
 
@@ -117,36 +169,22 @@ public class TrainingService {
         return CompletableFuture.completedFuture(null);
     }
 
-    private double calculateReward(TranslationSample sample, double similarityScore) {
-        boolean wasCorrectedByUser = StringUtils.hasText(sample.getCorrected());
-        if (wasCorrectedByUser) {
-            log.debug("사용자 수정 감지 [hash:{}]. 낮은 보상(0.1) 적용.", sample.getSourceHash());
-            return 0.1;
+    private static double resolveSimilarity(TranslationSample sample) {
+        if (sample == null) return 0.0;
+        Double s = sample.getSimilarity();
+        if (s != null && !s.isNaN() && !s.isInfinite()) {
+            return clamp01(s);
         }
-
-        double qualityReward = similarityScore;
-        double costFactor = getCostFactorFor(sample.getRoute());
-        double finalReward = qualityReward * costFactor;
-
-        return Math.max(0.0, Math.min(1.0, finalReward));
+        Double qErr = sample.getQError();
+        if (qErr != null && !qErr.isNaN() && !qErr.isInfinite()) {
+            return clamp01(1.0 - clamp01(qErr));
+        }
+        return 0.0;
     }
 
-    /**
-     * [수정] 컴파일러 호환성 문제를 해결하기 위해 if-else if 구문으로 변경
-     */
-    private double getCostFactorFor(TranslationRoute route) {
-        if (route == null) {
-            return 0.8;
-        }
-
-        if (route == TranslationRoute.MEMORY) {
-            return 1.0;
-        } else if (route == TranslationRoute.GPT_3_5 || route == TranslationRoute.GEMINI) {
-            return 0.95;
-        } else if (route == TranslationRoute.GPT_4) {
-            return 0.85;
-        } else {
-            return 0.9;
-        }
+    private static double clamp01(double v) {
+        if (v < 0.0) return 0.0;
+        if (v > 1.0) return 1.0;
+        return v;
     }
 }

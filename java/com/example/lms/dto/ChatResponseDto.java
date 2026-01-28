@@ -3,8 +3,10 @@ package com.example.lms.dto;
 
 import lombok.Getter;
 
+
+
 /**
- * 채팅 API 응답 DTO – 프론트엔드 요구 필드 100 % 일치
+ * 채팅 API 응답 DTO - 프론트엔드 요구 필드 100 % 일치
  */
 @Getter
 public class ChatResponseDto {
@@ -13,14 +15,24 @@ public class ChatResponseDto {
     private final Long    sessionId; // 세션 ID
     private final String  modelUsed; // 사용 모델명
     private final boolean ragUsed;   // RAG 사용 여부 (추가)
+    private final String  answerMode; // (옵션) answer.mode (fallback/debug)
 
     public ChatResponseDto(String content,
                            Long   sessionId,
                            String modelUsed,
                            boolean ragUsed) {
+        this(content, sessionId, modelUsed, ragUsed, null);
+    }
+
+    public ChatResponseDto(String content,
+                           Long   sessionId,
+                           String modelUsed,
+                           boolean ragUsed,
+                           String answerMode) {
         this.content   = content;
         this.sessionId = sessionId;
         this.modelUsed = modelUsed;
         this.ragUsed   = ragUsed;
+        this.answerMode = answerMode;
     }
 }

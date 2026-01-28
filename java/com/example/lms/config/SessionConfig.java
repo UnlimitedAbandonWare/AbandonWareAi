@@ -8,9 +8,11 @@ import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import jakarta.servlet.http.HttpSession;
-
 import java.util.function.Supplier;
 import com.example.lms.common.ChatSessionScope;
+
+
+
 
 @Configuration
 public class SessionConfig {
@@ -21,6 +23,3 @@ public class SessionConfig {
         return ChatSessionScope::current;
     };
 }
-
-
-

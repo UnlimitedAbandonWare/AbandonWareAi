@@ -1,12 +1,18 @@
 package com.example.lms.search;
 
+import com.example.lms.service.guard.GuardContextHolder;
+
 import dev.langchain4j.model.chat.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * LLM-as-a-Judge:  웹 스니펫 증거로 키워드 검증 (도메인 중립)
@@ -18,16 +24,17 @@ import java.util.List;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class LlmKeywordSanitizer {
+    private static final Logger log = LoggerFactory.getLogger(LlmKeywordSanitizer.class);
 
-    private final ChatModel chatModel;
+    @Qualifier("judgeChatModel")
+    private final ChatModel judgeChatModel;
 
     private static final int MAX_SNIPPETS = 6;          // 토큰 절약용
     private static final String PROMPT = """
         You are a search keyword verifier.
         Decide whether each candidate keyword is **supported** by the given web snippets.
-        Output a JSON array like [{"kw":"...","ok":true}, ...]
+        Output a JSON array like [{"kw":"/* ... */","ok":true}, /* ... *&#47;]
         ---
         ORIGINAL_QUESTION:
         %s
@@ -51,6 +58,11 @@ public class LlmKeywordSanitizer {
         if (candidates == null || candidates.isEmpty()) return candidates;
         if (snippets == null || snippets.size() <= 1)   return candidates; // 근거 부족 → 패스
 
+        var gctx = GuardContextHolder.get();
+        if (gctx != null && (gctx.isSensitiveTopic() || gctx.planBool("memory.forceOff", false))) {
+            return candidates;
+        }
+
         // 토큰 과다 방지: 앞쪽 N 개만 사용
         String snippetBlock = String.join("\n",
                 snippets.stream().limit(MAX_SNIPPETS).toList());
@@ -62,7 +74,8 @@ public class LlmKeywordSanitizer {
         );
 
         try {
-            String json = chatModel.chat(prompt);
+            String json = judgeChatModel.chat(java.util.List.of(dev.langchain4j.data.message.UserMessage.from(prompt)))
+                    .aiMessage().text();
 
             // 아주 단순한 파싱 (의존성 줄이기 위해 Jackson 생략)
             List<String> passed = new ArrayList<>();
@@ -79,7 +92,7 @@ public class LlmKeywordSanitizer {
             return passed.isEmpty() ? candidates : passed;
 
         } catch (Exception e) {
-            log.warn("[Sanitizer] LLM call failed – bypassing filter", e);
+            log.warn("[Sanitizer] LLM call failed - bypassing filter", e);
             return candidates;   // fail-open
         }
     }

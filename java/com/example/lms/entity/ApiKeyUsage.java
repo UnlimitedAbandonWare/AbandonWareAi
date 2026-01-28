@@ -16,6 +16,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+
+
 /**
  * API 키별 일일 사용량을 기록하는 엔티티
  */

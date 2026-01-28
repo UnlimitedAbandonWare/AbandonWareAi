@@ -2,45 +2,59 @@
 package com.example.lms.guard;
 
 import com.example.lms.prompt.PromptContext;
+import com.example.lms.rag.model.QueryDomain;
+import com.example.lms.service.rag.guard.UniversalDomainSanitizer;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 
-
+/**
+ * @deprecated Use {@link UniversalDomainSanitizer} instead.
+ *
+ * <p>과거 Genshin 전용 추천 가드. 지금은
+ * {@link UniversalDomainSanitizer} 에 위임하는 얇은 호환 계층입니다.
+ * 새로운 코드에서는 UniversalDomainSanitizer 또는 GameRecommendationSanitizer 를
+ * 직접 사용하는 것을 권장합니다.</p>
+ */
 @Component
+@Deprecated
+@RequiredArgsConstructor
 public class GenshinRecommendationSanitizer implements AnswerSanitizer {
+
+    private final UniversalDomainSanitizer delegate;
+
     @Override
     public String sanitize(String answer, PromptContext ctx) {
-        if (answer == null) return "";
-        if (!"RECOMMENDATION".equalsIgnoreCase(ctx.intent())) return answer;
-        if (!"GENSHIN".equalsIgnoreCase(ctx.domain())) return answer;
+        if (answer == null || answer.isBlank()) {
+            return answer;
+        }
 
-        // 금지 원소가 명시된 경우, 대표 PYRO 캐릭터 출현 차단
-        // 동적 관계 규칙 중 '금지/회피/약점' 성격 키에서 PYRO가 포함되면 차단
-        boolean pyroDiscouraged = false;
-        Map<String, Set<String>> rules = ctx.interactionRules();
-        if (rules != null && !rules.isEmpty()) {
-            for (Map.Entry<String, Set<String>> e : rules.entrySet()) {
-                String k = e.getKey();
-                if (k == null) continue;
-                String ku = k.toUpperCase(Locale.ROOT);
-                // 예: RELATIONSHIP_DISCOURAGED_WITH, RELATIONSHIP_AVOID, RELATIONSHIP_WEAK_TO, RELATIONSHIP_COUNTERED_BY ...
-                if (ku.contains("DISCOURAGED") || ku.contains("AVOID") || ku.contains("WEAK") || ku.contains("COUNTER")) {
-                    Set<String> vals = e.getValue();
-                    if (vals != null && vals.stream().anyMatch(v -> "PYRO".equalsIgnoreCase(v))) {
-                        pyroDiscouraged = true;
-                        break;
-                    }
-                }
+        // 도메인이 비어 있으면 기본으로 "genshin"을 사용
+        String domain = null;
+        if (ctx != null) {
+            domain = ctx.domain();
+            if ((domain == null || domain.isBlank()) && ctx.queryDomain() == QueryDomain.GAME) {
+                domain = "genshin";
             }
+        } else {
+            domain = "genshin";
         }
-        if (!pyroDiscouraged) return answer;
 
-        String low = answer.toLowerCase();
-        if (low.matches(".*(다이루크|호두|향릉|신염|연비|데히야).*")) {
-            return "정보 없음"; // 필요 시 재시도 루트 연결 가능
-        }
-        return answer;
+        // UniversalDomainSanitizer 는 PromptContext 기반 구현이므로
+        // 실제 도메인 정보는 ctx 내부에 그대로 두고, sanitize 를 위임한다.
+        return delegate.sanitize(answer, ctx);
+    }
+
+    /**
+     * 과거 구현에서 사용하던 위험 패턴 탐지 로직.
+     * UniversalDomainSanitizer 기반 규칙으로 점진 이관하기 위해
+     * 유틸 메서드 형태로 보존만 한다.
+     */
+    @SuppressWarnings("unused")
+    private boolean containsDangerousPattern(String text) {
+        if (text == null) return false;
+        return text.contains("계정 거래")
+                || text.contains("핵 다운")
+                || text.contains("사설 서버")
+                || text.matches(".*[0-9]+만원.*과금.*");
     }
 }

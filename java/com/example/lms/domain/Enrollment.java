@@ -1,5 +1,5 @@
 // 파일 경로:
-// C:\Users\dw-019\eclipse-workspace\demo-1\src\main\java\com\example\lms\domain\Enrollment.java
+// C:\Users\\dw-019\eclipse-workspace\\demo-1\\src\main\java\com\example\lms\\domain\Enrollment.java
 
 package com.example.lms.domain;
 
@@ -7,6 +7,8 @@ import com.example.lms.domain.Course;
 import com.example.lms.domain.Student;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+
+
 
 /**
  * 수강 신청(Entity) - Enrollment 테이블과 매핑

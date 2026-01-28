@@ -2,6 +2,8 @@ package com.example.lms.dto.learning;
 
 import java.util.Objects;
 
+
+
 /**
  * Represents a snippet of text to be inserted into the translation memory
  * or vector store. The subject field may provide context about the snippet.

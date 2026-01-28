@@ -1,24 +1,57 @@
 package com.example.lms.service.rag.handler;
 
 import com.example.lms.service.rag.SelfAskWebSearchRetriever;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
-@Slf4j @RequiredArgsConstructor
 public class SelfAskHandler extends AbstractRetrievalHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(SelfAskHandler.class);
+
     private final SelfAskWebSearchRetriever retriever;
+    private final OrchestrationGate gate;
+
+    public SelfAskHandler(SelfAskWebSearchRetriever retriever, OrchestrationGate gate) {
+        this.retriever = retriever;
+        this.gate = gate;
+    }
+
     @Override
     protected boolean doHandle(Query q, List<Content> acc) {
         try {
+            if (gate != null && !gate.allowSelfAsk(q)) {
+                log.debug("[SelfAsk] skipped by orchestration gate");
+                return true;
+            }
+
             acc.addAll(retriever.retrieve(q));
-            return true;                    // 다음 핸들러도 시도
+            // 항상 다음 핸들러도 시도한다.
+            return true;
         } catch (Exception e) {
-            log.warn("[SelfAsk] 실패 – 패스", e);
+            log.warn("[SelfAsk] failed: {}", e.toString());
             return true;
         }
+    }
+
+    // [HARDENING] ensure SID metadata is present on every query
+    @SuppressWarnings("unused")
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(
+            dev.langchain4j.rag.query.Query original,
+            String sessionKey
+    ) {
+        var md = original.metadata() != null
+                ? original.metadata()
+                : dev.langchain4j.data.document.Metadata.from(
+                        java.util.Map.of(
+                                com.example.lms.service.rag.LangChainRAGService.META_SID,
+                                sessionKey
+                        ));
+
+        // LangChain4j 1.0.x 에서는 (text, metadata)를 받는 public 생성자를 제공
+        return new dev.langchain4j.rag.query.Query(original.text(), md);
     }
 }
