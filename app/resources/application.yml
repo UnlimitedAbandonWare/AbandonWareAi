@@ -1,0 +1,138 @@
+retrieval:
+  vector:
+    enabled: true
+  kalloc:
+    enabled: true
+    totalK: 32
+naver:
+  keys: ${naver.keys:${NAVER_KEYS:}}
+  filters:
+    enable-domain-filter: true
+    domain-policy: boost
+  search:
+    timeout-ms: 2500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+  patch-query:
+    official-domains:
+    - hoyoverse.com
+    - hoyolab.com
+    - playlostark.com
+    - playoverwatch.com
+    - playvalorant.com
+    - leagueoflegends.com
+    community-domains:
+    - inven.co.kr
+    - namu.wiki
+    - arca.live
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+probe:
+  search:
+    enabled: true
+  admin-token: ${PROBE_TOKEN:}
+upstash:
+  cache:
+    ttl-seconds: 3600
+gate:
+  citation:
+    enabled: true
+    min: 1
+  finalSigmoid:
+    enabled: true
+    k: 8.0
+    x0: 0.0
+    threshold: 0.1
+  contextDiversity:
+    min: 0.1
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+planner.enabled: true
+brave.enabled: true
+zero_break.enabled: false
+rerank.dpp.enabled: true
+fusion.wpm.enabled: true
+scoring.calibrator.enabled: true
+guard.pii.enabled: true
+zsys.timebudget.ms: 3500
+zsys.onnx.max-concurrency: 2
+cache.singleflight.enabled: true
+ocr.retriever.enabled: true
+quality:
+  gate:
+    k: 8.0
+    x0: 0.6
+    min-citations: 3
+guard:
+  error-break:
+    warn:
+      onnx-enabled: false
+      web-top-k: 8
+      official-sources-only: true
+    break:
+      onnx-enabled: false
+      web-top-k: 4
+      use-cache-only: true
+fusion:
+  url:
+    canonicalizer:
+      enabled: true
+rag:
+  rerank:
+    dpp:
+      enabled: true
+      lambda: 0.65
+    topKFast: 64
+    topKFinal: 12
+embedding:
+  cache:
+    enabled: true
+    ttl-hours: 4
+domains:
+  whitelist: gov.kr,go.kr,ac.kr,who.int,nature.com
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: gemma3:27b
+  api-key: dummy
+fallback:
+  enabled: false
+selfask:
+  enabled: false
+vllm:
+  url: ${VLLM_URL:http://localhost:8002}
+train_idle:
+  enabled: true
+autolearn:
+  enabled: true
+spring:
+  config:
+    import: optional:classpath:application-llm.yaml
+local-llm:
+  autostart: false
+  health-check-url: http://localhost:8000/health
+  health-check-timeout: 30s
+  start-command: docker-compose -f vllm-compose.yml up -d
+  enabled: true
+  base-url: http://localhost:11434/v1
+jammini:
+  guard:
+    mode: aggressive
+    profile: PROFILE_MEMORY
+  memory:
+    enabled: true
+    low-guardrail: true
+    progressive: true
+verifier:
+  coverage:
+    threshold:
+      default: 0.2
+      high-risk: 0.4
+websearch:

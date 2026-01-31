@@ -2,9 +2,11 @@ package com.example.lms.service.correction;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.stream.Collectors;
+
+
+
 
 /**
  * application.yml 의 "query.correction.protected-terms" (콤마 구분) 값을 읽어

@@ -1,22 +1,23 @@
 package com.example.lms.search;
 
-import lombok.extern.slf4j.Slf4j;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.ko.KoreanAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.*;
 import org.apache.lucene.search.*;
-import org.apache.lucene.store.ByteBuffersDirectory;   // ✅ 새 디렉터리
 import org.apache.lucene.search.similarities.BM25Similarity;
 import org.springframework.stereotype.Service;
-
 import java.util.*;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
+import org.apache.lucene.store.ByteBuffersDirectory;   // ✅ 새 디렉터리
+
 @Service
 public class KeyTermMiner {
+    private static final Logger log = LoggerFactory.getLogger(KeyTermMiner.class);
 
     private static final int DEFAULT_TOP_N = 3;
     private final Analyzer analyzer = new KoreanAnalyzer();

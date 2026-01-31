@@ -1,0 +1,9 @@
+
+Date: 2025-10-27T20:03:59.870974Z
+Patch: Build Error Miner v1.2 integrated
+Changes:
+  - Added tools/build_error_miner.py (robust log parser, JSON/CSV/NDJSON/MD outputs)
+  - Added tools/run_build_error_miner.sh for convenience
+  - Deprecated tools/error_pattern_extractor.py → thin wrapper to new miner (backup kept)
+  - Generated analysis/stuff4_build_error_report.* from {스터프4} bundles
+  - Added docs/BUILD_ERROR_MINER.md and CI workflow (.github/workflows/build-error-miner.yml)

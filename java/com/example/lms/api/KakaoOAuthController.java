@@ -3,7 +3,6 @@ package com.example.lms.api;
 import com.example.lms.service.KakaoOAuthService;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,15 +10,19 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * 카카오 OAuth 2.0 로그인/동의 플로우 컨트롤러
  */
-@Slf4j
 @Controller
 @RequestMapping("/kakao/oauth")
 @RequiredArgsConstructor
 public class KakaoOAuthController {
+    private static final Logger log = LoggerFactory.getLogger(KakaoOAuthController.class);
 
     /** REST API Key 등 설정 (@Value) */
     @Value("${kakao.rest-api-key}")

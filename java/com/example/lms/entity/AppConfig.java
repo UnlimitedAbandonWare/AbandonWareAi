@@ -1,10 +1,12 @@
 // src/main/java/com/example/lms/entity/AppConfig.java
 package com.example.lms.entity;
 
-import jakarta.persistence.*;    // javax → jakarta 로 변경
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+
+
+import jakarta.persistence.*;    // javax → jakarta 로 변경
 
 @Entity
 @Table(name = "app_config")

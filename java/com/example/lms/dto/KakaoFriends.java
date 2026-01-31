@@ -3,8 +3,10 @@ package com.example.lms.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
-
 import java.util.List;
+
+
+
 
 /**
  * Kakao “친구 목록” REST 응답을 그대로 매핑하는 DTO

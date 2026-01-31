@@ -1,0 +1,18 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: brave_v1
+steps:
+  - task: RetrieveWeb
+  - task: RetrieveVector
+  - task: RetrieveKG
+  - task: FusionRRF
+  - task: BiEncoderRerank
+  - task: CrossEncoderRerank
+  - task: CitationGate
+  - task: LenientAnswerSanitizer
+
+guard:
+  profile: PROFILE_MEMORY

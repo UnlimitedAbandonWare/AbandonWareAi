@@ -4,28 +4,46 @@ package com.example.lms.service;
 import com.example.lms.domain.Administrator;
 import com.example.lms.repository.AdministratorRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j; // ✨ [수정] log를 사용하기 위해 import 추가
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+import lombok.extern.slf4j.Slf4j; // ✨ [수정] log를 사용하기 위해 import 추가
 
 /**
  * 관리자(Administrator) 관련 비즈니스 로직을 담당.
  */
-@Slf4j // ✨ [수정] log 변수를 사용하기 위해 어노테이션 추가
 @Service
 @Transactional
 @RequiredArgsConstructor
 public class AdminService {
-
+    private static final Logger log = LoggerFactory.getLogger(AdminService.class);
+    /* Removed duplicate manual Logger 'log'; using Lombok */
     private final AdministratorRepository repo;
-    private final PasswordEncoder         encoder;
-
+    private final PasswordEncoder encoder;
     /* ───────── 새 관리자 생성 ───────── */
     public Administrator create(String username, String rawPw, String name) {
+        // 기존 계정이 존재하는지 확인하지 않고 새 관리자를 생성합니다.
         Administrator admin = new Administrator(username, encoder.encode(rawPw), name);
         return repo.save(admin);
+    }
+
+    /**
+     * 주어진 사용자 이름으로 관리자가 이미 존재하지 않으면 새로 생성합니다.
+     * 존재하는 경우에는 기존 엔티티를 그대로 반환하여 idempotent하게 동작합니다.
+     *
+     * @param username 로그인 ID
+     * @param rawPw    암호화되지 않은 비밀번호
+     * @param name     관리자 이름
+     * @return 생성되었거나 이미 존재하는 관리자 엔티티
+     */
+    public Administrator createIfAbsent(String username, String rawPw, String name) {
+        return repo.findByUsername(username)
+                .orElseGet(() -> this.create(username, rawPw, name));
     }
 
     /* ───────── ID 조회 ───────── */

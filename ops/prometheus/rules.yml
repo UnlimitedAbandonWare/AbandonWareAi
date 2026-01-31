@@ -1,0 +1,25 @@
+groups:
+  - name: kchat_agent_rules
+    rules:
+      - alert: HighToolErrorRate
+        expr: rate(agent_tool_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High tool error rate"
+          description: "More than 10% of tool invocations have failed in the last 5 minutes."
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

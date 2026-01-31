@@ -8,9 +8,11 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-
 import java.math.BigDecimal;
 import java.time.LocalDate;
+
+
+
 
 /**
  * JPA 엔티티: OpenAI 모델 메타데이터 저장용
@@ -22,12 +24,12 @@ import java.time.LocalDate;
 @Table(name = "models")
 public class ModelEntity {
 
-    /** OpenAI 모델 ID(PK) – 예: "gpt-4" */
+    /** OpenAI 모델 ID(PK) - 예: "qwen2.5-7b-instruct" */
     @Id
     @Column(name = "model_id", length = 100, nullable = false)
     private String modelId;
 
-    /** 소유자(owned_by) – NOT NULL */
+    /** 소유자(owned_by) - NOT NULL */
     @Column(nullable = false, length = 64)
     private String owner;
 

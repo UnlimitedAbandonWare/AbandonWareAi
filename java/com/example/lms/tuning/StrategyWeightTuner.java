@@ -4,22 +4,25 @@ import com.example.lms.service.config.HyperparameterService;
 import com.example.lms.strategy.StrategyPerformanceRepository;
 import com.example.lms.strategy.StrategyPerformanceRepository.StatsRow;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.Optional;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 성과 통계(전략별 성공/실패/보상)를 이용해
  * w_sr(성공률 가중치), w_rw(평균 보상 가중치)를
  * 중앙 차분 경사상승으로 한 스텝 미세 조정한다.
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class StrategyWeightTuner {
+    private static final Logger log = LoggerFactory.getLogger(StrategyWeightTuner.class);
 
     private final StrategyPerformanceRepository perfRepo;
     private final HyperparameterService hp;
@@ -60,7 +63,7 @@ public class StrategyWeightTuner {
         log.info("[Tuner] strategy weights tuned → wSr={}, wRw={}", f(wSr), f(wRw));
     }
 
-    /** 전략 전반의 기대 점수(가중 평균) – 운영 데이터 기반 근사 */
+    /** 전략 전반의 기대 점수(가중 평균) - 운영 데이터 기반 근사 */
     private double objective(double wSr, double wRw) {
         List<StatsRow> rows = perfRepo.findStatsByCategory("default");
         if (rows == null || rows.isEmpty()) return 0.0;

@@ -1,33 +1,50 @@
 package com.example.lms.service.ner;
 
 import com.example.lms.service.correction.DomainTermDictionary;
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import com.example.lms.prompt.PromptBuilder;
+import com.example.lms.prompt.PromptContext;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * LLM과 도메인 사전을 함께 사용하여 텍스트에서 명명 개체(Named Entity)를 추출합니다.
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class LLMNamedEntityExtractor implements NamedEntityExtractor {
+    private static final Logger log = LoggerFactory.getLogger(LLMNamedEntityExtractor.class);
 
-    private final OpenAiService openAi;
+    /**
+     * The chat model used to perform named entity extraction.  We avoid
+     * depending on the OpenAI-Java SDK directly so that the LLM pipeline can
+     * be unified on LangChain4j.  A bean of type {@link ChatModel} must be
+     * available in the Spring context for this extractor to operate.  When no
+     * chat model is available, the extractor falls back to returning only
+     * dictionary terms.
+     */
+    private final ChatModel chatModel;
     private final DomainTermDictionary dict;
+    private final PromptBuilder promptBuilder;
 
-    @Value("${ner.model:gpt-4o-mini}")
+    /**
+     * Model name for the underlying LLM.  Defaults to the latest GPT-5 mini
+     * model.  This property can be overridden via application configuration.
+     */
+    @Value("${ner.model:gemma3:27b}")
     private String model;
 
     /**
@@ -47,22 +64,26 @@ public class LLMNamedEntityExtractor implements NamedEntityExtractor {
                 Output ONLY a comma-separated list of short entity names. No explanation.
                 Example: 푸리나, 원신, 폰타인
                 """;
-        String userPrompt = "TEXT:\n" + text;
+        String userPrompt = new StringBuilder(6 + text.length())
+                .append("TEXT:\n")
+                .append(text)
+                .toString();
 
         String rawLlmOutput = "";
         try {
-            ChatCompletionRequest request = ChatCompletionRequest.builder()
-                    .model(model)
-                    .messages(List.of(
-                            new ChatMessage(ChatMessageRole.SYSTEM.value(), sysPrompt),
-                            new ChatMessage(ChatMessageRole.USER.value(), userPrompt)
-                    ))
-                    .temperature(0.0) // 결정적(deterministic) 결과를 위해 0으로 설정
-                    .topP(0.05)      // 낮은 값으로 설정하여 더 집중된 결과 유도
-                    .build();
-
-            rawLlmOutput = openAi.createChatCompletion(request)
-                    .getChoices().get(0).getMessage().getContent();
+            if (chatModel != null) {
+                // Prompt composition rule: do not concatenate system+user prompts.
+                // Use PromptBuilder.build(ctx) only.
+                PromptContext ctx = PromptContext.builder()
+                        .systemInstruction(sysPrompt)
+                        .userQuery(userPrompt)
+                        .build();
+                String prompt = promptBuilder.build(ctx);
+                var res = chatModel.chat(UserMessage.from(prompt));
+                if (res != null && res.aiMessage() != null && res.aiMessage().text() != null) {
+                    rawLlmOutput = res.aiMessage().text();
+                }
+            }
         } catch (Exception e) {
             log.debug("[NER] LLM API 호출에 실패했습니다: {}", e.toString());
         }

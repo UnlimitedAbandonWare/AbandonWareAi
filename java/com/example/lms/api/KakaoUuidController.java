@@ -4,12 +4,15 @@ package com.example.lms.api;
 import com.example.lms.service.KakaoFriendService;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
-
 import java.util.List;
+
+
+
 
 @Controller
 @RequestMapping("/kakao")
@@ -20,8 +23,14 @@ public class KakaoUuidController {
 
     /** 세션에 저장된 access token 꺼낼 때 쓰는 키 */
     private static final String SESSION_TOKEN = "kakaoAccessToken";
-    /** 한 페이지당 보여줄 UUID 개수 (서비스와 동일하게 유지) */
-    private static final int PAGE_SIZE = 10;
+
+    /**
+     * 페이지 크기는 서비스/인터페이스에 하드코딩하지 않고, 호출부(Controller)가 정책으로 주입한다.
+     * <p>
+     * default=10 은 하위호환을 위한 안전망이며, 운영에서는 application.yml 로 명시 권장.
+     */
+    @Value("${kakao.friends.page-size:10}")
+    private int pageSize;
 
     /**
      * GET  /kakao/uuid-list?page=1
@@ -47,16 +56,18 @@ public class KakaoUuidController {
         }
 
         // 2) offset 계산
-        int offset = (page - 1) * PAGE_SIZE;
+        int safePage = Math.max(1, page);
+        int safePageSize = Math.max(1, pageSize);
+        int offset = (safePage - 1) * safePageSize;
 
-        // 3) 핵심 호출: accessToken + offset 으로 친구 UUID 리스트 조회 (한 페이지 분량)
-        List<String> uuids = friendService.fetchFriendUuids(accessToken, offset);
+        // 3) 핵심 호출: accessToken + offset + limit 으로 친구 UUID 리스트 조회 (한 페이지 분량)
+        List<String> uuids = friendService.fetchFriendUuids(accessToken, offset, safePageSize);
 
         // 4) 뷰에 모델 세팅
         model.addAttribute("uuids",   uuids);
-        model.addAttribute("page",    page);
-        model.addAttribute("hasPrev", page > 1);
-        model.addAttribute("hasNext", uuids.size() == PAGE_SIZE);
+        model.addAttribute("page",    safePage);
+        model.addAttribute("hasPrev", safePage > 1);
+        model.addAttribute("hasNext", uuids.size() == safePageSize);
         model.addAttribute("result",  result);
 
         return "kakao/uuid-list";

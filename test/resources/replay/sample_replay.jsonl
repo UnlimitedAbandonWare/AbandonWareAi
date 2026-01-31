@@ -1,0 +1,2 @@
+{"query": "q1", "groundTruth": ["d1", "d2"], "rankedResults": ["d1", "d3", "d4"], "latencyMs": 100}
+{"query": "q2", "groundTruth": ["d5"], "rankedResults": ["d6", "d5"], "latencyMs": 200}

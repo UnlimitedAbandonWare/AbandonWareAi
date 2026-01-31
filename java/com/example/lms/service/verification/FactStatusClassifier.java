@@ -1,17 +1,18 @@
 package com.example.lms.service.verification;
 
-import com.theokanning.openai.completion.chat.ChatCompletionRequest;
-import com.theokanning.openai.completion.chat.ChatMessage;
-import com.theokanning.openai.completion.chat.ChatMessageRole;
-import com.theokanning.openai.service.OpenAiService;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.data.message.UserMessage;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
-
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 초안 답변을 컨텍스트와 비교하여 PASS, CORRECTED, INSUFFICIENT 상태로 분류합니다.
@@ -20,13 +21,13 @@ import java.util.Locale;
  * LLM 호출이 실패하면 안전하게 휴리스틱 결과로 폴백(Fallback)합니다.
  * </p>
  */
-@Slf4j
 @Service("factStatusClassifier")
 @RequiredArgsConstructor
 public class FactStatusClassifier {
+    private static final Logger log = LoggerFactory.getLogger(FactStatusClassifier.class);
 
-    /** OpenAiService는 선택적으로 주입됩니다. 없으면 휴리스틱 분류만 동작합니다. */
-    private final ObjectProvider<OpenAiService> openAiProvider;
+    /** ChatModel은 선택적으로 주입됩니다. 없으면 휴리스틱 분류만 동작합니다. */
+    private final ObjectProvider<ChatModel> chatModelProvider;
 
     private static final String CLASSIFICATION_TEMPLATE = """
         You are a classification model.
@@ -59,21 +60,11 @@ public class FactStatusClassifier {
         }
 
         // 2. LLM 사용이 가능하면, 정밀 분류를 시도합니다.
-        OpenAiService openAi = openAiProvider.getIfAvailable();
-        if (openAi != null && isNotBlank(context) && context.length() >= 80 && isNotBlank(model)) {
+        ChatModel llm = chatModelProvider.getIfAvailable();
+        if (llm != null && isNotBlank(context) && context.length() >= 80 && isNotBlank(model)) {
             try {
                 String prompt = String.format(CLASSIFICATION_TEMPLATE, toNn(question), toNn(context), toNn(draft));
-                ChatCompletionRequest request = ChatCompletionRequest.builder()
-                        .model(model)
-                        .messages(List.of(new ChatMessage(ChatMessageRole.SYSTEM.value(), prompt)))
-                        .temperature(0.0)
-                        .topP(0.05)
-                        .maxTokens(2) // "CORRECTED" 등 2토큰 단어 고려
-                        .build();
-
-                String rawResponse = openAi.createChatCompletion(request)
-                        .getChoices().get(0).getMessage().getContent();
-
+                String rawResponse = callChatModel(llm, prompt);
                 FactVerificationStatus llmStatus = parseLabel(rawResponse);
                 if (llmStatus != FactVerificationStatus.UNKNOWN) {
                     // LLM이 성공적으로 분류했다면 그 결과를 최종적으로 신뢰합니다.
@@ -144,5 +135,24 @@ public class FactStatusClassifier {
 
     private String toNn(String s) {
         return s == null ? "" : s;
+    }
+
+    /**
+     * Execute a chat completion using the supplied ChatModel.  This method
+     * sends the prompt as a single user message and returns the assistant's
+     * text.  It swallows any exceptions and returns an empty string to
+     * allow callers to safely fall back to heuristics.
+     */
+    private String callChatModel(ChatModel llm, String prompt) {
+        if (llm == null || prompt == null) return "";
+        try {
+            var res = llm.chat(UserMessage.from(prompt));
+            if (res == null || res.aiMessage() == null) return "";
+            var ai = res.aiMessage();
+            return ai.text() == null ? "" : ai.text();
+        } catch (Exception e) {
+            log.debug("[FactStatusClassifier] ChatModel call failed: {}", e.toString());
+            return "";
+        }
     }
 }

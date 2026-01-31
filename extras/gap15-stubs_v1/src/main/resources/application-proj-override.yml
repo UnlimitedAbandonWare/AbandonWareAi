@@ -1,0 +1,36 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+# Projection overlay — non-destructive defaults for local-only intelligent augmentation
+# This file is imported via spring.config.import from application.yml
+llm:
+  provider: local
+  base-url: ${LLM_BASE_URL:http://localhost:11434/v1}
+  api-key: ${LLM_API_KEY:dummy}
+  chat-model: ${LLM_CHAT_MODEL:gemma3:27b}
+  high:
+    model: ${LLM_HIGH_MODEL:${llm.chat-model}}
+
+vector:
+  routing:
+    min-per-store: 1
+    topics:
+      default:
+        default: 1.0
+
+onnx:
+  enabled: ${ONNX_ENABLED:true}
+
+zsys:
+  onnx:
+    gpu-id: ${ZSYS_ONNX_GPU_ID:0}
+    max-concurrency: ${ZSYS_ONNX_MAX_CONCURRENCY:2}
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false

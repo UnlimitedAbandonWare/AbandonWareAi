@@ -3,19 +3,21 @@ package com.example.lms.util;
 
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 import java.util.HexFormat; // ✨ [개선] Java 17+ 의 HexFormat 사용
 
 /**
  * 해시 관련 유틸리티 함수를 제공하는 클래스.
  */
-@Slf4j
 @NoArgsConstructor(access = AccessLevel.PRIVATE) // 인스턴스화 방지
 public final class HashUtil {
+    private static final Logger log = LoggerFactory.getLogger(HashUtil.class);
 
     private static final MessageDigest SHA256_DIGEST;
 

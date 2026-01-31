@@ -1,0 +1,14 @@
+--- a/IndexingScheduler.java
++++ b/IndexingScheduler.java
+@@ -33,7 +33,10 @@
+  * 분할된 세그먼트는 임베딩 후 EmbeddingStore에 저장합니다.</p>
+  */
+ @Component
+-@RequiredArgsConstructorprivate static final Logger log = LoggerFactory.getLogger(IndexingScheduler.class);
++@RequiredArgsConstructor
++public class IndexingScheduler {
++
++    private static final Logger log = LoggerFactory.getLogger(IndexingScheduler.class);
+ 
+     private final EmbeddingModel              embeddingModel;
+     private final EmbeddingStore<TextSegment> embeddingStore;

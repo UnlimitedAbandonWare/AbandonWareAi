@@ -1,0 +1,42 @@
+{
+  "timestamp": "2025-10-31T00:17:33.391001Z",
+  "action": "Patch SearchProbeController to define 'enabled' and 'adminToken' fields, and add guard.",
+  "targets": [
+    {
+      "file": "app/src/main/java/com/example/lms/probe/SearchProbeController.java",
+      "changed": false,
+      "what": "no-op"
+    },
+    {
+      "file": "backup/_abandonware_backup/ai/probe/SearchProbeController.java",
+      "changed": false,
+      "what": "no-op"
+    },
+    {
+      "file": "lms-core/src/main/java/com/abandonware/ai/probe/SearchProbeController.java",
+      "changed": false,
+      "what": "no-op"
+    },
+    {
+      "file": "src/main/java/com/abandonware/ai/probe/SearchProbeController.java",
+      "changed": false,
+      "what": "no-op"
+    },
+    {
+      "file": "src/main/java/com/example/lms/probe/SearchProbeController.java",
+      "changed": false,
+      "what": "no-op"
+    }
+  ],
+  "source_evidence": {
+    "pattern_files": [
+      "BUILD_ERROR_PATTERNS.json",
+      ".build/error_patterns_db.json",
+      ".internal/build_error_patterns/patterns.json",
+      "__reports__/build-error-patterns.json",
+      "build_error_patterns_summary.json",
+      "PATCH__build_error_patterns.json"
+    ],
+    "compile_log": "build-logs/2025-10-18-compileJava.log"
+  }
+}

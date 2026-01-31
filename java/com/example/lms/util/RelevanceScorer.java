@@ -1,17 +1,19 @@
 package com.example.lms.util;
-//검색
+
 import dev.langchain4j.model.embedding.EmbeddingModel;
 
+//검색
+
 /**
- * Cosine‑similarity 기반 간단 유사도 스코어러.
- * 필요한 건 query·doc 두 문장을 받아 0~1 사이 double 점수를 돌려주는 score(...) 하나뿐입니다.
+ * Cosine-similarity 기반 간단 유사도 스코어러.
+ * 필요한 건 query·doc 두 문장을 받아 0~1 사이 double 점수를 돌려주는 score(/* ... *&#47;) 하나뿐입니다.
  */
 public class RelevanceScorer {
 
 
     private final EmbeddingModel embeddingModel;
 
-    /** divide‑by‑zero 방지 상수 */
+    /** divide-by-zero 방지 상수 */
     private static final double EPS = 1e-9;
     public RelevanceScorer(EmbeddingModel embeddingModel) {
         this.embeddingModel = embeddingModel;
@@ -49,8 +51,8 @@ public class RelevanceScorer {
      */
 
     public double score(String query, String doc, double bm25Raw) {
-        double cos  = score(query, doc);                         // 0‑1 범위
-        double bm25 = 1.0 - Math.exp(-Math.max(0.0, bm25Raw));   // 0‑1 범위로 압축
+        double cos  = score(query, doc);                         // 0-1 범위
+        double bm25 = 1.0 - Math.exp(-Math.max(0.0, bm25Raw));   // 0-1 범위로 압축
         // 경험적 가중치: cosine 0.6 +   bm25 0.4
         return (0.6 * cos) + (0.4 * bm25);
     }

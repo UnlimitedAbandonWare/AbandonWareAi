@@ -2,8 +2,10 @@ package com.example.lms.dto.learning;
 
 import java.util.Objects;
 
+
+
 /**
- * Represents a subject–predicate–object triple extracted from an answer,
+ * Represents a subject-predicate-object triple extracted from an answer,
  * along with the source URL supporting it.
  */
 public record Triple(

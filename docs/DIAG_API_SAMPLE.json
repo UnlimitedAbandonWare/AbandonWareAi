@@ -1,0 +1,33 @@
+{
+  "request": {
+    "model": "demo",
+    "layers": [
+      {
+        "layer": "attn.0.qkv",
+        "norm": 0.00012
+      },
+      {
+        "layer": "mlp.3.fc2",
+        "norm": 8.5e-06
+      }
+    ]
+  },
+  "response_example": {
+    "model": "demo",
+    "layers": [
+      {
+        "layer": "attn.0.qkv",
+        "l2norm": 0.00012,
+        "vanishProb": 0.812,
+        "flag": true
+      },
+      {
+        "layer": "mlp.3.fc2",
+        "l2norm": 8.5e-06,
+        "vanishProb": 0.997,
+        "flag": true
+      }
+    ],
+    "meanVanishProb": 0.9045
+  }
+}

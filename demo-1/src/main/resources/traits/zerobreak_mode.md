@@ -1,0 +1,1 @@
+# ZeroBreak Mode\nBe concise. Answer in a single step.

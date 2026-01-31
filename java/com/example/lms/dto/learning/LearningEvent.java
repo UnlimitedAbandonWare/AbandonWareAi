@@ -3,6 +3,8 @@ package com.example.lms.dto.learning;
 import java.util.List;
 import java.util.Objects;
 
+
+
 /**
  * Event emitted after fact verification capturing the final answer and its supporting evidence.
  * This event is consumed by the Gemini curation pipeline to produce a structured knowledge delta.

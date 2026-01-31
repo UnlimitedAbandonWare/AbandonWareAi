@@ -4,6 +4,8 @@ package com.example.lms.payload;
 import lombok.*;
 import java.util.Map;
 
+
+
 /**
  * 카카오톡 Webhook 콜백 페이로드 매핑용 DTO
  */

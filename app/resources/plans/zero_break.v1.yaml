@@ -1,0 +1,21 @@
+
+# zero_break.v1.yaml — Nova Protocol: Zero Break (plan DSL)
+name: zero_break.v1
+gates:
+  ruleBreak: true
+  citation:
+    min: 3
+  finalSigmoid:
+    k: 12.0
+    x0: 0.0
+chain:
+  - selfAsk: {branches: 3}
+  - queryBurst: {min: 12, max: 24}
+  - extremeZ: {min: 18, max: 36}
+  - angerOverdrive: {anchor: auto}
+  - retrieval: {webTopK: 32, vectorTopK: 16, kgTopK: 8}
+  - fusion: {method: grandas}
+  - rerank: {biEncoder: true, crossEncoder: onnx}
+safety:
+  whitelist: any  # rule break overrides whitelist with audit
+  auditLog: true

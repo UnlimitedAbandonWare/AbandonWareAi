@@ -4,7 +4,6 @@ import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -12,6 +11,10 @@ import org.springframework.util.StringUtils;
 import dev.langchain4j.data.message.UserMessage;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * 스니펫에서 핵심 문장만 추출(Pruning)하는 서비스입니다.
@@ -20,10 +23,10 @@ import java.util.stream.Collectors;
  * <p>
  * <b>대체 전략 (Fallback Strategy):</b> 임베딩 모델 호출 실패 시, 시스템 안정성을 위해 <b>키워드 토큰 매칭 방식</b>으로 자동 전환됩니다.
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SnippetPruner {
+    private static final Logger log = LoggerFactory.getLogger(SnippetPruner.class);
 
     private final EmbeddingModel embeddingModel;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -42,6 +45,11 @@ public class SnippetPruner {
     private int minSentences;
     @Value("${memory.reinforce.pruning.llm.enabled:false}")
     private boolean llmPruningEnabled;
+
+    // [HARDENING] Prompt injection pattern; drop snippets containing these triggers
+    private static final java.util.regex.Pattern BLOCK =
+            java.util.regex.Pattern.compile(
+                    "(?i)\\b(ignore\\s+previous|system\\s*:|##\\s*시스템|do\\s*not\\s*follow\\s*above)\\b");
 
 
     /**
@@ -90,6 +98,14 @@ public class SnippetPruner {
         if (q.isBlank() || rawSnippet.isBlank()) {
             return Result.passThrough(snippet);
         }
+
+        // [HARDENING] drop snippet if it contains prompt-injection patterns
+        try {
+            String plain = stripHtml(rawSnippet);
+            if (BLOCK.matcher(plain).find()) {
+                return new Result("", 0.0, 0.0, 0, 0);
+            }
+        } catch (Exception ignore) {}
 
         try {
             // 1) 임베딩 기반
@@ -213,7 +229,7 @@ public class SnippetPruner {
         if (!StringUtils.hasText(text)) return Collections.emptyList();
 
         // 문장 분리 정규식: 마침표, 물음표, 느낌표, 또는 '다.' 뒤의 공백을 기준으로 분리
-        String[] parts = text.split("(?<=[.?!？！…]|다\\.)\\s+");
+        String[] parts = text.split("(?<=[.?!？！/* ... *&#47;]|다\\.)\\s+");
         List<String> sentences = Arrays.stream(parts)
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())

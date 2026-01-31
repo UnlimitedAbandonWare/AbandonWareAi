@@ -1,0 +1,26 @@
+{
+  "0": {
+    "label": "spring-config/type-mismatch",
+    "mitigation": [
+      "Add relaxed boolean binder: treat 'true/false', '1/0', 'yes/no'",
+      "Add override defaults in application.properties with strict types",
+      "Fail-fast validator on critical @Value placeholders"
+    ]
+  },
+  "1": {
+    "label": "spring-config/type-mismatch",
+    "mitigation": [
+      "Add relaxed boolean binder: treat 'true/false', '1/0', 'yes/no'",
+      "Add override defaults in application.properties with strict types",
+      "Fail-fast validator on critical @Value placeholders"
+    ]
+  },
+  "2": {
+    "label": "spring-config/type-mismatch",
+    "mitigation": [
+      "Add relaxed boolean binder: treat 'true/false', '1/0', 'yes/no'",
+      "Add override defaults in application.properties with strict types",
+      "Fail-fast validator on critical @Value placeholders"
+    ]
+  }
+}

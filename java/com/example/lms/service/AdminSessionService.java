@@ -14,16 +14,19 @@ package com.example.lms.service;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Optional;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 어드민 전용 24h remember-me 토큰 발급 & 검증 서비스.
@@ -31,13 +34,13 @@ import java.util.Optional;
  * token 구조: base64("username|epochMillis|HMAC(username|epochMillis, secretKey)")
  * - username      : 관리자 ID (단순 식별용)
  * - epochMillis   : 발급 시각 (ms)
- * - HMAC          : SHA‑256 서명 → 위·변조 방지
+ * - HMAC          : SHA-256 서명 → 위·변조 방지
  * </pre>
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AdminSessionService {
+    private static final Logger log = LoggerFactory.getLogger(AdminSessionService.class);
 
     private static final String COOKIE_NAME = "admin-token";
     private static final long   VALIDITY_MS = 24 * 60 * 60 * 1000L; // 24h
@@ -90,7 +93,7 @@ public class AdminSessionService {
         }
     }
 
-    /* ────────── 내부: HMAC SHA‑256 ────────── */
+    /* ────────── 내부: HMAC SHA-256 ────────── */
     private String hmacSha256(String data) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");

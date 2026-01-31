@@ -1,0 +1,47 @@
+--- a/scheduler/IndexingScheduler.java
++++ b/scheduler/IndexingScheduler.java
+@@ -1,17 +1,33 @@
++package scheduler;
+ 
+-    package scheduler;
+-    import java.util.function.Supplier;private final IndexJobLock lock = new IndexJobLock();
+-        public void runWithRetry(Supplier<Boolean> job) throws InterruptedException {
+-            if (!lock.tryLock()) return;
+-            try {
+-                long[] backoff = new long[]{250,500,1000};
+-                for (int i=0;i<3;i++) {
+-                    if (job.get()) return;
+-                    Thread.sleep(backoff[i]);
++import java.util.function.Supplier;
++
++/**
++ * Lightweight local scheduler wrapper with back-off that delegates a unit of work.
++ * Exists in a distinct package to avoid collision with the Spring component:
++ * com.example.lms.scheduler.IndexingScheduler.
++ */
++public class IndexingScheduler {
++
++    private final IndexJobLock lock = new IndexJobLock();
++
++    /**
++     * Run the given job up to 3 times with back-off (250/500/1000ms) if it returns false.
++     * Returns immediately if lock is already held.
++     */
++    public void runWithRetry(Supplier<Boolean> job) throws InterruptedException {
++        if (job == null) return;
++        if (!lock.tryLock()) return;
++        try {
++            long[] backoff = new long[]{250, 500, 1000};
++            for (int i = 0; i < backoff.length; i++) {
++                if (Boolean.TRUE.equals(job.get())) {
++                    return;
+                 }
+-            } finally {
+-                lock.unlock();
++                Thread.sleep(backoff[i]);
+             }
++        } finally {
++            lock.unlock();
+         }
+     }
+-    +}

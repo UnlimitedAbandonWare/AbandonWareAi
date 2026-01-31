@@ -2,6 +2,8 @@ package com.example.lms.service.verbosity;
 
 import java.util.List;
 
+
+
 public record VerbosityProfile(
         String hint,                // brief|standard|deep|ultra
         int    minWordCount,

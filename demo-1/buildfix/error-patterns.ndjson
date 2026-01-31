@@ -1,0 +1,5 @@
+{"path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\domain\\Question.java", "line": 53, "level": "warning", "message": "@Builder.Default requires @Builder or @SuperBuilder on the class for it to mean anything."}
+{"path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\infra\\upstash\\UpstashRedisClient.java", "line": 33, "level": "error", "message": "variable http not initialized in the default constructor"}
+{"path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\learning\\gemini\\GeminiCurationService.java", "line": 52, "level": "error", "message": "cannot find symbol"}
+{"path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\search\\extract\\HybridKeywordExtractor.java", "line": 149, "level": "error", "message": "incompatible types: String cannot be converted to List<String>"}
+{"path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\service\\prompt\\EvidencePromptBuilder.java", "line": 99, "level": "error", "message": "illegal escape character (regex char class; '[' and ']' must be written as '\\\\[' and '\\\\]' in Java string literals)"}

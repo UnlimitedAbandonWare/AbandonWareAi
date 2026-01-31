@@ -1,10 +1,12 @@
 package com.example.lms.util;
 
-import org.springframework.stereotype.Component;  // Component 어노테이션 추가
 import org.springframework.web.multipart.MultipartFile;
 import java.nio.file.*;
 import java.io.IOException;
 import java.util.UUID;
+
+
+import org.springframework.stereotype.Component;  // Component 어노테이션 추가
 
 @Component  // Spring 빈으로 등록
 public class FileStorage {

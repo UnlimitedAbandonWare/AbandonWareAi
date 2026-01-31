@@ -1,0 +1,76 @@
+addons:
+  complexity:
+    enabled: true
+  budget:
+    default-ms: 1500
+  onnx:
+    max-concurrent: 4
+    queue-wait-ms: 120
+  web:
+    enabled: true
+    top-k-default: 5
+  vector:
+    top-k-default: 12
+  synthesis:
+    moe-mix: 0.5
+    min-bytes-per-item: 240
+    authority-tier:
+      gov: 1.0
+      edu: 0.95
+      journal: 0.9
+      news: 0.8
+      blog: 0.6
+  ocr:
+    enabled: false
+    top-k: 6
+alias:
+  corrector:
+    enabled: true
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+retrieval:
+  vector:
+    enabled: true
+onnx:
+  enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: dummy
+  chat-model: gemma3:27b
+
+  provider: local
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+fallback:
+  enabled: false
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false

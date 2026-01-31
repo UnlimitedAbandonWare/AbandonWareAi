@@ -4,20 +4,27 @@ import jakarta.persistence.*;
 import lombok.*;
 import lombok.ToString;
 import org.hibernate.annotations.UpdateTimestamp;
-// import org.hibernate.annotations.CreationTimestamp; // (선택) Hibernate @CreationTimestamp 사용 가능
 import org.apache.commons.codec.digest.DigestUtils;
-
 import java.time.LocalDateTime;
+
+
+// import org.hibernate.annotations.CreationTimestamp; // (선택) Hibernate @CreationTimestamp 사용 가능
+
 
 @Entity
 @Table(
         name = "translation_memory",
         indexes = {
-                @Index(name = "idx_tm_source_hash", columnList = "source_hash"),
                 @Index(name = "idx_tm_session",     columnList = "session_id"),
                 // [추가] 볼츠만 강화 검색 최적화를 위해 에너지 컬럼에 인덱스 추가
                 @Index(name = "idx_tm_energy",      columnList = "energy"),
-                @Index(name = "idx_tm_last_used_at", columnList = "last_used_at") //  최근 사용 정렬 최적화
+                @Index(name = "idx_tm_last_used_at", columnList = "last_used_at"), //  최근 사용 정렬 최적화
+                // [PENDING→ACTIVE] promote scan optimization
+                // - PendingMemorySoakScheduler queries: status = PENDING ORDER BY created_at LIMIT N
+                // - Composite index avoids full scan + filesort on write-heavy tables.
+                @Index(name = "idx_tm_status_created_at", columnList = "status, created_at"),
+                // [Lease] multi-instance claim support
+                @Index(name = "idx_tm_status_locked_at", columnList = "status, locked_at")
         }
 )
 @Getter @Setter @Builder
@@ -47,6 +54,20 @@ public class TranslationMemory {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /**
+     * Multi-instance lease fields for PENDING→ACTIVE promotion.
+     *
+     * <p>
+     * When multiple schedulers run concurrently, rows are claimed by setting
+     * locked_at/locked_by. Expired leases may be reclaimed.
+     * </p>
+     */
+    @Column(name = "locked_at")
+    private LocalDateTime lockedAt;
+
+    @Column(name = "locked_by", length = 64)
+    private String lockedBy;
+
     /** 엔티티 UPDATE 시 자동 갱신 (DB 컬럼: last_used_at) */
     @UpdateTimestamp
     @Column(name = "last_used_at")
@@ -62,6 +83,15 @@ public class TranslationMemory {
     @Column(name = "source_tag", length = 32)
     private String sourceTag;
 
+
+@Column(name = "model_id")
+private String modelId;
+
+@Column(name = "embedding_model")
+private String embeddingModel;
+
+@Column(name = "memory_profile")
+private String memoryProfile;
 
     @Lob
     @ToString.Exclude //  대용량 로그/GC 보호
@@ -85,7 +115,19 @@ public class TranslationMemory {
     @Builder.Default private int    successCount = 0;
     @Builder.Default private int    failureCount = 0;
 
-    /** [추가] 볼츠만 에너지 (낮을수록 좋음) */
+        // ═══════════════════════════════════════════════════════════════════════
+    // PROTECTED FIELDS (Hard Invariant)
+    // 아래 필드들은 MemoryReinforcementService, StrategyDecisionTracker 등
+    // 여러 서비스가 reflection 또는 직접 접근하므로 삭제/리네임/타입 변경 금지.
+    // - qValue
+    // - energy
+    // - temperature
+    // - confidenceScore
+    // - lastUsedAt
+    // 위 필드를 수정할 경우 전체 강화 학습/메모리 파이프라인을 함께 점검해야 합니다.
+    // ═══════════════════════════════════════════════════════════════════════
+
+/** [추가] 볼츠만 에너지 (낮을수록 좋음) */
     @Column(name = "energy")
     private Double energy;
 
@@ -103,7 +145,29 @@ public class TranslationMemory {
     @Builder.Default
     private MemoryStatus status = MemoryStatus.ACTIVE;
 
-    public enum MemoryStatus { ACTIVE, STABLE, STALE, EXPORTED }
+    /**
+     * Memory lifecycle state.
+     *
+     * IMPORTANT: persisted using EnumType.ORDINAL.
+     * Always append new values to the end.
+     */
+    public enum MemoryStatus {
+        ACTIVE,
+        STABLE,
+        STALE,
+        EXPORTED,
+        /** Candidate memory saved for later verification (idle soak). */
+        PENDING,
+        /**
+         * Quarantined memory (suspected log/trace/diagnostic dump).
+         *
+         * <p>
+         * IMPORTANT:
+         * - EnumType.ORDINAL 저장 시에도 "맨 끝에 추가"는 기존 값 밀림이 없어 안전합니다.
+         * </p>
+         */
+        QUARANTINED
+    }
 
     /* ===== 비영속 ===== */
     @Transient
@@ -191,4 +255,47 @@ public class TranslationMemory {
         this.updatedAt  = now;
         this.status     = MemoryStatus.ACTIVE;
     }
+    /* ===== Manual getters/setters for environments without Lombok processing ===== */
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+
+    public String getSourceHash() { return sourceHash; }
+    public void setSourceHash(String sourceHash) { this.sourceHash = sourceHash; }
+
+    public String getSessionId() { return sessionId; }
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+
+    public String getCorrected() { return corrected; }
+    public void setCorrected(String corrected) { this.corrected = corrected; }
+
+    public Integer getHitCount() { return hitCount; }
+    public void setHitCount(Integer hitCount) { this.hitCount = hitCount; }
+
+    public int getSuccessCount() { return successCount; }
+    public void setSuccessCount(int successCount) { this.successCount = successCount; }
+
+    public int getFailureCount() { return failureCount; }
+    public void setFailureCount(int failureCount) { this.failureCount = failureCount; }
+
+    public Double getCosineSimilarity() { return cosineSimilarity; }
+    public void setCosineSimilarity(Double cosineSimilarity) { this.cosineSimilarity = cosineSimilarity; }
+
+    public double getQValue() { return qValue; }
+    public void setQValue(double qValue) { this.qValue = qValue; }
+
+    public String getSourceTag() { return sourceTag; }
+    public void setSourceTag(String sourceTag) { this.sourceTag = sourceTag; }
+
+    public Double getConfidenceScore() { return confidenceScore; }
+    public void setConfidenceScore(Double confidenceScore) { this.confidenceScore = confidenceScore; }
+
+    public LocalDateTime getLastUsedAt() { return lastUsedAt; }
+    public void setLastUsedAt(LocalDateTime lastUsedAt) { this.lastUsedAt = lastUsedAt; }
+
+    public Double getEnergy() { return energy; }
+    public void setEnergy(Double energy) { this.energy = energy; }
+
+    public Double getTemperature() { return temperature; }
+    public void setTemperature(Double temperature) { this.temperature = temperature; }
+
 }

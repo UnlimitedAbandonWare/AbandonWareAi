@@ -1,24 +1,27 @@
 package com.example.lms.client;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
 import java.util.List;
 import java.util.Map;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * Google Translate v2 REST 래퍼
  */
 @Component
 @RequiredArgsConstructor
-@Slf4j
 public class GTranslateClient {
+    private static final Logger log = LoggerFactory.getLogger(GTranslateClient.class);
 
     /** WebClientConfig 에서 만든 @Bean(name="googleTranslateWebClient") */
     @Qualifier("googleTranslateWebClient")

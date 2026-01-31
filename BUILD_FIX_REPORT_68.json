@@ -1,0 +1,29 @@
+{
+  "pattern_files_found": [
+    "BUILD_FIX_REPORT.json",
+    "analysis/build_patterns_aggregated.json",
+    "BUILD_FIX_NOTES.md",
+    "BUILD_PATTERN_SUMMARY.md",
+    "BUILD_PATTERN_RUN.md",
+    "BUILD_ERROR_PATTERN_SCAN.md",
+    "scripts/README_BUILD_WRAPPER.md",
+    "tools/README_MATRIX.md",
+    "tools/build_matrix.yaml",
+    "tools/Matrixtxt.snapshot.txt"
+  ],
+  "patches": [
+    [
+      "ConsentExceptionHandler.java",
+      [
+        "app/src/main/java/com/abandonware/ai/agent/consent/ConsentExceptionHandler.java",
+        "src/main/java/com/abandonware/ai/agent/consent/ConsentExceptionHandler.java"
+      ]
+    ],
+    [
+      "QdrantClient.java",
+      [
+        "src/main/java/com/abandonware/ai/vector/qdrant/QdrantClient.java"
+      ]
+    ]
+  ]
+}

@@ -2,14 +2,20 @@ package com.example.lms.repository;
 
 import com.example.lms.entity.TranslationMemory;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
+import java.util.Collection;
+
+
+
 
 @Repository
 public interface TranslationMemoryRepository extends JpaRepository<TranslationMemory, Long> {
@@ -18,6 +24,67 @@ public interface TranslationMemoryRepository extends JpaRepository<TranslationMe
      * sourceHash로 단건 조회
      */
     Optional<TranslationMemory> findBySourceHash(String sourceHash);
+
+    /** Bulk lookup to eliminate N+1 in training/reinforcement. */
+    List<TranslationMemory> findBySourceHashIn(Collection<String> sourceHashes);
+
+    Page<TranslationMemory> findByStatusOrderByCreatedAtAsc(TranslationMemory.MemoryStatus status, Pageable pageable);
+
+    /**
+     * Claim a batch of PENDING rows by writing locked_at/locked_by.
+     *
+     * <p>
+     * MySQL/MariaDB support ORDER BY + LIMIT on UPDATE. This makes claim O(logN)
+     * with (status, created_at) index and avoids full scan + filesort.
+     * </p>
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query(value = """
+        UPDATE translation_memory
+           SET locked_at = :now,
+               locked_by = :lockedBy
+         WHERE status = :pendingStatus
+           AND (locked_at IS NULL OR locked_at < :expireBefore)
+         ORDER BY created_at ASC
+         LIMIT :limit
+    """, nativeQuery = true)
+    int claimPendingLease(@Param("pendingStatus") int pendingStatus,
+                          @Param("lockedBy") String lockedBy,
+                          @Param("now") LocalDateTime now,
+                          @Param("expireBefore") LocalDateTime expireBefore,
+                          @Param("limit") int limit);
+
+    /**
+     * Claim a batch of QUARANTINED rows by writing locked_at/locked_by.
+     *
+     * <p>
+     * Shares the same lease fields with PENDING, but uses a different status.
+     * This enables "격리 재처리" without full table scans.
+     * </p>
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query(value = """
+        UPDATE translation_memory
+           SET locked_at = :now,
+               locked_by = :lockedBy
+         WHERE status = :quarantineStatus
+           AND (locked_at IS NULL OR locked_at < :expireBefore)
+         ORDER BY created_at ASC
+         LIMIT :limit
+    """, nativeQuery = true)
+    int claimQuarantineLease(@Param("quarantineStatus") int quarantineStatus,
+                             @Param("lockedBy") String lockedBy,
+                             @Param("now") LocalDateTime now,
+                             @Param("expireBefore") LocalDateTime expireBefore,
+                             @Param("limit") int limit);
+
+    /** Fetch rows claimed by this scheduler run. */
+    List<TranslationMemory> findByLockedByAndLockedAtOrderByCreatedAtAsc(String lockedBy, LocalDateTime lockedAt);
+
+    // lazy bootstrap용: sid 후보들에서 상위 N개만 가져오기
+    Page<TranslationMemory> findBySessionIdIn(List<String> sessionIds, Pageable pageable);
 
     /**
      * 에너지가 설정된 전체 레코드 중 상위 10개 조회
@@ -101,7 +168,7 @@ public interface TranslationMemoryRepository extends JpaRepository<TranslationMe
         UPDATE translation_memory
            SET hit_count = hit_count + 1,
                last_used_at = NOW(),
-               score = GREATEST(score, :score)
+               score = GREATEST(COALESCE(score, 0), :score)
          WHERE source_hash = :hash
     """, nativeQuery = true)
     int incrementHitAndBumpLastUsed(@Param("hash") String hash,

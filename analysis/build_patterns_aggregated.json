@@ -1,0 +1,145 @@
+{
+  "timestamp": "2025-10-16T12:31:33.233209Z",
+  "recognized_patterns": [
+    {
+      "pattern": "method does not override or implement a method from a supertype",
+      "code": "OverrideMismatch"
+    },
+    {
+      "pattern": "cannot find symbol",
+      "code": "MissingSymbol"
+    },
+    {
+      "pattern": "duplicate class",
+      "code": "DuplicateClass"
+    },
+    {
+      "pattern": "illegal start of type",
+      "code": "IllegalStartOfType"
+    },
+    {
+      "pattern": "class, interface, enum, or record expected",
+      "code": "ClassOrInterfaceExpected"
+    },
+    {
+      "pattern": "package ... does not exist",
+      "code": "PackageNotFound"
+    },
+    {
+      "pattern": "method does not override or implement a method from a supertype",
+      "code": "OverrideMismatch"
+    },
+    {
+      "pattern": "constructor ChatService in class ChatService cannot be applied to given types; required: ... found: no arguments",
+      "code": "SuperConstructorMissing"
+    },
+    {
+      "pattern": "class <Name> is public, should be declared in a file named <Name>.java",
+      "code": "PublicClassFileNameMismatch"
+    },
+    {
+      "pattern": "name clash: ... have the same erasure",
+      "code": "ErasureNameClash"
+    },
+    {
+      "pattern": "cannot be applied to given types; required: ..., found: ...",
+      "code": "MethodArityMismatch"
+    },
+    {
+      "pattern": "method ... cannot be applied to given types; required: double,double,double; found: List<List<ContextSlice>>,int,...",
+      "code": "OverloadMismatch"
+    },
+    {
+      "pattern": "cannot find symbol rerankTopK(List<ContextSlice>,int)",
+      "code": "MissingMethod"
+    },
+    {
+      "pattern": "duplicate class: .*_abandonware_backup.*",
+      "code": "DuplicateClassAbandonwareBackup"
+    }
+  ],
+  "runtime_patterns": {
+    "regex_single_escape_suspect": {
+      "count": 8,
+      "severity": 0.8022,
+      "files": [
+        {
+          "path": "1229/src_91/cfvm-raw/src/main/java/com/example/lms/cfvm/BuildLogSlotExtractor.java",
+          "hits": 6
+        },
+        {
+          "path": "1229/src_91/src/main/java/com/example/lms/planning/DefaultQueryComplexityClassifier.java",
+          "hits": 1
+        },
+        {
+          "path": "1229/src_91/src/main/java/com/example/lms/service/understanding/AnswerUnderstandingService.java",
+          "hits": 1
+        }
+      ]
+    }
+  },
+  "fixes_applied": [
+    {
+      "file": "src/main/java/com/example/lms/service/NaverSearchService.java",
+      "changes": 1
+    },
+    {
+      "file": "src/main/java/com/example/lms/service/patch/NaverSearchService.java",
+      "changes": 1
+    },
+    {
+      "date": "2025-10-11T07:57:44.280123+00:00",
+      "module": "app (main)",
+      "path": "src/main/java/com/example/lms/config/FeatureFlags.java",
+      "action": "rename",
+      "reason": "Mismatch between public class name and file name caused compileJava failure"
+    }
+  ],
+  "notes": [
+    "Fixed repeated modifier in SearchTrace class declaration by keeping a single 'public static final'.",
+    "Consider checking for potential duplicate class: two NaverSearchService.java exist under the same package; ensure only one is compiled."
+  ],
+  "patterns": {
+    "MissingSymbol": 1,
+    "BeanNameConflict": 1
+  },
+  "incidents": [
+    {
+      "date": "2025-10-11T07:57:44.279985+00:00",
+      "task": "compileJava",
+      "code": "PublicClassFileNameMismatch",
+      "file": "src/main/java/com/example/lms/config/FeatureFlagsPlaceholder.java",
+      "fixed_by": "rename file to FeatureFlags.java to match public class name",
+      "sample_error": "error: class FeatureFlags is public, should be declared in a file named FeatureFlags.java"
+    },
+    {
+      "date": "2025-10-10",
+      "code": "MissingSymbol",
+      "where": "VersionPurityCheck.log",
+      "fix": "Inserted slf4j Logger field inside class body; removed misplaced comment-line."
+    },
+    {
+      "date": "2025-10-11",
+      "code": "BeanNameConflict",
+      "where": "com.example.lms.nova.RuleBreakInterceptor vs com.example.lms.guard.rulebreak.RuleBreakInterceptor",
+      "fix": "Renamed Nova bean to 'novaRuleBreakInterceptor'; injected guard bean and removed duplicate RuleBreakEvaluator @Bean."
+    },
+    {
+      "date": "2025-10-12T02:03:25.553685Z",
+      "task": "compileJava",
+      "code": [
+        "PackageNotFound",
+        "MissingSymbol"
+      ],
+      "file": "src/main/java/guard/FinalQualityGate.java",
+      "fixed_by": [
+        "change import to com.example.lms.service.rag.auth.DomainWhitelist",
+        "replace whitelist.isAllowed -> whitelist.isOfficial"
+      ],
+      "sample_error": [
+        "error: package service.rag.auth does not exist",
+        "error: cannot find symbol class DomainWhitelist"
+      ]
+    }
+  ]
+}

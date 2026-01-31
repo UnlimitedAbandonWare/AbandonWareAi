@@ -2,21 +2,24 @@
 package com.example.lms.integrations;
 
 import com.example.lms.api.KakaoProperties;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 @Service
-@Slf4j
 public class KakaoMessageService {
+    private static final Logger log = LoggerFactory.getLogger(KakaoMessageService.class);
 
     private final WebClient kakaoWebClient;      // REST API 전용
     private final WebClient kakaoBizWebClient;   // Biz API 전용

@@ -1,0 +1,21 @@
+# Hypernova policies — loosen exploration, tighten output verification
+allow:
+  - retrieval.explore.tail_focus
+  - fusion.twpm
+  - fusion.cvar
+deny:
+  - unsafe.domains.blacklist
+gates:
+  citation.min: 3
+  final.sigmoid.k: 10.0
+  final.sigmoid.x0: 0.85
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

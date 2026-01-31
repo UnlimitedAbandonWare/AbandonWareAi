@@ -2,8 +2,12 @@ package com.example.lms.service.rag.handler;
 
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 책임 연쇄 패턴을 위한 추상 베이스 클래스입니다.
@@ -11,8 +15,8 @@ import java.util.List;
  * 템플릿 메서드 패턴을 사용하여 예외 발생 시에도 체인이 끊기지 않는 안정적인 실행을 보장합니다.
  * </p>
  */
-@Slf4j
 public abstract class AbstractRetrievalHandler implements RetrievalHandler {
+    protected static final Logger log = LoggerFactory.getLogger(AbstractRetrievalHandler.class);
 
     private RetrievalHandler next;
 
@@ -35,22 +39,89 @@ public abstract class AbstractRetrievalHandler implements RetrievalHandler {
      */
     @Override
     public final void handle(Query query, List<Content> accumulator) {
+        final long startNs = System.nanoTime();
+        final int beforeSize = (accumulator != null) ? accumulator.size() : -1;
+        final String handler = this.getClass().getSimpleName();
+        final String qClip = safeClip((query != null) ? query.text() : null, 220);
+
+        // Breadcrumb: stage start
+        appendTraceEvent("start", handler, beforeSize, beforeSize, 0L, true, null, qClip);
+
         boolean shouldContinue = true;
+        Throwable err = null;
         try {
             // 1. 하위 클래스에 실제 로직 실행을 위임
             //    doHandle의 반환값에 따라 체인 지속 여부 결정
             shouldContinue = doHandle(query, accumulator);
         } catch (Throwable t) {
+            err = t;
             // 2. 예외 발생 시, 로그를 남기고 체인은 계속 진행되도록 보장 (안정성 핵심)
             log.warn("[RetrievalChain] Handler '{}' failed, but the chain will continue. Error: {}",
-                    this.getClass().getSimpleName(), t.getMessage());
+                    handler, t.getMessage());
             shouldContinue = true; // 예외 시에도 다음 핸들러는 실행
+        } finally {
+            long ms = Math.max(0L, (System.nanoTime() - startNs) / 1_000_000L);
+            int afterSize = (accumulator != null) ? accumulator.size() : -1;
+            boolean continued = shouldContinue && next != null;
+            // Breadcrumb: stage end (with duration + delta)
+            appendTraceEvent("end", handler, beforeSize, afterSize, ms, continued, err, qClip);
         }
 
         // 3. 체인을 계속 진행해야 하고, 다음 핸들러가 존재하면 실행
         if (shouldContinue && next != null) {
             next.handle(query, accumulator);
         }
+    }
+
+    private static void appendTraceEvent(
+            String phase,
+            String handler,
+            int before,
+            int after,
+            long ms,
+            boolean continued,
+            Throwable err,
+            String qClip) {
+        try {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("ts", java.time.Instant.now().toString());
+            ev.put("phase", phase);
+            ev.put("handler", handler);
+            ev.put("acc.before", before);
+            ev.put("acc.after", after);
+            if (before >= 0 && after >= 0) {
+                ev.put("acc.added", after - before);
+            }
+            ev.put("ms", ms);
+            ev.put("continued", continued);
+            if (qClip != null && !qClip.isBlank()) {
+                ev.put("q", qClip);
+            }
+            if (err != null) {
+                ev.put("err", err.getClass().getSimpleName());
+                String msg = err.getMessage();
+                if (msg != null && !msg.isBlank()) {
+                    ev.put("errMsg", com.example.lms.trace.SafeRedactor.redact(safeClip(msg, 240)));
+                }
+            }
+
+            com.example.lms.search.TraceStore.append("retrieval.chain.events", ev);
+            com.example.lms.search.TraceStore.put("retrieval.chain.last", handler);
+            com.example.lms.search.TraceStore.put("retrieval.chain.last.phase", phase);
+            com.example.lms.search.TraceStore.put("retrieval.chain.last.ms", ms);
+            if (err != null) {
+                com.example.lms.search.TraceStore.put("retrieval.chain.last.err", err.getClass().getSimpleName());
+            }
+        } catch (Throwable ignore) {
+            // fail-soft
+        }
+    }
+
+    private static String safeClip(String s, int max) {
+        if (s == null) return null;
+        String t = s.replaceAll("\\s+", " ").trim();
+        if (t.length() <= max) return t;
+        return t.substring(0, Math.max(0, max)) + "...";
     }
 
     /**

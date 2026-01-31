@@ -1,0 +1,16 @@
+id: zero_break
+sequence:
+  - step: retrieve
+    handler: DynamicRetrievalHandlerChain
+    params:
+      use_web: true
+      use_vector: false
+      use_kg: false
+      total_k: 5
+  - step: fuse
+    method: weighted_rrf
+gates:
+  - type: CitationGate
+    min_sources: 1
+attenuation:
+  temperature_decay: false

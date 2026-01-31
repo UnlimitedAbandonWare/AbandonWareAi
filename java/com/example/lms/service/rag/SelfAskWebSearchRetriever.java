@@ -1,40 +1,49 @@
 // src/main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java
 package com.example.lms.service.rag;
 
-import com.example.lms.service.NaverSearchService;
-
+import com.example.lms.search.provider.WebSearchProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
-
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
-import com.example.lms.service.rag.detector.GameDomainDetector;       // + 도메인 감지
 import org.springframework.util.StringUtils;
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.concurrent.*;                                        // 중복 정리: 한 번만 남김
 import jakarta.annotation.PreDestroy;
-@Slf4j
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+// SelfAskWebSearchRetriever.java
+
+
+import com.example.lms.service.rag.pre.QueryContextPreprocessor;      // 🆕 전처리기 클래스 import
+import com.example.lms.service.rag.detector.GameDomainDetector;       // + 도메인 감지
+import com.example.lms.search.TypoNormalizer;                         // NEW: typo normalizer
+import java.util.concurrent.*;                                        // 중복 정리: 한 번만 남김
 @Component                          // ➍
 @RequiredArgsConstructor            // ➋ 모든 final 필드 주입
 public class SelfAskWebSearchRetriever implements ContentRetriever {
-
-    private final NaverSearchService searchSvc;
+    private static final Logger log = LoggerFactory.getLogger(SelfAskWebSearchRetriever.class);
+    private final WebSearchProvider webSearchProvider;
+    @Qualifier("fastChatModel")
     private final ChatModel chatModel;
-    @Qualifier("guardrailQueryPreprocessor")
-    private final QueryContextPreprocessor preprocessor;
+        private final QueryContextPreprocessor preprocessor;
     private final GameDomainDetector domainDetector; // + GENSHIN 감지용
+
+    // Optional typo normalizer for hygiene. Injected if available.
+    @Autowired(required = false)
+    private TypoNormalizer typoNormalizer;
+
+    @Autowired(required = false)
+    private com.example.lms.infra.resilience.NightmareBreaker nightmareBreaker;
 
     /* 선택적 Tavily 폴백(존재 시에만 사용) */
     @Autowired(required = false)
@@ -42,7 +51,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     private ContentRetriever tavily;
     /* ---------- 튜닝 가능한 기본값(프로퍼티 주입) ---------- */
     @Value("${selfask.max-depth:2}")                private int maxDepth;                 // Self-Ask 재귀 깊이
-    @Value("${selfask.web-top-k:5}")                private int webTopK;                  // 키워드당 검색 스니펫 수
+    @Value("${selfask.web-top-k:8}")                private int webTopK;                  // 키워드당 검색 스니펫 수
     @Value("${selfask.overall-top-k:10}")           private int overallTopK;              // 최종 반환 상한
     @Value("${selfask.max-api-calls-per-query:8}")  private int maxApiCallsPerQuery;      // 질의당 최대 호출
     @Value("${selfask.followups-per-level:2}")      private int followupsPerLevel;        // 레벨별 추가 키워드
@@ -50,18 +59,22 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     @Value("${selfask.timeout-seconds:12}")         private int selfAskTimeoutSec;        // 레벨 타임박스(초)
     @Value("${selfask.per-request-timeout-ms:5000}") private int perRequestTimeoutMs; // 개별 검색 타임아웃(ms)
     @Value("${selfask.use-llm-followups:false}")     private boolean useLlmFollowups;  // 하위 키워드 LLM 사용 여부
+    @Value("${selfask.use-llm-seeds:false}")         private boolean useLlmSeeds;      // 시드 키워드 LLM 사용 여부
     /**
-     * Executor for parallel Naver searches
+     * Search I/O executor.
+     *
+     * <p>Do not use {@code ForkJoinPool.commonPool} for blocking I/O (web search/HTTP).
      */
-
-    private final ExecutorService searchExecutor =
-            Executors.newFixedThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors()));
+    @Autowired
+    @Qualifier("searchIoExecutor")
+    private ExecutorService searchExecutor;
     /** 간이 복잡도 추정 → Self-Ask 깊이(1..3) */
     private int estimateDepthByComplexity(String q) {
         if (!StringUtils.hasText(q)) return 1;
         int len = q.codePointCount(0, q.length());
         long spaces = q.chars().filter(ch -> ch == ' ').count();
-        boolean hasWh = q.matches(".*(누가|언제|어디|무엇|왜|어떻게|비교|차이|원리).*");
+        // vs (대소문자 무관) 도 비교/차이 질문의 한 형태이므로 패턴에 포함한다.
+        boolean hasWh = q.matches(".*(?i)(누가|언제|어디|무엇|왜|어떻게|비교|차이|원리|vs).*");
         int score = 0;
         if (len > 30) score++;
         if (spaces > 6) score++;
@@ -112,25 +125,58 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
 
         String qText = (query != null) ? query.text() : null;
+        java.util.Map<String, Object> meta = toMetaMap(query);
+        meta.putIfAbsent("purpose", "WEB_SEARCH");
+        // Apply typo normalization if configured
+        if (typoNormalizer != null && qText != null) {
+            qText = typoNormalizer.normalize(qText);
+        }
         // ① Guardrail: 오타 교정/금칙어/중복 정리 (중복 호출 제거 + NPE 가드)
-        qText = (preprocessor != null) ? preprocessor.enrich(qText) : qText;
+        qText = (preprocessor != null) ? preprocessor.enrich(qText, meta) : qText;
         if (!StringUtils.hasText(qText)) {
             log.debug("[SelfAsk] empty query -> []");
             return List.of();
         }
 
+        int reqWebTopK = metaInt(meta, "webTopK", this.webTopK);
+        long webBudgetMs = metaLong(meta, "webBudgetMs", -1L);
+        boolean allowWeb = metaBool(meta, "allowWeb", true);
+        if (!allowWeb) {
+            return java.util.List.of();
+        }
+        boolean enableSelfAskHint = metaBool(meta, "enableSelfAsk", true);
+        boolean nightmareMode = metaBool(meta, "nightmareMode", false);
+        boolean auxLlmDown = metaBool(meta, "auxLlmDown", false);
+
+        int reqPerRequestTimeoutMs = this.perRequestTimeoutMs;
+        int reqSelfAskTimeoutSec = this.selfAskTimeoutSec;
+        if (webBudgetMs > 0) {
+            reqPerRequestTimeoutMs = (int) Math.min((long) reqPerRequestTimeoutMs, Math.max(300L, webBudgetMs));
+            reqSelfAskTimeoutSec = (int) Math.min((long) reqSelfAskTimeoutSec, Math.max(1L, (webBudgetMs + 999L) / 1000L));
+        }
+
         /* 1) 빠른 1차 검색 */
-        List<String> firstSnippets = safeSearch(qText, webTopK);
+        java.util.List<String> firstSnippets = safeSearch(qText, reqWebTopK);
 
         // 질의 복잡도 간단 판정
         boolean enableSelfAsk = qText.length() > 25
-                || qText.chars().filter(ch -> ch == ' ').count() > 3;
+                || qText.chars().filter(ch -> ch == ' ').count() > 3
+                // '비교', '차이' 또는 ' vs '가 포함되면 Self-Ask가 필요하다.
+                || qText.contains("비교")
+                || qText.contains("차이")
+                || qText.toLowerCase(Locale.ROOT).contains(" vs ");
+        if (!enableSelfAskHint || nightmareMode) {
+            enableSelfAsk = false;
+        }
+        final boolean useLlmSeedsHere = this.useLlmSeeds && enableSelfAskHint && !nightmareMode && !auxLlmDown;
+        final boolean useLlmFollowupsHere = this.useLlmFollowups && enableSelfAskHint && !nightmareMode && !auxLlmDown;
+
         // 질의 복잡도 기반 동적 깊이(1..maxDepth)
         final int depthLimit = Math.max(1, Math.min(maxDepth, estimateDepthByComplexity(qText)));
 
-        /* 1‑B) Self‑Ask 조기 종료 결정 (품질 평가는 LLM 키워드 확장에서 수행) */
+        /* 1-B) Self-Ask 조기 종료 결정 (품질 평가는 LLM 키워드 확장에서 수행) */
         if (!enableSelfAsk) {
-            if (firstSnippets.isEmpty()) return List.of(Content.from("[검색 결과 없음]"));
+            if (firstSnippets.isEmpty()) return List.of();
             // 단순 질의면서 1차에서 충분히 많이 맞으면(=조기 종료)
             if (firstSnippets.size() >= firstHitStopThreshold) {
                 return firstSnippets.stream().limit(overallTopK).map(Content::from).toList();
@@ -142,7 +188,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         }
 
         // 2) 휴리스틱 키워드 시드 구성 → BFS 확장
-        List<String> seeds = new ArrayList<>(basicKeywords(qText)); // 또는 원하는 변수명
+        java.util.List<String> seeds = new java.util.ArrayList<>(basicKeywords(qText, useLlmSeedsHere));
 
         // Seed queue with canonical uniqueness to avoid duplicate/synonym searches
         Deque<String> queue = new ArrayDeque<>();
@@ -173,48 +219,34 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
 
             // 해당 depth의 키워드들을 병렬 검색 (상한 적용)
-            List<CompletableFuture<List<String>>> futures = new ArrayList<>();
+                List<Future<List<String>>> futures = new ArrayList<>();
             for (String kw : currentKeywords) {
                 if (!budget.tryConsume()) break; // ✅ 상한
                 log.debug("[SelfAsk][d{}] 검색어: {}", depth, kw);
-                CompletableFuture<List<String>> f =
-                        CompletableFuture.supplyAsync(() -> {
-                                    try {
-                                        return searchSvc.searchSnippets(kw, webTopK);
-                                    } catch (Exception e) {
-                                        log.warn("[SelfAsk] 검색 실패(kw={}): {}", kw, e.toString());
-                                        return List.<String>of();
-                                    }
-                                }, searchExecutor)
-                                .completeOnTimeout(List.of(), perRequestTimeoutMs, TimeUnit.MILLISECONDS)
-                                .exceptionally(ex -> {
-                                    log.debug("[SelfAsk] future 실패: {}", ex.toString());
-                                    return List.of();
-                                });
+                Future<java.util.List<String>> f = searchExecutor.submit(() -> safeSearch(kw, reqWebTopK));
                 futures.add(f);
 
             }
 
-            // (레벨 타임박스) 모든 future 완료 대기(부분 실패/타임아웃은 무시하고 병합 계속)
-            try {
-                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                        .orTimeout(selfAskTimeoutSec, TimeUnit.SECONDS)
-                        .exceptionally(ex -> null)
-                        .join();
-            } catch (Exception ignore) {
-                log.debug("[SelfAsk] level={} 타임아웃 — partial merge 진행", depth);
-            }
+            // Level-wide budget for this depth.
+            // Important: we do NOT rely on CompletableFuture.orTimeout(), because it only times out the
+            // future result and may leave the underlying work running ("zombie" tasks).
+            final long levelDeadlineMs = System.currentTimeMillis() + java.util.concurrent.TimeUnit.SECONDS.toMillis(reqSelfAskTimeoutSec);
 
             // 결과 병합 및 다음 레벨 키워드 생성
             for (int i = 0; i < futures.size(); i++) {
                 String kw = i < currentKeywords.size() ? currentKeywords.get(i) : "";
-                List<String> results = futures.get(i).getNow(List.of()); // 🔒 비차단/예외 無
+                List<String> results = getWithHardTimeout(
+                        futures.get(i),
+                        Math.min(reqPerRequestTimeoutMs, Math.max(0L, levelDeadlineMs - System.currentTimeMillis())),
+                        kw
+                );
                 results.forEach(snippets::add);
 
                 if (depth + 1 <= maxDepth && snippets.size() < overallTopK) {
                     int used = 0;
                     // LLM 호출 최소화: 기본은 휴리스틱, 필요 시에만 LLM
-                    List<String> children = useLlmFollowups
+                    java.util.List<String> children = useLlmFollowupsHere
                             ? followUpKeywords(kw)
                             : heuristicFollowups(kw);
                     for (String child : children) {
@@ -228,6 +260,14 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                     }
                 }
             }
+
+            // Cancel any straggling tasks once this depth budget is exhausted.
+            for (Future<List<String>> f : futures) {
+                if (f != null && !f.isDone()) {
+                    // Interrupt Hygiene: never interrupt pooled workers (cancel(false) only).
+                    f.cancel(false);
+                }
+            }
             depth++;
         }
 
@@ -235,7 +275,18 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         if (snippets.size() < overallTopK && tavily != null) {
             try {
                 int need = Math.max(0, overallTopK - snippets.size());
-                tavily.retrieve(Query.from(qText)).stream()
+                // [HARDENING] Always propagate existing query metadata (e.g. session sid) when
+                // constructing new Query objects for the Tavily fallback.  This ensures that
+                // downstream retrievers enforce per-session isolation and do not pollute
+                // transient or public namespaces.  When the original query has no metadata
+                // attached, the builder will accept a null and Tavily will treat it as
+                // __PRIVATE__ internally.  Avoid the deprecated Query.from API.
+                // [HARDENING] use builder API to propagate metadata and avoid deprecated Query.from
+                Query fallbackQuery = dev.langchain4j.rag.query.Query.builder()
+                        .text(qText)
+                        .metadata((query != null ? query.metadata() : null))
+                        .build();
+                tavily.retrieve(fallbackQuery).stream()
                         .map(Content::toString)
                         .filter(StringUtils::hasText)
                         .limit(need)
@@ -248,11 +299,12 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         if (snippets.isEmpty()) {
             if (!firstSnippets.isEmpty()) {
                 return firstSnippets.stream()
-                        .limit(Math.max(1, Math.min(overallTopK, webTopK)))
+                        .limit(Math.max(1, Math.min(overallTopK, reqWebTopK)))
                         .map(Content::from)
                         .toList();
             }
-            return List.of(Content.from("[검색 결과 없음]"));
+            // No snippets found at all. Return an empty list instead of a placeholder to avoid polluting the vector store.
+            return java.util.List.of();
         }
         return snippets.stream()
                 .limit(overallTopK)
@@ -260,59 +312,174 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 .toList();
     }
 
-    /**
-     * 빈 스레드 풀 정리
-     */
-    @PreDestroy
-    public void close() {
-        searchExecutor.shutdown();
-        try {
-            if (!searchExecutor.awaitTermination(3, TimeUnit.SECONDS)) {
-                searchExecutor.shutdownNow();
+
+
+    // ---- per-request metadata helpers (OrchestrationHints bridge) ----
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<String, Object> toMetaMap(Query query) {
+        if (query == null || query.metadata() == null) return java.util.Collections.emptyMap();
+        Object meta = query.metadata();
+        if (meta instanceof java.util.Map<?, ?> raw) {
+            java.util.Map<String, Object> out = new java.util.HashMap<>();
+            for (java.util.Map.Entry<?, ?> e : raw.entrySet()) {
+                if (e.getKey() != null) out.put(String.valueOf(e.getKey()), e.getValue());
             }
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            searchExecutor.shutdownNow();
+            return out;
         }
+        try {
+            java.lang.reflect.Method m = meta.getClass().getMethod("asMap");
+            Object v = m.invoke(meta);
+            if (v instanceof java.util.Map<?, ?> m2) {
+                java.util.Map<String, Object> out = new java.util.HashMap<>();
+                for (java.util.Map.Entry<?, ?> e : m2.entrySet()) {
+                    if (e.getKey() != null) out.put(String.valueOf(e.getKey()), e.getValue());
+                }
+                return out;
+            }
+        } catch (NoSuchMethodException ignore) {
+            try {
+                java.lang.reflect.Method m = meta.getClass().getMethod("map");
+                Object v = m.invoke(meta);
+                if (v instanceof java.util.Map<?, ?> m2) {
+                    java.util.Map<String, Object> out = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m2.entrySet()) {
+                        if (e.getKey() != null) out.put(String.valueOf(e.getKey()), e.getValue());
+                    }
+                    return out;
+                }
+            } catch (Exception ignore2) {
+                return java.util.Collections.emptyMap();
+            }
+        } catch (Exception ignore) {
+            return java.util.Collections.emptyMap();
+        }
+        return java.util.Collections.emptyMap();
     }
+
+    private static int metaInt(java.util.Map<String, Object> meta, String key, int def) {
+        if (meta == null) return def;
+        Object v = meta.get(key);
+        if (v instanceof Number n) return n.intValue();
+        if (v instanceof String s) {
+            try { return Integer.parseInt(s.trim()); } catch (Exception ignore) {}
+        }
+        return def;
+    }
+
+    private static long metaLong(java.util.Map<String, Object> meta, String key, long def) {
+        if (meta == null) return def;
+        Object v = meta.get(key);
+        if (v instanceof Number n) return n.longValue();
+        if (v instanceof String s) {
+            try { return Long.parseLong(s.trim()); } catch (Exception ignore) {}
+        }
+        return def;
+    }
+
+    private static boolean metaBool(java.util.Map<String, Object> meta, String key, boolean def) {
+        if (meta == null) return def;
+        Object v = meta.get(key);
+        if (v instanceof Boolean b) return b;
+        if (v instanceof Number n) return n.intValue() != 0;
+        if (v instanceof String s) {
+            String t = s.trim().toLowerCase();
+            if (t.equals("true") || t.equals("1") || t.equals("yes")) return true;
+            if (t.equals("false") || t.equals("0") || t.equals("no")) return false;
+        }
+        return def;
+    }
+    // Executor lifecycle is managed by Spring (SearchExecutorConfig.searchIoExecutor).
 
     /* ───────────── 키워드 Helper (휴리스틱) ───────────── */
     /** 얕은 1~3개 시드 키워드 */
     /**
      * LLM 한 번으로 1~3개 핵심 키워드를 추출
      */
-    private List<String> basicKeywords(String question) {
+    private List<String> basicKeywords(String question, boolean allowLlm) {
         if (!StringUtils.hasText(question)) return List.of();
+        if (!allowLlm) return heuristicSeeds(question);
+
         String prompt = SEARCH_PROMPT.formatted(question.trim());
+        String reply = "";
         try {
-            String reply = chatModel.chat(List.of(
-                    SystemMessage.from("당신은 최고의 검색 전문가입니다."),
-                    UserMessage.from(prompt)
-            )).aiMessage().text();
-            return splitLines(reply).stream().limit(3).toList();
+            if (nightmareBreaker != null) {
+                reply = nightmareBreaker.execute(
+                        com.example.lms.infra.resilience.NightmareKeys.SELFASK_SEED,
+                        prompt,
+                        () -> chatModel.chat(List.of(
+                                SystemMessage.from("당신은 최고의 검색 전문가입니다."),
+                                UserMessage.from(prompt)
+                        )).aiMessage().text(),
+                        com.example.lms.infra.resilience.FriendShieldPatternDetector::looksLikeSilentFailure,
+                        () -> ""
+                );
+            } else {
+                reply = chatModel.chat(List.of(
+                        SystemMessage.from("당신은 최고의 검색 전문가입니다."),
+                        UserMessage.from(prompt)
+                )).aiMessage().text();
+            }
         } catch (Exception e) {
             log.warn("LLM keyword generation failed", e);
-            return List.of();
         }
+
+        List<String> out = splitLines(reply).stream().limit(3).toList();
+        if (out == null || out.isEmpty()) return heuristicSeeds(question);
+        return out;
     }
 
-    /** 하위 키워드(간단 확장) */
+    private List<String> heuristicSeeds(String question) {
+        if (!StringUtils.hasText(question)) return List.of();
+        String cleaned = question.replaceAll("[\\p{Punct}]+", " ").trim();
+        if (!StringUtils.hasText(cleaned)) {
+            return List.of(question.trim());
+        }
+
+        java.util.LinkedHashSet<String> uniq = new java.util.LinkedHashSet<>();
+        for (String t : cleaned.split("\\s+")) {
+            String norm = normalize(t);
+            if (!StringUtils.hasText(norm)) continue;
+            String canon = canonicalKeyword(norm);
+            if (!StringUtils.hasText(canon)) continue;
+            uniq.add(norm);
+            if (uniq.size() >= 3) break;
+        }
+        if (uniq.isEmpty()) return List.of(question.trim());
+        return uniq.stream().limit(3).toList();
+    }
+
     /**
-     * Self‑Ask 하위 키워드를 LLM으로 1~2개 생성
+     * Self-Ask 하위 키워드를 LLM으로 1~2개 생성
      */
     private List<String> followUpKeywords(String parent) {
         if (!StringUtils.hasText(parent)) return List.of();
         String prompt = FOLLOWUP_PROMPT.formatted(parent.trim());
+        String reply = "";
         try {
-            String reply = chatModel.chat(List.of(
-                    SystemMessage.from("검색어를 더 구체화하세요."),
-                    UserMessage.from(prompt)
-            )).aiMessage().text();
-            return splitLines(reply).stream().limit(followupsPerLevel).toList();
+            if (nightmareBreaker != null) {
+                reply = nightmareBreaker.execute(
+                        com.example.lms.infra.resilience.NightmareKeys.SELFASK_FOLLOWUP,
+                        prompt,
+                        () -> chatModel.chat(List.of(
+                                SystemMessage.from("검색어를 더 구체화하세요."),
+                                UserMessage.from(prompt)
+                        )).aiMessage().text(),
+                        com.example.lms.infra.resilience.FriendShieldPatternDetector::looksLikeSilentFailure,
+                        () -> ""
+                );
+            } else {
+                reply = chatModel.chat(List.of(
+                        SystemMessage.from("검색어를 더 구체화하세요."),
+                        UserMessage.from(prompt)
+                )).aiMessage().text();
+            }
         } catch (Exception e) {
-            log.warn("LLM follow‑up generation failed", e);
-            return List.of();
+            log.warn("LLM follow-up generation failed", e);
         }
+
+        List<String> out = splitLines(reply).stream().limit(Math.max(1, followupsPerLevel)).toList();
+        if (out == null || out.isEmpty()) return heuristicFollowups(parent);
+        return out;
     }
 
     /* ───────────── LLM 프롬프트 상수 및 검색 예산 ───────────── */
@@ -349,17 +516,49 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         }
     }
 
+    /**
+     * Hard timeout: on timeout, actively cancel the running task.
+     */
+    private List<String> getWithHardTimeout(Future<List<String>> future, long timeoutMs, String keyword) {
+        if (future == null) {
+            return List.of();
+        }
+        if (timeoutMs <= 0) {
+            // Best-effort cancel without interrupt to avoid cancellation toxicity.
+            future.cancel(false);
+            return List.of();
+        }
+        try {
+            List<String> v = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            return (v != null) ? v : List.of();
+        } catch (TimeoutException te) {
+            // Best-effort cancel without interrupt to avoid poisoning pooled workers.
+            future.cancel(false);
+            log.debug("[SelfAsk] hard timeout ({}ms) keyword={}", timeoutMs, keyword);
+            return List.of();
+        } catch (InterruptedException ie) {
+            // Interrupt Hygiene: consume interrupt flag (parry) and fail-soft.
+            Thread.interrupted();
+            future.cancel(false);
+            log.debug("[SelfAsk] interrupted while waiting keyword={} (interrupt consumed)", keyword);
+            return List.of();
+        } catch (Exception e) {
+            future.cancel(false);
+            log.debug("[SelfAsk] keyword search failed: {} -> {}", keyword, e.toString());
+            return List.of();
+        }
+    }
 
     private List<String> safeSearch(String q, int k) {
         try {
             if (!StringUtils.hasText(q)) return List.of();
-            return searchSvc.searchSnippets(q, k);
+            return webSearchProvider.search(q, k);
         } catch (Exception e) {
             log.warn("초기 검색 실패: {}", q, e);
             return Collections.emptyList();
         }
     }
-    /** LLM 호출 없이 간단 확장(최대 followupsPerLevel개) — 도메인 민감 */
+    /** LLM 호출 없이 간단 확장(최대 followupsPerLevel개) - 도메인 민감 */
     private List<String> heuristicFollowups(String parent) {
         if (!StringUtils.hasText(parent)) return List.of();
         boolean isGenshin = (domainDetector != null)
@@ -393,5 +592,30 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     }
 
 
+
+
+    // [HARDENING] ensure SID metadata is present on every query
+    private dev.langchain4j.rag.query.Query ensureSidMetadata(dev.langchain4j.rag.query.Query original, String sessionKey) {
+        var md = (original.metadata() != null)
+                ? original.metadata()
+                : dev.langchain4j.data.document.Metadata.from(
+                java.util.Map.of(com.example.lms.service.rag.LangChainRAGService.META_SID, sessionKey));
+        try {
+            return dev.langchain4j.rag.query.Query.builder()
+                    .text(original.text())
+                    .metadata(md)
+                    .build();
+        } catch (Throwable t) {
+            try {
+                // Fallback: 일부 환경에서만 존재할 수 있는 생성자(없으면 원본 반환)
+                var ctor = dev.langchain4j.rag.query.Query.class
+                        .getDeclaredConstructor(String.class, dev.langchain4j.data.document.Metadata.class);
+                ctor.setAccessible(true);
+                return ctor.newInstance(original.text(), md);
+            } catch (Throwable t2) {
+                return original;
+            }
+        }
+    }
 
 }

@@ -1,6 +1,7 @@
 // src/main/java/com/example/lms/netty/ChatWebSocketHandler.java
 package com.example.lms.netty;
 
+import com.example.lms.service.ChatResult;
 import com.example.lms.service.ChatService;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -8,6 +9,8 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+
+
 
 @Component
 @RequiredArgsConstructor
@@ -20,8 +23,8 @@ public class ChatWebSocketHandler extends SimpleChannelInboundHandler<TextWebSoc
     protected void channelRead0(ChannelHandlerContext ctx, TextWebSocketFrame frame) {
         String userMsg = frame.text();
 
-        /* ChatService → ChatResult 구조로 변경됨 */
-        ChatService.ChatResult result = chatService.ask(userMsg);
+        /* ChatService → ChatResult 구조로 변경됨 (inner class → top-level record) */
+        ChatResult result = chatService.ask(userMsg);
 
         String answer    = result.content();  // GPT 응답
         String usedModel = result.modelUsed();

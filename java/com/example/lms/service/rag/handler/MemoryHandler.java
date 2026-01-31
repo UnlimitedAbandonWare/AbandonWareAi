@@ -2,19 +2,22 @@ package com.example.lms.service.rag.handler;
 
 import com.example.lms.service.ChatHistoryService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import java.util.List;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 /**
- * MemoryHandler — 읽기 전담(minimal):
+ * MemoryHandler - 읽기 전담(minimal):
  *  - loadForSession(sessionId): 최근 N턴을 bullet text로 묶어 프롬프트 주입용 문자열 반환(없으면 null)
  *  - 파일 분리 유지, 다른 체인 단계와의 결합 제거(evidence 주입/핸들러 링크 제거)
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MemoryHandler {
+    private static final Logger log = LoggerFactory.getLogger(MemoryHandler.class);
 
     private final ChatHistoryService historyService;
 

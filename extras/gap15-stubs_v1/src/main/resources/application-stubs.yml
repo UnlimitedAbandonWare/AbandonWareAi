@@ -1,0 +1,181 @@
+mcp:
+  enabled: false
+  transport: stdio
+  tools:
+    manifest: classpath:tool_manifest__mcp.json
+planner:
+  enabled: true
+  plan-name: safe.v1.yaml
+  plans-path: classpath:planner/plans/
+guard:
+  autorun:
+    enabled: true
+    min-citations: 2
+    min-evidence: 2
+    allowed-domains-profile: gov_sci_news
+  final-sigmoid:
+    enabled: false
+    k: 12.0
+    x0: 0.9
+  citation:
+    min: 3
+  version-purity:
+    enabled: false
+    require-locked-versions: true
+  reflection-proxy:
+    enabled: false
+k-allocation:
+  enabled: true
+  web: 12
+  vector: 6
+  kg: 4
+critic:
+  enabled: true
+  max-retries: 2
+  backoff-ms: 300
+evolver:
+  enabled: false
+  ab-test-percent: 0.15
+selfask:
+  branching: 3way
+fusion:
+  mp-law:
+    enabled: false
+    zca:
+      enabled: false
+  wpm:
+    enabled: false
+  delta-project:
+    enabled: false
+  bode-clamp:
+    enabled: false
+    db-limit: 12.0
+  isotonic:
+    enabled: false
+  dbvmx:
+    enabled: false
+overdrive:
+  enabled: false
+  trigger:
+    scarcity-threshold: 0.3
+    conflict-threshold: 0.4
+  narrowing:
+    k-steps:
+    - 48
+    - 32
+    - 16
+    - 8
+extremez:
+  enabled: false
+  max-burst: 24
+nova:
+  rulebreak:
+    enabled: false
+    header: X-RuleBreak-Token
+zsystem:
+  budget:
+    enabled: false
+    millis: 3500
+  cancel:
+    enabled: false
+rerank:
+  cross-encoder:
+    semaphore:
+      max-permits: 4
+cache:
+  singleflight:
+    enabled: false
+telemetry:
+  aop:
+    enabled: false
+  compaction:
+    simhash:
+      enabled: false
+context:
+  matrix-transformer:
+    enabled: false
+  portfolio:
+    enabled: false
+    weights:
+      authority: 0.5
+      novelty: 0.3
+      augmentability: 0.2
+nlp:
+  alias:
+    tile:
+      enabled: false
+      path: classpath:alias/tiles/
+vision:
+  mpc:
+    enabled: false
+alias:
+  corrector:
+    enabled: true
+onnx:
+  enabled: true
+  max-concurrency: 3
+budget:
+  request-time-ms: 3500
+naver:
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+ocr:
+  enabled: true
+  min-confidence: 0.78
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+retrieval:
+  vector:
+    enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: dummy
+  chat-model: gemma3:27b
+
+  provider: local
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+fallback:
+  enabled: false
+
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true

@@ -1,0 +1,20 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: kg_first.v1
+k: { web: 6, vec: 4, kg: 8 }
+enable: { ocr: false, dpp: false }
+thresholds: { minScore: 0.2 }
+gates: { citationsMin: 3 }
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

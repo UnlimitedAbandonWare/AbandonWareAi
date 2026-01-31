@@ -1,0 +1,11 @@
+# Acceptance Checklist (Phase-A + Phase-B Lite)
+- Complexity Gate: LOW -> CE off, HIGH -> CE on.
+- Self-Ask: planner generates 3 sub-questions (BQ/ER/RC).
+- Plan-DSL: resolve plan by header or default (recency_first.v1).
+- PII/Citation: Email/phone stripped; citations <2 blocked.
+- Time-Budget: remaining <300ms -> CE skip -> Bi-Encoder fallback.
+- Single-Flight: collapsing duplicate concurrent calls.
+- BM25+Dense: optional BM25 stub included for hybrid pipeline.
+- Isotonic: Calibration utility present.
+- Overdrive/Extreme-Z: trigger -> recall↑; pass Final Sigmoid Gate.
+- Final Sigmoid: score < τ -> safe "insufficient evidence".

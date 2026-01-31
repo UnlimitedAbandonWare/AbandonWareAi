@@ -8,8 +8,10 @@ import com.example.lms.repository.CourseRepository;
 import com.example.lms.service.ProfessorService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
+
+
+
 
 @Service
 @Transactional
@@ -61,7 +63,7 @@ public class CourseService {
     }
 
     /**
-     * id만 넘기는 기존 버전 – 내부에서 위 create(...) 재활용
+     * id만 넘기는 기존 버전 - 내부에서 위 create(/* ... *&#47;) 재활용
      */
     public Course create(String title, String desc, Long profId) {
         Professor p = professorSvc.findById(profId);

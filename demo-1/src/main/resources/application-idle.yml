@@ -1,0 +1,54 @@
+nova:
+  idle-train:
+    enabled: true
+    auto-train-enabled: true
+    min-qa-accepted-to-train: 10
+    max-train-runs-per-day: 2
+    train-rag-jsonl-path: data/train/train_rag.jsonl
+    train-rag-dataset-name: autolearn-train
+    vector-index-path: data/vector/index.jsonl
+
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: gemma3:27b
+
+  api-key: dummy
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+fallback:
+  enabled: false
+
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+
+# UAW spare-time gating
+idle:
+  pollMillis: 60000
+  quietMillis: 120000
+  maxCpuLoad: 0.35
+  budget:
+    maxRunsPerDay: 24
+    minIntervalSeconds: 300
+  ingest:
+    maxLinesPerRun: 200

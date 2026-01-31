@@ -5,8 +5,10 @@ import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
-
 import java.time.LocalDateTime;
+
+
+
 
 @Entity
 @Getter @Setter
@@ -29,12 +31,17 @@ public class ChatMessage {
     private String role;               // user | assistant | system
 
     /**
-     * ① @Lob → 대용량 문자열임을 JPA에 알림
-     * ② columnDefinition="TEXT" → Hibernate 가 DDL 생성 시
-     *    명시적으로 TEXT 타입을 사용하도록 강제 (utf8mb4 가능)
+     * 대용량 메시지 저장 컬럼.
+     *
+     * <p>과거에는 MariaDB/MySQL에서 {@code TEXT}로 강제했지만,
+     * Search Trace(HTML) / RSUM(rolling summary) 같은 시스템 메타가 커지면
+     * {@code Data too long for column 'content'} 오류가 발생할 수 있습니다.
+     *
+     * <p>따라서 dialect가 적절한 LOB 타입(CLOB/LONGTEXT 등)을 선택하도록
+     * {@link jakarta.persistence.Lob} 매핑만 사용합니다.
      */
     @Lob
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(nullable = false)
     private String content;
 
     /* ────────── 메타 ────────── */

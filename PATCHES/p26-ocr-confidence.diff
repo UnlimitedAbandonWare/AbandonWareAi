@@ -1,0 +1,5 @@
+*** a/service/ocr/OcrService.java
+--- b/service/ocr/OcrService.java
+@@
+-  // placeholder pass-through
++  // Filter by min confidence and optionally merge spans into lines.

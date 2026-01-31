@@ -1,20 +1,25 @@
 package com.example.lms.service;
 
+import com.example.lms.search.provider.WebSearchProvider;
+
 import java.util.List;
 import java.util.stream.Collectors;
-import lombok.extern.slf4j.Slf4j; // 추가
-@Slf4j  // 로그 기능을 제공하기 위해 추가
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
 public class EnhancedSearchService {
+    private static final Logger log = LoggerFactory.getLogger(EnhancedSearchService.class);
 
-    private final NaverSearchService searchService;
+    private final WebSearchProvider webSearchProvider;
 
-    public EnhancedSearchService(NaverSearchService searchService) {
-        this.searchService = searchService;
+    public EnhancedSearchService(WebSearchProvider webSearchProvider) {
+        this.webSearchProvider = webSearchProvider;
     }
 
     public List<String> safeSearch(String query, int topK) {
         try {
-            List<String> snippets = searchService.searchSnippets(query, topK);
+            List<String> snippets = webSearchProvider.search(query, topK);
             return snippets.stream()
                     .filter(s -> !s.contains("[검색 결과 없음]"))
                     .collect(Collectors.toList());

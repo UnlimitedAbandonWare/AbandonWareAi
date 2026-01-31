@@ -6,6 +6,8 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+
+
 /**
  * 임베딩 기반 간단 관련도 점수 서비스.
  * 내부적으로 {@link RelevanceScorer} 를 사용합니다.

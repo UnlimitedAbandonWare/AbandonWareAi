@@ -1,0 +1,36 @@
+# FUTURE profile: gpu-3090-3060x2 (1× RTX 3090 + 2× RTX 3060)
+# This file is inert until you activate Spring profile: gpu-3090-3060x2
+llmrouter:
+  profiles:
+    3090_3060x2:
+      models:
+        heavy:  { base-url: "http://localhost:8000", weight: 0.35, tag: "GPU0-3090" }
+        mid:    { base-url: "http://localhost:8002", weight: 0.10, tag: "GPU1-3060" }
+        light:  { base-url: "http://localhost:8003", weight: 0.55, tag: "GPU2-3060" }
+zsys:
+  onnx:
+    device-id: 2   # use GPU2 (second 3060) for ONNX tasks in future profile
+train_idle:
+  enabled: true
+autolearn:
+  enabled: true
+
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: gemma3:27b
+
+  api-key: dummy
+fallback:
+  enabled: false
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false

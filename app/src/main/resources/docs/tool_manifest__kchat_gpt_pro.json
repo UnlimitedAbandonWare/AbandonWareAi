@@ -1,0 +1,69 @@
+{
+  "id": "kchat_gpt_pro",
+  "version": "1.0",
+  "scopes": [
+    "web_read",
+    "rag_read",
+    "ocr_read"
+  ],
+  "tools": [
+    {
+      "name": "web.search",
+      "description": "신뢰도 필터와 캐시/레이트리밋 포함 웹 검색",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "recencyDays": {
+            "type": "integer"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "q"
+        ]
+      }
+    },
+    {
+      "name": "rag.search",
+      "description": "페더레이티드 벡터 스토어에서语义 검색",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "topK": {
+            "type": "integer",
+            "default": 6
+          }
+        },
+        "required": [
+          "q"
+        ]
+      }
+    },
+    {
+      "name": "ocr.extract",
+      "description": "OCR → 텍스트/바운딩박스/신뢰도",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "fileUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileUrl"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+# zero_break.v1.yaml — controlled override plan (admin only)
+version: 1
+name: zero_break.v1
+k-allocation: { web: 30, vector: 18, kg: 10, ocr: 6 }
+modes:
+  extremez: { enabled: true, max-burst: 32 }
+  anger: { enabled: true }
+whitelist:
+  override: audit     # allow with audit banner
+gates:
+  autorun: { min-citations: 3, min-evidence: 3 }
+  citation: { min: 3 }
+  final:
+    threshold: 0.90
+    k: 8.0
+  banner:
+    enabled: true
+    text: "【주의: 확장 탐색(Zero Break) 모드 적용】"
+flow:
+  - analyze
+  - selfask: { branching: "3way" }
+  - extremez
+  - retrieve:web
+  - retrieve:vector
+  - retrieve:kg
+  - retrieve:ocr
+  - fuse:wpm+rrf+delta
+  - rerank:bi
+  - rerank:cross
+  - gate:final
+  - build:prompt
+alias:
+  corrector: { enabled: true }
+probe: { search: { enabled: false }, admin-token: "" }
+retrieval: { vector: { enabled: true } }

@@ -1,0 +1,25 @@
+name: Build Error Miner
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/build_error_miner.py'
+      - '.github/workflows/build-error-miner.yml'
+      - '**/*.gradle*'
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run miner (if logs uploaded as artifact)
+        run: |
+          mkdir -p analysis
+          python tools/build_error_miner.py scan --in "${{ github.workspace }}/build-logs" --out analysis/ci_build_error_report || true
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-error-report
+          path: analysis/ci_build_error_report.*

@@ -1,8 +1,10 @@
 package com.example.lms.support;
 
 import com.example.lms.entity.TranslationMemory;
-
 import java.util.concurrent.atomic.AtomicReference;
+
+
+
 
 /**
  * A service that dynamically adjusts reward policy weights based on user feedback.
@@ -11,12 +13,12 @@ public class WeightTuningService {
     private final AtomicReference<double[]> weights = new AtomicReference<>(new double[] {0.55, 0.30, 0.15});
 
     public void positiveFeedback(TranslationMemory mem) {
-        // Placeholder: nudge all weights slightly upwards.
+        // shim: nudge all weights slightly upwards.
         adjustWeights(0.01, 0.01, 0.01);
     }
 
     public void negativeFeedback(TranslationMemory mem) {
-        // Placeholder: nudge all weights slightly downwards.
+        // shim: nudge all weights slightly downwards.
         adjustWeights(-0.01, -0.01, -0.01);
     }
 

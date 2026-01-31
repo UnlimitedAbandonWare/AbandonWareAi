@@ -6,14 +6,17 @@ import com.example.lms.service.config.HyperparameterService;
 import com.example.lms.util.TextSimilarityUtil;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 /**
  * ① 모든 하이퍼파라미터를 {@link HyperparameterService} 로부터 **동적**으로 가져온다.
  * ② TEXT 컬럼과 utf8mb4 설정을 통해 한글/이모지 문제를 해결했다.
@@ -21,8 +24,8 @@ import org.springframework.beans.factory.annotation.Value;
  */
 @Component
 @RequiredArgsConstructor
-@Slf4j
 public class BanditSelector {
+    private static final Logger log = LoggerFactory.getLogger(BanditSelector.class);
 
     private final MemoryRepository    memoryRepo;
     private final TextSimilarityUtil  simUtil;

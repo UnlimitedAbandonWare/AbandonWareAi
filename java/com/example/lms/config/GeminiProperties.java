@@ -3,6 +3,8 @@ package com.example.lms.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+
+
 /**
  * Configuration properties for the Gemini integration.  This class binds
  * the fields defined under the {@code gemini.*} namespace in the

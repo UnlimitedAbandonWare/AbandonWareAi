@@ -3,9 +3,12 @@ package com.example.lms.service.rag;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
+
+
+
 
 /**
  * 쿼리 복잡도를 판단해 검색 흐름을 제어하는 게이트웨이.
@@ -33,14 +36,20 @@ public class QueryComplexityGate {
     );
 
     // 3) 직접 검색 연산자(키워드형) 힌트
+    // VS 비교 질의를 SIMPLE로 분류하지 않도록 vs 조건을 제거하였다.
     private static final Pattern DIRECT_SEARCH = Pattern.compile(
-            "(?i)(site:|filetype:|\\binurl:|\\bintitle:|\".+\"|\\bvs\\b" +
-                    "|사양|스펙|가격|정의|다운로드|설치)"
+            "(?i)(site:|filetype:|\\binurl:|\\bintitle:|\".+\""
+                    + "|사양|스펙|가격|정의|다운로드|설치)"
+    );
+
+    /** 비교 연산자 힌트: 'vs', '비교', '차이'가 포함되면 복합 질문으로 처리 */
+    private static final Set<String> COMPARISON_HINTS = Set.of(
+            "vs", "비교", "차이"
     );
 
     // 4) 문장 분절·복합도 힌트
     private static final Pattern MULTI_CLAUSE = Pattern.compile(
-            "[.,!?·…；;]{1,}.*[가-힣\\w].*"
+            "[\\.,!?·;；:，。、！？；：~〜]\\s+\\S+|\\b(vs|versus)\\b"
     );
 
     /**
@@ -55,6 +64,14 @@ public class QueryComplexityGate {
         /* 2) 분류기가 없거나 초기화 실패 시 → 기존 규칙 기반 로직 */
         if (q == null) return Level.SIMPLE;
         String s = q.strip();
+
+        // 비교 관련 힌트가 포함되면 복합(Complex) 질의로 분류한다.
+        String sLower = s.toLowerCase(Locale.ROOT);
+        for (String hint : COMPARISON_HINTS) {
+            if (sLower.contains(hint.toLowerCase(Locale.ROOT))) {
+                return Level.COMPLEX;
+            }
+        }
 
         // (A) 매우 짧거나 직접 검색 연산자 포함 → SIMPLE
         // 길이 임계치 24 → 16: 짧은 키워드성 질의는 SIMPLE 취급

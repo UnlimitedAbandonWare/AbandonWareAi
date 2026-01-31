@@ -1,5 +1,7 @@
 package com.example.lms.service;
 
+import com.example.lms.llm.OpenAiTokenParamCompat;
+
 import com.example.lms.entity.CurrentModel;
 import com.example.lms.repository.CurrentModelRepository;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -9,11 +11,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.web.reactive.function.client.WebClient;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+
+
 
 @Service
 public class GPTService {
@@ -21,22 +26,33 @@ public class GPTService {
     // ✨ 1. 로거(Logger) 추가
     private static final Logger log = LoggerFactory.getLogger(GPTService.class);
 
-    private final RestTemplate restTemplate;
+    private final WebClient openaiWebClient;
     private final CurrentModelRepository currentRepo;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${openai.api.url}")
     private String apiUrl;
 
-    @Value("${openai.api.key}")
+    // Resolve the API key from configuration or environment.  Prefer the
+    // `openai.api.key` property and fall back to OPENAI_API_KEY.  Do not
+    // include other vendor keys (e.g. GROQ_API_KEY) to avoid authentication
+    // failures.
+    @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String apiKey;
 
-    @Value("${openai.api.model:gpt-3.5-turbo}") // o3에서 gpt-3.5-turbo로 변경
+    @Value("${openai.api.model:gemma3:27b}") // o3에서 gemma3:27b로 변경
     private String defaultModelFromProps;
 
-    public GPTService(RestTemplate restTemplate,
+    // 고급 모델을 위한 구성. openai.chat.model-high-tier 가 지정되지 않으면 기본 모델을 재사용한다.
+    @Value("${openai.chat.model-high-tier:${openai.api.model:${openai.chat.model:gemma3:27b}}}")
+    private String highTierModel;
+    // true인 경우 항상 상위 티어 모델을 사용한다.
+    @Value("${openai.chat.force-high-tier:false}")
+    private boolean forceHighTier;
+
+    public GPTService(@Qualifier("openaiWebClient") WebClient openaiWebClient,
                       CurrentModelRepository currentRepo) {
-        this.restTemplate = restTemplate;
+        this.openaiWebClient = openaiWebClient;
         this.currentRepo = currentRepo;
     }
 
@@ -53,26 +69,46 @@ public class GPTService {
         Map<String, Object> body = new HashMap<>();
         body.put("model", modelToUse);
         body.put("messages", List.of(message));
+        body.put("temperature", 0.7);
+        String tokenKey = OpenAiTokenParamCompat.tokenParamKey(modelToUse, apiUrl);
+        if (tokenKey != null && !tokenKey.isBlank() && !"none".equalsIgnoreCase(tokenKey)) {
+            body.put(tokenKey, 1024);
+        }
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(apiKey);
-
-        HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-
-        ResponseEntity<String> response = restTemplate.postForEntity(
-                apiUrl + "/chat/completions",
-                request,
-                String.class
-        );
-
-        if (response.getStatusCode() != HttpStatus.OK) {
-            log.error("[GPTService] OpenAI API error: {} - {}", response.getStatusCode(), response.getBody());
-            throw new IllegalStateException("OpenAI API error: " + response.getStatusCode());
+        // Invoke the OpenAI chat completions endpoint using WebClient
+        String responseBody;
+        try {
+            responseBody = openaiWebClient.post()
+                .uri(apiUrl + "/chat/completions")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        } catch (org.springframework.web.reactive.function.client.WebClientResponseException wcre) {
+            if (OpenAiTokenParamCompat.isUnsupportedMaxTokens(wcre)) {
+                OpenAiTokenParamCompat.replaceTokenParamForRetry(body, 1024);
+                responseBody = openaiWebClient.post()
+                .uri(apiUrl + "/chat/completions")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+            } else {
+                throw wcre;
+            }
+        }
+        if (responseBody == null || responseBody.isBlank()) {
+            throw new IllegalStateException("OpenAI API empty body");
         }
 
         // ✨ 3. 응답에서 모델 정보를 "추출"하고 로그 남기기
-        JsonNode root = objectMapper.readTree(response.getBody());
+        JsonNode root = objectMapper.readTree(responseBody);
 
         // 사용된 모델 정보 추출
         String responseModel = root.path("model").asText("N/A");
@@ -94,8 +130,11 @@ public class GPTService {
 
     private String pickModel(String overrideModel) {
         if (overrideModel != null && !overrideModel.isBlank()) {
-            // log.debug("Using override model: {}", overrideModel);
             return overrideModel;
+        }
+        // forceHighTier가 true면 항상 고급 모델을 선택한다.
+        if (forceHighTier) {
+            return highTierModel;
         }
         return currentRepo.findById(1L)
                 .map(CurrentModel::getModelId)

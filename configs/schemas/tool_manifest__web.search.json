@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "web.search",
+  "type": "object",
+  "properties": {
+    "q": {
+      "type": "string",
+      "minLength": 2
+    },
+    "topK": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "lang": {
+      "type": "string",
+      "enum": [
+        "ko",
+        "en",
+        "ja",
+        "zh"
+      ]
+    }
+  },
+  "required": [
+    "q"
+  ],
+  "additionalProperties": false
+}

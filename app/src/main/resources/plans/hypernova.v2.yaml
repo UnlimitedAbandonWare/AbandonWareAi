@@ -1,0 +1,46 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+meta:
+  id: hypernova.v2
+  description: "Hypernova: TWPM+CVaR+Softmax Clamp, DPP 다양성, 게이트 엄격화 (전역 파라미터화)"
+stages:
+  - name: preflight_safety
+    gates:
+      - AutorunPreflightGate{ require_official_sources=${NOVA_REQUIRE_OFFICIAL:false}, allow_rulebreak=${NOVA_RULEBREAK:false} }
+      - PIISanitizer{ mode=${NOVA_PII_MODE:scan} }
+  - name: expand_queries
+    handlers:
+      - SelfAskPlanner{ branches=${NOVA_SELFASK_BRANCHES:12}, temperature=${NOVA_SELFASK_TEMP:0.9} }
+      - ExtremeZSystemHandler{ bursts=${NOVA_Z_BURSTS:18}, parallel=${NOVA_Z_PARALLEL:true} }
+  - name: retrieval
+    handlers:
+      - DynamicRetrievalHandlerChain{ mode=${NOVA_CHAIN_MODE:HYPERNOVA} }
+  - name: condense_refine
+    handlers:
+      - AngerOverdriveNarrower{ stages=[${NOVA_OVERDRIVE_STAGES:48,32,16,8}] }
+      - DppDiversityReranker{ size=${NOVA_DPP_SIZE:10}, lambda=${NOVA_DPP_LAMBDA:0.7} }
+      - OnnxCrossEncoderReranker{ max=${NOVA_ONNX_MAX:8}, threshold=${NOVA_ONNX_THRESH:0.15} }
+  - name: fuse_and_score
+    handlers:
+      - NovaNextFusionService{ }
+      - ScoreCalibrator{ mode=${NOVA_CALIB_MODE:prob_fallback} }
+  - name: finalize
+    gates:
+      - CitationGate{ min_citations=${NOVA_MIN_CITATIONS:3} }
+      - FinalSigmoidGate{ k=${NOVA_SIGMOID_K:10.0}, x0=${NOVA_SIGMOID_X0:0.85} }
+    output:
+      prompt_builder: PromptBuilder{ mode=${NOVA_PROMPT_MODE:structured}, evidence=${NOVA_PROMPT_EVIDENCE:true} }
+      trace: ${NOVA_TRACE:true}
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

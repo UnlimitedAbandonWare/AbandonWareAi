@@ -1,0 +1,330 @@
+{
+  "version": "2025-09-26",
+  "name": "kchat_gpt_pro_tools",
+  "description": "K-CHAT / LMS 멀티채널 어시스턴트를 위한 표준 툴 매니페스트",
+  "scopes": {
+    "kakao.push": {
+      "description": "카카오 채널로 메시지 발송",
+      "consent_ttl_seconds": 1800,
+      "risk": [
+        "external_write",
+        "user_notification"
+      ]
+    },
+    "n8n.notify": {
+      "description": "n8n 웹훅으로 콜백/페이로드 전송",
+      "consent_ttl_seconds": 1800,
+      "risk": [
+        "external_write",
+        "workflow_trigger"
+      ]
+    },
+    "web.get": {
+      "description": "웹 검색/페이지 조회",
+      "consent_ttl_seconds": 900,
+      "risk": [
+        "external_network"
+      ]
+    },
+    "places.read": {
+      "description": "Kakao Places 검색",
+      "consent_ttl_seconds": 3600,
+      "risk": [
+        "external_network",
+        "location_context"
+      ]
+    },
+    "geo.read": {
+      "description": "좌표→주소 역지오코딩",
+      "consent_ttl_seconds": 3600,
+      "risk": [
+        "external_network",
+        "location_context"
+      ]
+    },
+    "internal.read": {
+      "description": "내부 문서/임베딩 RAG 조회",
+      "consent_ttl_seconds": 86400,
+      "risk": [
+        "internal_data_access"
+      ]
+    },
+    "internal.enqueue": {
+      "description": "내부 큐에 장기 작업 등록",
+      "consent_ttl_seconds": 86400,
+      "risk": [
+        "resource_consumption"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "kakao.push",
+      "description": "카카오 방/사용자에게 텍스트 메시지 전송",
+      "scope": "kakao.push",
+      "idempotent": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "description": "Kakao room/thread id"
+          },
+          "text": {
+            "type": "string",
+            "description": "보낼 텍스트(최대 1000자 권장)"
+          }
+        },
+        "required": [
+          "roomId",
+          "text"
+        ]
+      },
+      "backend_mapping": {
+        "class": "com.abandonware.ai.integrations.kakao.KakaoMessageService",
+        "method": "send",
+        "args": [
+          "roomId",
+          "text"
+        ]
+      }
+    },
+    {
+      "name": "n8n.notify",
+      "description": "n8n 웹훅 혹은 콜백 URL로 JSON 페이로드 POST",
+      "scope": "n8n.notify",
+      "idempotent": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "webhookUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "webhookUrl",
+          "payload"
+        ]
+      },
+      "backend_mapping": {
+        "class": "com.abandonware.ai.integrations.n8n.N8nNotifier",
+        "method": "notify",
+        "args": [
+          "webhookUrl",
+          "payload"
+        ]
+      }
+    },
+    {
+      "name": "places.search",
+      "description": "Kakao 장소 검색(쿼리/좌표/반경)",
+      "scope": "places.read",
+      "idempotent": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number",
+            "minimum": 124,
+            "maximum": 132
+          },
+          "y": {
+            "type": "number",
+            "minimum": 33,
+            "maximum": 39
+          },
+          "radius": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 20000
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "backend_mapping": {
+        "class": "com.abandonware.ai.location.places.KakaoPlacesClient",
+        "method": "search",
+        "args": [
+          "query",
+          "x",
+          "y",
+          "radius"
+        ]
+      }
+    },
+    {
+      "name": "geo.reverse",
+      "description": "좌표→주소(행정구/도로명)",
+      "scope": "geo.read",
+      "idempotent": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      },
+      "backend_mapping": {
+        "class": "com.abandonware.ai.location.geo.KakaoReverseGeocodingClient",
+        "method": "lookup",
+        "args": [
+          "x",
+          "y"
+        ]
+      }
+    },
+    {
+      "name": "rag.retrieve",
+      "description": "질의에 대한 하이브리드 검색+재랭크 후 증거 스니펫 반환",
+      "scope": "internal.read",
+      "idempotent": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "topK": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 8
+          },
+          "domain": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "backend_mapping": {
+        "class": "com.abandonware.ai.service.rag.HybridRetriever",
+        "method": "retrieve",
+        "args": [
+          "query",
+          "topK",
+          "domain"
+        ]
+      }
+    },
+    {
+      "name": "web.search",
+      "description": "최신성 필요시 웹 검색(요약용)",
+      "scope": "web.get",
+      "idempotent": true,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "topK": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "ko",
+              "en",
+              "ja",
+              "zh"
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "backend_mapping": {
+        "class": "com.abandonware.ai.service.rag.TavilyWebSearchRetriever",
+        "method": "search",
+        "args": [
+          "query",
+          "topK",
+          "lang"
+        ]
+      }
+    },
+    {
+      "name": "jobs.enqueue",
+      "description": "긴 작업을 큐에 등록하고 백그라운드 처리",
+      "scope": "internal.enqueue",
+      "idempotent": false,
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "flow": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow",
+          "payload"
+        ]
+      },
+      "backend_mapping": {
+        "class": "com.abandonware.ai.jobs.JobService",
+        "method": "enqueue",
+        "args": [
+          "flow",
+          "payload",
+          "requestId",
+          "sessionId"
+        ]
+      }
+    }
+  ],
+  "llm_hints": {
+    "timely_keywords": [
+      "공지",
+      "업데이트",
+      "최근",
+      "오늘",
+      "어제",
+      "방금",
+      "뉴스",
+      "일정",
+      "변경"
+    ],
+    "prefer_low_cost_model_first": true,
+    "max_retry_low_cost": 1,
+    "escalate_on_coverage_gap": true
+  }
+}

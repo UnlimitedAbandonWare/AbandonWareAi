@@ -5,6 +5,8 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+
+
 /**
  * A simple validator that extracts named entities from an answer and
  * verifies that those entities appear in the provided evidence.

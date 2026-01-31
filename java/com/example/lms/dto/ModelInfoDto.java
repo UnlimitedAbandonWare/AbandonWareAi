@@ -3,6 +3,8 @@ package com.example.lms.dto;
 
 import lombok.Data;
 
+
+
 /**
  * OpenAI에서 가져온 모델 메타데이터를 담는 DTO
  */

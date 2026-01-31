@@ -1,0 +1,13 @@
+agents:
+- id: resume_llm_mcp
+  system: agents/resume_llm_mcp/system_ko.md
+  traits:
+  - traits/stuff2_ko.md
+  - traits/stuff4_ko.md
+  merge:
+    order:
+    - trait
+    - system
+    conflict: project_overrides_global
+  output:
+    path: out/resume_agent.prompt

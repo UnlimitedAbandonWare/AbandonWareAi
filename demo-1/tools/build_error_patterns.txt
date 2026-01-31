@@ -1,0 +1,74 @@
+# Common Java/Gradle compile errors (regex)
+cannot find symbol
+error: incompatible types
+method\s+.*\s+in class\s+.*\s+cannot be applied to given types
+incompatible types:\s+String cannot be converted to TextSegment
+package .* does not exist
+symbol:\s+class\s+.*
+symbol:\s+method\s+.*
+symbol:\s+method\s+search\(String\)
+class file for .* not found
+symbol:\s+class\s+TimeoutException
+
+# Lombok issues
+lombok.* not found
+
+# YAML duplicate key / SnakeYAML
+org.yaml.snakeyaml.constructor.DuplicateKeyException
+DuplicateKeyException
+found duplicate key
+while constructing a mapping
+
+# Gradle project/module missing
+Project with path ':lms-core' could not be found
+project :lms-core not found
+Could not resolve project :lms-core
+
+# BootRun non-zero exit
+finished with non-zero exit value
+non-zero exit value 1
+
+
+# Spring DI annotations missing import (Autowired / Qualifier)
+symbol:\s+class\s+Autowired
+symbol:\s+class\s+Qualifier
+# banned placeholder tokens (pattern injection guard)
+\{스터프3\}
+\{STUFF3_DISABLED\}
+
+# Javac lambda capture of non-final local variable
+local variables referenced from a lambda expression must be final or effectively final
+
+# Java 17 text block (""" ... """) syntax errors
+illegal text block open delimiter sequence, missing line terminator
+
+# Java parser errors for malformed switch/case
+orphaned case
+case, default, or '}' expected
+illegal escape character
+
+# aliasCorrector field missing in DynamicRetrievalHandlerChain
+symbol:\s+variable\s+aliasCorrector
+# Auto-added parser error patterns (javac parser errors from aggregated logs)
+illegal start of type
+invalid method declaration; return type required
+class, interface, enum, or record expected
+
+
+# ---- AUTO: stuff3_missing_helpers ----
+# Pattern: Gradle Java compile error for missing DomainWhitelist / HybridRetriever helper methods.
+# Trigger when build log contains all of:
+#   - "HybridRetriever.java"
+#   - "DomainWhitelist.java"
+#   - "error: cannot find symbol"
+#   - one of: "extractUrl(String)", "extractHost(String)", "isCommunity(String)", "isBanned(String)"
+# Suggested fix: implement extractUrl in HybridRetriever and helper methods (extractHost, isOfficial(host), isCommunity, isBanned) in DomainWhitelist.
+
+# ---- AUTO: stuff3_unified_rag_orchestrator_lc4j_shim ----
+# Pattern: Gradle Java compile error in demo-1 for UnifiedRagOrchestrator using legacy LangChain4j Query/metadata APIs.
+# Trigger when build log contains all of:
+#   - "UnifiedRagOrchestrator.java"
+#   - "error: cannot find symbol"
+#   - "Query.from(req.query)"
+#   - "Map<ContentMetadata,Object> cannot be converted to Metadata"
+# Suggested fix: update UnifiedRagOrchestrator to call `new Query(req.query)`, treat `Content.metadata()` as a Map, and add an slf4j `log` field.

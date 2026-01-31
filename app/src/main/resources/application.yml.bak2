@@ -1,0 +1,126 @@
+spring:
+  application:
+    name: kchat-agent
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  devtools:
+    restart:
+      enabled: true
+
+agent:
+  flows:
+    # When set, flows will be loaded from this directory before falling back to the classpath
+    path: ${AGENT_FLOWS_PATH:}
+
+
+  models:
+    path: ${AGENT_MODELS_PATH:configs/models.manifest.yaml}
+
+  models:
+    path: ${AGENT_MODELS_PATH:configs/models.manifest.yaml}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,loggers,threaddump,httpexchanges
+
+logging:
+  level:
+    root: INFO
+    com.abandonware.ai.agent: INFO
+
+consent:
+  redis:
+    enabled: ${CONSENT_REDIS_ENABLED:true}
+
+jobs:
+  redis:
+openai:
+  base-url: ${OPENAI_BASE_URL:${OPENROUTER_BASE_URL:https://openrouter.ai/api}}
+  api:
+    key: ${OPENAI_API_KEY:${OPENROUTER_API_KEY:}}
+  http:
+    timeout-sec: ${OPENAI_TIMEOUT_SEC:120}
+    max-in-mem-mb: ${OPENAI_MAX_MEM_MB:30}
+  chat:
+    model:
+      a-default: ${LLM_DEFAULT_MODEL:}   # 공란이면 매니페스트 bindings.default 사용
+      moe:       ${LLM_MOE_MODEL:}       # 공란이면 매니페스트 bindings.moe 사용
+
+local-llm:
+  enabled: ${LOCAL_LLM_ENABLED:false}
+  base-url: ${LOCAL_LLM_BASE_URL:}/v1
+
+router:
+  moe:
+    tokens-threshold: ${ROUTER_MOE_TOKENS:280}
+    uncertainty-threshold: ${ROUTER_MOE_UNCERTAINTY:0.35}
+    web-evidence-threshold: ${ROUTER_MOE_WEB_EVIDENCE:0.55}
+    escalate-on-rigid-temp: ${ROUTER_MOE_ESCALATE_ON_RIGID_TEMP:true}
+
+
+# Added by automated patch: ensure models manifest is resolvable on classpath
+
+---
+agent:
+  models:
+    # Prefer classpath packaging; overridable via AGENT_MODELS_PATH
+    path: ${AGENT_MODELS_PATH:classpath:/configs/models.manifest.yaml}
+
+# Diagnostics for manifest loader
+
+---
+logging:
+  level:
+    com.example.lms.manifest: DEBUG
+
+# [PATCH][RRF KG Fusion defaults]
+retrieval:
+  kg:
+    half-life-days: 60
+    # a,b,c,d for (path, confidence, recency, degree)
+    score:
+      weights: "0.25,0.45,0.20,0.10"
+
+  fusion:
+    rrf:
+      k: 60
+      # source list order mapping (default weights = 1.0 if not found)
+      # This chain assumes [web, sem, kg] ordering
+      weights: "w_web,w_sem,w_kg"
+
+
+# Gradient diagnostics (disabled by default)
+diag:
+  nn:
+    gradient:
+      enabled: ${DIAG_NN_GRAD_ENABLED:false}
+      vanish-threshold: ${DIAG_NN_GRAD_VANISH_THRESHOLD:0.001}
+      alpha: ${DIAG_NN_GRAD_ALPHA:4.0}
+      beta: ${DIAG_NN_GRAD_BETA:0.0}
+      eps: ${DIAG_NN_GRAD_EPS:1e-12}
+
+# ADDED v12: prcyk & ocr config
+agent:
+  prcyk:
+    enabled: true
+    weights: { P: 0.2, R: 0.25, C: 0.25, Y: 0.2, K: 0.1 }
+    thresholds:
+      degrade: 0.55
+      fallback: 0.35
+    penalties:
+      rdi: 0.15
+rag:
+  ocr:
+    enabled: true
+    minConfidence: 0.65
+    maxPages: 50
+    chunk:
+      maxChars: 1200
+      overlap: 120
+    rrf:
+      weight: 1.2
+

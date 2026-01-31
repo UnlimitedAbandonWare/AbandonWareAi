@@ -1,0 +1,61 @@
+{
+  "name": "Follow-up: KAKAO Ask Completion",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "kchat-followup",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "responseData": "default",
+          "responseCode": 200
+        }
+      },
+      "id": "Webhook1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "eec7f9b2-29bd-4005-8bf7-a8e3d42dc6b3"
+    },
+    {
+      "parameters": {
+        "responseBody": "OK",
+        "responseCode": 200
+      },
+      "id": "Respond1",
+      "name": "HTTP Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        600,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HTTP Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Asia/Seoul",
+    "saveManualExecutions": false
+  },
+  "staticData": {},
+  "pinData": {},
+  "meta": {
+    "templateCredsSetup": "Add credentials for any extra nodes you attach (Slack, Google Sheets, etc.)."
+  },
+  "__type": "partial-skeleton"
+}

@@ -1,16 +1,18 @@
 package com.example.lms.util;
 
 import dev.langchain4j.data.document.Metadata;
-
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.UUID;
 
+
+
+
 public final class MetadataUtils {
 
-    private MetadataUtils() {}       // util class‑방지용 private 생성자
+    private MetadataUtils() {}       // util class-방지용 private 생성자
 
-    /* 메타데이터 → Map 변환 (LangChain4j v0.27 ‑ v0.30 호환) */
+    /* 메타데이터 → Map 변환 (LangChain4j v0.27 - v0.30 호환) */
     @SuppressWarnings("unchecked")
     private static Map<String, Object> toMap(Object meta) {
         try {
@@ -25,7 +27,7 @@ public final class MetadataUtils {
         return Map.of();
     }
 
-    /* 타입‑안전한 put */
+    /* 타입-안전한 put */
     public static void putTyped(Metadata md, String key, Object val) {
         if (md == null || key == null || val == null) return;
         if (val instanceof String s)        md.put(key, s);

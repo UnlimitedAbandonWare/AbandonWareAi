@@ -1,12 +1,14 @@
 package com.example.lms.agent;
 
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
 
 /**
  * A simple throttle controller to respect the free tier limits of external APIs such as Gemini.
@@ -16,10 +18,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * to guard against exceeding the free quota and incurring unexpected charges or rate limit errors.
  * </p>
  */
-@Slf4j
 @Service
 @ConditionalOnProperty(prefix = "gemini.api.free-tier.throttle", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class FreeTierApiThrottleService {
+    private static final Logger log = LoggerFactory.getLogger(FreeTierApiThrottleService.class);
 
     /** The maximum number of API requests allowed per minute. */
     private final int maxPerMinute;

@@ -4,6 +4,8 @@ package com.example.lms.service.translator;
 import com.example.lms.service.translator.BasicTranslator;
 import org.springframework.stereotype.Component;
 
+
+
 /**
  * ⭐️ 데모용 구현:
  *   - 그냥 입력 그대로 돌려보냅니다.
@@ -14,7 +16,7 @@ public class EchoTranslator implements BasicTranslator {
 
     @Override
     public String translate(String text, String srcLang, String tgtLang) {
-        // TODO: OpenAI 번역 호출 등으로 대체
+        // Implementation shim: replace with a call to an external translation service (e.g., OpenAI).
         return text;
     }
 }

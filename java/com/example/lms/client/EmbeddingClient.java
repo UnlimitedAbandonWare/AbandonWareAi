@@ -2,8 +2,12 @@
 package com.example.lms.client;
 
 import org.springframework.stereotype.Component;
+import org.springframework.context.annotation.Profile;
 import java.util.concurrent.ThreadLocalRandom;
 
+
+
+@Profile("test")
 @Component
 public class EmbeddingClient {
     // 실제 운영 환경에서는 OpenAI의 Embedding API를 호출해야 합니다.

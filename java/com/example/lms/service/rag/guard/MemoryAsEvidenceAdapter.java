@@ -4,15 +4,18 @@
 import com.example.lms.service.ChatHistoryService;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * 여러 소스(대화 기록, 지식 베이스)에서 '증거'로 사용할 텍스트 스니펫을 가져와 정규화하는 어댑터입니다.
@@ -21,10 +24,10 @@ import java.util.stream.Collectors;
  * 2. 가져온 데이터에서 빈 줄, 메타데이터, 중복 등을 <b>정리(정규화)</b>하여 순수한 텍스트 증거 목록을 생성합니다.
  * </p>
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MemoryAsEvidenceAdapter {
+    private static final Logger log = LoggerFactory.getLogger(MemoryAsEvidenceAdapter.class);
 
     private final ChatHistoryService history;
 

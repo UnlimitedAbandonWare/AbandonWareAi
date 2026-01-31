@@ -1,5 +1,8 @@
 package com.example.lms.agent;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.example.lms.agent.KnowledgeGapLogger.GapEvent;
 import com.example.lms.dto.learning.EvidenceSnippet;
 import com.example.lms.dto.learning.LearningEvent;
 import com.example.lms.learning.gemini.GeminiCurationService;
@@ -8,17 +11,17 @@ import com.example.lms.search.SmartQueryPlanner;
 import com.example.lms.service.rag.HybridRetriever;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+
+
 
 /**
  * The AutonomousExplorationService periodically analyses logged knowledge gap events and proactively
@@ -27,11 +30,11 @@ import java.util.Set;
  * interaction.  The retrieved evidence is passed into the Gemini curation pipeline to extract
  * structured knowledge and update the knowledge base.
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "agent.autonomous-exploration", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class AutonomousExplorationService {
+    private static final Logger log = LoggerFactory.getLogger(AutonomousExplorationService.class);
 
     private final KnowledgeGapLogger gapLogger;
     private final SmartQueryPlanner planner;
@@ -84,7 +87,7 @@ public class AutonomousExplorationService {
                 log.info("[AutonomousExploration] No evidence found for gap '{}'", gap.getQuery());
                 return;
             }
-            // 4. Convert results into evidence snippets.  The third‑party Content type does not expose
+            // 4. Convert results into evidence snippets.  The third-party Content type does not expose
             //    rich metadata in our current dependency, so we conservatively use its string
             //    representation as the evidence text and leave URL/title blank.  All snippets are
             //    marked with an "UNVERIFIED" credibility tier.

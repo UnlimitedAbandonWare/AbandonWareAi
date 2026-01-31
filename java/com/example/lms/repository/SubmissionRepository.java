@@ -6,9 +6,11 @@ import com.example.lms.domain.Assignment;
 import com.example.lms.domain.Student;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-
 import java.util.List;
 import java.util.Optional;
+
+
+
 
 /**
  * Submission 엔티티 CRUD 및 조회용 JPA 리포지토리.

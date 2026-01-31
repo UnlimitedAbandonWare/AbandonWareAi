@@ -1,0 +1,18 @@
+Fix: compileJava failures (illegal start/class expected) in com.abandonwareai/*
+
+Changes:
+- src/main/java/com/abandonwareai/fusion/BodeClamp.java
+- src/main/java/com/abandonwareai/fusion/ScoreCalibrator.java
+- src/main/java/com/abandonwareai/planner/PlannerNexus.java
+- devtools/build/error_patterns.json (auto-generated)
+- BUILD_ERROR_PATTERN_SCAN.md (appended auto-scan section)
+
+Root cause:
+- Double brace artifacts `{{`/`}}` and truncated identifiers introduced during earlier merges.
+
+Actions:
+- Rewrote the 3 classes with clean syntax; retained intended behaviour.
+- Hooked PlannerNexus to KAllocationPolicy and added reflective, fail-soft application of RRF/calibration if supported.
+
+Expected outcome:
+- compileJava should pass for these units; remaining failures (if any) will be unrelated.

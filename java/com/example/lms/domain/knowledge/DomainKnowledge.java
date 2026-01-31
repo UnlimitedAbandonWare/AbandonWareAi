@@ -38,7 +38,7 @@ public class DomainKnowledge {
      * 이 개체에 속한 속성들의 목록 (예: Element=CRYO, Rarity=5)
      */
     @OneToMany(mappedBy = "owner", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
-    private List<EntityAttribute> attributes = new ArrayList<>();
+    private Set<EntityAttribute> attributes = new LinkedHashSet<>();
 
     /**
      * 마지막으로 이 지식이 조회된 시간입니다. 지식 감쇠(decay) 로직에서 사용됩니다.

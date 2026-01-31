@@ -9,8 +9,10 @@ import com.example.lms.service.NoticeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
+
+
+
 
 @Service
 @Transactional
@@ -20,7 +22,7 @@ public class NoticeServiceImpl implements NoticeService {
     private final NoticeRepository repo;
     private final AdminService adminService;
 
-    /* ✨ 인터페이스 요구사항 충족 – 전체 공지 조회 */
+    /* ✨ 인터페이스 요구사항 충족 - 전체 공지 조회 */
     @Override
     @Transactional(readOnly = true)
     public List<Notice> findAll() {

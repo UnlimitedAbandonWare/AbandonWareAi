@@ -2,10 +2,8 @@
 package com.example.lms.service;
 
 import com.example.lms.dto.KakaoFriends;
-import com.example.lms.service.KakaoFriendService;
 import com.example.lms.service.KakaoOAuthService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -14,16 +12,20 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
-
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /** 카카오 OAuth + "나에게 보내기" 구현체 */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class KakaoOAuthServiceImpl implements KakaoOAuthService {
+    private static final Logger log = LoggerFactory.getLogger(KakaoOAuthServiceImpl.class);
 
     /* ─────────── 설정 (@Value) ─────────── */
     @Value("${kakao.rest-api-key}")
@@ -75,14 +77,16 @@ public class KakaoOAuthServiceImpl implements KakaoOAuthService {
      *  3) 친구 목록 (검수 완료 앱에서만 필요)
      * ===================================================================== */
     @Override
-    public KakaoFriends friends(String accessToken, int offset) {
+    public KakaoFriends friends(String accessToken, int offset, int limit) {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(accessToken);
 
+        int safeOffset = Math.max(0, offset);
+        int safeLimit = Math.max(1, limit);
         String url = UriComponentsBuilder
                 .fromUriString("https://kapi.kakao.com/v1/api/talk/friends")
-                .queryParam("offset", offset)
-                .queryParam("limit",  KakaoFriendService.PAGE_SIZE)
+                .queryParam("offset", safeOffset)
+                .queryParam("limit",  safeLimit)
                 .toUriString();
 
         ResponseEntity<KakaoFriends> resp = rest.exchange(
@@ -92,8 +96,8 @@ public class KakaoOAuthServiceImpl implements KakaoOAuthService {
     }
 
     @Override
-    public List<String> fetchFriendUuids(String accessToken, int offset) {
-        return friends(accessToken, offset)
+    public List<String> fetchFriendUuids(String accessToken, int offset, int limit) {
+        return friends(accessToken, offset, limit)
                 .getElements().stream()
                 .map(KakaoFriends.Element::getUuid)
                 .filter(Objects::nonNull)
@@ -101,7 +105,7 @@ public class KakaoOAuthServiceImpl implements KakaoOAuthService {
     }
 
     /* =====================================================================
-     *  4) “나에게 보내기” – Default 템플릿
+     *  4) “나에게 보내기” - Default 템플릿
      * ===================================================================== */
     @Override
     public void sendMemoDefault(String accessToken, String text, String linkUrl) {

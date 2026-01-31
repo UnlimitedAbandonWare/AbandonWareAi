@@ -4,6 +4,8 @@ package com.example.lms.prompt;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+
+
 /**
  * 시스템 프롬프트를 관리하고 포맷팅하는 컴포넌트.
  * application.properties 파일에서 프롬프트 내용을 주입받아 사용합니다.

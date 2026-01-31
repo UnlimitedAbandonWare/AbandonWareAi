@@ -7,9 +7,11 @@ import com.example.lms.repository.QuestionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.util.*;
 import java.util.stream.IntStream;
+
+
+
 
 @Service
 @RequiredArgsConstructor
@@ -61,7 +63,7 @@ public class QuestionService {
     }
 
     /* ────────────────────────────────
-       3. MCQ 추가 (배열 기반 – 레거시 API)
+       3. MCQ 추가 (배열 기반 - 레거시 API)
        ──────────────────────────────── */
     public Question addMCQ(Long     examId,
                            String   content,
@@ -91,7 +93,7 @@ public class QuestionService {
     }
 
     /* ────────────────────────────────
-       4. MCQ 추가 (List 기반 – answerKey 로 정답 판별)
+       4. MCQ 추가 (List 기반 - answerKey 로 정답 판별)
        ──────────────────────────────── */
     public Question addMCQ(Long         examId,
                            String       content,

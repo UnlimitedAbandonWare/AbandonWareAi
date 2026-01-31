@@ -1,0 +1,3 @@
+com.abandonware.ai.addons.config.AddonsAutoConfiguration
+com.nova.protocol.config.NovaProtocolConfig
+com.nova.protocol.autoconfig.NovaNextAutoConfiguration

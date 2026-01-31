@@ -2,6 +2,8 @@ package com.example.lms.dto;
 
 import jakarta.validation.constraints.NotNull;
 
+
+
 /**
  * 프론트엔드에서 전송하는 피드백 데이터를 담는 DTO (Data Transfer Object).
  *

@@ -4,9 +4,11 @@ package com.example.lms.model;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
 import java.math.BigDecimal;
 import java.time.LocalDate;
+
+
+
 
 /**
  * OpenAI 모델 메타데이터 저장용 JPA 엔티티
@@ -22,7 +24,7 @@ public class ModelInfo {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** OpenAI에서 내려주는 모델 식별자 (예: "gpt-4") */
+    /** OpenAI에서 내려주는 모델 식별자 (예: "qwen2.5-7b-instruct") */
     @Column(name = "model_id", unique = true, nullable = false, length = 100)
     private String modelId;
 
@@ -38,7 +40,7 @@ public class ModelInfo {
     @Column(name = "owned_by", length = 100)
     private String ownedBy;
 
-    /** 모델 패밀리 (예: "gpt-4") */
+    /** 모델 패밀리 (예: "qwen2.5-7b-instruct") */
     @Column(name = "family", length = 100)
     private String family;
 

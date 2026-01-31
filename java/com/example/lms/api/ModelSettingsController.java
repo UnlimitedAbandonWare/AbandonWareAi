@@ -2,20 +2,22 @@ package com.example.lms.api;
 
 import com.example.lms.service.ModelSettingsService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
 import java.util.Map;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
+
+
 @RestController
 @RequestMapping("/api/settings") // API 경로를 /api/settings 로 통일하여 관리
 @RequiredArgsConstructor
 public class ModelSettingsController {
+    private static final Logger log = LoggerFactory.getLogger(ModelSettingsController.class);
 
     // 컨트롤러는 이제 Repository를 직접 다루지 않고, 비즈니스 로직을 가진 Service만 호출합니다.
     private final ModelSettingsService modelSettingsService;
@@ -23,7 +25,7 @@ public class ModelSettingsController {
     /**
      * 기본 채팅 모델을 변경하고 저장합니다.
      * 이제 모델을 저장하기 전에 반드시 유효성을 검사합니다.
-     * @param payload 요청 본문, 예: {"model": "gpt-4"}
+     * @param payload 요청 본문, 예: {"model": "qwen2.5-7b-instruct"}
      * @return 성공 또는 실패 메시지를 담은 JSON 응답
      */
     @PostMapping("/model") // 엔드포인트를 /model 로 명확히 함

@@ -1,0 +1,47 @@
+{
+  "ran_at": "2025-10-30 23:36:46.985811",
+  "applied_fixes": [
+    {
+      "file": "app/src/main/java/com/example/lms/service/onnx/OnnxCrossEncoderReranker.java",
+      "fix": "semaphore gate + timeout fallback"
+    },
+    {
+      "file": "app/src/main/java/com/example/lms/service/rag/rerank/DppDiversityReranker.java",
+      "fix": "diversity greedy selector"
+    },
+    {
+      "file": "app/src/main/java/com/example/lms/service/rag/fusion/WeightedRRF.java",
+      "fix": "self-contained weighted RRF"
+    },
+    {
+      "file": "app/src/main/java/com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain.java",
+      "fix": "compile-safe stub"
+    },
+    {
+      "file": "app/src/main/java/com/abandonware/ai/addons/cache/SingleFlightRegistry.java",
+      "fix": "single-flight implementation"
+    },
+    {
+      "file": "app/src/main/java/com/abandonware/ai/agent/consent/*",
+      "fix": "reconstructed minimal consent module"
+    },
+    {
+      "file": "app/src/main/java/com/example/lms/guard/*",
+      "fix": "FinalSigmoidGate + CitationGate + PIISanitizer"
+    },
+    {
+      "file": "app/src/main/resources/plans/*",
+      "fix": "brave/zero_break plans"
+    },
+    {
+      "file": "app/src/main/resources/application-patch.properties",
+      "fix": "feature flags defaults"
+    }
+  ],
+  "build_error_patterns": [
+    "ILLEGAL_ESCAPE_CHAR (regex) \u2014 fixed by using double backslashes where present",
+    "BAD_HYPHEN_ESCAPE \u2014 normalized char-class hyphens",
+    "SPLIT_RAW_WS \u2014 replaced String.split(\"\\\\s+\")",
+    "CNF_BM25_INDEX \u2014 not referenced by app module; left untouched"
+  ]
+}

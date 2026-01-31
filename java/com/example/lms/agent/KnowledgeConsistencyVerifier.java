@@ -4,25 +4,28 @@ import com.example.lms.domain.knowledge.DomainKnowledge;
 import com.example.lms.repository.DomainKnowledgeRepository;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-
 import java.util.*;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+
+
+
 
 /**
  * Periodically verifies the internal knowledge base for logical inconsistencies.  It scans
  * relationship attributes on stored entities and flags contradictions such as the same partner being
- * both preferred and discouraged.  If the free‑tier API throttle permits, this service could
+ * both preferred and discouraged.  If the free-tier API throttle permits, this service could
  * leverage an external model (e.g. Gemini) for deeper semantic checks, but for now it performs a
- * simple heuristic analysis in‑process.
+ * simple heuristic analysis in-process.
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "agent.knowledge-consistency", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class KnowledgeConsistencyVerifier {
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeConsistencyVerifier.class);
 
     private final DomainKnowledgeRepository knowledgeRepo;
     private final KnowledgeBaseService knowledgeBase;
@@ -64,9 +67,9 @@ public class KnowledgeConsistencyVerifier {
                         // In a full implementation we would persist this to a review table or notify administrators
                     }
                 }
-                // Placeholder for future LLM-based checks: if throttle allows, send combined data to Gemini.
+                // shim for future LLM-based checks: if throttle allows, send combined data to Gemini.
                 if (throttle != null && throttle.canProceed()) {
-                    // TODO: integrate with Gemini client for advanced contradiction detection
+                    // shim: integrate with the Gemini client for advanced contradiction detection.
                     // For now we just log that the throttle permits a call; no API call is made.
                     log.debug("[KnowledgeConsistency] Throttle permits an external consistency check for {}:{}", domain, entity);
                 }

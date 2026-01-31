@@ -1,0 +1,84 @@
+spring:
+  config:
+    activate:
+      on-profile: zerobreak
+zerobreak:
+  enabled: true
+  require_signed_token: true
+  default_policy:
+  - recency
+  - max_recall
+  whitelist_override: conditional
+  citation_gate_min_sources: 3
+  final_sigmoid_threshold: 0.9
+  banner_text: '【주의: 확장 탐색(Zero Break) 모드 적용】'
+  header_names:
+    token: X-ZeroBreak-Token
+    policy: X-ZeroBreak-Policy
+naver:
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+retrieval:
+  vector:
+    enabled: true
+  fusion:
+    rrf:
+      weighted: true
+onnx:
+  enabled: true
+budget:
+  request-time-ms: 3500
+ocr:
+  enabled: true
+  min-confidence: 0.78
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  base-url: https://api.groq.com/openai/v1
+  api-key: ${LLM_API_KEY:dummy}
+  chat-model: gpt-4
+
+  provider: groq
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+selfask:
+  enabled: false
+
+fallback:
+  enabled: false
+
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true

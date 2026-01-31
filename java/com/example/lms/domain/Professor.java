@@ -4,10 +4,12 @@ package com.example.lms.domain;
 import com.example.lms.domain.Course;
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
-
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+
+
+
 
 /**
  * 교수(Professor) 엔티티
@@ -57,7 +59,7 @@ public class Professor {
     private List<Course> courses = new ArrayList<>();
 
     /* ─────────────── 생성자 ─────────────── */
-    /** JPA & Thymeleaf 바인딩용 – 이제 <b>public</b> */
+    /** JPA & Thymeleaf 바인딩용 - 이제 <b>public</b> */
     public Professor() { }
 
     /** 전체 필드 생성자 */
@@ -71,14 +73,14 @@ public class Professor {
         this.name     = name;
     }
 
-    /** (username, email, name) – password 공백 */
+    /** (username, email, name) - password 공백 */
     public Professor(String username,
                      String email,
                      String name) {
         this(username, email, "", name);
     }
 
-    /** (name, email) – 서비스·테스트 호환용 */
+    /** (name, email) - 서비스·테스트 호환용 */
     public Professor(String name, String email) {
         this(usernameFrom(email), email, "", name);
     }

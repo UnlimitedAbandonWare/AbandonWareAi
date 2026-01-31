@@ -1,0 +1,17 @@
+{
+  "scanned_log_files": 1,
+  "patterns": [
+    {
+      "file": "docs/errors_input.txt",
+      "top_hits": [
+        "org.yaml.snakeyaml.constructor.DuplicateKeyException"
+      ]
+    }
+  ],
+  "top_codes": [
+    [
+      "org.yaml.snakeyaml.constructor.DuplicateKeyException",
+      1
+    ]
+  ]
+}

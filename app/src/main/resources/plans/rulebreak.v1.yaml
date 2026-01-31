@@ -1,0 +1,44 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: rulebreak
+fusion:
+  mode: rrf+wpm   # rrf|wpm|rrf+wpm
+  wpm:
+    p: auto
+    weights: {web:0.55, vector:0.35, kg:0.1}
+normalize:
+  mp_law: { enabled: true, beta: 0.6 }
+calibration:
+  mode: platt_isotonic
+diversity:
+  dpp: { enabled: true, lambda: 0.25, k: 8 }
+allocator:
+  k_total: 28
+  mode: softmax
+  temp: 0.9
+gate:
+  final:
+    k: 9.0
+    x0: 0.78
+    min_citations: 2
+    pii_required: true
+timeouts:
+  time_budget_ms: 4200
+rulebreak:
+  whitelist_override: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true
+
+guard:
+  profile: PROFILE_FREE

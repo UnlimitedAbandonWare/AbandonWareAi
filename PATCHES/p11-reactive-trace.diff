@@ -1,0 +1,9 @@
+*** a/web/TraceFilter.java
+--- b/web/TraceFilter.java
+@@
+-  return chain.filter(exchange);
++  return chain.filter(exchange)
++    .contextWrite(ctx -> {
++      TraceContext t = TraceContext.from(exchange);
++      return ctx.put(TraceContext.KEY, t);
++    });

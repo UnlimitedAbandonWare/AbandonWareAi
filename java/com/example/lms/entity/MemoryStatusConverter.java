@@ -3,11 +3,13 @@ package com.example.lms.entity;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
+
+
 /**
  * TranslationMemory.MemoryStatus ↔️ DB 문자열 매핑기.
  *
- * • 레거시: DB에 숫자 ordinal ("0","1",…) 형태로 저장된 경우 → 해당 enum 상수로 변환
- * • 신규: 이름("ACTIVE","STALE",…) 형태로 저장된 경우 → name() ↔ valueOf() 매핑
+ * • 레거시: DB에 숫자 ordinal ("0","1",/* ... *&#47;) 형태로 저장된 경우 → 해당 enum 상수로 변환
+ * • 신규: 이름("ACTIVE","STALE",/* ... *&#47;) 형태로 저장된 경우 → name() ↔ valueOf() 매핑
  * • autoApply=true 로 모든 MemoryStatus 필드에 자동 적용
  */
 @Converter(autoApply = true)

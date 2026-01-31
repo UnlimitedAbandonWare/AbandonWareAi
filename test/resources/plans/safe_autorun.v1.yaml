@@ -1,0 +1,22 @@
+id: safe
+rerank:
+  onnx: true
+  biencoder: true
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true
+
+guard:
+  profile: PROFILE_MEMORY

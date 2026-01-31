@@ -4,6 +4,8 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+
+
 /**
  * 카카오 API 연동을 위한 설정 프로퍼티
  */

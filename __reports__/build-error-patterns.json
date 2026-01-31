@@ -1,0 +1,125 @@
+{
+  "generatedAt": "2025-10-17T07:30:27.088180Z",
+  "dominantBasePackage": "com.example.lms",
+  "stats": {
+    "files.total": 3232,
+    "files.java": 1893,
+    "build.gradle.count": 5,
+    "pom.xml.count": 0
+  },
+  "javax_to_jakarta_changed_files": [
+    "src/test/java/com/example/lms/entity/TranslationMemoryTest.java"
+  ],
+  "new_files_created": {
+    "src/main/java/com/example/lms/service/soak/SoakReport.java": 43,
+    "src/main/java/com/example/lms/service/soak/SoakQueryProvider.java": 23,
+    "src/main/java/com/example/lms/service/soak/SearchOrchestrator.java": 12,
+    "src/main/java/com/example/lms/service/soak/SoakTestService.java": 84,
+    "src/main/java/com/example/lms/api/internal/SoakApiController.java": 18,
+    "src/main/java/com/example/lms/config/SoakConfig.java": 14,
+    "src/main/java/com/example/lms/probe/dto/ProbeDTOs.java": 32,
+    "src/main/java/com/example/lms/probe/SearchProbeService.java": 22,
+    "src/main/java/com/example/lms/probe/SearchProbeController.java": 34,
+    "src/main/java/com/example/lms/probe/ProbeConfig.java": 30,
+    "src/main/java/com/example/lms/integrations/n8n/SignatureVerifier.java": 29,
+    "src/main/java/com/example/lms/jobs/JobService.java": 32,
+    "src/main/java/com/example/lms/api/N8nWebhookController.java": 40,
+    "src/main/java/com/example/lms/config/JobConfig.java": 9
+  },
+  "gradle_adjustments": [
+    [
+      "dependency:web",
+      "/mnt/data/work/src111_merge15/build.gradle.kts"
+    ],
+    [
+      "dependency:test",
+      "/mnt/data/work/src111_merge15/build.gradle.kts"
+    ],
+    [
+      "dependency:web",
+      "/mnt/data/work/src111_merge15/cfvm-raw/build.gradle.kts"
+    ],
+    [
+      "dependency:test",
+      "/mnt/data/work/src111_merge15/cfvm-raw/build.gradle.kts"
+    ],
+    [
+      "dependency:web",
+      "/mnt/data/work/src111_merge15/lms-core/build.gradle.kts"
+    ],
+    [
+      "dependency:test",
+      "/mnt/data/work/src111_merge15/lms-core/build.gradle.kts"
+    ],
+    [
+      "dependency:web",
+      "/mnt/data/work/src111_merge15/tools-scorecard/build.gradle.kts"
+    ],
+    [
+      "dependency:test",
+      "/mnt/data/work/src111_merge15/tools-scorecard/build.gradle.kts"
+    ]
+  ],
+  "maven_adjustments": [],
+  "mined_error_patterns": {
+    "java.compile.cannot_find_symbol": 12
+  },
+  "cannot_find_symbol_details": {
+    "classes": [
+      [
+        "ChatService",
+        88
+      ],
+      [
+        "ChatResult",
+        14
+      ],
+      [
+        "Bm25LocalIndex",
+        1
+      ],
+      [
+        "NoriAnalyzer",
+        1
+      ],
+      [
+        "SearchResult",
+        1
+      ]
+    ],
+    "packages": [
+      [
+        "...",
+        3
+      ],
+      [
+        "com.example.lms.service.ChatService",
+        3
+      ],
+      [
+        "lombok",
+        2
+      ],
+      [
+        "com.fasterxml.jackson.dataformat.yaml",
+        1
+      ],
+      [
+        "com.networknt.schema",
+        1
+      ],
+      [
+        "org.apache.lucene.analysis.ko",
+        1
+      ],
+      [
+        "org.springframework.data.redis.core",
+        1
+      ],
+      [
+        "service.rag.auth",
+        1
+      ]
+    ]
+  }
+}

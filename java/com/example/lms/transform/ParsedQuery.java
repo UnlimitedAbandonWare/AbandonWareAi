@@ -2,6 +2,8 @@ package com.example.lms.transform;
 
 import java.util.List;
 
+
+
 /** LLM이 반환하는 구조화 결과 */
 public record ParsedQuery(
         String subject,

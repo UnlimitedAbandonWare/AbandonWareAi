@@ -7,15 +7,18 @@ import com.example.lms.repository.SynergyStatRepository;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-@Slf4j
+
+
 @Service
 @RequiredArgsConstructor
 public class ExplorationService {
+    private static final Logger log = LoggerFactory.getLogger(ExplorationService.class);
 
     private final EmbeddingModel embeddingModel;
     private final KnowledgeBaseService kb;

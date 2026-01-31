@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.Query;
 import java.util.List;
 
 
+
+
 /**
  * JPA Repository for ModelEntity.
  * PK 타입이 String(modelId) 인 점에 유의하세요.
@@ -18,7 +20,7 @@ public interface ModelEntityRepository extends JpaRepository<ModelEntity, String
      */
     List<ModelEntity> findAllByOwner(String owner);
 
-    /** 모든 모델 ID만 조회 — 삭제 후보 계산용 경량 쿼리 */
+    /** 모든 모델 ID만 조회 - 삭제 후보 계산용 경량 쿼리 */
     @Query("select m.modelId from ModelEntity m")
     List<String> findAllModelIds();
     // JPQL 직접 작성 예시:

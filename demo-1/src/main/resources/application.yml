@@ -1,0 +1,106 @@
+spring.config.import: optional:application-secrets.yml, optional:application-proj-override.yml,
+  ${spring.config.import:}
+llm:
+  provider: local
+  base-url: http://localhost:11434/v1
+  chat-model: gemma3:27b
+  api-key: dummy
+fallback:
+  enabled: false
+zsys:
+  onnx:
+    enabled: true
+    device-id: 1
+    max-concurrency: 2
+gate:
+  citation:
+    enabled: true
+    min: 1
+  finalSigmoid:
+    enabled: true
+    k: 8.0
+    x0: 0.0
+    threshold: 0.1
+  contextDiversity:
+    min: 0.1
+probe:
+  search:
+    enabled: true
+retrieval:
+  vector:
+    enabled: true
+onnx:
+  enabled: true
+  device: 1
+idle_train:
+  schedule: 0 30 0,3,5 * * *
+  soak_batch: 20
+  update_on_pass: true
+llmrouter:
+  models:
+    primary:
+      base-url: http://localhost:11434/v1
+      weight: 1.0
+    secondary:
+      base-url: http://localhost:11434/v1
+      weight: 0.0
+  cooldown-ms: 900000
+selfask:
+  enabled: false
+spring:
+  profiles:
+    group:
+      gpu-3090-3060:
+      - base
+      gpu-3090-3060x2:
+      - base
+train_idle:
+  enabled: true
+autolearn:
+  enabled: true
+local-llm:
+  autostart: false
+  health-check-url: http://localhost:8000/health
+  health-check-timeout: 30s
+  start-command: docker-compose -f vllm-compose.yml up -d
+  enabled: true
+  base-url: http://localhost:11434/v1
+gpt-search:
+  serpapi:
+    enabled: true
+    base-url: https://serpapi.com/search.json
+    timeout-ms: 5000
+  brave:
+    enabled: true
+    base-url: https://api.search.brave.com/res/v1/web/search
+    timeout-ms: 3000
+jammini:
+  guard:
+    mode: aggressive
+    profile: PROFILE_MEMORY
+  memory:
+    enabled: true
+    low-guardrail: true
+    progressive: true
+verifier:
+  coverage:
+    threshold:
+      default: 0.2
+      high-risk: 0.4
+websearch:
+naver:
+  filters:
+    enable-domain-filter: true
+    domain-policy: boost
+  patch-query:
+    official-domains:
+    - hoyoverse.com
+    - hoyolab.com
+    - playlostark.com
+    - playoverwatch.com
+    - playvalorant.com
+    - leagueoflegends.com
+    community-domains:
+    - inven.co.kr
+    - namu.wiki
+    - arca.live

@@ -1,74 +1,374 @@
-// src/main/java/com/example/lms/search/SmartQueryPlanner.java
+// patched SmartQueryPlanner
 package com.example.lms.search;
 
+import com.example.lms.infra.resilience.NightmareBreaker;
+import com.example.lms.infra.resilience.NightmareKeys;
+import com.example.lms.infra.resilience.NoiseRoutingGate;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
+
+import com.example.search.plan.MultiQueryPlan;
 import com.example.lms.transform.QueryTransformer;
+import com.example.lms.search.QueryHygieneFilter;
+import com.example.lms.search.extract.HybridKeywordExtractor;
 import com.example.lms.service.subject.SubjectResolver;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
+import com.example.lms.search.KeywordSelectionService;
+import com.example.lms.search.terms.SelectedTerms;
+import com.example.lms.search.terms.SelectedTermsDebug;
 import java.util.Objects;
+
+import com.example.lms.rag.model.QueryDomain;
+import com.example.lms.search.probe.EvidenceSignals;
+import com.example.lms.search.probe.NeedleProbeSynthesizer;
+
+// Keyword selection types
 
 /**
  * 지능형 다중 쿼리 생성기.
- * QueryTransformer.transformEnhanced() 결과를 받아 위생 처리(Hygiene) 및 상한(Cap) 적용 후 반환합니다.
+ * QueryTransformer.transformEnhanced() 결과를 받아 위생 처리(Hygiene) 및 상한(Cap) 적용 후
+ * 반환합니다.
  */
 @Component
 public class SmartQueryPlanner {
 
+    private final HybridKeywordExtractor extractor;
+
+    @Autowired(required = false)
+    private NightmareBreaker nightmareBreaker;
     private final QueryTransformer transformer;
     private final SubjectResolver subjectResolver;
     private final KnowledgeBaseService knowledgeBase;
+    // Unified noise clipper used to normalise user prompts prior to
+    // subject/domain inference and keyword extraction. This ensures
+    // consistent cleaning and prevents duplicated clipping logic across
+    // retrievers and planners.
+    private final com.example.lms.search.NoiseClipper noiseClipper;
+
+    /**
+     * Optional LLM driven keyword selection service. When available this
+     * service will be invoked before the hybrid keyword extractor to
+     * dynamically assemble search vocabulary from the full conversation.
+     * When not injected (e.g. in tests or when disabled via config) the
+     * planner will fall back to the existing extraction logic.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private KeywordSelectionService selector;
+
+    /** Optional conditional probe/needle query synthesizer. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private NeedleProbeSynthesizer needleProbeSynthesizer;
 
     /**
      * 의존성 주입을 위한 생성자.
-     * 여러 QueryTransformer 빈 중 'queryTransformer'를 명시적으로 주입받습니다.
-     * @param transformer 쿼리 변환을 수행할 트랜스포머
+     *
+     * @param extractor       하이브리드 키워드 추출기
+     * @param transformer     쿼리 변환을 수행할 트랜스포머 (앵커드 쿼리 플래너에서 사용)
+     * @param subjectResolver SubjectResolver
+     * @param knowledgeBase   KnowledgeBaseService
      */
     public SmartQueryPlanner(
+            HybridKeywordExtractor extractor,
             @Qualifier("queryTransformer") QueryTransformer transformer,
             SubjectResolver subjectResolver,
-            KnowledgeBaseService knowledgeBase
-    ) {
+            KnowledgeBaseService knowledgeBase,
+            com.example.lms.search.NoiseClipper noiseClipper) {
+        this.extractor = extractor;
         this.transformer = transformer;
         this.subjectResolver = subjectResolver;
         this.knowledgeBase = knowledgeBase;
+        this.noiseClipper = noiseClipper;
+    }
+
+    /**
+     * Generates a small number (1~2) of high-precision probe queries only when
+     * evidence quality signals indicate the current retrieval pool is weak.
+     */
+    public List<String> planNeedleProbes(
+            String userPrompt,
+            QueryDomain domain,
+            EvidenceSignals signals,
+            List<String> alreadyPlanned,
+            java.util.Locale locale) {
+        if (needleProbeSynthesizer == null) {
+            return List.of();
+        }
+        try {
+            return needleProbeSynthesizer.synthesize(userPrompt, domain, signals, alreadyPlanned, locale);
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     /**
      * 사용자 질문(+선택적 초안)을 바탕으로 검색에 투입할 "핵심 쿼리" 목록을 생성합니다.
      * <ul>
      * <li><b>중앙 집중 생성</b>: 쿼리 생성 로직은 QueryTransformer로 중앙화합니다.</li>
-     * <li><b>위생 및 정제</b>: QueryHygieneFilter를 통해 중복 제거, 빈 문자열 필터링, 길이 제한 등을 적용합니다.</li>
+     * <li><b>위생 및 정제</b>: QueryHygieneFilter를 통해 중복 제거, 빈 문자열 필터링, 길이 제한 등을
+     * 적용합니다.</li>
      * </ul>
-     * @param userPrompt 사용자 원본 질문
+     * 
+     * @param userPrompt     사용자 원본 질문
      * @param assistantDraft (선택 사항) 모델이 생성한 1차 초안. 쿼리 확장 힌트로 사용될 수 있습니다.
-     * @param maxQueries 반환할 최대 쿼리 개수 (1~4개로 제한)
+     * @param maxQueries     반환할 최대 쿼리 개수 (1~4개로 제한)
      * @return 정제된 쿼리 문자열 목록
      */
     public List<String> plan(String userPrompt, @Nullable String assistantDraft, int maxQueries) {
-        // 쿼리 개수를 1개 이상 4개 이하로 보정
-        int cap = Math.max(1, Math.min(4, maxQueries));
+        // Clear any existing trace data for the current request. Without this
+        // explicit clear, previous trace values could leak across threads.
+        // When we're called from a flow that already seeded a request trace
+        // (trace.runId),
+        // don't wipe it here.
+        if (com.example.lms.search.TraceStore.get("trace.runId") == null) {
+            com.example.lms.search.TraceStore.clear();
+        }
 
-        // 0) 도메인/주제 추정 → 앵커
-        String domain = knowledgeBase.inferDomain(userPrompt);
-        String subject = subjectResolver.resolve(userPrompt, domain).orElse(null);
+        // 0) Clean the user prompt once at the entry point. The NoiseClipper
+        // removes polite suffixes, leading labels and collapses whitespace. When
+        // noiseClipper is not available (e.g. in tests) fall back to the raw
+        // prompt. An empty or null input yields an empty cleaned string.
+        String cleaned = (noiseClipper != null)
+                ? noiseClipper.clip(userPrompt)
+                : Objects.toString(userPrompt, "").trim();
 
-        // QueryTransformer를 통해 원시 쿼리 목록 생성(주제 앵커 전달)
-        List<String> raw = transformer.transformEnhanced(
-                Objects.toString(userPrompt, ""),
-                assistantDraft,
-                subject
-        );
+        // 1) Infer domain and subject based on the cleaned prompt. Domain
+        // inference determines the cap and deduplication thresholds; subject
+        // resolution provides the anchor used in sanitisation.
+        String domain = knowledgeBase.inferDomain(cleaned);
+        String subject = subjectResolver.resolve(cleaned, domain).orElse(null);
 
-        // 위생 필터를 적용하여 최종 쿼리 목록 반환
-        return QueryHygieneFilter.sanitize(raw, cap, 0.80);
+        // 2) Attempt to select search vocabulary via LLM. When a
+        // KeywordSelectionService is present and returns a non-empty
+        // result, bypass the hybrid keyword extractor and build queries
+        // directly from the selected terms. This branch returns
+        // immediately after sanitisation. Should the service be
+        // unavailable or fail to parse the JSON, control falls back to
+        // the existing extraction logic below.
+        boolean bypassKeywordSelection = false;
+        GuardContext gctx = GuardContextHolder.get();
+        if (gctx != null && gctx.isAggressivePlan())
+            bypassKeywordSelection = true;
+        // UAW: aux degrade or STRIKE → skip expensive aux calls
+        if (gctx != null && ((gctx.isAuxDegraded() || gctx.isAuxHardDown())
+                || gctx.isStrikeMode())) {
+            bypassKeywordSelection = true;
+        }
+
+        // NoiseGate: COMPRESSION-only bypass is sometimes a false-positive.
+        // Allow a small escape probability so keyword selection can still run.
+        if (!bypassKeywordSelection && gctx != null && gctx.isCompressionMode()) {
+            try {
+                boolean stageNoiseEnabled = Boolean.parseBoolean(System.getProperty("orch.noiseGate.keywordSelection.compression.enabled", "true"));
+                if (stageNoiseEnabled) {
+                    double irr = (gctx != null) ? gctx.getIrregularityScore() : 0.0;
+                    double max = Double.parseDouble(System.getProperty("orch.noiseGate.keywordSelection.compression.escapeP.max", "0.16"));
+                    double min = Double.parseDouble(System.getProperty("orch.noiseGate.keywordSelection.compression.escapeP.min", "0.03"));
+                    double t = Math.min(1.0, Math.max(0.0, (irr - 0.35) / 0.45));
+                    double escapeP = max + (min - max) * t;
+
+                    boolean escape = NoiseRoutingGate.decideEscape("keywordSelection.compression", escapeP, gctx).escape();
+                    if (!escape) {
+                        bypassKeywordSelection = true;
+                    } else {
+                        try {
+                            TraceStore.put("keywordSelection.bypass.noiseEscape", true);
+                            TraceStore.put("keywordSelection.bypass.noiseEscape.escapeP", escapeP);
+                        } catch (Throwable ignore) {
+                            // best-effort
+                        }
+                    }
+                } else {
+                    bypassKeywordSelection = true;
+                }
+            } catch (Throwable ignore) {
+                bypassKeywordSelection = true;
+            }
+        }
+        if (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.KEYWORD_SELECTION_SELECT)) {
+            bypassKeywordSelection = true;
+        }
+        if (bypassKeywordSelection) {
+            TraceStore.put("keywordSelection", "bypassed");
+            try {
+                TraceStore.put("keywordSelection.mode", "bypassed");
+                String reason = (gctx != null && gctx.isAggressivePlan()) ? "gctx.aggressive=true"
+                        : (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.KEYWORD_SELECTION_SELECT)
+                                ? "nightmare_open"
+                                : "unknown");
+                TraceStore.put("keywordSelection.bypass.reason", reason);
+                TraceStore.append("web.selectedTerms.rules", "keywordSelection.mode=bypassed reason=" + reason);
+            } catch (Throwable ignore) {
+                // ignore
+            }
+        }
+
+        if (selector != null && !bypassKeywordSelection) {
+            try {
+                java.util.Optional<SelectedTerms> maybeTerms = selector.select(cleaned, domain, 3);
+                if (maybeTerms.isPresent()) {
+                    SelectedTerms selected = maybeTerms.get();
+                    // assemble tokens: quoted exact phrases, must and should keywords
+                    List<String> tokens = new ArrayList<>();
+                    if (selected.getExact() != null) {
+                        for (String e : selected.getExact()) {
+                            if (e != null && !e.isBlank()) {
+                                String trimmed = e.trim();
+                                // wrap in quotes to anchor exact matches
+                                tokens.add("\"" + trimmed + "\"");
+                            }
+                        }
+                    }
+                    if (selected.getMust() != null) {
+                        for (String m : selected.getMust()) {
+                            if (m != null && !m.isBlank()) {
+                                tokens.add(m.trim());
+                            }
+                        }
+                    }
+                    if (selected.getShould() != null) {
+                        for (String s : selected.getShould()) {
+                            if (s != null && !s.isBlank()) {
+                                tokens.add(s.trim());
+                            }
+                        }
+                    }
+                    // Deduplicate and limit the number of tokens to avoid overly long queries.
+                    List<String> dedup = tokens.stream()
+                            .filter(t -> t != null && !t.isBlank())
+                            .distinct()
+                            .limit(12)
+                            .collect(Collectors.toList());
+                    String q0 = String.join(" ", dedup);
+                    // Record the selected terms for debugging; this will be consumed by
+                    // WebSearchHandler.
+                    com.example.lms.search.TraceStore.put("selectedTerms", selected);
+                    TraceStore.put("web.selectedTerms", SelectedTermsDebug.toDebugMap(selected, 6));
+                    TraceStore.put("web.selectedTerms.summary", SelectedTermsDebug.toSummaryString(selected));
+                    // Compose one or two queries: base q0 and optionally prefix with subject
+                    List<String> qs = new ArrayList<>();
+                    qs.add(q0);
+                    if (subject != null && !subject.isBlank()
+                            && !q0.toLowerCase().contains(subject.toLowerCase())) {
+                        qs.add((subject + " " + q0).trim());
+                    }
+                    // Apply hygiene filtering based on domain caps and thresholds
+                    List<String> cleanedQs = QueryHygieneFilter.sanitizeForDomain(qs, domain);
+                    if (cleanedQs != null && !cleanedQs.isEmpty()) {
+                        return cleanedQs;
+                    }
+                    // Fail-soft: keywordSelection produced only empty/filtered queries; fall through to
+                    // hybrid extraction rather than returning an empty plan (prevents fallback_blank loops).
+                    TraceStore.put("smartQueryPlanner.keywordSelection.emptySanitized", true);
+                }
+            } catch (Exception e) {
+                // Defensive: log and proceed to hybrid extraction on any exception
+                org.slf4j.LoggerFactory.getLogger(SmartQueryPlanner.class)
+                        .warn("[SmartQueryPlanner] LLM keyword selection failed; falling back", e);
+            }
+        }
+
+        // 3) Determine cap and jaccard based on the domain. GENERAL
+        // allows more diversity (6-8 queries) with a lower deduplication
+        // threshold; specialised domains cap at 4 queries with a higher
+        // similarity threshold.
+        boolean isGeneral = "GENERAL".equalsIgnoreCase(domain);
+        int cap;
+        double jaccard;
+        if (isGeneral) {
+            cap = Math.min(8, Math.max(6, maxQueries));
+            jaccard = 0.60;
+        } else {
+            cap = Math.max(1, Math.min(4, maxQueries));
+            jaccard = 0.80;
+        }
+
+        // 3) Use the hybrid keyword extractor to propose candidate queries from
+        // the cleaned input. The extractor will internally choose between
+        // rule, LLM or hybrid strategies based on configuration and heuristics.
+        List<String> cand = extractor.extract(cleaned, assistantDraft, subject, domain, cap, jaccard);
+        // Retrieve the raw LLM proposals. When the extractor did not invoke
+        // the LLM this list may be empty. This data can be used for trace
+        // visualisation or debugging.
+        List<String> llmProposed = extractor.getLastProposed();
+        // 4) Apply hygiene filtering and mandatory subject anchoring. This
+        // step removes duplicates, enforces the cap and inserts the subject
+        // anchor into queries that lack it. Capture the kept list for trace.
+        List<String> hygieneKept = QueryHygieneFilter.sanitizeAnchored(cand, cap, jaccard, subject, null);
+        // In the current implementation the final used queries are identical
+        // to the hygiene kept list. If additional downstream filters are
+        // introduced this variable can be updated accordingly.
+        List<String> finalQs = hygieneKept;
+
+        // Fail-soft: always ensure at least one planned query so downstream retrieval
+        // never collapses.
+        if (finalQs == null || finalQs.isEmpty()) {
+            List<String> planned = new java.util.ArrayList<>();
+            planned.add(cleaned);
+            if (domain != null && !domain.isBlank()) {
+                planned.add(cleaned + " " + domain);
+            }
+            finalQs = QueryHygieneFilter.sanitize(planned, Math.max(1, cap), 0.80);
+        }
+
+        // Ensure SelectedTerms exists for downstream components (e.g.,
+        // NeedleProbeEngine).
+        if (TraceStore.get("selectedTerms") == null) {
+            try {
+                List<String> kws = new ArrayList<>();
+                if (subject != null && !subject.isBlank()) {
+                    kws.add(subject.trim());
+                }
+                if (cleaned != null && !cleaned.isBlank()) {
+                    String c = cleaned.trim();
+                    boolean dup = false;
+                    for (String k : kws) {
+                        if (k != null && k.equalsIgnoreCase(c)) {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (!dup) {
+                        kws.add(c);
+                    }
+                }
+                if (kws.isEmpty() && finalQs != null) {
+                    kws.addAll(finalQs);
+                }
+
+                SelectedTerms fallbackTerms = SelectedTerms.builder()
+                        .must(kws)
+                        .exact((subject != null && !subject.isBlank()) ? List.of(subject) : List.of())
+                        .domains(new ArrayList<>())
+                        .domainProfile((domain != null && !domain.isBlank()) ? domain : "GENERAL")
+                        .build();
+                TraceStore.put("selectedTerms", fallbackTerms);
+                TraceStore.put("selectedTerms.fallback", true);
+            } catch (Throwable ignore) {
+                // fail-soft
+            }
+        }
+        // Record trace information for downstream diagnostics. The
+        // TraceStore stores values on a per-thread basis and is cleared
+        // automatically at the start of this method.
+        com.example.lms.search.TraceStore.put("llmProposed", llmProposed);
+        TraceStore.put("queryPlanner.llmProposed", llmProposed);
+        com.example.lms.search.TraceStore.put("hygieneKept", hygieneKept);
+        TraceStore.put("queryPlanner.hygieneKept", hygieneKept);
+        com.example.lms.search.TraceStore.put("finalUsed", finalQs);
+        TraceStore.put("queryPlanner.finalUsed", finalQs);
+        return finalQs;
     }
 
     /**
      * assistantDraft 없이 최대 2개의 쿼리를 생성하는 편의 메서드입니다.
+     * 
      * @param userPrompt 사용자 원본 질문
      * @return 정제된 쿼리 문자열 목록
      */
@@ -85,19 +385,28 @@ public class SmartQueryPlanner {
             String subjectPrimary,
             @Nullable String subjectAlias,
             @Nullable String assistantDraft,
-            int maxQueries
-    ) {
+            int maxQueries) {
         int cap = Math.max(1, Math.min(4, maxQueries));
 
         // 1. QueryTransformer를 통해 원시 쿼리 목록을 생성합니다.
         List<String> raw = transformer.transformEnhanced(
                 Objects.toString(userPrompt, ""),
-                assistantDraft
-        );
+                assistantDraft);
 
         // 2. [수정] 앵커링 및 정제 작업을 QueryHygieneFilter.sanitizeAnchored 메서드에 모두 위임합니다.
-        //    - 이 클래스 내에서 앵커를 미리 추가하는 중복 로직을 제거했습니다.
-        return QueryHygieneFilter.sanitizeAnchored(raw, cap, 0.80, subjectPrimary, subjectAlias);
+        // - 이 클래스 내에서 앵커를 미리 추가하는 중복 로직을 제거했습니다.
+        List<String> planned = QueryHygieneFilter.sanitizeAnchored(raw, cap, 0.80, subjectPrimary, subjectAlias);
+        if (planned == null || planned.isEmpty()) {
+            planned = new java.util.ArrayList<>();
+            String base = Objects.toString(userPrompt, "").strip();
+            if (!base.isEmpty())
+                planned.add(base);
+            if (subjectPrimary != null && !subjectPrimary.isBlank()) {
+                planned.add(base + " " + subjectPrimary);
+            }
+            planned = QueryHygieneFilter.sanitize(planned, cap, 0.80);
+        }
+        return planned;
     }
 
     /**
@@ -106,19 +415,31 @@ public class SmartQueryPlanner {
     public List<String> planAnchored(
             String userPrompt,
             @Nullable String assistantDraft,
-            int maxQueries
-    ) {
+            int maxQueries) {
         int cap = Math.max(1, Math.min(4, maxQueries));
         String domain = knowledgeBase.inferDomain(userPrompt);
         String subject = subjectResolver.resolve(userPrompt, domain).orElse(null);
         List<String> raw = transformer.transformEnhanced(
                 Objects.toString(userPrompt, ""),
                 assistantDraft,
-                subject
-        );
-        return QueryHygieneFilter.sanitizeAnchored(raw, cap, 0.80, subject, null);
+                subject);
+        List<String> planned = QueryHygieneFilter.sanitizeAnchored(raw, cap, 0.80, subject, null);
+        if (planned == null || planned.isEmpty()) {
+            planned = new java.util.ArrayList<>();
+            String base = Objects.toString(userPrompt, "").strip();
+            if (!base.isEmpty())
+                planned.add(base);
+            if (domain != null && !domain.isBlank()) {
+                planned.add(base + " " + domain);
+            }
+            planned = QueryHygieneFilter.sanitize(planned, cap, 0.80);
+        }
+        return planned;
     }
 
     // ⬅️ [제거] 이 메서드는 QueryHygieneFilter.sanitizeAnchored 내부 로직과 중복되므로 제거합니다.
-    // private static String ensureSubjectAnchor(String q, String primary, String alias) { ... }
+    // private static String ensureSubjectAnchor(String q, String primary, String
+    // alias) { /* ... */ }
+    // Added by patch: simple multi-query plan
+
 }

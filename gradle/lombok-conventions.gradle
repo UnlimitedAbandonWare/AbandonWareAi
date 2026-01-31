@@ -1,0 +1,48 @@
+// gradle/lombok-conventions.gradle
+plugins {
+    id 'java'
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+    testCompileOnly {
+        extendsFrom testAnnotationProcessor
+    }
+}
+
+dependencies {
+    // Lombok
+    compileOnly 'org.projectlombok:lombok:1.18.34'
+    annotationProcessor 'org.projectlombok:lombok:1.18.34'
+    testCompileOnly 'org.projectlombok:lombok:1.18.34'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.34'
+
+    // Logging
+    implementation 'org.slf4j:slf4j-api:2.0.13'
+    runtimeOnly 'ch.qos.logback:logback-classic:1.5.7'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-parameters']
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17) // 필요시 21로 상향
+    }
+}
+
+// [GPTPRO] apply build error guard plugin
+apply from: "gradle/buildErrorGuard.gradle.kts"
+
+// [GPTPRO] sourceSets excludes to remove duplicates
+sourceSets {
+    main {
+        java {
+            exclude ['**/_abandonware_backup/**', '**/java_clean/**', 'extras/**', 'backup/**']
+        }
+    }
+}

@@ -3,6 +3,8 @@ package com.example.lms.storage;
 
 import org.springframework.web.multipart.MultipartFile;
 
+
+
 /**
  * 파일 저장 서비스 인터페이스
  */

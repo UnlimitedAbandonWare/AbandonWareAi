@@ -1,0 +1,1300 @@
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/api/VectorAdminController.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/api/VectorAdminController.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/api/VectorAdminController.java	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/api/VectorAdminController.java	2025-12-30 12:51:41.908711087 +0000
+@@ -0,0 +1,160 @@
++package com.example.lms.api;
++
++import com.example.lms.entity.TranslationMemory;
++import com.example.lms.repository.TranslationMemoryRepository;
++import com.example.lms.service.EmbeddingStoreManager;
++import com.example.lms.service.VectorStoreService;
++import com.example.lms.service.vector.VectorSidService;
++import com.example.lms.service.rag.LangChainRAGService;
++import lombok.RequiredArgsConstructor;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.data.domain.Sort;
++import org.springframework.http.ResponseEntity;
++import org.springframework.web.bind.annotation.*;
++
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++
++@RestController
++@RequestMapping("/api/admin/vector")
++@RequiredArgsConstructor
++public class VectorAdminController {
++
++    private final VectorSidService vectorSidService;
++    private final VectorStoreService vectorStoreService;
++    private final EmbeddingStoreManager embeddingStoreManager;
++    private final TranslationMemoryRepository memoryRepo;
++
++    @GetMapping("/status")
++    public ResponseEntity<Map<String, Object>> status() {
++        Map<String, Object> out = new LinkedHashMap<>();
++        out.put("sid", vectorSidService.snapshot());
++        out.put("activeGlobalSid", vectorSidService.resolveActiveSid(LangChainRAGService.GLOBAL_SID));
++        out.put("quarantineSid", vectorSidService.quarantineSid());
++        out.put("buffer", vectorStoreService.bufferStats());
++        return ResponseEntity.ok(out);
++    }
++
++    @PostMapping("/flush")
++    public ResponseEntity<Map<String, Object>> flush() {
++        vectorStoreService.flush();
++        return ResponseEntity.ok(Map.of(
++                "ok", true,
++                "buffer", vectorStoreService.bufferStats()
++        ));
++    }
++
++    @PostMapping("/rotate-sid")
++    public ResponseEntity<Map<String, Object>> rotateSid() {
++        String prev = vectorSidService.resolveActiveSid(LangChainRAGService.GLOBAL_SID);
++        String next = embeddingStoreManager.rotateGlobalSid();
++        return ResponseEntity.ok(Map.of(
++                "logicalSid", LangChainRAGService.GLOBAL_SID,
++                "prevActiveSid", prev,
++                "nextActiveSid", next
++        ));
++    }
++
++    @PostMapping("/rebuild")
++    public ResponseEntity<EmbeddingStoreManager.AdminRebuildReport> rebuild(
++            @RequestParam(name = "logicalSid", required = false) String logicalSid,
++            @RequestParam(name = "kbLimit", defaultValue = "5000") int kbLimit,
++            @RequestParam(name = "memoryLimit", defaultValue = "500") int memoryLimit,
++            @RequestParam(name = "includeKb", defaultValue = "true") boolean includeKb
++    ) {
++        EmbeddingStoreManager.AdminRebuildReport rep = embeddingStoreManager.adminRebuild(logicalSid, kbLimit, memoryLimit, includeKb);
++        return ResponseEntity.ok(rep);
++    }
++
++    /* ------------------------ quarantine CRUD (TranslationMemory) ------------------------ */
++
++    public record QuarantineItem(
++            Long id,
++            String sessionId,
++            String sourceTag,
++            String status,
++            String createdAt,
++            String updatedAt,
++            String lastUsedAt,
++            String preview
++    ) {
++    }
++
++    @GetMapping("/quarantine")
++    public ResponseEntity<List<QuarantineItem>> listQuarantine(
++            @RequestParam(name = "page", defaultValue = "0") int page,
++            @RequestParam(name = "size", defaultValue = "50") int size
++    ) {
++        int p = Math.max(0, page);
++        int s = Math.max(1, Math.min(size, 200));
++        var pageable = PageRequest.of(p, s, Sort.by(Sort.Order.asc("createdAt")));
++        var res = memoryRepo.findByStatusOrderByCreatedAtAsc(TranslationMemory.MemoryStatus.QUARANTINED, pageable);
++
++        List<QuarantineItem> out = (res == null || res.isEmpty())
++                ? List.of()
++                : res.getContent().stream().map(VectorAdminController::toItem).toList();
++
++        return ResponseEntity.ok(out);
++    }
++
++    @GetMapping("/quarantine/{id}")
++    public ResponseEntity<QuarantineItem> getQuarantine(@PathVariable("id") Long id) {
++        if (id == null) return ResponseEntity.notFound().build();
++        Optional<TranslationMemory> opt = memoryRepo.findById(id);
++        if (opt.isEmpty()) return ResponseEntity.notFound().build();
++        return ResponseEntity.ok(toItem(opt.get()));
++    }
++
++    public record QuarantineUpdate(String status) {
++    }
++
++    @PostMapping("/quarantine/{id}")
++    public ResponseEntity<Map<String, Object>> updateQuarantine(@PathVariable("id") Long id,
++                                                                @RequestBody(required = false) QuarantineUpdate req) {
++        if (id == null) return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "id is null"));
++        TranslationMemory tm = memoryRepo.findById(id).orElse(null);
++        if (tm == null) return ResponseEntity.notFound().build();
++
++        String st = (req == null || req.status() == null) ? "" : req.status().trim().toUpperCase();
++        if (st.isBlank()) st = "ACTIVE";
++
++        TranslationMemory.MemoryStatus ns;
++        try {
++            ns = TranslationMemory.MemoryStatus.valueOf(st);
++        } catch (Exception e) {
++            ns = TranslationMemory.MemoryStatus.ACTIVE;
++        }
++
++        tm.setStatus(ns);
++        memoryRepo.save(tm);
++
++        return ResponseEntity.ok(Map.of("ok", true, "id", id, "status", ns.name()));
++    }
++
++    @DeleteMapping("/quarantine/{id}")
++    public ResponseEntity<Map<String, Object>> deleteQuarantine(@PathVariable("id") Long id) {
++        if (id == null) return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "id is null"));
++        if (!memoryRepo.existsById(id)) return ResponseEntity.notFound().build();
++        memoryRepo.deleteById(id);
++        return ResponseEntity.ok(Map.of("ok", true, "id", id));
++    }
++
++    private static QuarantineItem toItem(TranslationMemory tm) {
++        String content = (tm == null) ? "" : (tm.getCorrected() != null && !tm.getCorrected().isBlank() ? tm.getCorrected() : tm.getContent());
++        String preview = (content == null) ? "" : content.replaceAll("\s+", " ").trim();
++        if (preview.length() > 240) preview = preview.substring(0, 240) + "...";
++
++        return new QuarantineItem(
++                tm == null ? null : tm.getId(),
++                tm == null ? null : tm.getSessionId(),
++                tm == null ? null : tm.getSourceTag(),
++                tm == null || tm.getStatus() == null ? null : tm.getStatus().name(),
++                tm == null || tm.getCreatedAt() == null ? null : tm.getCreatedAt().toString(),
++                tm == null || tm.getUpdatedAt() == null ? null : tm.getUpdatedAt().toString(),
++                tm == null || tm.getLastUsedAt() == null ? null : tm.getLastUsedAt().toString(),
++                preview
++        );
++    }
++}
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/config/AppSecurityConfig.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/config/AppSecurityConfig.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/config/AppSecurityConfig.java	2025-12-30 12:34:06.596436831 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/config/AppSecurityConfig.java	1970-01-01 00:00:00.000000000 +0000
+@@ -1,221 +0,0 @@
+-    package com.example.lms.config;
+-
+-import com.example.lms.domain.Administrator;
+-import com.example.lms.repository.AdministratorRepository;
+-import com.example.lms.security.CustomUserDetailsService;
+-import lombok.RequiredArgsConstructor;
+-import org.springframework.boot.ApplicationRunner;
+-import org.springframework.boot.web.servlet.FilterRegistrationBean;
+-import org.springframework.context.annotation.Bean;
+-import org.springframework.context.annotation.Configuration;
+-import org.springframework.core.Ordered;
+-import org.springframework.core.annotation.Order;
+-import org.springframework.orm.jpa.support.OpenEntityManagerInViewFilter;
+-import org.springframework.security.authentication.AuthenticationManager;
+-import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+-import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+-import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+-import org.springframework.security.crypto.password.PasswordEncoder;
+-import org.springframework.security.web.SecurityFilterChain;
+-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+-import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+-import com.example.lms.service.AdminDetailsServiceImpl;
+-import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+-
+-
+-/**
+- * 애플리케이션의 보안을 총괄하는 설정 클래스.
+- * - 이 체인은 'any request' 캐치올 체인으로, 항상 마지막(@Order LOWEST_PRECEDENCE)으로 두어
+- *   다른 체인(예: 별도 API 체인)이 securityMatcher로 범위를 명시했을 때 충돌을 피한다.
+- * - CSRF 보호 및 HTTPS 강제, Remember-me, Form Login 등을 구성한다.
+- */
+-@Configuration
+-@RequiredArgsConstructor
+-@EnableMethodSecurity
+-public class AppSecurityConfig {
+-    private static final Logger log = LoggerFactory.getLogger(AppSecurityConfig.class);
+-
+-    private final AdministratorRepository adminRepo;
+-    private final CustomUserDetailsService customUserDetailsService;
+-    private final AuthenticationConfiguration authenticationConfiguration;
+-
+-    @Bean
+-    public PasswordEncoder passwordEncoder() {
+-        return new BCryptPasswordEncoder();
+-    }
+-
+-    /**
+-     * 관리자 인증을 전담하는 DaoAuthenticationProvider 빈을 구성합니다.
+-     * 여러 UserDetailsService 빈이 등록된 환경에서 명시적으로 사용할 구현체를 지정하여
+-     * Spring Boot의 자동 구성 경고를 해소합니다. 주입되는 AdminDetailsServiceImpl은
+-     * 관리자 계정 조회만을 담당하며, PasswordEncoder는 기존 암호화 전략을 그대로 사용합니다.
+-     *
+-     * @param adminDetailsService 관리자 계정을 로드하는 서비스
+-     * @param passwordEncoder     비밀번호 인코더
+-     * @return 관리자 인증 프로바이더
+-     */
+-    @Bean
+-    public DaoAuthenticationProvider adminAuthProvider(AdminDetailsServiceImpl adminDetailsService,
+-                                                       PasswordEncoder passwordEncoder) {
+-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+-        provider.setUserDetailsService(adminDetailsService);
+-        provider.setPasswordEncoder(passwordEncoder);
+-        return provider;
+-    }
+-
+-    @Bean
+-    public AuthenticationManager authenticationManager() throws Exception {
+-        return authenticationConfiguration.getAuthenticationManager();
+-    }
+-
+-    @Bean
+-    public FilterRegistrationBean<OpenEntityManagerInViewFilter> openEntityManagerInViewFilter() {
+-        FilterRegistrationBean<OpenEntityManagerInViewFilter> registrationBean = new FilterRegistrationBean<>();
+-        registrationBean.setFilter(new OpenEntityManagerInViewFilter());
+-        registrationBean.addUrlPatterns("/*");
+-        registrationBean.setOrder(Ordered.HIGHEST_PRECEDENCE);
+-        return registrationBean;
+-    }
+-
+-    /**
+-     * 캐치올(SecurityMatcher 미지정) 보안 필터 체인.
+-     * - 다른 체인이 존재한다면 그 체인들은 반드시 securityMatcher(/* ... *&#47;)로 담당 URL을 명시해야 하며,
+-     *   본 체인은 항상 마지막에 평가되도록 @Order(LOWEST_PRECEDENCE)로 지정한다.
+-     */
+-    @Bean
+-    @Order(Ordered.LOWEST_PRECEDENCE)  // ★ 캐치올은 반드시 마지막
+-    public SecurityFilterChain appSecurity(HttpSecurity http, DaoAuthenticationProvider adminAuthProvider) throws Exception {
+-        // Thymeleaf 등에서 _csrf 이름으로 접근하도록 핸들러 설정
+-        var handler = new CsrfTokenRequestAttributeHandler();
+-        handler.setCsrfRequestAttributeName("_csrf");
+-
+-        http
+-                // 명시적으로 관리자 인증 프로바이더를 추가합니다.
+-                .authenticationProvider(adminAuthProvider)
+-                // securityMatcher() 호출 안 함 → ★ 이 체인이 'any request' 캐치올
+-                .csrf(csrf -> csrf
+-                        // Configure CSRF once for this chain.  Use a cookie repository with
+-                        // non-HttpOnly cookies and set the request attribute handler so that
+-                        // Thymeleaf can access the token via the `_csrf` attribute.  Ignore
+-                        // CSRF protection for websocket/chat and settings APIs so that
+-                        // JSON POSTs to those endpoints are not rejected when no token is
+-                        // present.
+-                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+-                        .csrfTokenRequestHandler(handler)
+-                        .ignoringRequestMatchers("/api/chat/**",
+-                                "/api/chat-extra/**", "/ws/**", "/api/settings/**",
+-                                "/api/attachments/**")) // [PATCH] 파일 업로드 CSRF 예외 추가
+-                .userDetailsService(customUserDetailsService)
+-                .authorizeHttpRequests(auth -> {
+-                    // 필요 시 세부 인가 규칙을 상단에 추가하고, 마지막에 anyRequest().permitAll() 유지
+-                    auth.anyRequest().permitAll();
+-                })
+-                .formLogin(form -> form
+-                        .loginPage("/login")
+-                        .loginProcessingUrl("/login")
+-                        .defaultSuccessUrl("/", true)
+-                        .permitAll())
+-                .rememberMe(rem -> rem
+-                        .key("change-this-remember-me-key") // In production, replace this with a secure remember-me key
+-                        .tokenValiditySeconds(24 * 60 * 60)
+-                        .alwaysRemember(true))
+-                .logout(logout -> logout
+-                        .logoutUrl("/logout")
+-                        .logoutSuccessUrl("/login?logout")
+-                        .permitAll())
+-                // Disable the request cache to avoid SavedRequest loops.  When disabled
+-                // Spring Security will not attempt to remember the original request and
+-                // will simply redirect to the defaultSuccessUrl on successful login.
+-                .requestCache(cache -> cache.disable());
+-                // (dev 전용) HTTP 허용. HTTPS 강제 설정을 비활성화하여 개발 환경에서 http://로 실행될 때 리디렉션이 발생하지 않도록 한다.
+-                // .requiresChannel(channel -> channel
+-                //         .anyRequest().requiresSecure()); // 모든 요청 HTTPS 강제
+-
+-        return http.build();
+-    }
+-
+-    // 관리자 계정 초기화는 LmsApplication의 CommandLineRunner에서 처리합니다.
+-    // 중복 초기화를 방지하기 위해 기존 adminInitializer는 제거하였습니다.
+-
+-    /**
+-     * Default security filter chain for non-admin requests.  This chain permits
+-     * anonymous access to the chat API, login page and static resources, while
+-     * requiring authentication for all other requests.  It is evaluated after
+-     * the admin chain (order 1) and before the catch-all chain (lowest precedence).
+-     */
+-    @Bean
+-    @Order(2)
+-    public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http, DaoAuthenticationProvider adminAuthProvider) throws Exception {
+-        var handler = new CsrfTokenRequestAttributeHandler();
+-        handler.setCsrfRequestAttributeName("_csrf");
+-
+-        http
+-                // 명시적으로 관리자 인증 프로바이더를 추가합니다.
+-                .authenticationProvider(adminAuthProvider)
+-                // Match all requests that are not explicitly handled by higher-priority chains
+-                .securityMatcher("/**")
+-                .userDetailsService(customUserDetailsService)
+-                .authorizeHttpRequests(authorize -> authorize
+-                        // Endpoints that should be accessible without authentication
+-                        .requestMatchers(
+-                                "/",
+-                                "/chat",
+-                                "/chat-ui",
+-                                "/login",
+-                                "/register",
+-                                "/logout",
+-                                "/error",
+-                                "/favicon.ico",
+-                                "/webjars/**",
+-                                "/css/**",
+-                                "/js/**",
+-                                "/images/**",
+-                                "/actuator/health",
+-                                "/api/public/**",
+-                                "/api/chat/**",
+-                                "/api/chat-extra/**",
+-                                "/api/settings",
+-                                "/api/settings/**",
+-                                // Allow unauthenticated access to n8n webhooks and task APIs
+-                                "/hooks/n8n/**",
+-                                "/v1/tasks/**"
+-                        ).permitAll()
+-                        // All other requests require authentication
+-                        .anyRequest().authenticated()
+-                )
+-                .formLogin(form -> form
+-                        .loginPage("/login")
+-                        .loginProcessingUrl("/login")
+-                        // Redirect users to the chat page on successful login
+-                        .defaultSuccessUrl("/chat", true)
+-                        .permitAll()
+-                )
+-                .logout(logout -> logout
+-                        .logoutUrl("/logout")
+-                        .logoutSuccessUrl("/login?logout")
+-                )
+-                .csrf(csrf -> csrf
+-                        // Apply a consistent CSRF configuration: use a cookie-based token
+-                        // repository and attribute handler, and ignore token checks for
+-                        // chat/websocket and settings APIs.  These endpoints are called
+-                        // programmatically via fetch and cannot reliably include the
+-                        // generated token header.
+-                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+-                        .csrfTokenRequestHandler(handler)
+-                        .ignoringRequestMatchers("/api/chat/**",
+-                                "/api/chat-extra/**", "/ws/**", "/api/settings/**",
+-                                "/api/attachments/**", // [PATCH] 파일 업로드 CSRF 예외 추가
+-                                // Disable CSRF checks for n8n webhook and task endpoints
+-                                "/hooks/n8n/**", "/v1/tasks/**")
+-                )
+-                // Disable request caching to prevent infinite redirect loops
+-                .requestCache(cache -> cache.disable());
+-
+-        return http.build();
+-    }
+-}
+\ No newline at end of file
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/config/VectorAdminSecurityConfig.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/config/VectorAdminSecurityConfig.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/config/VectorAdminSecurityConfig.java	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/config/VectorAdminSecurityConfig.java	2025-12-30 12:51:42.002491556 +0000
+@@ -0,0 +1,47 @@
++package com.example.lms.config;
++
++import com.example.lms.security.VectorAdminTokenFilter;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++import org.springframework.core.Ordered;
++import org.springframework.core.annotation.Order;
++import org.springframework.security.config.annotation.web.builders.HttpSecurity;
++import org.springframework.security.config.http.SessionCreationPolicy;
++import org.springframework.security.web.SecurityFilterChain;
++import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
++
++/**
++ * Dedicated security chain for vector admin endpoints.
++ *
++ * <p>Applies token auth (vector.admin.token) to /api/admin/vector/**.</p>
++ */
++@Configuration
++public class VectorAdminSecurityConfig {
++
++    @Bean
++    public VectorAdminTokenFilter vectorAdminTokenFilter(@Value("${vector.admin.token:}") String token) {
++        return new VectorAdminTokenFilter(token);
++    }
++
++    @Bean
++    @Order(Ordered.HIGHEST_PRECEDENCE)
++    public SecurityFilterChain vectorAdminChain(HttpSecurity http,
++                                                VectorAdminTokenFilter tokenFilter) throws Exception {
++
++        http.securityMatcher("/api/admin/vector/**");
++
++        http
++                .csrf(csrf -> csrf.disable())
++                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
++                .authorizeHttpRequests(auth -> auth
++                        .anyRequest().hasRole("VECTOR_ADMIN")
++                )
++                .addFilterBefore(tokenFilter, UsernamePasswordAuthenticationFilter.class)
++                .requestCache(cache -> cache.disable())
++                .formLogin(fl -> fl.disable())
++                .logout(lo -> lo.disable());
++
++        return http.build();
++    }
++}
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/security/VectorAdminTokenFilter.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/security/VectorAdminTokenFilter.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/security/VectorAdminTokenFilter.java	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/security/VectorAdminTokenFilter.java	2025-12-30 12:51:41.976555121 +0000
+@@ -0,0 +1,96 @@
++package com.example.lms.security;
++
++import jakarta.servlet.FilterChain;
++import jakarta.servlet.ServletException;
++import jakarta.servlet.http.HttpServletRequest;
++import jakarta.servlet.http.HttpServletResponse;
++import org.springframework.http.HttpHeaders;
++import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
++import org.springframework.security.core.authority.SimpleGrantedAuthority;
++import org.springframework.security.core.context.SecurityContextHolder;
++import org.springframework.web.filter.OncePerRequestFilter;
++
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.util.List;
++
++/**
++ * Token auth filter for /api/admin/vector/** endpoints.
++ *
++ * <p>Header options:
++ * <ul>
++ *   <li>Authorization: Bearer &lt;token&gt;</li>
++ *   <li>X-Vector-Admin-Token: &lt;token&gt;</li>
++ * </ul>
++ * </p>
++ */
++public class VectorAdminTokenFilter extends OncePerRequestFilter {
++
++    public static final String HEADER_TOKEN = "X-Vector-Admin-Token";
++
++    private final String token;
++
++    public VectorAdminTokenFilter(String token) {
++        this.token = token == null ? "" : token.trim();
++    }
++
++    @Override
++    protected void doFilterInternal(HttpServletRequest request,
++                                    HttpServletResponse response,
++                                    FilterChain filterChain) throws ServletException, IOException {
++
++        // Fail-closed if token not configured.
++        if (token.isBlank()) {
++            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
++            response.setContentType("application/json");
++            response.getOutputStream().write("{"error":"vector.admin.token not configured"}".getBytes(StandardCharsets.UTF_8));
++            return;
++        }
++
++        String presented = extractToken(request);
++        if (!constantTimeEquals(token, presented)) {
++            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
++            response.setHeader("WWW-Authenticate", "Bearer");
++            response.setContentType("application/json");
++            response.getOutputStream().write("{"error":"unauthorized"}".getBytes(StandardCharsets.UTF_8));
++            return;
++        }
++
++        var auth = new UsernamePasswordAuthenticationToken(
++                "vector-admin",
++                null,
++                List.of(new SimpleGrantedAuthority("ROLE_VECTOR_ADMIN"))
++        );
++        SecurityContextHolder.getContext().setAuthentication(auth);
++
++        filterChain.doFilter(request, response);
++    }
++
++    private static String extractToken(HttpServletRequest request) {
++        if (request == null) return "";
++        String h = request.getHeader(HEADER_TOKEN);
++        if (h != null && !h.isBlank()) return h.trim();
++
++        String auth = request.getHeader(HttpHeaders.AUTHORIZATION);
++        if (auth != null) {
++            String a = auth.trim();
++            if (a.regionMatches(true, 0, "Bearer ", 0, 7)) {
++                return a.substring(7).trim();
++            }
++        }
++        String q = request.getParameter("token");
++        return q == null ? "" : q.trim();
++    }
++
++    private static boolean constantTimeEquals(String a, String b) {
++        if (a == null || b == null) return false;
++        byte[] aa = a.getBytes(StandardCharsets.UTF_8);
++        byte[] bb = b.getBytes(StandardCharsets.UTF_8);
++        if (aa.length != bb.length) return false;
++        int r = 0;
++        for (int i = 0; i < aa.length; i++) {
++            r |= aa[i] ^ bb[i];
++        }
++        return r == 0;
++    }
++}
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/EmbeddingStoreManager.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/EmbeddingStoreManager.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/EmbeddingStoreManager.java	2025-12-30 12:34:06.574353802 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/EmbeddingStoreManager.java	2025-12-30 12:51:41.882234820 +0000
+@@ -5,6 +5,8 @@
+ import com.example.lms.service.rag.LangChainRAGService;
+ import com.example.lms.dto.learning.MemorySnippet;
+ import com.example.lms.service.guard.VectorPoisonGuard;
++import com.example.lms.service.knowledge.DefaultKnowledgeBaseService;
++import com.example.lms.service.vector.VectorSidService;
+ import dev.langchain4j.data.document.Metadata;
+ import dev.langchain4j.data.segment.TextSegment;
+ import dev.langchain4j.model.embedding.EmbeddingModel;
+@@ -57,6 +59,12 @@
+     @Autowired(required = false)
+     private VectorPoisonGuard vectorPoisonGuard;
+ 
++    @Autowired(required = false)
++    private VectorSidService vectorSidService;
++
++    @Autowired(required = false)
++    private DefaultKnowledgeBaseService knowledgeBaseService;
++
+     @Value("${vector.bootstrap.startup.enabled:false}")
+     private boolean startupBootstrapEnabled;
+ 
+@@ -108,6 +116,28 @@
+         log.info("✅  {}개의 문장을 Embedding Store에 성공적으로 적재했습니다.", items.size());
+     }
+ 
++    private String activeGlobalSid() {
++        try {
++            if (vectorSidService == null) return LangChainRAGService.GLOBAL_SID;
++            String s = vectorSidService.resolveActiveSid(LangChainRAGService.GLOBAL_SID);
++            return (s == null || s.isBlank()) ? LangChainRAGService.GLOBAL_SID : s.trim();
++        } catch (Exception ignore) {
++            return LangChainRAGService.GLOBAL_SID;
++        }
++    }
++
++    private String resolveActiveSid(String logicalSid) {
++        String k = (logicalSid == null) ? "" : logicalSid.trim();
++        if (k.isBlank()) return LangChainRAGService.GLOBAL_SID;
++        if (vectorSidService == null) return k;
++        try {
++            return vectorSidService.resolveActiveSid(k);
++        } catch (Exception ignore) {
++            return k;
++        }
++    }
++
++
+ 
+     /**
+      * 필요 시점(검색 결과 비었을 때)에만 세션 메모리 제한적 부트스트랩.
+@@ -185,9 +215,11 @@
+         String text = chooseIndexText(tm);
+         if (text == null || text.isBlank()) return null;
+ 
+-        String sid = (tm.getSessionId() == null || tm.getSessionId().isBlank())
++        String logicalSid = (tm.getSessionId() == null || tm.getSessionId().isBlank())
+                 ? LangChainRAGService.GLOBAL_SID
+-                : tm.getSessionId();
++                : tm.getSessionId().trim();
++
++        String sid = resolveActiveSid(logicalSid);
+ 
+         String st = normalizeSourceTag(tm.getSourceTag());
+ 
+@@ -200,6 +232,9 @@
+ 
+         Map<String, Object> meta = new HashMap<>();
+         meta.put(LangChainRAGService.META_SID, sid);
++        if (!Objects.equals(sid, logicalSid)) {
++            meta.put("sid_logical", logicalSid);
++        }
+         meta.put(VectorMetaKeys.META_SOURCE_TAG, st);
+         meta.putIfAbsent(VectorMetaKeys.META_DOC_TYPE, "MEMORY");
+         meta.put(VectorMetaKeys.META_ORIGIN, deriveOrigin(st));
+@@ -265,7 +300,9 @@
+                 int cc = detectCitationCount(text);
+ 
+                 Map<String, Object> meta = new HashMap<>();
+-                meta.put(LangChainRAGService.META_SID, LangChainRAGService.GLOBAL_SID);
++                String activeGlobalSid = activeGlobalSid();
++                meta.put(LangChainRAGService.META_SID, activeGlobalSid);
++                meta.put("sid_logical", LangChainRAGService.GLOBAL_SID);
+                 meta.put(VectorMetaKeys.META_SOURCE_TAG, "SYSTEM");
+                 meta.putIfAbsent(VectorMetaKeys.META_DOC_TYPE, "KB");
+                 meta.put(VectorMetaKeys.META_ORIGIN, "SYSTEM");
+@@ -278,7 +315,7 @@
+                 if (vectorPoisonGuard != null) {
+                     try {
+                         VectorPoisonGuard.IngestDecision dec = vectorPoisonGuard.inspectIngest(
+-                                LangChainRAGService.GLOBAL_SID, text, meta, "bootstrap.ms");
++                                activeGlobalSid, text, meta, "bootstrap.ms");
+                         if (dec == null || !dec.allow()) {
+                             continue;
+                         }
+@@ -390,4 +427,96 @@
+         double conf = (confidenceScore == null) ? 0.0 : confidenceScore.doubleValue();
+         return conf >= 0.85;
+     }
++
++    // MERGE_HOOK:PROJ_AGENT::VECTOR_ADMIN_REBUILD_V1
++    public record AdminRebuildReport(
++            String logicalSid,
++            String activeSid,
++            int kbIndexed,
++            int memoryIndexed
++    ) {
++    }
++
++    /** Admin: rotate the logical global sid and return the new active sid. */
++    public synchronized String rotateGlobalSid() {
++        if (vectorSidService == null) {
++            throw new IllegalStateException("VectorSidService is not configured");
++        }
++        String next = vectorSidService.rotateSid(LangChainRAGService.GLOBAL_SID);
++        // allow bootstrap on the new active sid
++        bootstrapOnce.remove(LangChainRAGService.GLOBAL_SID);
++        bootstrapOnce.remove(next);
++        return next;
++    }
++
++    /**
++     * Admin: force a bootstrap-style rebuild into the current active sid.
++     * This bypasses the bootstrap-once guard.
++     */
++    public int forceBootstrapToActiveSid(int limit) {
++        return forceBootstrapToActiveSid(LangChainRAGService.GLOBAL_SID, limit);
++    }
++
++    /**
++     * Admin: force a bootstrap-style rebuild for a logical sid into its current active sid.
++     * For the global sid this is used after rotate-sid to repopulate the pool.
++     */
++    public int forceBootstrapToActiveSid(String logicalSid, int limit) {
++        String key = (logicalSid == null || logicalSid.isBlank()) ? LangChainRAGService.GLOBAL_SID : logicalSid.trim();
++        String active = resolveActiveSid(key);
++
++        bootstrapOnce.remove(key);
++        bootstrapOnce.remove(active);
++
++        int cap = Math.max(1, Math.min(limit, 5000));
++        List<String> sids = buildSidVariants(key);
++        List<TranslationMemory> memories = loadForBootstrap(sids, cap);
++        if (memories.isEmpty()) {
++            return 0;
++        }
++
++        List<IndexedSegment> items = memories.stream()
++                .map(this::toIndexedSegment)
++                .filter(Objects::nonNull)
++                .toList();
++
++        if (items.isEmpty()) {
++            return 0;
++        }
++
++        batchEmbed(items);
++        bootstrapOnce.put(key, Boolean.TRUE);
++        bootstrapOnce.put(active, Boolean.TRUE);
++
++        log.info("[VectorAdmin] forceBootstrap sid={} active={} indexed={}", key, active, items.size());
++        return items.size();
++    }
++
++    /**
++     * Admin: rebuild helper for the rotate-sid flow. Reindexes KB rows (optional) and
++     * bootstraps translation memories for the logical sid into its active sid.
++     */
++    public AdminRebuildReport adminRebuild(String logicalSid, int kbLimit, int memoryLimit, boolean includeKb) {
++        String key = (logicalSid == null || logicalSid.isBlank()) ? LangChainRAGService.GLOBAL_SID : logicalSid.trim();
++        String active = resolveActiveSid(key);
++
++        int kb = 0;
++        if (includeKb && knowledgeBaseService != null && LangChainRAGService.GLOBAL_SID.equals(key)) {
++            try {
++                kb = knowledgeBaseService.adminReindexAllToVectorStore(kbLimit, false);
++            } catch (Exception e) {
++                log.warn("[VectorAdmin] KB reindex fail-soft: {}", e.toString());
++            }
++        }
++
++        int mem = 0;
++        try {
++            mem = forceBootstrapToActiveSid(key, memoryLimit);
++        } catch (Exception e) {
++            log.warn("[VectorAdmin] memory rebuild fail-soft: {}", e.toString());
++        }
++
++        return new AdminRebuildReport(key, active, kb, mem);
++    }
++
+ }
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/knowledge/DefaultKnowledgeBaseService.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/knowledge/DefaultKnowledgeBaseService.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/knowledge/DefaultKnowledgeBaseService.java	2025-12-30 12:34:06.491671935 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/knowledge/DefaultKnowledgeBaseService.java	2025-12-30 12:51:41.792879092 +0000
+@@ -8,6 +8,7 @@
+ import com.example.lms.service.VectorMetaKeys;
+ import com.example.lms.service.VectorStoreService;
+ import com.example.lms.service.rag.LangChainRAGService;
++import com.example.lms.service.vector.VectorSidService;
+ import com.fasterxml.jackson.databind.JsonNode;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import lombok.RequiredArgsConstructor;
+@@ -15,6 +16,8 @@
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.beans.factory.annotation.Value;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.data.domain.Sort;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+@@ -31,6 +34,7 @@
+     private final DomainKnowledgeRepository repo;
+     private final ObjectMapper om;
+     private final VectorStoreService vectorStoreService;
++    private final VectorSidService vectorSidService;
+ 
+     @Value("${knowledge.base.persist.enabled:true}")
+     private boolean persistEnabled;
+@@ -138,6 +142,13 @@
+             return IntegrationStatus.REJECTED;
+         }
+ 
++        boolean verificationNeeded = false;
++        try {
++            verificationNeeded = root.path("verification_needed").asBoolean(false)
++                    || root.path("verificationNeeded").asBoolean(false);
++        } catch (Exception ignore) {
++        }
++
+         String dom = pickText(root, "domain", domain);
+         String ent = pickText(root, "entity", entityName);
+         String entityType = pickText(root, "entityType", "");
+@@ -244,7 +255,7 @@
+ 
+         if (indexEnabled) {
+             try {
+-                indexKnowledgeToVectorStore(dk, attrs, mergedSources, confidenceScore);
++                indexKnowledgeToVectorStore(dk, attrs, mergedSources, confidenceScore, verificationNeeded);
+             } catch (Exception e) {
+                 // fail-soft: KB 저장은 성공했으니 인덱싱만 경고
+                 log.warn("[KB][INTEGRATE] vector index failed (fail-soft): {}", e.toString());
+@@ -286,7 +297,10 @@
+                 meta.put("kb_confidence", clamp01(m.confidence()));
+ 
+                 String stableId = "kbm:" + DigestUtils.sha1Hex(m.subject() + "|" + m.text());
+-                vectorStoreService.enqueue(stableId, LangChainRAGService.GLOBAL_SID, m.text(), meta);
++                String activeGlobalSid = vectorSidService.resolveActiveSid(LangChainRAGService.GLOBAL_SID);
++                meta.put(VectorMetaKeys.META_DOC_TYPE, "KB");
++                meta.put("sid_logical", LangChainRAGService.GLOBAL_SID);
++                vectorStoreService.enqueue(stableId, activeGlobalSid, m.text(), meta);
+                 indexed++;
+ 
+                 if (indexed >= 200) {
+@@ -305,13 +319,17 @@
+     private void indexKnowledgeToVectorStore(DomainKnowledge dk,
+             Map<String, String> attrs,
+             List<String> sources,
+-            double confidence) {
++            double confidence,
++            boolean verificationNeeded) {
+         String text = renderForEmbedding(dk, attrs, sources);
+ 
+         Map<String, Object> meta = new LinkedHashMap<>();
++        meta.put(VectorMetaKeys.META_DOC_TYPE, "KB");
+         meta.put(VectorMetaKeys.META_SOURCE_TAG, "SYSTEM");
+         meta.put(VectorMetaKeys.META_ORIGIN, "SYSTEM");
+-        meta.put(VectorMetaKeys.META_VERIFIED, "true");
++        meta.put(VectorMetaKeys.META_VERIFIED, String.valueOf(!verificationNeeded));
++        meta.put("verification_needed", String.valueOf(verificationNeeded));
++
+         meta.put("kb_domain", dk.getDomain());
+         meta.put("kb_entity", dk.getEntityName());
+         meta.put("kb_entity_type", dk.getEntityType());
+@@ -321,8 +339,12 @@
+         // Stable per entity, so updates upsert instead of accumulating duplicates.
+         String vectorId = "kb:" + DigestUtils.sha1Hex(dk.getDomain() + "|" + dk.getEntityName());
+ 
+-        // 글로벌 SID로 인덱싱하여 세션 무관하게 RAG에서 히트되게
+-        vectorStoreService.enqueue(vectorId, LangChainRAGService.GLOBAL_SID, text, meta);
++        String logicalSid = LangChainRAGService.GLOBAL_SID;
++        String activeGlobalSid = vectorSidService.resolveActiveSid(logicalSid);
++        String targetSid = verificationNeeded ? vectorSidService.quarantineSid() : activeGlobalSid;
++        meta.put("sid_logical", logicalSid);
++
++        vectorStoreService.enqueue(vectorId, targetSid, text, meta);
+     }
+ 
+     private String renderForEmbedding(DomainKnowledge dk, Map<String, String> attrs, List<String> sources) {
+@@ -659,4 +681,98 @@
+     public Policy getPairingPolicy(String domain, String entityName) {
+         return new Policy(Set.of(), Set.of());
+     }
++
++    /**
++     * Admin: reindex all KB rows into the vector store using the current active global sid.
++     * This is designed for the rotate-sid + rebuild flow.
++     */
++    @Transactional(readOnly = true)
++    public int adminReindexAllToVectorStore(int limit, boolean routeToQuarantine) {
++        int cap = Math.max(1, Math.min(limit <= 0 ? 5000 : limit, 20000));
++        int pageSize = Math.min(500, cap);
++
++        String logicalSid = LangChainRAGService.GLOBAL_SID;
++        String activeGlobalSid = vectorSidService.resolveActiveSid(logicalSid);
++        String targetSid = routeToQuarantine ? vectorSidService.quarantineSid() : activeGlobalSid;
++
++        int indexed = 0;
++        int page = 0;
++
++        while (indexed < cap) {
++            var pageable = PageRequest.of(page, Math.min(pageSize, cap - indexed),
++                    Sort.by(Sort.Order.asc("domain"), Sort.Order.asc("entityName")));
++            var slice = repo.findAll(pageable);
++            if (slice == null || slice.isEmpty()) break;
++
++            for (DomainKnowledge dk : slice.getContent()) {
++                if (dk == null) continue;
++
++                Map<String, String> attrs = new LinkedHashMap<>();
++                List<String> sources = new ArrayList<>();
++
++                try {
++                    if (dk.getAttributes() != null) {
++                        for (EntityAttribute a : dk.getAttributes()) {
++                            if (a == null || a.getAttributeKey() == null) continue;
++                            String k = safe(a.getAttributeKey());
++                            String v = safe(a.getAttributeValue());
++                            if (k.isBlank() || v.isBlank()) continue;
++
++                            String nk = normKey(k);
++                            if ("_sources".equals(nk)) {
++                                // parse JSON list if possible
++                                try {
++                                    JsonNode n = om.readTree(v);
++                                    if (n != null && n.isArray()) {
++                                        for (JsonNode x : n) {
++                                            String s = safe(x.asText(""));
++                                            if (!s.isBlank()) sources.add(s.trim());
++                                        }
++                                    }
++                                } catch (Exception ignore) {
++                                }
++                                continue;
++                            }
++                            if (nk.startsWith("_")) continue;
++                            attrs.put(k, v);
++                        }
++                    }
++                } catch (Exception ignore) {
++                }
++
++                String text = renderForEmbedding(dk, attrs, sources);
++
++                Map<String, Object> meta = new LinkedHashMap<>();
++                meta.put(VectorMetaKeys.META_DOC_TYPE, "KB");
++                meta.put(VectorMetaKeys.META_SOURCE_TAG, "SYSTEM");
++                meta.put(VectorMetaKeys.META_ORIGIN, "SYSTEM");
++                meta.put(VectorMetaKeys.META_VERIFIED, String.valueOf(!routeToQuarantine));
++                meta.put("verification_needed", String.valueOf(routeToQuarantine));
++                meta.put("sid_logical", logicalSid);
++
++                meta.put("kb_domain", dk.getDomain());
++                meta.put("kb_entity", dk.getEntityName());
++                meta.put("kb_entity_type", dk.getEntityType());
++                meta.put("kb_confidence", clamp01(Optional.ofNullable(dk.getConfidenceScore()).orElse(0.0)));
++                meta.put(VectorMetaKeys.META_CITATION_COUNT, sources.size());
++
++                String vectorId = "kb:" + DigestUtils.sha1Hex(dk.getDomain() + "|" + dk.getEntityName());
++                vectorStoreService.enqueue(vectorId, targetSid, text, meta);
++
++                indexed++;
++                if (indexed >= cap) break;
++            }
++
++            if (!slice.hasNext()) break;
++            page++;
++        }
++
++        if (indexed > 0) {
++            vectorStoreService.flush();
++        }
++
++        log.info("[KB][ADMIN_REINDEX] sid={} targetSid={} indexed={}", logicalSid, targetSid, indexed);
++        return indexed;
++    }
++
+ }
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/rag/LangChainRAGService.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/rag/LangChainRAGService.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/rag/LangChainRAGService.java	2025-12-30 12:34:06.511639014 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/rag/LangChainRAGService.java	2025-12-30 12:51:41.817452482 +0000
+@@ -16,6 +16,7 @@
+ import com.example.lms.infra.resilience.NightmareBreaker;
+ import com.example.lms.infra.resilience.NightmareKeys;
+ import com.example.lms.search.TraceStore;
++import com.example.lms.service.vector.VectorSidService;
+ import com.example.lms.service.EmbeddingStoreManager;
+ import com.example.lms.service.guard.VectorPoisonGuard;
+ import com.example.lms.service.guard.VectorPoisonGuard;
+@@ -54,6 +55,9 @@
+     private VectorPoisonGuard vectorPoisonGuard;
+ 
+     @Autowired(required = false)
++    private VectorSidService vectorSidService;
++
++    @Autowired(required = false)
+     private NightmareBreaker nightmareBreaker;
+ 
+     @Value("${vector.bootstrap.on-empty.enabled:true}")
+@@ -77,6 +81,17 @@
+         }
+     }
+ 
++    private String activeGlobalSid() {
++        try {
++            if (vectorSidService == null) return GLOBAL_SID;
++            String s = vectorSidService.resolveActiveSid(GLOBAL_SID);
++            return (s == null || s.isBlank()) ? GLOBAL_SID : s.trim();
++        } catch (Exception ignore) {
++            return GLOBAL_SID;
++        }
++    }
++
++
+     /**
+      * HybridRetriever 등 다른 컴포넌트와의 호환성을 위해 ContentRetriever 변환 제공.
+      * 1.0.1 버전의 표준 구현체인 EmbeddingStoreContentRetriever를 사용합니다.
+@@ -212,7 +227,7 @@
+                     .maxResults(maxResults)
+                     .minScore(requestMinScore)
+                     // Global KB space only
+-                    .filter(metadataKey(META_SID).isEqualTo(GLOBAL_SID))
++                    .filter(metadataKey(META_SID).isEqualTo(activeGlobalSid()))
+                     .build();
+ 
+             EmbeddingSearchResult<TextSegment> result = embeddingStore.search(request);
+@@ -330,7 +345,7 @@
+         return def;
+     }
+ 
+-    private static Filter buildFilterForSid(String sid) {
++    private Filter buildFilterForSid(String sid) {
+         try {
+             String s = (sid == null) ? "" : sid.trim();
+ 
+@@ -340,7 +355,7 @@
+             }
+ 
+             // 글로벌 풀(EmbeddingStoreManager 기본값)
+-            Filter global = metadataKey(META_SID).isEqualTo(GLOBAL_SID);
++            Filter global = metadataKey(META_SID).isEqualTo(activeGlobalSid());
+ 
+             if (!s.isBlank()) {
+                 // Compatibility: some components store numeric sids, others store "chat-<n>".
+@@ -357,7 +372,7 @@
+             // fail-closed: on filter build errors, only allow global pool.
+             log.warn("[RAG] Cannot build metadata filter (fail-closed to global). sid={}, err={}"
+                     , sid, ex.getMessage());
+-            return metadataKey(META_SID).isEqualTo(GLOBAL_SID);
++            return metadataKey(META_SID).isEqualTo(activeGlobalSid());
+         }
+     }
+ 
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/vector/VectorSidService.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/vector/VectorSidService.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/service/vector/VectorSidService.java	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/service/vector/VectorSidService.java	2025-12-30 12:51:42.066885553 +0000
+@@ -0,0 +1,145 @@
++package com.example.lms.service.vector;
++
++import com.fasterxml.jackson.annotation.JsonInclude;
++import com.fasterxml.jackson.databind.ObjectMapper;
++import jakarta.annotation.PostConstruct;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.stereotype.Service;
++
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.StandardCopyOption;
++import java.time.Instant;
++import java.util.LinkedHashMap;
++import java.util.Map;
++import java.util.Objects;
++import java.util.UUID;
++
++/**
++ * VectorSidService
++ *
++ * <p>Maintains a small persisted mapping from a logical sid (e.g. {@code __PRIVATE__})
++ * to an active physical sid (e.g. {@code __PRIVATE__#...}).</p>
++ *
++ * <p>Rotation is used to hard-cut contaminated/global pools without having to delete
++ * historical vectors. Searches should use only the active sid.</p>
++ */
++@Service
++public class VectorSidService {
++
++    private static final Logger log = LoggerFactory.getLogger(VectorSidService.class);
++
++    public static final String QUARANTINE_SID = "Q";
++
++    private final ObjectMapper om;
++
++    @Value("${vector.sid.state-path:./data/vector-sid-state.json}")
++    private String statePath;
++
++    private volatile State state = new State();
++
++    public VectorSidService(ObjectMapper om) {
++        this.om = (om == null) ? new ObjectMapper() : om.copy();
++        this.om.setSerializationInclusion(JsonInclude.Include.NON_NULL);
++    }
++
++    @PostConstruct
++    public void init() {
++        loadFailSoft();
++    }
++
++    /** Resolve the active sid for a logical sid (default: identity). */
++    public String resolveActiveSid(String logicalSid) {
++        String key = (logicalSid == null) ? "" : logicalSid.trim();
++        if (key.isBlank()) return "";
++        State s = state;
++        String mapped = (s == null || s.mappings == null) ? null : s.mappings.get(key);
++        return (mapped == null || mapped.isBlank()) ? key : mapped.trim();
++    }
++
++    /** Quarantine namespace sid. */
++    public String quarantineSid() {
++        return QUARANTINE_SID;
++    }
++
++    /** Rotate a logical sid to a new physical sid and persist state. */
++    public synchronized String rotateSid(String logicalSid) {
++        String key = (logicalSid == null) ? "" : logicalSid.trim();
++        if (key.isBlank()) {
++            throw new IllegalArgumentException("logicalSid is blank");
++        }
++        String prev = resolveActiveSid(key);
++
++        // Short, URL-safe suffix.
++        String suffix = Long.toString(System.currentTimeMillis(), 36) + "-" + UUID.randomUUID().toString().substring(0, 8);
++        String next = key + "#" + suffix;
++
++        State s = (state == null) ? new State() : state;
++        if (s.mappings == null) s.mappings = new LinkedHashMap<>();
++        s.mappings.put(key, next);
++        s.updatedAt = Instant.now().toString();
++        state = s;
++
++        persistFailSoft();
++
++        log.warn("[VectorSid] rotated logicalSid={} prev={} next={}", key, prev, next);
++        return next;
++    }
++
++    /** Small diagnostic snapshot (no secrets). */
++    public Map<String, Object> snapshot() {
++        State s = state;
++        Map<String, Object> out = new LinkedHashMap<>();
++        out.put("statePath", Objects.toString(statePath, ""));
++        out.put("updatedAt", s == null ? null : s.updatedAt);
++        out.put("mappings", s == null ? Map.of() : (s.mappings == null ? Map.of() : new LinkedHashMap<>(s.mappings)));
++        out.put("quarantineSid", QUARANTINE_SID);
++        return out;
++    }
++
++    /* ------------------------ persistence ------------------------ */
++
++    private void loadFailSoft() {
++        try {
++            Path p = Path.of(statePath);
++            if (!Files.exists(p)) {
++                return;
++            }
++            String json = Files.readString(p, StandardCharsets.UTF_8);
++            if (json == null || json.isBlank()) return;
++
++            State s = om.readValue(json, State.class);
++            if (s != null) {
++                if (s.mappings == null) s.mappings = new LinkedHashMap<>();
++                state = s;
++            }
++        } catch (Exception e) {
++            log.debug("[VectorSid] load fail-soft: {}", e.toString());
++        }
++    }
++
++    private void persistFailSoft() {
++        try {
++            Path p = Path.of(statePath);
++            Path dir = p.getParent();
++            if (dir != null) Files.createDirectories(dir);
++
++            String json = om.writerWithDefaultPrettyPrinter().writeValueAsString(state);
++            Path tmp = p.resolveSibling(p.getFileName().toString() + ".tmp");
++            Files.writeString(tmp, json, StandardCharsets.UTF_8);
++            Files.move(tmp, p, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
++        } catch (Exception e) {
++            log.debug("[VectorSid] persist fail-soft: {}", e.toString());
++        }
++    }
++
++    /* ------------------------ data ------------------------ */
++
++    public static final class State {
++        public Map<String, String> mappings = new LinkedHashMap<>();
++        public String updatedAt = Instant.now().toString();
++    }
++}
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/uaw/autolearn/ingest/TrainRagIngestService.java /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/uaw/autolearn/ingest/TrainRagIngestService.java
+--- /mnt/data/src111_merge15_work/_patch_original/main/java/com/example/lms/uaw/autolearn/ingest/TrainRagIngestService.java	2025-12-30 12:34:06.471093827 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/java/com/example/lms/uaw/autolearn/ingest/TrainRagIngestService.java	2025-12-30 12:51:41.766674600 +0000
+@@ -1,14 +1,13 @@
+ package com.example.lms.uaw.autolearn.ingest;
+ 
++import com.example.lms.service.VectorMetaKeys;
++import com.example.lms.service.VectorStoreService;
+ import com.example.lms.service.rag.LangChainRAGService;
++import com.example.lms.service.vector.VectorSidService;
+ import com.example.lms.uaw.autolearn.PreemptionToken;
+ import com.example.lms.uaw.autolearn.UawAutolearnProperties;
+ import com.fasterxml.jackson.core.type.TypeReference;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+-import dev.langchain4j.data.document.Metadata;
+-import dev.langchain4j.data.segment.TextSegment;
+-import dev.langchain4j.model.embedding.EmbeddingModel;
+-import dev.langchain4j.store.embedding.EmbeddingStore;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.stereotype.Service;
+@@ -24,6 +23,7 @@
+ import java.util.ArrayList;
+ import java.util.HashMap;
+ import java.util.List;
++import java.util.Locale;
+ import java.util.Map;
+ import java.util.Objects;
+ 
+@@ -31,25 +31,25 @@
+  * Incremental ingest of train_rag.jsonl with a persistent checkpoint.
+  */
+ 
+-// MERGE_HOOK:PROJ_AGENT::UAW_TRAIN_INGEST_IDS_SID_V1
++// MERGE_HOOK:PROJ_AGENT::UAW_TRAIN_INGEST_IDS_SID_V2
+ @Service
+ public class TrainRagIngestService {
+ 
+     private static final Logger log = LoggerFactory.getLogger(TrainRagIngestService.class);
+ 
+-    private final EmbeddingStore<TextSegment> embeddingStore;
+-    private final EmbeddingModel embeddingModel;
++    private final VectorStoreService vectorStoreService;
++    private final VectorSidService vectorSidService;
+     private final UawAutolearnProperties props;
+     private final ObjectMapper om = new ObjectMapper();
+ 
+-    private record Indexed(String id, TextSegment segment) {
++    private record Indexed(String id, String sid, String text, Map<String, Object> meta) {
+     }
+ 
+-    public TrainRagIngestService(EmbeddingStore<TextSegment> embeddingStore,
+-                                EmbeddingModel embeddingModel,
+-                                UawAutolearnProperties props) {
+-        this.embeddingStore = embeddingStore;
+-        this.embeddingModel = embeddingModel;
++    public TrainRagIngestService(VectorStoreService vectorStoreService,
++                                 VectorSidService vectorSidService,
++                                 UawAutolearnProperties props) {
++        this.vectorStoreService = vectorStoreService;
++        this.vectorSidService = vectorSidService;
+         this.props = props;
+     }
+ 
+@@ -126,21 +126,26 @@
+                 String vectorId = "uaw:" + stableId;
+ 
+                 Map<String, Object> meta = new HashMap<>();
++                meta.put(VectorMetaKeys.META_DOC_TYPE, "KB");
++                meta.put(VectorMetaKeys.META_SOURCE_TAG, "UAW_AUTOLRN");
++                meta.put(VectorMetaKeys.META_ORIGIN, "SYSTEM");
++                meta.put(VectorMetaKeys.META_VERIFIED, "true");
++                meta.put(VectorMetaKeys.META_CITATION_COUNT, 0);
++
+                 meta.put("type", "qa");
+                 meta.put("dataset", datasetName);
+                 meta.put("source", Objects.toString(m.getOrDefault("source", "uaw_autolearn"), "uaw_autolearn"));
+                 meta.put("uaw_id", stableId);
+                 meta.put("ts", Objects.toString(m.getOrDefault("ts", Instant.now().toString()), Instant.now().toString()));
+ 
+-                // Ensure the chunk is searchable by the default sid filter.
+-                meta.put(LangChainRAGService.META_SID, LangChainRAGService.GLOBAL_SID);
+-
+                 Object sessionId = m.get("sessionId");
+-                if (sessionId != null) {
+-                    meta.put("sessionId", sessionId.toString());
++                String sid = (sessionId == null) ? "" : sessionId.toString().trim();
++                if (sid.isBlank() || LangChainRAGService.GLOBAL_SID.equals(sid)) {
++                    sid = vectorSidService.resolveActiveSid(LangChainRAGService.GLOBAL_SID);
++                    meta.put("sid_logical", LangChainRAGService.GLOBAL_SID);
+                 }
+ 
+-                batch.add(new Indexed(vectorId, TextSegment.from(content, Metadata.from(meta))));
++                batch.add(new Indexed(vectorId, sid, content, meta));
+ 
+                 if (batch.size() >= batchSize) {
+                     if (token != null && token.shouldAbort()) {
+@@ -176,12 +181,14 @@
+                 return true;
+             }
+ 
+-            List<String> ids = batch.stream().map(Indexed::id).toList();
+-            List<TextSegment> segments = batch.stream().map(Indexed::segment).toList();
+-
+-            var embeddings = embeddingModel.embedAll(segments).content();
+-            embeddingStore.addAll(ids, embeddings, segments);
+-
++            for (Indexed it : batch) {
++                if (it == null || it.text() == null || it.text().isBlank()) continue;
++                String sid = (it.sid() == null || it.sid().isBlank())
++                        ? vectorSidService.resolveActiveSid(LangChainRAGService.GLOBAL_SID)
++                        : it.sid().trim();
++                vectorStoreService.enqueue(it.id(), sid, it.text(), it.meta());
++            }
++            vectorStoreService.flush();
+             return true;
+         } catch (Exception e) {
+             log.warn("[UAW] vector upsert failed: {}", e.toString());
+@@ -258,7 +265,7 @@
+             MessageDigest md = MessageDigest.getInstance("SHA-1");
+             byte[] b = md.digest(s.getBytes(StandardCharsets.UTF_8));
+             StringBuilder sb = new StringBuilder();
+-            for (byte v : b) sb.append(String.format("%02x", v));
++            for (byte v : b) sb.append(String.format(Locale.ROOT, "%02x", v));
+             return sb.toString();
+         } catch (Exception e) {
+             return Integer.toHexString(s.hashCode());
+diff -ruN /mnt/data/src111_merge15_work/_patch_original/main/resources/application.properties /mnt/data/src111_merge15_work/_patch_modified/main/resources/application.properties
+--- /mnt/data/src111_merge15_work/_patch_original/main/resources/application.properties	2025-12-30 12:34:06.617417553 +0000
++++ /mnt/data/src111_merge15_work/_patch_modified/main/resources/application.properties	2025-12-30 12:51:42.179772828 +0000
+@@ -862,3 +862,12 @@
+ lms.debug.search.trace.steps.maxRows=20
+ lms.debug.search.trace.steps.maxRows.boost=40
+ lms.debug.search.trace.steps.maxRows.boost.detail=80
++
++
++# --- Vector admin (token-auth) ---
++# Set a strong random token in production.
++vector.admin.token=
++
++# Persisted mapping for logical->active sid rotation.
++# Default is ./data/vector-sid-state.json
++#vector.sid.state-path=./data/vector-sid-state.json

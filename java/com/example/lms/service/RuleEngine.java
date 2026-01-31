@@ -6,6 +6,8 @@ import com.example.lms.repository.RuleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+
+
 /** 전/후처리 룰 엔진 */
 @Component
 @RequiredArgsConstructor

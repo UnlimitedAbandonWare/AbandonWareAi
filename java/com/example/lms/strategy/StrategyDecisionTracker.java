@@ -3,9 +3,11 @@ package com.example.lms.strategy;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.stereotype.Component;
-
 import java.time.Duration;
 import java.util.Optional;
+
+
+
 
 /**
  * 각 세션(sessionKey)별로 마지막으로 어떤 검색 전략이 선택되었는지 추적합니다.

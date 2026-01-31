@@ -1,0 +1,51 @@
+# extracted duplicate config blocks (auto-generated)
+
+onnx:
+  enabled: true
+
+onnx:
+  enabled: true
+
+retrieval:
+  vector:
+    enabled: true
+
+retrieval:
+  vector:
+    enabled: true
+
+probe:
+  search:
+    enabled: true
+
+
+# -- injected defaults (merge carefully) --
+
+probe:
+  search:
+    enabled: true
+
+probe:
+  search:
+    enabled: true
+
+zsys:
+  onnx:
+    max-concurrency: 2
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: dummy
+  chat-model: gemma3:27b
+
+  provider: local
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+fallback:
+  enabled: false

@@ -5,6 +5,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
+
+
 @Entity
 @Table(name = "rules") // 'rule'은 DB 예약어일 수 있으므로 'rules' 사용을 권장
 @Getter

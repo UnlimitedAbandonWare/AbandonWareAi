@@ -2,6 +2,8 @@ package com.example.lms.dto.learning;
 
 import java.util.Objects;
 
+
+
 /**
  * Represents an alias for an entity. Useful for normalising different names
  * referring to the same entity.

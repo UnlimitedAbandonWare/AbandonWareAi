@@ -5,6 +5,8 @@ import com.example.lms.entity.CorrectedSample;
 import org.springframework.data.jpa.repository.*;
 import java.util.List;
 
+
+
 public interface CorrectedSampleRepository
         extends JpaRepository<CorrectedSample, Long> {
 

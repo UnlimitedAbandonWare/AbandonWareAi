@@ -6,9 +6,11 @@ import com.example.lms.domain.Exam;
 import com.example.lms.domain.QuestionType;
 import jakarta.persistence.*;
 import lombok.*;
-
 import java.util.ArrayList;
 import java.util.List;
+
+
+
 
 /**
  * 시험(Exam)에 속한 문항(Question) 엔티티

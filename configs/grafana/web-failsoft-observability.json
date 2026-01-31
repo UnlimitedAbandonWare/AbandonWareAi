@@ -1,0 +1,360 @@
+{
+  "title": "Web FailSoft Observability",
+  "schemaVersion": 38,
+  "version": 2,
+  "editable": true,
+  "tags": [
+    "web",
+    "failsoft",
+    "orchestrator"
+  ],
+  "timezone": "browser",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Runs/min (5m)",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nova_orch_web_failsoft_run_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])) * 60",
+          "legendFormat": "runs/min"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Out=0/min (5m)",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nova_orch_web_failsoft_out_zero_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])) * 60",
+          "legendFormat": "out0/min"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Fallback/min (5m)",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nova_orch_web_failsoft_starvation_fallback_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])) * 60",
+          "legendFormat": "fallback/min"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Fallback rate % (5m)",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nova_orch_web_failsoft_starvation_fallback_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])) / sum(rate(nova_orch_web_failsoft_run_total[5m]))",
+          "legendFormat": "fallback_rate"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Runs / Out=0 / Fallback (per min)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nova_orch_web_failsoft_run_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])) * 60",
+          "legendFormat": "runs/min"
+        },
+        {
+          "expr": "sum(rate(nova_orch_web_failsoft_out_zero_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])) * 60",
+          "legendFormat": "out0/min"
+        },
+        {
+          "expr": "sum(rate(nova_orch_web_failsoft_starvation_fallback_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])) * 60",
+          "legendFormat": "fallback/min"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Selected stage mix (per min)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage) (rate(nova_orch_web_failsoft_stage_selected_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\", stage=~\"$stage\"}[5m])) * 60",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Top candidate drop reasons (rate)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (reason) (rate(nova_orch_web_failsoft_candidate_drop_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\", stage=~\"$stage\"}[5m])))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Starvation fallback skipped (rate)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (reason) (rate(nova_orch_web_failsoft_starvation_fallback_skipped_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\"}[5m])))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Avg candidate score (by stage, selected)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage, selected) (rate(nova_orch_web_failsoft_candidate_score_sum{intent=~\"$intent\", officialOnly=~\"$officialOnly\", stage=~\"$stage\", selected=~\"$selected\"}[5m])) / sum by (stage, selected) (rate(nova_orch_web_failsoft_candidate_score_count{intent=~\"$intent\", officialOnly=~\"$officialOnly\", stage=~\"$stage\", selected=~\"$selected\"}[5m]))",
+          "legendFormat": "{{stage}} selected={{selected}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Max candidate score (by stage, selected)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "targets": [
+        {
+          "expr": "max_over_time(nova_orch_web_failsoft_candidate_score_max{intent=~\"$intent\", officialOnly=~\"$officialOnly\", stage=~\"$stage\", selected=~\"$selected\"}[5m])",
+          "legendFormat": "{{stage}} selected={{selected}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Candidate score samples / min (by stage, selected)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage, selected) (rate(nova_orch_web_failsoft_candidate_score_count{intent=~\"$intent\", officialOnly=~\"$officialOnly\", stage=~\"$stage\", selected=~\"$selected\"}[5m]))*60",
+          "legendFormat": "{{stage}} selected={{selected}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Candidate drops / min (by stage, reason)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage, reason) (rate(nova_orch_web_failsoft_candidate_drop_total{intent=~\"$intent\", officialOnly=~\"$officialOnly\", stage=~\"$stage\"}[5m]))*60",
+          "legendFormat": "{{stage}} {{reason}}"
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "intent",
+        "type": "query",
+        "query": "label_values(nova_orch_web_failsoft_run_total, intent)",
+        "datasource": null,
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*"
+      },
+      {
+        "name": "officialOnly",
+        "type": "query",
+        "query": "label_values(nova_orch_web_failsoft_run_total, officialOnly)",
+        "datasource": null,
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*"
+      },
+      {
+        "name": "stage",
+        "type": "query",
+        "query": "label_values(nova_orch_web_failsoft_candidate_score_count, stage)",
+        "datasource": null,
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*"
+      },
+      {
+        "name": "selected",
+        "type": "query",
+        "query": "label_values(nova_orch_web_failsoft_candidate_score_count, selected)",
+        "datasource": null,
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*"
+      }
+    ]
+  }
+}

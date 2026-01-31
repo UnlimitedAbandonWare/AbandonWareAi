@@ -1,0 +1,14 @@
+# Copy values to application.yml or set via environment variables
+onnx:
+  enabled: true
+zsys:
+  onnx:
+    max-concurrency: 2
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0

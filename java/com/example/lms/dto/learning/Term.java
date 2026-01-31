@@ -2,6 +2,8 @@ package com.example.lms.dto.learning;
 
 import java.util.Objects;
 
+
+
 /**
  * Represents a protected term that should not be altered or removed during
  * subsequent processing. Each term belongs to a particular domain.

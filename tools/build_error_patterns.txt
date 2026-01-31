@@ -1,0 +1,53 @@
+# Common Java/Gradle compile errors (regex)
+cannot find symbol
+error: incompatible types
+inference variable [A-Z]\w* has incompatible bounds
+incompatible types:\s+String cannot be converted to TextSegment
+package .* does not exist
+symbol:\s+class\s+.*
+symbol:\s+method\s+.*
+symbol:\s+method\s+search\(String\)
+# LMS websearch method rename
+method\s+searchSnippets\(String,int\)
+method\s+getKeyword\(\)
+class file for .* not found
+symbol:\s+class\s+TimeoutException
+# Lombok issues
+lombok.* not found
+# placeholder token to block
+\STUFF3_DISABLED\}
+DuplicateKeyException
+found duplicate key
+The dependencies of some of the beans in the application context form a cycle
+Requested bean is currently in creation: Is there an unresolvable circular reference
+
+# Javac lambda capture of non-final local variable
+local variables referenced from a lambda expression must be final or effectively final
+
+# Java parser errors for malformed switch/case
+orphaned case
+case, default, or '}' expected
+illegal escape character
+# Auto-added parser error patterns (javac parser errors from aggregated logs)
+illegal start of type
+invalid method declaration; return type required
+class, interface, enum, or record expected
+
+
+# ---- AUTO: stuff3_missing_helpers ----
+# Pattern: Gradle Java compile error for missing DomainWhitelist / HybridRetriever helper methods.
+# Trigger when build log contains all of:
+#   - "HybridRetriever.java"
+#   - "DomainWhitelist.java"
+#   - "error: cannot find symbol"
+#   - one of: "extractUrl(String)", "extractHost(String)", "isCommunity(String)", "isBanned(String)"
+# Suggested fix: implement extractUrl in HybridRetriever and helper methods (extractHost, isOfficial(host), isCommunity, isBanned) in DomainWhitelist.
+
+# ---- AUTO: stuff3_unified_rag_orchestrator_lc4j_shim ----
+# Pattern: Gradle Java compile error for UnifiedRagOrchestrator using legacy LangChain4j Query/metadata APIs.
+# Trigger when build log contains all of:
+#   - "UnifiedRagOrchestrator.java"
+#   - "error: cannot find symbol"
+#   - "Query.from(req.query)"
+#   - "Map<ContentMetadata,Object> cannot be converted to Metadata"
+# Suggested fix: update UnifiedRagOrchestrator to call `new Query(req.query)`, treat `Content.metadata()` as a Map, and add an slf4j `log` field.

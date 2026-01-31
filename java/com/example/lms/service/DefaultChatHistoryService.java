@@ -2,28 +2,28 @@
 package com.example.lms.service;
 
 import com.example.lms.domain.ChatSession;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
-
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
 
-@Slf4j
 @Service
-@Profile("stub")
+@Profile("shim")
 public class DefaultChatHistoryService implements ChatHistoryService {
+    private static final Logger log = LoggerFactory.getLogger(DefaultChatHistoryService.class);
 
     @Override
-    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail) {
-        log.debug("[ChatHistory] startNewSession user={} (stub)", userEmail);
+    public Optional<ChatSession> startNewSession(String firstMessage, String userEmail, String clientIp) {
+        log.debug("[ChatHistory] startNewSession user={} (shim)", userEmail);
         return Optional.empty();
     }
 
     @Override
     public void addMessagesToSession(ChatSession session, String userMessage, String assistantMessage) {
-        log.debug("[ChatHistory] addMessagesToSession id={} (stub)",
+        log.debug("[ChatHistory] addMessagesToSession id={} (shim)",
                 session != null ? session.getId() : null);
     }
 
@@ -36,6 +36,18 @@ public class DefaultChatHistoryService implements ChatHistoryService {
         }
         log.debug("[ChatHistory] append sid={}, role={}, len={}",
                 sessionId, role, content != null ? content.length() : 0);
+    }
+
+    @Override
+    public Long appendMessageReturningId(Long sessionId, String role, String content) {
+        appendMessage(sessionId, role, content);
+        return null;
+    }
+
+    @Override
+    public void updateSessionAnswerModeAndTrace(Long sessionId, String answerMode, Long traceTurnId) {
+        log.debug("[ChatHistory] updateSessionAnswerModeAndTrace sid={}, mode={}, traceTurnId={} (shim)",
+                sessionId, answerMode, traceTurnId);
     }
 
     @Override
@@ -56,18 +68,19 @@ public class DefaultChatHistoryService implements ChatHistoryService {
 
     @Override
     public ChatSession getSessionWithMessages(Long id) {
-        log.debug("[ChatHistory] getSessionWithMessages sid={} (stub)", id);
+        log.debug("[ChatHistory] getSessionWithMessages sid={} (shim)", id);
         return null;
     }
 
     @Override
     public void deleteSession(Long id) {
-        log.debug("[ChatHistory] delete sid={} (stub)", id);
+        log.debug("[ChatHistory] delete sid={} (shim)", id);
     }
 
     @Override
     public List<String> getFormattedRecentHistory(Long sessionId, int limit) {
-        if (sessionId == null || limit <= 0) return Collections.emptyList();
+        if (sessionId == null || limit <= 0)
+            return Collections.emptyList();
         log.debug("[ChatHistory] sid={}, limit={} -> empty", sessionId, limit);
         return Collections.emptyList();
     }
@@ -75,7 +88,20 @@ public class DefaultChatHistoryService implements ChatHistoryService {
     // ★ 새 인터페이스 메서드 구현
     @Override
     public Optional<String> getLastAssistantMessage(Long sessionId) {
-        log.debug("[ChatHistory] getLastAssistantMessage sid={} -> empty (stub)", sessionId);
+        log.debug("[ChatHistory] getLastAssistantMessage sid={} -> empty (shim)", sessionId);
+        return Optional.empty();
+    }
+
+    // ★ 5-파라미터 startNewSession 구현 (shim)
+    @Override
+    public Optional<ChatSession> startNewSession(
+            String firstMessage,
+            String username,
+            String clientIp,
+            String preResolvedOwnerKey,
+            com.example.lms.domain.enums.MemoryProfile memoryProfile) {
+        log.debug("[ChatHistory] startNewSession (5-param) user={}, ownerKey={}, profile={} (shim)",
+                username, preResolvedOwnerKey, memoryProfile);
         return Optional.empty();
     }
 }

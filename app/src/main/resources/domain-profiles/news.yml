@@ -1,0 +1,17 @@
+allow:
+  - "go.kr"
+  - "sciencedirect.com"
+  - "nature.com"
+  - "reuters.com"
+  - "apnews.com"
+  - "bbc.com"
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true
