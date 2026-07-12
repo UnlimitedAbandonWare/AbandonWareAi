@@ -21,6 +21,7 @@ The user permits one bounded Ollama restart as a verification action. That permi
 - `var/codex-smoke`: 4,181 files and 360,337,872 bytes; the tree is untracked
 - `sourceHealthScorecard` currently declares the whole `var/codex-smoke` JSON/NDJSON/text tree as a Gradle input
 - `goal_next_auto.ps1` currently invokes completion audit at preflight, packet, and final stages
+- Existing run evidence shows the stages are not interchangeable: preflight can lack command/collection packets, packet audit can still see an incomplete source-health contract, and final audit is the stage that proves both contracts together
 - Ollama `0.31.2` listens on port 11434; the existing chatbot listens on port 18166
 
 These values are an intake snapshot, not permanent constants. Implementation must remeasure them immediately before mutation.
@@ -31,7 +32,7 @@ These values are an intake snapshot, not permanent constants. Implementation mus
 
 1. Make source-health artifact selection canonical-first and bounded.
 2. Replace the recursive Gradle artifact input tree with exact canonical inputs.
-3. Remove the redundant packet-stage completion audit while preserving preflight and final safety decisions.
+3. Skip the redundant preflight completion audit on a safe warm path while preserving the packet and final convergence checks.
 4. Move obsolete generated smoke artifacts out of the active tree through a reversible quarantine operation.
 5. Restart Ollama at most once when a pre-restart generation probe reproduces the runner failure.
 6. Verify the current source on an isolated application port and perform a browser chat probe.
@@ -58,14 +59,18 @@ These values are an intake snapshot, not permanent constants. Implementation mus
 
 It will no longer register a recursive `fileTree` over JSON, NDJSON, and text artifacts. This changes Gradle invalidation and enumeration cost, not the evidence schema.
 
-### 2. Two-stage completion audit
+### 2. Conditional bootstrap and two-audit warm path
 
-`scripts/goal_next_auto.ps1` will retain:
+`scripts/goal_next_auto.ps1` will always retain:
 
-- preflight audit, which supplies source-health input and early secret evidence;
-- final audit, which owns the final canonical copy and completion decision.
+- packet audit, which runs after command and collection packets exist and refreshes the canonical completion-audit input for final source-health generation;
+- final audit, which runs after final source-health generation, owns the final canonical copy, and proves the converged contracts.
 
-The packet-stage audit invocation, packet result, and packet log will be removed. Packet assembly will reuse already computed evidence and will not fabricate a successful audit. Exit code 4 and accumulated secret hits remain `secret-leak-risk`; a nonzero final audit remains `evidence_needed` unless a stronger existing failure applies.
+Before the initial source-health run, the wrapper will inspect the canonical completion audit. The warm path may reuse it and skip preflight only when it parses as an object, has current `generatedAt` evidence within the existing maximum age, and its redacted secret-hit counters are zero. The warm path therefore executes packet and final audits: two audit runs.
+
+If the canonical file is missing, malformed, stale, future-dated, or unsafe, the cold path runs the existing preflight audit before continuing. The cold path retains preflight, packet, and final audits: three audit runs. This fallback preserves first-run convergence and fails closed instead of claiming a cost saving without reusable bootstrap evidence.
+
+Exit code 4 or secret hits from every audit that executes remain `secret-leak-risk`. A nonzero final audit remains `evidence_needed` unless a stronger existing failure applies. Skipping preflight must be explicit in the summary with a bounded reason code; it must not be represented as a successful executed audit.
 
 No public completion-audit schema field will be renamed or removed.
 
@@ -115,7 +120,7 @@ Implementation follows RED, GREEN, then broader proof:
 
 1. Add tests showing canonical completion audit wins over newer legacy files, fallback occurs only for absent/unparseable canonical input, and a valid stale canonical input remains stale.
 2. Add a static Gradle contract test that rejects recursive `var/codex-smoke` task inputs and requires both exact canonical files.
-3. Change goal-next tests to require two completion-audit invocations, no packet audit artifacts, final canonical ownership, and preserved exit-code-4 handling.
+3. Change goal-next tests to require two audit invocations and no preflight artifacts on the eligible warm path; three invocations and retained preflight artifacts on missing, malformed, stale, future-dated, or unsafe canonical input; packet and final artifacts on both paths; final canonical ownership; and preserved exit-code-4 handling.
 4. Run the focused Python and PowerShell tests.
 5. Run `sourceHealthScorecard`, source-set hygiene, and LangChain4j purity with isolated Desktop caches.
 6. Compare pre/post active-tree file count, byte count, Gradle input count, and completion-audit invocation count.
@@ -125,7 +130,7 @@ Implementation follows RED, GREEN, then broader proof:
 
 ## Acceptance criteria
 
-- Default goal-next completion-audit invocations decrease from three to two.
+- Eligible warm-path goal-next completion-audit invocations decrease from three to two; cold-path runs remain three and expose the fallback reason.
 - `sourceHealthScorecard` no longer declares the recursive smoke tree as a Gradle input.
 - Canonical evidence selection is deterministic and preserves stale/malformed classification.
 - The active smoke tree has fewer files and bytes, while every held or moved item is accounted for in a redacted manifest.
