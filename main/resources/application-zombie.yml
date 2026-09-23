@@ -1,0 +1,10 @@
+nova:
+  zombie:
+    enabled: false
+    detection-window-ms: 30000
+    blocked-thread-threshold: 4
+    spawn-rate-threshold: 8
+    max-containment-pool-size: 4
+    clean-pool-keep-alive-sec: 60
+    drain-timeout-ms: 3000
+    trace-key-prefix: "zombie"

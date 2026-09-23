@@ -1,0 +1,33 @@
+# MERGE_HOOK:PROJ_AGENT::document_evidence_rag_fusion
+# Upload-document focused RAG route. This plan never changes provider/model policy.
+
+plan:
+  id: document_evidence.v1
+  description: "Use uploaded document evidence as first-class local context, then apply existing vector/rerank gates."
+  overrides:
+    properties:
+      gate.citation.min: 3
+      onnx.enabled: true
+      overdrive.enabled: true
+      retrieval.vector.enabled: true
+    knobs:
+      expand.selfAsk.count: 3
+      rerank.ce.topK: 24
+      rerank.topK: 8
+
+retrieval:
+  order: [VECTOR, WEB, KG]
+  topk:
+    web: 8
+    vector: 12
+    kg: 3
+
+guards:
+  min_citations: 3
+  whitelist_profile: "trusted+docs"
+
+params:
+  allowRag: true
+  retrieval:
+    vector:
+      enabled: true

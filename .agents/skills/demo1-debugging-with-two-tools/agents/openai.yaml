@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Two-Tool Debugging"
+  short_description: "Debug one failure with two tools"
+  default_prompt: "Use $demo1-debugging-with-two-tools to isolate one demo-1 failure and run one bounded patch cycle."

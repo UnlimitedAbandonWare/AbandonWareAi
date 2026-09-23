@@ -1,0 +1,7 @@
+[mcp_servers.awx-control-tower]
+command = "python"
+args = [
+    "-B",
+    "scripts/awx_mcp_stdio_server.py",
+]
+enabled = true

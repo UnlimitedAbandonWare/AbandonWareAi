@@ -1,0 +1,4 @@
+interface:
+  display_name: "Display · sync 클라이언트"
+  short_description: "기존 채팅 API에 답변 카드와 입력 제어를 연결하는 구현 스킬"
+  default_prompt: "Use $demo1-meta-display-sync-client for the current authorized E1/E2 client change, reusing the actual sync contract and existing source-owner gate through focused verification."

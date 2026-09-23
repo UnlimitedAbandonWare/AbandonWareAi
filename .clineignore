@@ -1,0 +1,24 @@
+# Cline file-access blocklist — secrets only (mirrors .ignore/.rgignore).
+# Do not add build outputs here; evidence needed for verification must stay readable.
+.secrets/
+config/secrets/
+.env
+.env.*
+shared.env
+shared.env.*
+apikey.txt
+data/device-resources/*
+
+# Meta Display DB export snapshots are shared read-only evidence for agents
+!var/meta-display-db/export/
+
+# Chat session debug traces/exports are shared read-only evidence for agents
+!var/debug/chat-session-traces/
+
+# --- vibe-max-agency read exceptions (AGENTS.md DEMO1-VIBE-MAX-AGENCY) ---
+!data/device-resources/events/
+!data/device-resources/registry/
+!var/debug/
+!var/debug/**
+!var/dev-admin-token.txt
+var/meta-display-db/*.db

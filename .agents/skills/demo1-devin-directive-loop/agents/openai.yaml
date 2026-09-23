@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Devin Directive Loop"
+  short_description: "데빈 지시서 작성·보고 검토를 델타 전용으로"
+  default_prompt: "Use $demo1-devin-directive-loop: classify DRAFT/REVIEW/CLOSE, keep follow-ups delta-only, map claims to evidence tiers, and close with durable status-doc + marker updates."

@@ -1,0 +1,884 @@
+﻿# AWX model-defaults remapped 2026-09-17: legacy ollama names -> installed (3090 chat/judge/coder, 3060 fast/vision).
+# [PATCH] Port 443 baseline moved to SERVER_PORT / SERVER_SSL_* env inputs.
+spring:
+  profiles:
+    default: ${SPRING_PROFILES_DEFAULT:local}
+  config:
+    import: ${APP_CONFIG_IMPORT:optional:application-proj-override.yml,optional:openai-model-param-matrix.yaml,optional:orchestration-stage-policy.yml,optional:classpath:application-llm.yaml,optional:classpath:application-deepgram-local.yml}
+
+deepgram:
+  api-key: ${DEEPGRAM_API_KEY:}
+  api-key-secondary: ${DEEPGRAM_API_KEY_SECONDARY:}
+
+server:
+  port: ${SERVER_PORT:8080}
+  https-port: ${SERVER_HTTPS_PORT:443}
+  http-port: ${SERVER_HTTP_PORT:80}
+  forward-headers-strategy: ${SERVER_FORWARD_HEADERS_STRATEGY:framework}
+  ssl:
+    enabled: ${SERVER_SSL_ENABLED:false}
+    key-store: ${SERVER_SSL_KEY_STORE:}
+    key-store-password: ${SERVER_SSL_KEY_STORE_PASSWORD:}
+    key-store-type: ${SERVER_SSL_KEY_STORE_TYPE:PKCS12}
+    key-password: ${SERVER_SSL_KEY_PASSWORD:}
+
+public:
+  request-budget:
+    max-time-budget-ms: ${PUBLIC_REQUEST_MAX_TIME_BUDGET_MS:120000}
+    body-read:
+      workers: ${PUBLIC_REQUEST_BODY_READ_WORKERS:4}
+      queue-capacity: ${PUBLIC_REQUEST_BODY_READ_QUEUE_CAPACITY:32}
+
+hybrid:
+  relatedness-filter:
+    fail-soft: ${HYBRID_RELATEDNESS_FILTER_FAIL_SOFT:false}
+
+app:
+  public-base-url: ${APP_PUBLIC_BASE_URL:https://abandonwareai.kro.kr}
+
+sse:
+  replay-limit: ${SSE_REPLAY_LIMIT:200}
+
+prompt:
+  context:
+    refiner:
+      enabled: ${PROMPT_CONTEXT_REFINER_ENABLED:false}
+
+artplate:
+  sse:
+    enabled: ${ARTPLATE_SSE_ENABLED:false}
+    stagnation-threshold: ${ARTPLATE_SSE_STAGNATION:4}
+    noise-scale: ${ARTPLATE_SSE_NOISE:0.25}
+    high-reward-threshold: ${ARTPLATE_SSE_HIGH_REWARD:0.05}
+    low-penalty-threshold: ${ARTPLATE_SSE_LOW_PENALTY:-0.04}
+    learning-rate: ${ARTPLATE_SSE_LR:0.08}
+    lr-boost-factor: ${ARTPLATE_SSE_LR_BOOST:1.5}
+    lr-decay-factor: ${ARTPLATE_SSE_LR_DECAY:0.5}
+    max-reset-count: ${ARTPLATE_SSE_MAX_RESET:2}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  health:
+    neo4j:
+      enabled: ${MANAGEMENT_HEALTH_NEO4J_ENABLED:false}
+  endpoint:
+    health:
+      show-details: never
+    env:
+      show-values: NEVER
+    httptrace:
+      enabled: false
+
+runtime:
+  config:
+    guard:
+      enabled: ${RUNTIME_CONFIG_GUARD_ENABLED:true}
+
+domain:
+  allowlist:
+    admin-token: ${DOMAIN_ALLOWLIST_ADMIN_TOKEN:}
+    "admin-token.required": ${DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED:false}
+    "admin-token.allow-query": ${DOMAIN_ALLOWLIST_ADMIN_TOKEN_ALLOW_QUERY:false}
+
+security:
+  force-https: ${SECURITY_FORCE_HTTPS:${SERVER_SSL_ENABLED:false}}
+  admin-secret: ${SECURITY_ADMIN_SECRET:}
+  remember-me-key: ${SECURITY_REMEMBER_ME_KEY:}
+  bootstrap-admin:
+    password: ${LMS_ADMIN_BOOTSTRAP_PASSWORD:}
+
+# MERGE_HOOK:PROJ_AGENT::ORCH_STAGE_POLICY_IMPORT
+retrieval:
+  vector:
+    enabled: true
+  implicit-consistency:
+    persist-enabled: ${RETRIEVAL_IMPLICIT_CONSISTENCY_PERSIST_ENABLED:false}
+  kg:
+    neo4j:
+      enabled: ${RETRIEVAL_KG_NEO4J_ENABLED:false}
+      uri: ${RETRIEVAL_KG_NEO4J_URI:${NEO4J_URI:}}
+      user: ${RETRIEVAL_KG_NEO4J_USER:${NEO4J_USER:}}
+      password: ${RETRIEVAL_KG_NEO4J_PASSWORD:${NEO4J_PASSWORD:}}
+      database: ${RETRIEVAL_KG_NEO4J_DATABASE:${NEO4J_DATABASE:neo4j}}
+      timeout-ms: ${RETRIEVAL_KG_NEO4J_TIMEOUT_MS:${NEO4J_TIMEOUT_MS:1200}}
+  fusion:
+    kg-tail:
+      enabled: true
+kg:
+  anchor-map:
+    enabled: ${KG_ANCHOR_MAP_ENABLED:false}
+    top-k: ${KG_ANCHOR_MAP_TOP_K:5}
+graphdb:
+  manual-learning:
+    enabled: ${GRAPHDB_MANUAL_LEARNING_ENABLED:false}
+    dry-run-default: ${GRAPHDB_MANUAL_LEARNING_DRY_RUN_DEFAULT:true}
+    vector-enabled: ${GRAPHDB_MANUAL_LEARNING_VECTOR_ENABLED:true}
+    neo4j-enabled: ${GRAPHDB_MANUAL_LEARNING_NEO4J_ENABLED:true}
+    brain-state-mirror-enabled: ${GRAPHDB_MANUAL_LEARNING_BRAIN_STATE_MIRROR_ENABLED:false}
+    max-text-chars: ${GRAPHDB_MANUAL_LEARNING_MAX_TEXT_CHARS:50000}
+otel:
+  mla:
+    bridge:
+      enabled: false
+vector:
+  fingerprint:
+    allow-legacy: false
+    bypass-if-metadata-missing: false
+  poison-guard:
+    enabled: true
+    # Block log-like texts (TRACE/DEBUG/stack traces) at ingest.
+    block-log-like: true
+    # Sanitize orchestration trace dumps at ingest (keeps a small tail window).
+    sanitize-trace-dump: true
+    # Upper bounds to reduce cost / risk in embedding
+    max-text-chars: 6000
+    max-lines: 180
+    # If logline matches ratio exceeds this threshold, treat as poisoned
+    logline-ratio-threshold: 0.25
+    min-logline-matches: 4
+    # Allow legacy segments missing doc_type (still guarded by log-like rules)
+    allow-legacy-no-doc-type: false
+adapter:
+  acme-websearch:
+    enabled: ${ADAPTER_ACME_WEBSEARCH_ENABLED:false}
+naver:
+  keys: "${NAVER_KEYS:}"
+  client-id: "${NAVER_CLIENT_ID:}"
+  client-secret: "${NAVER_CLIENT_SECRET:}"
+  filters:
+    enable-domain-filter: false
+    enable-keyword-filter: true
+    keyword-min-hits: 2
+    domain-policy: boost
+  search:
+    timeout-ms: 5500
+    retry:
+      max-attempts: 1
+      initial-backoff-ms: 200
+      max-backoff-ms: 800
+      jitter: 0.2
+    # Query-transform LLM timeout guard; failures must fall back to the raw query.
+    # Keep this below the request budget so search/vector fallback still has time.
+    query-transform-timeout-ms: 3500
+    web-top-k: 10
+    cache:
+      enabled: true
+      ttl-seconds: 3600
+  patch-query:
+    official-domains:
+    - hoyoverse.com
+    - hoyolab.com
+    - playlostark.com
+    - playoverwatch.com
+    - playvalorant.com
+    - leagueoflegends.com
+    - samsung.com
+    - news.samsung.com
+    - apple.com
+    - support.apple.com
+    community-domains:
+    - inven.co.kr
+    - namu.wiki
+    - arca.live
+upstash:
+  cache:
+    ttl-seconds: 3600
+onnx:
+  enabled: ${ONNX_ENABLED:false}
+ocr:
+  enabled: ${OCR_ENABLED:false}
+  timeout-ms: ${OCR_TIMEOUT_MS:900}
+  min-confidence: ${OCR_MIN_CONFIDENCE:0.65}
+  language: ${OCR_LANGUAGE:eng+kor}
+  datapath: ${OCR_DATAPATH:${TESSDATA_PREFIX:}}
+zsys:
+  onnx:
+    enabled: ${ONNX_ENABLED:false}
+    max-concurrency: ${ZSYS_ONNX_MAX_CONCURRENCY:1}
+search:
+  executor:
+    io:
+      core-size: 4
+      max-size: 64
+      queue-capacity: 256
+      keep-alive-seconds: 60
+
+probe:
+  search:
+    enabled: ${PROBE_SEARCH_ENABLED:false}
+  soak:
+    enabled: ${PROBE_SOAK_ENABLED:false}
+gate:
+  citation:
+    enabled: true
+    min: ${GATE_CITATION_MIN:2}
+  finalSigmoid:
+    enabled: true
+    k: 8.0
+    x0: 0.0
+    threshold: ${GATE_FINAL_SIGMOID_THRESHOLD:0.70}
+  contextDiversity:
+    min: ${GATE_CONTEXT_DIVERSITY_MIN:0.20}
+plugin:
+  image:
+    enabled: false
+guard:
+  model:
+    ensure-config: true
+routing:
+  tokens:
+    light_max: 1600
+    mistral_max: 2400
+  citation:
+    force_heavy: true
+  code:
+    light_max: 1200
+llm:
+  provider: ${LLM_PROVIDER:local}
+  base-url: ${LLM_BASE_URL:http://localhost:11434/v1}
+  chat-model: ${LLM_CHAT_MODEL:gemma4:26b}
+  api-key: ${LLM_API_KEY:ollama}
+  provider-guard:
+    fail-fast: ${LLM_PROVIDER_GUARD_FAIL_FAST:true}
+  fast:
+    # Keep the active primary loopback unless a dedicated fast/3060 endpoint is explicit.
+    base-url: ${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}
+    model: ${LLM_FAST_MODEL:qwen3.5:9b}
+    # NOTE: Aux LLM timeouts should be classified softly so raw-query fallback remains available.
+    timeout-seconds: 6
+    max-retries: 0
+    max-tokens: 256
+
+  # ---------------------------------------------------------------------------
+  # Internal SDK/model-level retries (global defaults)
+  #
+  # Default is 0 (fail-fast) so orchestration can own the retry budget.
+  # Uncomment to override per environment.
+  # ---------------------------------------------------------------------------
+  # max-retries: 0
+  # mini:
+  #   max-retries: 0
+  # high:
+  #   max-retries: 0
+  # dynamic:
+  #   max-retries: 0
+
+# --- Nightmare Breaker operational policy ---
+nightmare:
+  breaker:
+    enabled: true
+    open-duration: 15s
+    config-open-duration: 5m
+    # Fail-soft: do not count 429/timeout as generic hard failures.
+    rate-limit-counts-as-failure: false
+    timeout-counts-as-failure: false
+
+    # RATE_LIMIT/TIMEOUT open-duration policy; Retry-After hints are capped by max duration.
+    rate-limit-open-duration: 2s
+    rate-limit-max-open-duration: 30s
+    timeout-open-duration: 5s
+    timeout-max-open-duration: 30s
+    backoff-base: 2.0
+    failure-threshold: 3
+    timeout-threshold: 2
+    rate-limit-threshold: 1
+    rejected-threshold: 1
+    interrupt-threshold: 2
+    trip-on-blank: true
+    blank-threshold: 2
+    # Slow-call breaker: trip only after repeated slow calls.
+    slow-call-threshold-ms: 2500
+    slow-call-threshold: 3
+    trip-on-silent-failure: true
+    silent-failure-threshold: 2
+    # HALF_OPEN transition policy after an OPEN window.
+    half-open-enabled: true
+    half-open-max-calls: 1
+    half-open-success-threshold: 1
+    max-context-chars: 240
+    log-stack-trace: false
+
+    # Key-specific override policies for optional/auxiliary stages.
+    key-overrides:
+      - pattern: "query-transformer:*"
+        weight: 0.5
+        open-duration: 5s
+      - pattern: "disambiguation:*"
+        weight: 0.7
+        open-duration: 5s
+
+      - pattern: "keyword-selection:*"
+        weight: 0.8
+        open-duration: 3s
+        trip-on-blank: false
+        trip-on-slow-call: false
+        trip-on-silent-failure: false
+
+      # --- websearch:* breaker presets (choose ONE active block) ---
+      # Websearch preset: short OPEN windows and separate timeout/rate-limit handling reduce merged=0 starvation.
+      - pattern: "websearch:*"  # preset: balanced (recommended default)
+        open-duration: 3s
+        failure-threshold: 6
+        timeout-threshold: 4
+        rate-limit-threshold: 2
+        rejected-threshold: 2
+        interrupt-threshold: 10
+
+      # - pattern: "websearch:*"  # preset: aggressive-recovery (OPEN short, faster recovery; may flap)
+      #   open-duration: 2s
+      #   failure-threshold: 5
+      #   timeout-threshold: 3
+      #   rate-limit-threshold: 1
+      #   rejected-threshold: 1
+      #   interrupt-threshold: 20
+
+      # - pattern: "websearch:*"  # preset: conservative (rarely OPEN; prefer cache-only; slower protection)
+      #   open-duration: 5s
+      #   failure-threshold: 8
+      #   timeout-threshold: 6
+      #   rate-limit-threshold: 3
+      #   rejected-threshold: 3
+      #   interrupt-threshold: 30
+
+fallback:
+  enabled: false
+
+selfask:
+  enabled: false
+train_idle:
+  enabled: ${TRAIN_IDLE_ENABLED:false}
+autolearn:
+  enabled: ${AUTOLEARN_ENABLED:false}
+local-llm:
+  autostart: ${LOCAL_LLM_AUTOSTART:true}
+  ollama-host: ${OLLAMA_HOST:127.0.0.1:11435}
+  health-check-url: ${LOCAL_LLM_HEALTH_CHECK_URL:http://127.0.0.1:11435/api/version}
+  health-check-timeout: 30s
+  start-command: ${LOCAL_LLM_START_COMMAND:}
+  enabled: ${LOCAL_LLM_ENABLED:true}
+  base-url: http://localhost:11434/v1
+gpt-search:
+  # Bing is not available in ops environments; keep it disabled by default.
+  bing:
+    enabled: false
+  serpapi:
+    enabled: true
+    base-url: https://serpapi.com/search.json
+    timeout-ms: 5000
+  brave:
+    enabled: true
+    base-url: https://api.search.brave.com/res/v1/web/search
+    timeout-ms: 3000
+    qps-limit: 1.0
+    monthly-quota: ${GPT_SEARCH_BRAVE_MONTHLY_QUOTA:950}
+    acquire-timeout-ms: 500
+  hybrid:
+    timeout-sec: 7
+    primary: BRAVE
+    skip-naver-if-brave-sufficient: true
+    naver-opportunistic-ms: 1200
+
+    # Stuff6: min-live-budget floor to avoid timeoutMs=0/budget_exhausted -> immediate cancel -> merged=0
+    await:
+      # Default: 600ms. This is a floor to avoid timeoutMs=0 starvation, NOT a user-visible wait target.
+      # Override via ENV (optional): GPT_SEARCH_HYBRID_AWAIT_MIN_LIVE_BUDGET_MS
+      min-live-budget-ms: ${GPT_SEARCH_HYBRID_AWAIT_MIN_LIVE_BUDGET_MS:600}
+      near-exhausted-threshold-ms: 10
+      floor-tiny-budget: true
+      cancel-suppressed-when-floor: true
+
+    remerge-on-empty:
+      enabled: true
+      initial-delay-ms: 80
+      # NOTE: remerge-on-empty is a cache-only rescue. Keep this small to avoid user-visible latency.
+      # Tune independently from await.min-live-budget-ms (which is a floor to avoid timeoutMs=0 starvation).
+      # Recommended: 250~350ms (too low makes remerge ineffective; too high is user-visible latency).
+      max-total-wait-ms: ${GPT_SEARCH_HYBRID_REMERGE_MAX_TOTAL_WAIT_MS:350}
+      max-polls: 3
+
+      # Optional: emit per-poll orch breadcrumbs (very verbose; use only when debugging).
+      debug:
+        emit-poll-events: ${GPT_SEARCH_HYBRID_REMERGE_DEBUG_EMIT_POLL_EVENTS:false}
+    official-only:
+      brave-full-join:
+        # In officialOnly mode, Brave should join up to the deadline (no soft-wait).
+        # This optional cap limits extra wait when Naver already filled topK (diversity join only).
+        max-wait-ms: 2000
+    korean:
+      hedge-delay-ms: 250
+      force-opportunistic-naver-even-if-brave-fast: true
+  soak:
+    enabled: ${GPT_SEARCH_SOAK_ENABLED:false}
+
+# Single Gemini wire-policy owner. Initial verification intentionally enables only
+# the zero-result web-search expansion purpose; all other Gemini purposes fail soft.
+gemini:
+  gateway:
+    enabled: ${GEMINI_GATEWAY_ENABLED:true}
+    base-url: ${GEMINI_GATEWAY_BASE_URL:https://generativelanguage.googleapis.com}
+    openai-compatible-base-url: ${GEMINI_GATEWAY_OPENAI_COMPATIBLE_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai}
+    timeout-ms: ${GEMINI_GATEWAY_TIMEOUT_MS:5000}
+    max-attempts: ${GEMINI_GATEWAY_MAX_ATTEMPTS:2}
+    preflight:
+      enabled: ${GEMINI_GATEWAY_PREFLIGHT_ENABLED:true}
+    circuit-breaker:
+      sliding-window-size: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_WINDOW:10}
+      minimum-calls: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_MINIMUM_CALLS:5}
+      failure-rate-threshold: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_FAILURE_RATE:50}
+      wait-open-ms: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_WAIT_OPEN_MS:30000}
+    models:
+      default: ${GEMINI_GATEWAY_DEFAULT_MODEL:gemini-2.5-flash}
+      search-expansion: ${GEMINI_GATEWAY_SEARCH_EXPANSION_MODEL:gemini-2.5-flash}
+      translation: ${GEMINI_GATEWAY_TRANSLATION_MODEL:gemini-2.5-flash}
+      understanding: ${GEMINI_GATEWAY_UNDERSTANDING_MODEL:gemini-2.5-flash}
+      keyword-training: ${GEMINI_GATEWAY_KEYWORD_TRAINING_MODEL:gemini-2.5-flash}
+      curation: ${GEMINI_GATEWAY_CURATION_MODEL:gemini-2.5-pro}
+      router: ${GEMINI_GATEWAY_ROUTER_MODEL:gemini-2.5-pro}
+      long-input: ${GEMINI_GATEWAY_LONG_INPUT_MODEL:gemini-2.5-flash}
+    purpose:
+      search-expansion:
+        enabled: ${GEMINI_GATEWAY_SEARCH_EXPANSION_ENABLED:true}
+      translation:
+        enabled: ${GEMINI_GATEWAY_TRANSLATION_ENABLED:false}
+      understanding:
+        enabled: ${GEMINI_GATEWAY_UNDERSTANDING_ENABLED:false}
+      keyword-training:
+        enabled: ${GEMINI_GATEWAY_KEYWORD_TRAINING_ENABLED:false}
+      curation:
+        enabled: ${GEMINI_GATEWAY_CURATION_ENABLED:false}
+      router:
+        enabled: ${GEMINI_GATEWAY_ROUTER_ENABLED:false}
+web:
+  trace:
+    expose: ${WEB_TRACE_EXPOSE:false}
+    raw-query-enabled: false
+    expose-snippets: false
+
+knowledge-curation:
+  enabled: ${KNOWLEDGE_CURATION_ENABLED:false}
+
+abandonware:
+  web:
+    trace:
+      expose: ${web.trace.expose:false}
+  debug:
+    ndjson-dir: ${ABNADON_DEBUG_DIR:var/abnadon/debug}
+  learning:
+    min-score: ${ABNADON_LEARNING_MIN_SCORE:0.75}
+
+image:
+  jobs:
+    manifest-dir: ${IMAGE_JOB_MANIFEST_DIR:var/abnadon/images}
+
+# Bridge legacy/other soak toggles into the Soak subsystem.
+soak:
+  enabled: ${gpt-search.soak.enabled:${probe.soak.enabled:false}}
+  # Seed queries are configured here (no hard-coded fixed sets in code).
+  seed:
+    limit: 10
+    topics:
+      # Official quick smoke test topic (Bing-free). Alias: naver-bing-fixed10 -> naver-fixed10
+      naver-fixed10:
+        - "naver search smoke query"
+        - "local employment support query"
+        - "youth job support fund"
+        - "Brave Search API 422 count parameter"
+        - "pinecone index namespace metadata filter"
+        - "RAG evidence starvation debug"
+        - "Ollama OpenAI compatible chat completions"
+        - "LangChain4j OpenAI compatible model"
+        - "Spring Boot local LLM health"
+        - "Gradle sourceSet hygiene"
+      # Alternative quick topic label for environments that prefer brave+naver naming.
+      naver-brave-fixed10:
+        - "naver search smoke query"
+        - "local employment support query"
+        - "youth job support fund"
+        - "Brave Search API 422 count parameter"
+        - "pinecone index namespace metadata filter"
+        - "RAG evidence starvation debug"
+        - "Ollama OpenAI compatible chat completions"
+        - "LangChain4j OpenAI compatible model"
+        - "Spring Boot local LLM health"
+        - "Gradle sourceSet hygiene"
+      employment:
+        - "employment support policy"
+        - "youth job training program"
+        - "career support application"
+      genshin:
+        - "genshin character official guide"
+        - "genshin event official notice"
+      default:
+        - "RAG retrieval smoke test"
+        - "local model routing smoke test"
+      all:
+        - "RAG retrieval smoke test"
+        - "local model routing smoke test"
+        - "genshin character official guide"
+        - "employment support policy"
+  export:
+    enabled: true
+    dir: ./data/soak
+    file: seed10.jsonl
+  dataset:
+    enabled: true
+    auto-accept:
+      min-evidence-rate: 0.35
+      min-success-rate: 0.60
+
+jammini:
+  rag:
+    flush:
+      enabled: true
+      min-results: 3
+      aggressive-top-k: 32
+
+memory:
+  summary:
+    max-chars: ${MEMORY_SUMMARY_MAX_CHARS:1200}
+    promote-min-turns: ${MEMORY_SUMMARY_PROMOTE_MIN_TURNS:6}
+    promote-token-threshold: ${MEMORY_SUMMARY_PROMOTE_TOKEN_THRESHOLD:900}
+    promote-sentence-threshold: ${MEMORY_SUMMARY_PROMOTE_SENTENCE_THRESHOLD:18}
+    anchor-count: ${MEMORY_SUMMARY_ANCHOR_COUNT:12}
+    important-sentences: ${MEMORY_SUMMARY_IMPORTANT_SENTENCES:6}
+    shadow-vector-enabled: ${MEMORY_SUMMARY_SHADOW_VECTOR_ENABLED:true}
+    shadow-vector-score: ${MEMORY_SUMMARY_SHADOW_VECTOR_SCORE:0.72}
+
+
+verifier:
+  coverage:
+    threshold:
+      default: 0.2
+      high-risk: 0.4
+rag:
+  anchor:
+    enabled: ${RAG_ANCHOR_ENABLED:true}
+    max-anchors: ${RAG_ANCHOR_MAX_ANCHORS:3}
+    max-drift-score: ${RAG_ANCHOR_MAX_DRIFT_SCORE:0.65}
+  ocr:
+    enabled: ${RAG_OCR_ENABLED:${OCR_ENABLED:false}}
+    required: ${RAG_OCR_REQUIRED:false}
+    top-k: ${RAG_OCR_TOP_K:6}
+    max-chars: ${RAG_OCR_MAX_CHARS:1200}
+  budget:
+    enabled: ${RAG_BUDGET_ENABLED:true}
+    max-query-burst: ${RAG_BUDGET_MAX_QUERY_BURST:6}
+    default-query-burst: ${RAG_BUDGET_DEFAULT_QUERY_BURST:3}
+    hypernova-requires-anchor-confidence: ${RAG_BUDGET_HYPERNOVA_MIN_ANCHOR_CONFIDENCE:0.70}
+  offline-texture:
+    enabled: ${RAG_OFFLINE_TEXTURE_ENABLED:true}
+    write-enabled: ${RAG_OFFLINE_TEXTURE_WRITE_ENABLED:false}
+    manifest-path: ${RAG_OFFLINE_TEXTURE_MANIFEST:data/offline-texture/offline_texture_manifest.jsonl}
+    snapshot-dir: ${RAG_OFFLINE_TEXTURE_DIR:data/offline-texture/snapshots}
+    ttl-hours: ${RAG_OFFLINE_TEXTURE_TTL_HOURS:24}
+    max-snapshots: ${RAG_OFFLINE_TEXTURE_MAX_SNAPSHOTS:500}
+    max-anchors: ${RAG_OFFLINE_TEXTURE_MAX_ANCHORS:3}
+  brain-state:
+    anchor-map:
+      enabled: ${KG_ANCHOR_MAP_ENABLED:false}
+      top-k: ${KG_ANCHOR_MAP_TOP_K:5}
+    indexing:
+      meaningful-gate-enabled: ${RAG_BRAIN_STATE_MEANINGFUL_GATE_ENABLED:true}
+      min-entities-per-chunk: ${RAG_BRAIN_STATE_MIN_ENTITIES_PER_CHUNK:1}
+      min-chunk-confidence: ${RAG_BRAIN_STATE_MIN_CHUNK_CONFIDENCE:0.50}
+  langgraph:
+    mode: ${RAG_LANGGRAPH_MODE:off}
+    max-steps: ${RAG_LANGGRAPH_MAX_STEPS:12}
+    timeout-ms: ${RAG_LANGGRAPH_TIMEOUT_MS:15000}
+    checkpoint: ${RAG_LANGGRAPH_CHECKPOINT:memory}
+    postgres:
+      host: ${RAG_LANGGRAPH_POSTGRES_HOST:localhost}
+      port: ${RAG_LANGGRAPH_POSTGRES_PORT:5432}
+      database: ${RAG_LANGGRAPH_POSTGRES_DB:lg4j_store}
+      user: ${RAG_LANGGRAPH_POSTGRES_USER:lg4j}
+      password: ${RAG_LANGGRAPH_POSTGRES_PASSWORD:}
+      create-tables: ${RAG_LANGGRAPH_POSTGRES_CREATE_TABLES:false}
+      drop-tables-first: false
+  latest-tech:
+    enabled: true
+    auto-disable-vector: true
+    skip-memory-read: true
+    allow-rumor-answer: true
+    patterns:
+      - '(?i)(fold)\s*[7-9]'
+      - '(?i)(flip)\s*[7-9]'
+      - '(?i)(iphone)\s*1[7-9]'
+      - '(?i)(galaxy\s*s)\s*2[5-9]'
+      - '(?i)rtx\s*5\d{2}'
+  rrf:
+    constant: 60
+    weight:
+      web: 1.0
+      vector: 0.8
+      bm25: 0.9
+      kg: 0.7
+    web-rich-threshold: 3
+    vector-weight-when-web-rich: 0.15
+    bm25-weight-when-web-rich: 0.15
+    web-weight-when-web-rich: 0.7
+  blackbox:
+    graph:
+      enabled: false
+      min-confidence: 0.65
+      top-k: 3
+    risk:
+      virtual-point:
+        enabled: true
+        min-similarity: 0.94
+      history-correction:
+        enabled: true
+        contamination-threshold: 0.35
+        apply-threshold: 0.65
+        require-current-signal: true
+
+irregularity:
+  error-break-threshold: 0.55
+
+# --- Nova orchestration overlay (fail-soft, togglable) ---
+nova:
+  ecosystem:
+    enabled: ${NOVA_ECOSYSTEM_ENABLED:true}
+    pool:
+      max-size: ${NOVA_ECOSYSTEM_POOL_MAX_SIZE:${NOVA_ECOSYSTEM_BUFFER_MAX_POOL_SIZE:64}}
+      ttl-ms: ${NOVA_ECOSYSTEM_POOL_TTL_MS:${NOVA_ECOSYSTEM_BUFFER_TTL_MS:300000}}
+      recirculate-max: ${NOVA_ECOSYSTEM_POOL_RECIRCULATE_MAX:${NOVA_ECOSYSTEM_BUFFER_RECIRCULATE_MAX:8}}
+      ammonia-threshold: ${NOVA_ECOSYSTEM_POOL_AMMONIA_THRESHOLD:${NOVA_ECOSYSTEM_AMMONIA_THRESHOLD:0.5}}
+      quarantine-tag: ${NOVA_ECOSYSTEM_POOL_QUARANTINE_TAG:UNVERIFIED}
+    buffer:
+      max-pool-size: ${NOVA_ECOSYSTEM_BUFFER_MAX_POOL_SIZE:64}
+      ttl-ms: ${NOVA_ECOSYSTEM_BUFFER_TTL_MS:300000}
+      recirculate-max: ${NOVA_ECOSYSTEM_BUFFER_RECIRCULATE_MAX:8}
+    ammonia:
+      threshold: ${NOVA_ECOSYSTEM_AMMONIA_THRESHOLD:0.5}
+      quarantine-tag: UNVERIFIED
+  orch:
+    enabled: true
+
+    # --- Web fail-soft (officialOnly starvation top-up ratio cap) ---
+    web-failsoft:
+      # Allow a single NOFILTER_SAFE top-up when minCitations=2 and outCount=1
+      # (0.45 => floor(2*0.45)=0, blocks any top-up)
+      official-only-starvation-fallback-max-ratio: 0.55
+    query-transformer:
+      enabled: true
+      bypass-on-strike: true
+      cheap-variants: 3
+    rag-compressor:
+      enabled: true
+      ablation-guided-enabled: true
+      ablation-pressure-threshold: 0.55
+      max-contents: 8
+      max-chars-per-content: 800
+      anchor-window-chars: 220
+      anchor-probe-enabled: true
+      probe-mode: spread
+      anchor-probe-k-schedule: [32, 16, 8, 3]
+      anchor-probe-final-min-docs: 1
+      anchor-probe-final-max-docs: 3
+      spread-probe-k-schedule: [64, 48, 32, 16, 5]
+      spread-probe-final-min-docs: 3
+      spread-probe-final-max-docs: 5
+      spread-probe-min-anchor-diversity: 0.30
+      memory-enabled: true
+      memory-max-lines: 12
+      memory-max-chars: 1400
+      memory-contamination-threshold: 0.35
+    degraded-storage:
+      enabled: true
+      path: ./data/degraded-memory.jsonl
+      ttl-seconds: 604800
+    # Debug toggles (opt-in). Turn on when you need to inspect why GuardContext flips to BYPASS
+    # or what baseUrl/modelName the auxiliary fastChatModel is actually using right before the request.
+    debug:
+      llm-trace:
+        enabled: false
+        # fast = only fastChatModel, all = include chatModel/highModel/miniModel too
+        scope: fast
+        # verbose=true logs every call at INFO; otherwise only failures/blank-model are WARN and successes are DEBUG
+        verbose: false
+      guard-trace:
+        enabled: false
+        verbose: false
+
+    # Evidence-list diagnostics injection (safe-by-default: <details> closed + redaction + clipping)
+    evidence-list:
+      trace-injection:
+        enabled: ${NOVA_EVIDENCE_LIST_TRACE_INJECTION_ENABLED:false}
+        # IMPORTANT: prepend=true places the trace marker at the beginning of the answer.
+        # With output.clean.enabled=true, that can cut the whole body and result in an empty response.
+        prepend: false
+        # Keep <details> CLOSED by default (do not auto-open)
+        details-open: false
+        # Redact secrets (sk-*, Bearer, etc.) inside the diagnostics block
+        redact: true
+        # Hard clip to reduce risk / cost in user-facing answers
+        max-lines: 60
+        max-chars: 3000
+        # Dumping selected TraceStore keys can leak internal details; keep it off by default
+        include-selected-keys: false
+    # Hybrid websearch empty-merge guard (fail-soft, cache-only, request-local rescue)
+    web:
+      failsoft:
+        hybrid-empty-fallback:
+          enabled: true
+          brave:
+            enabled: true
+          relax-official-only: true
+          # keep under the upstream hybrid timeout (gpt-search.hybrid.timeout-sec)
+          timeout-ms: 4500
+          deadline-ms: 4500
+          cache-only:
+            # probe ladder to reduce cache-key fragmentation (quotes/suffix/site:)
+            probe-max: 10
+          rescue-merge:
+            # request-local last-resort: reuse previously selected URLs when current merge is empty
+            enabled: true
+            max: 12
+
+    # Hatch: Naver plan-hint boost-only overlay (ops tuning)
+    hatch:
+      naver-planhint-boost-only:
+        enabled: true
+        apply-only-when-plan-hint-strict: true
+        location:
+          negative-keywords:
+            - "machine learning"
+            - "deep learning"
+            - "supervised learning"
+            - "unsupervised learning"
+            - "semi-supervised learning"
+            - "self-supervised learning"
+            - "self supervised learning"
+          local-intent-keywords:
+            - "near me"
+            - "nearby"
+            - "ATM"
+            - "atm"
+            - "restaurant"
+            - "cafe"
+            - "gas station"
+          # local-intent-enabled: true
+          # negative-only-affects-weak-keywords: true
+
+query-transformer:
+  llm:
+    inflight-timeout-ms: ${QUERY_TRANSFORMER_INFLIGHT_TIMEOUT_MS:4000}
+
+# Experimental: predict-tree endpoint (disabled by default)
+feature:
+  predict-tree:
+    enabled: false
+
+
+# UAW autolearn (fail-soft defaults)
+uaw:
+  thumbnail:
+    enabled: ${UAW_THUMBNAIL_ENABLED:false}
+    plan-id: ${UAW_THUMBNAIL_PLAN_ID:UAW_thumbnail.v1}
+    min-confidence: ${UAW_THUMBNAIL_MIN_CONFIDENCE:0.55}
+  autolearn:
+    enabled: ${UAW_AUTOLEARN_ENABLED:false}
+    schedule: "0 */10 * * * *"
+    max-cycles-per-tick: 3
+    min-seconds-between-ticks: 300
+    max-seconds-per-tick: 55
+    max-queue-backlog: 200
+    max-seed-sample: 120
+    min-evidence-count: ${UAW_AUTOLEARN_MIN_EVIDENCE_COUNT:3}
+    idle-trigger:
+      enabled: ${UAW_AUTOLEARN_IDLE_TRIGGER_ENABLED:false}
+      breadcrumb-enabled: ${UAW_AUTOLEARN_IDLE_BREADCRUMB_ENABLED:true}
+    memory-reinforcement:
+      enabled: ${UAW_AUTOLEARN_MEMORY_REINFORCEMENT_ENABLED:false}
+    dataset:
+      path: ${UAW_AUTOLEARN_DATASET_PATH:data/train_rag.jsonl}
+      name: ${UAW_AUTOLEARN_DATASET_NAME:uaw-train}
+    retrain:
+      raw-content-to-vector: ${UAW_AUTOLEARN_RAW_CONTENT_TO_VECTOR:false}
+      vector-projection-mode: ${UAW_AUTOLEARN_VECTOR_PROJECTION_MODE:METADATA_ONLY}
+    agent-handoff:
+      enabled: ${UAW_AUTOLEARN_AGENT_HANDOFF_ENABLED:true}
+      root-path: ${UAW_AUTOLEARN_AGENT_HANDOFF_ROOT:data/agent-handoff/codex}
+      accepted-path: ${UAW_AUTOLEARN_AGENT_HANDOFF_ACCEPTED:data/agent-handoff/codex/accepted.jsonl}
+      rejected-path: ${UAW_AUTOLEARN_AGENT_HANDOFF_REJECTED:data/agent-handoff/codex/rejected.jsonl}
+      cycle-path: ${UAW_AUTOLEARN_AGENT_HANDOFF_CYCLE:data/agent-handoff/codex/cycles.jsonl}
+      manifest-path: ${UAW_AUTOLEARN_AGENT_HANDOFF_MANIFEST:data/agent-handoff/codex/manifest.json}
+      write-full-accepted-text: ${UAW_AUTOLEARN_AGENT_HANDOFF_FULL_ACCEPTED:false}
+      rejected-preview-chars: ${UAW_AUTOLEARN_AGENT_HANDOFF_REJECTED_PREVIEW:800}
+      max-line-bytes: ${UAW_AUTOLEARN_AGENT_HANDOFF_MAX_LINE_BYTES:32768}
+    validation:
+      metrics-enabled: true
+      dynamic-threshold-enabled: true
+      window-size: 64
+      ewma-alpha: 0.20
+      auto-quarantine-enabled: true
+      contradiction-threshold: 0.60
+      contradiction-threshold-min: 0.50
+      contradiction-threshold-max: 0.75
+      target-error-rate: 0.25
+      tuning-scale: 0.20
+      tuning-delta-min: -0.04
+      tuning-delta-max: 0.08
+      max-train-error-rate: 0.35
+      spike-error-rate: 0.50
+      spike-error-rate-rise: 0.25
+      spike-contamination-score: 0.55
+      spike-contamination-rise: 0.20
+      drift-min-window: 8
+      drift-sample-score-drop: 0.20
+      drift-contamination-rise: 0.15
+      cycle-debug-enabled: true
+    dataset-filter:
+      enabled: true
+    strict:
+      # Requests whose query starts with this prefix will be forced into a stable, repeatable autolearn plan.
+      prefix: "[UAW_AUTOLEARN]"
+      search-queries: ""
+      max-sources: 4
+      model: ""
+      max-tokens: 800
+      memory-mode: "MIXED"
+      search-mode: "AUTO"
+      temperature: 0.2
+
+ensemble:
+  sampling:
+    enabled: false
+    model: ${llm.fast.model:${llm.chat-model:qwen3.5:9b}}
+    judge-model: ${llm.judge.model:${LLM_JUDGE_MODEL:qwen3.8:27b}}
+    timeout-seconds: 30
+    citation-gate:
+      min-score: 0.5
+    risk-gate:
+      max-score: 0.7
+  judge:
+    temperature: 0.3
+    top-p: 0.5
+    max-tokens: 2000
+    timeout-seconds: ${ENSEMBLE_JUDGE_TIMEOUT_SECONDS:6}
+    require-support-eligible: ${ENSEMBLE_JUDGE_REQUIRE_SUPPORT_ELIGIBLE:false}
+
+
+# ---------------------------------------------------------------------------
+# Nova web fail-soft (operators can tune in prod)
+# ---------------------------------------------------------------------------
+# nova:
+#   orch:
+#     web-failsoft:
+#       # Quality gate: in officialOnly + starvation fallback, prevent answers with only UNVERIFIED snippets.
+#       officialOnlyStarvationFallbackQualityGateEnabled: true
+#       officialOnlyStarvationFallbackQualityGateUnverifiedRatioThreshold: 0.75
+#       officialOnlyStarvationFallbackQualityGateRequireForceInsert: false
+#
+#       # If no OFFICIAL/DOCS candidate exists, allow one deterministic rescue query
+#       # (queries are generated from officialDocsRescueQueries).
+#       allowExtraSearchCalls: true
+#       maxExtraSearchCalls: 1
+#       officialDocsRescueQueries:
+#         - "{entity} official site"
+#         - "{entity} documentation"
+#         - "{canonical} official docs"
+#         - "{canonical} site:github.com {entity}"

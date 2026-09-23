@@ -1,0 +1,6 @@
+interface:
+  display_name: "PatchDrop Orchestrator"
+  short_description: "Role split and gates for Desktop/Mac mini PatchDrop safe patch handoffs"
+  default_prompt: "Use $patchdrop-safe-patch-orchestrator to choose producer/consumer role, enforce one cumulative v3 bundle, and keep Desktop final proof separate from Mac mini evidence."
+policy:
+  allow_implicit_invocation: true

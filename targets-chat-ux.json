@@ -1,0 +1,20 @@
+﻿{
+    "targets":  [
+                    {
+                        "sha256":  "f17b93d466384aa0343588c22960d237d8e028637accc05cd2240b098b864119",
+                        "path":  "main/resources/templates/chat-ui.html"
+                    },
+                    {
+                        "sha256":  "b549216d2052935cfc1925c1a4c74efa45f80b79d756990dd474e0218659a935",
+                        "path":  "main/java/com/example/lms/web/PageController.java"
+                    },
+                    {
+                        "sha256":  "9d37ddc244bf471838533d660f182ff4313b19cd11ed02098d06ce75bf2a84a3",
+                        "path":  "src/test/java/com/example/lms/web/BrainStateFrontendContractTest.java"
+                    },
+                    {
+                        "sha256":  "68089df928cdc914128a3774ecbe48b41fb736df70985ab325e3f965942565bd",
+                        "path":  "main/resources/static/css/chat-style.css"
+                    }
+                ]
+}

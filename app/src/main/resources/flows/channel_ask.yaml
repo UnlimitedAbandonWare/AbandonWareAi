@@ -1,0 +1,95 @@
+id: "channel/ask"
+version: "1.0.0"
+
+defaults:
+  objective: "Answer the user's question and, if consented, enqueue a generic message."
+  language: "ko"
+  channel: "message"
+  sessionId: "${sessionId}"
+  roomId: "${roomId}"
+  topK: 6
+  budget:
+    max_tokens: 4000
+    max_cost_usd: 0.05
+
+steps:
+  - id: plan
+    type: PLAN
+    ref: "_planner"
+    params:
+      strategy: "RAG_FIRST_TIMELY_WEB"
+      disambiguation_max: 1
+
+  - id: retrieve
+    type: TOOL
+    uses: "rag.retrieve"
+    when: ${ tools["rag.retrieve"].exists == true }
+    args:
+      topK: "${topK}"
+
+  - id: retrieve_fallback
+    type: TOOL
+    uses: "rag.retrieve.fallback"
+    when: ${ tools["rag.retrieve"].exists != true }
+
+  - id: critic_coverage
+    type: CRITIC
+    ref: "safety.critic"
+    params:
+      min_evidence: 2
+      escalate_on_gap: true
+
+  - id: synth
+    type: SYNTH
+    ref: "writer.synth"
+    params:
+      style: "channel_compact"
+      include_sources: true
+      outputs:
+        answer_key: "answer"
+        sources_key: "sources_short"
+
+  - id: trace_orchestration
+    type: TOOL
+    uses: "orchestration.trace"
+
+  - id: send_message
+    type: TOOL
+    uses: "message.send"
+    when: ${ scopes["MESSAGE_SEND"].granted == true }
+    args:
+      roomId: "${roomId}"
+      text: |-
+        {{answer}}
+        Sources: {{sources_short}}
+
+  - id: send_outbox
+    type: TOOL
+    uses: "message.send.outbox"
+    when: ${ scopes["MESSAGE_SEND"].granted != true }
+
+  - id: notify_n8n
+    type: TOOL
+    uses: "n8n.notify"
+    args:
+      enabled: true
+      webhookUrl_key: "n8n_webhook_url"
+      payload:
+        flow: "channel/ask"
+        sessionId: "${sessionId}"
+        roomId: "${roomId}"
+        answer_ref: "{{answer}}"
+        sources_ref: "{{sources_short}}"
+
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+retrieval:
+  vector:
+    enabled: true

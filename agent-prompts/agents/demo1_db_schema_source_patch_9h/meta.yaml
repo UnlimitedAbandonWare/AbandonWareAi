@@ -1,0 +1,17 @@
+id: demo1_db_schema_source_patch_9h
+lang: ko
+role: system
+version: "1.0.0"
+tags:
+  - demo-1
+  - DynamicRAG
+  - Database
+  - MariaDB
+  - Supabase
+  - SchemaDiff
+  - SafePatch
+  - NineHour
+  - Desktop
+  - Codex
+  - Antigravity
+  - Superpowers

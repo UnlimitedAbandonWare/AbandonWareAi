@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scoped Blocker Recovery"
+  short_description: "Recover owned leases and isolate overlapping work"
+  default_prompt: "Use $scoped-blocker-recovery to inspect exact operation dependencies, preserve unrelated writers, and recover only proven abandoned source leases."

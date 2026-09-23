@@ -1,0 +1,703 @@
+schemaVersion: demo1.autonomous_patch_backlog.v1
+generatedAt: "2026-06-20T16:29:20+09:00"
+sourceDirective:
+  path: "C:/Users/nninn/Downloads/9h_comprehensive_patch_directive.md"
+  mode: "desktop-safe-patch"
+  decompositionDecision:
+    mode: "direct"
+    reason: "Directive listed concrete safe-delete and S01-S08 TraceStore coverage targets; live source audit selected the smallest verifiable local gap."
+desktopRoot: "C:/AbandonWare/demo-1/demo-1/src"
+activeSourceSets:
+  backendJava: "main/java"
+  backendResources: "main/resources"
+  tests: "src/test/java"
+  appJava: "app/src/main/java_clean"
+statusLegend:
+  DONE: "Live source contains the requested behavior and the current session has command evidence."
+  EVIDENCE_NEEDED: "Patch is not safe to claim complete until external or runtime evidence is supplied."
+  MONITOR: "No code patch currently needed; keep the guard in future verification loops."
+hardGates:
+  langchain4jVersion: "dev.langchain4j:* must remain 1.0.1"
+  promptBoundary: "Final prompt assembly must stay on PromptBuilder.build(PromptContext)"
+  secretSafety: "No raw API keys, tokens, auth headers, cookies, or raw full prompts in logs/traces"
+  sourceSet: "Patch only active sourceSets proven by Gradle/source evidence"
+  patchdrop: "Mac mini and Notebook evidence is supporting only until Desktop PatchDrop review and verification"
+verificationEvidence:
+  focusedQueryTransformerTest: "gradlew test --tests com.example.lms.transform.QueryTransformerNeedleTraceTest.suppressedTraceHelperWritesRedactedTraceStoreBreadcrumb"
+  queryTransformerSweep: "gradlew test --tests *QueryTransformer*"
+  directiveSweep: "gradlew test --tests *QueryTransformer* --tests *ExtremeZ* --tests *Cfvm* --tests *NightmareBreaker* --tests *ModelGuard* --tests *ExpectedFailure* --tests *HybridWebSearch* --tests *Naver* --tests *ArtPlate*"
+  directiveNoopFocusedSweep: "gradlew test --tests AnchorTailTraceRedactionTest --tests RawMatrixBufferTest --tests OverdriveGuardTest --tests NovaNextFusionServiceTest --tests ExtremeZTriggerTest --tests HybridWebSearchProviderAwaitEventRedactionTest --tests ArtPlateEvolverScoreCardTest --tests NovaAutoConfigurationSourceContractTest --tests NaverSearchServiceRedactionContractTest"
+  staleTestClasspathRefresh: "gradlew compileJava -x test --rerun-tasks; rerun directiveNoopFocusedSweep"
+  fullTest: "gradlew test BUILD SUCCESSFUL in 2m 24s with Desktop cache isolation"
+  sourceGates: "gradlew checkLangchain4jVersionPurity checkSourceSetHygiene compileJava -x test"
+  projectMap: "gradlew projects BUILD SUCCESSFUL; root project includes :app"
+  langchain4jRuntimeClasspath: "gradlew dependencies --configuration runtimeClasspath shows dev.langchain4j modules at 1.0.1"
+  packageGates: "gradlew sourceHealthScorecard :app:classes bootJar -x test"
+  janitorProbeGuards: "__patch_drop__/janitor_tests.ps1 -Suite ProbeGuards"
+  secretScan: "count-only scan over main/java, main/resources, src/test/java"
+  bootProbe: "verify_boot.ps1 application-ready-event-proven; logs/verify_boot_after_topology_split_refresh_120s.log has webServerStartedProven=True, wiringPrecheckProven=True, runtimePrecheckProven=True, applicationReadyEventProven=True, bootStartedProven=True, bootSuccessProven=False"
+  topologyVerifier: "verify_control_plane_topology.ps1 PASS after build-surface --rerun-tasks refreshed split main classes; collector, desktop GPU node, and simulated Mac mini GPU handoff smokes passed."
+  harmonyRuntimeProof: "harmony_scan live runtime probe; traceStoreExportOk=True, agentDbSnapshotOk=True, rawSecretPatternHits=0"
+  harmonyScanCurrent: "harmony_scan source proof reports score=100.0, HB-01 DONE, catchWithoutBreadcrumbCount=0, duplicateFqcnCount=0, secretPatternHits=0."
+  harmonyPressureCatchProof: "harmony_pressure_report broadCatchWithoutLocalBreadcrumbApprox=0 after Harmony breadcrumb patch"
+  promptBoundaryContract: "OperationalQualitySourceContractTest, ChatWorkflowTraceRedactionContractTest, PromptBuilderLearningContextTest, and ReflectionBypassGuardTest passed."
+  fullTestRefresh: "scripts/verify_full_test_refresh.ps1 PASS; rerun-tasks fail-fast BUILD SUCCESSFUL in 3m 4s and normal test BUILD SUCCESSFUL in 2m 6s after split-output refresh."
+  supabaseReadonlySmokeSummary: "smoke_supabase_readonly_snapshot.ps1 writes supabase-readonly-snapshot.summary.json with decision, missing-result counts, and secret/JDBC/path counters."
+  supabaseApplyCollectedEvidence: "supabase_apply_collected_evidence.ps1 imports collected Supabase result/advisor JSON, reruns DB gap scanner, source health scorecard, and completion audit."
+  externalApplyCollectedEvidence: "external_apply_collected_evidence.ps1 imports collected Mac mini/Notebook evidence, reruns external evidence audit and completion audit, and fail-closes on secret hits."
+  webSoakProviderDisabledSmoke: "smoke_websoak_kpi_provider_disabled.ps1 PASS; status=200 providerDisabledOrSkipped=True outCount=5 starvationFallback.trigger=BELOW_MIN_CITATIONS secretPatternHits=0 rawQueryHits=0."
+  webSoakProviderDisabledAuditGate: "completion audit now requires the WebSoak provider-disabled runtime artifact and summary with status=200, providerDisabledOrSkipped=True, outCount>0, rawInputCount>0, and zero secret/raw-query hits."
+  sourceGovernanceProofChainV4: "source_governance_proof_chain_v4.ps1 PASS; blocking=0 warnings=0 activePatchCount=0 sourceLeaseActiveCount=0 activeResourceSecretHits=0."
+  patchdropJanitorInventory: "janitor_inventory.ps1 shows source-lease activeCount=0, producer pending total=0, nested producer pending=0, notebook reconciliation recorded=1; nested report-only tailscale-smb-load-shed remains supporting evidence only."
+  safeDeletePathPresence: "safe_delete_path_presence.ps1 writes awx.safe_delete_path_presence.v1 read-only JSON; completion audit requires safe-delete.path-presence and safe-delete-readonly-gate."
+  computerUseSmoke: "var/codex-smoke/computer-use-smoke.json records count-only Windows helper reachability with storesRawAppNames=false, storesWindowTitles=false, and rawSecretPatternHits=0."
+  archiveIndexProbe: "BackupsXS/index.jsonl is present under the Desktop root; archive_search path resolution is satisfied, while individual zero-result queries remain evidence_needed per query."
+  desktopControlLoopLocalReady: "desktop_control_loop reports ok=true, localReady=true, nextActions=[], and completionReady=false only because project-scoped Supabase proof is still evidence_needed."
+  browserUiSmoke: "var/codex-smoke/browser-ui-smoke.json reports ok=true, decision=ok, browserSurface=in_app_browser, storesRawUrl=false, storesScreenshotPath=false, and rawSecretPatternHits=0."
+  sourceHealthPostprocessCurrent: "source_health_scorecard reports strictEvidenceAdjustedScore=78.1425, activeRiskCount=0, and evidenceNeededCount=1 for Supabase live result-set proof."
+  harmonyDirectiveCoverageReport: "harmonyScoreReport writes verification/harmony-build-report.txt with S01-S08 directive keys including overdrive.trigger.*, overdrive.blackbox.available, cfvm.triggered, chain.steps.planned, llm.versionPurity, llm.primary.port, and strategy.conflict.overdriveDeferred."
+items:
+  - id: PATCH-01
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/transform/QueryTransformer.java"
+    claim: "Duplicate import compile guard"
+    liveEvidence: "Directive duplicate imports are absent in active QueryTransformer source."
+    verification:
+      - "compileJava -x test"
+      - "*QueryTransformer* focused tests"
+  - id: PATCH-02
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "main/java/ai/abandonware/nova/orch/aop/QueryTransformerAnchorTailAspect.java"
+    claim: "Anchor-tail early exits leave fail-soft breadcrumbs"
+    traceKeys:
+      - "queryTransformer.anchorTail.skipped"
+      - "nova.queryTransformer.anchorTail.skipped"
+    verification:
+      - "*QueryTransformer* focused tests"
+  - id: PATCH-03
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/service/rag/overdrive/OverdriveGuard.java"
+    claim: "Blackbox refresh catch records redacted TraceStore breadcrumbs"
+    traceKeys:
+      - "overdrive.blackbox.refresh.failed"
+      - "overdrive.blackbox.refresh.errorType"
+    verification:
+      - "directive focused test sweep"
+  - id: PATCH-04
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/cfvm/RawMatrixBuffer.java"
+    claim: "Boltzmann degenerate sum records breadcrumbs before returning"
+    traceKeys:
+      - "cfvm.rawBuffer.boltzmannSum.degenerate"
+      - "cfvm.rawBuffer.boltzmannSum.value"
+    verification:
+      - "*Cfvm* focused tests"
+  - id: PATCH-05
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/nova/protocol/fusion/NovaNextFusionService.java"
+    claim: "Fusion fail-soft catch records stage, error type, and message hash"
+    traceKeys:
+      - "nova.next.failSoft.stage"
+      - "nova.next.failSoft.errorType"
+      - "nova.next.failSoft.errorMessageHash"
+    verification:
+      - "directive focused test sweep"
+  - id: PATCH-06
+    priority: P2
+    status: DONE
+    targetFiles:
+      - "main/java/com/nova/protocol/fusion/NovaNextFusionService.java"
+    claim: "clampApplied is conditional, not an always-true trace"
+    traceKeys:
+      - "hypernova.clampApplied"
+    verification:
+      - "directive focused test sweep"
+  - id: PATCH-07
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/service/rag/burst/ExtremeZSystemHandler.java"
+    claim: "InterruptedException path suppresses cancellation toxicity at the CancelShield boundary"
+    traceKeys:
+      - "extremeZ.interrupted"
+      - "extremeZ.interruptPropagated"
+      - "extremeZ.interrupt.suppressed.reason"
+      - "extremeZ.cancelSuppressed.count"
+    verification:
+      - "*ExtremeZ* focused tests"
+  - id: PATCH-08
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/service/NaverSearchService.java"
+    claim: "Naver preprocessor failures keep raw query fallback and trace redacted reason"
+    traceKeys:
+      - "web.naver.preprocessor.failed"
+      - "web.naver.preprocessor.failureReason"
+    verification:
+      - "*Naver* focused tests"
+  - id: PATCH-09
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/service/NaverSearchService.java"
+    claim: "Naver cache-only failures record errorType without raw secrets"
+    traceKeys:
+      - "web.naver.cacheOnly.error"
+      - "web.naver.cacheOnly.errorType"
+    verification:
+      - "*Naver* focused tests"
+  - id: PATCH-10
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/search/provider/HybridWebSearchProvider.java"
+    claim: "Starvation trace keys are present for opaque empty-output diagnosis"
+    traceKeys:
+      - "outCount"
+      - "stageCountsSelectedFromOut"
+      - "starvationFallback.poolSafeEmpty"
+      - "poolSafeEmpty"
+      - "starvationFallback.trigger"
+      - "rescueMerge.used"
+      - "tracePool.size"
+    verification:
+      - "*HybridWebSearch* focused tests"
+  - id: PATCH-11
+    priority: P2
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/artplate/ArtPlateEvolver.java"
+    claim: "ArtPlate evolver registration leaves MoE trace breadcrumbs"
+    traceKeys:
+      - "moe.evolverPlateRegistered"
+      - "moe.evolverPlate.id"
+    verification:
+      - "*ArtPlate* focused tests"
+  - id: PATCH-12
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "main/java/ai/abandonware/nova/autoconfig/NovaOrchestrationAutoConfiguration.java"
+    claim: "Core orchestration beans are registered or guarded through active auto-configuration"
+    verification:
+      - "directive focused test sweep"
+      - "verify_boot.ps1 blocker-scan-only"
+  - id: PATCH-13
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/transform/QueryTransformer.java"
+      - "src/test/java/com/example/lms/transform/QueryTransformerNeedleTraceTest.java"
+    claim: "traceSuppressed(String) writes redacted TraceStore breadcrumbs for helper-based silent catches"
+    traceKeys:
+      - "queryTransformer.suppressed"
+      - "queryTransformer.suppressed.stage"
+      - "queryTransformer.suppressed.<redacted-stage>"
+    tdd:
+      red: "Focused test failed before the helper wrote TraceStore keys."
+      green: "Focused test passed after adding helper breadcrumbs."
+    verification:
+      - "focused QueryTransformerNeedleTraceTest"
+      - "*QueryTransformer* focused tests"
+      - "full gradlew test"
+  - id: RUNTIME-01
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "data/agent-handoff/mcp-control-tower/harmony-runtime-proof.json"
+      - "verification/harmony-runtime-proof.json"
+      - "verification/harmony-scan-runtime.json"
+    claim: "Live local Spring runtime satisfies harmony runtime proof"
+    evidence: "harmony_scan live runtime probe returned traceStoreExportOk=True, agentDbSnapshotOk=True, trace_snapshot_loaded, agent_db_snapshot_loaded, rawSecretPatternHits=0."
+    verification:
+      - "bootRun with Desktop cache isolation and local synthetic admin token"
+      - "harmony_scan runtime_probe=true"
+      - "completion audit harmony-runtime-proof-live=satisfied"
+  - id: JANITOR-01
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "__patch_drop__/janitor_tests.ps1"
+      - "__patch_drop__/janitor_inventory.ps1"
+      - "__patch_drop__/janitor_apply_one.ps1"
+    claim: "PatchDrop janitor probe guards cover missing metadata, blocked filemodes, and SHA mismatches"
+    evidence: "ProbeGuards suite passed MISSING_META, filemode-blocked, SHA_MISMATCH, and secret-prefix mutation-blocking assertions."
+    verification:
+      - "__patch_drop__/janitor_tests.ps1 -Suite ProbeGuards"
+  - id: JANITOR-02
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "__patch_drop__/janitor_inventory.ps1"
+      - "__patch_drop__/janitor_tests.ps1"
+    claim: "Nested report-only PatchDrop bundles surface SHA_INCOMPLETE/SHA_MISMATCH instead of hiding integrity failures behind SUPPORTING_EVIDENCE."
+    evidence: "ProbeGuards RED/GREEN fixture now covers report-only SHA mismatch; live tailscale report-only packet remains SUPPORTING_EVIDENCE with desktopProof=PENDING because its sidecar is SHA-consistent but Desktop final proof is still missing."
+    verification:
+      - "__patch_drop__/janitor_tests.ps1 -Suite ProbeGuards"
+      - "__patch_drop__/janitor_inventory.ps1"
+  - id: SUPABASE-02
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/awx_mcp_toolbox.py"
+      - "scripts/smoke_supabase_readonly_snapshot.ps1"
+      - "scripts/smoke_supabase_readonly_snapshot_tests.ps1"
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+    claim: "Supabase readonly smoke records explicit MCP network-probe skip state instead of synthetic endpoint-unavailable evidence."
+    evidence: "RED/GREEN tests now prove skip_mcp_network_probe produces mcpProbeSkipped=True and mcpDecision=mcp_endpoint_probe_skipped; live smoke still stops safely at project_ref_missing with mutationAllowed=False."
+    verification:
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_supabase_context_probe_can_skip_mcp_network_probe"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_supabase_read_only_db_probe scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_detects_standard_jdbc_urls_in_supabase_smoke_artifacts"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot_tests.ps1"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot.ps1 -RequireProjectScope -SkipNetworkProbe"
+      - "python .\\scripts\\awx_mcp_completion_audit.py --root ."
+  - id: SUPABASE-03
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/awx_mcp_toolbox.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+      - "main/resources/mcp/awx-control-tower-tools.json"
+    claim: "Supabase schema snapshot import no longer marks partial read-only result sets as complete imported proof."
+    evidence: "RED/GREEN regression now requires partial query result imports to return schemaSnapshotComplete=False, resultSetComplete=False, partial_evidence_needed status, and supabase_schema_snapshot_import_evidence_needed decision."
+    verification:
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot.ps1 -RequireProjectScope -SkipNetworkProbe"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot_tests.ps1"
+      - "python .\\scripts\\awx_mcp_completion_audit.py --root ."
+      - "python .\\scripts\\source_health_scorecard.py --root . --out .\\verification\\source-health-scorecard.json"
+  - id: SUPABASE-04
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/smoke_supabase_readonly_snapshot.ps1"
+      - "scripts/smoke_supabase_readonly_snapshot_tests.ps1"
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+    claim: "Supabase readonly smoke and completion audit visibly surface schemaSnapshotComplete/resultSetComplete evidence."
+    evidence: "RED/GREEN tests prove smoke output and completion audit evidence include schemaSnapshotComplete=False and resultSetComplete=False for incomplete imports; live smoke now prints both fields before stopping at project_ref_missing."
+    verification:
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot_tests.ps1"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_supabase_read_only_db_probe"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot.ps1 -RequireProjectScope -SkipNetworkProbe"
+      - "python .\\scripts\\awx_mcp_completion_audit.py --root ."
+  - id: SUPABASE-05
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/db_gap_scanner.py"
+      - "scripts/test_db_gap_scanner.py"
+    claim: "DB gap reports classify partial Supabase live snapshots distinctly instead of collapsing them into generic evidence gaps."
+    evidence: "RED/GREEN regression proves schemaSnapshotAvailable=True with schemaSnapshotComplete=False, resultSetComplete=False, and partial_evidence_needed import status reports evidenceStatus=partial_live_snapshot."
+    verification:
+      - "python -m unittest test_db_gap_scanner.DbGapScannerClassificationTest.test_markdown_marks_partial_supabase_import_as_partial_live_snapshot"
+      - "python -m unittest test_db_gap_scanner"
+  - id: SUPABASE-06
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/supabase_apply_collected_evidence.ps1"
+      - "scripts/supabase_apply_collected_evidence_tests.ps1"
+      - "scripts/source_health_scorecard.py"
+      - "scripts/test_source_health_scorecard.py"
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+    claim: "Collected Supabase read-only evidence can now be applied automatically through import, DB gap scan, source health scorecard, completion audit, and summary JSON."
+    evidence: "RED/GREEN PowerShell fixture proves complete imports exit 0, partial imports exit evidence_needed, follow-up scanners run, summary/artifact files are written, and secretHits=0; source-health and completion audit expose the collected-evidence wrapper command."
+    verification:
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\supabase_apply_collected_evidence_tests.ps1"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\supabase_apply_collected_evidence.ps1"
+      - "python -m unittest scripts.test_source_health_scorecard.SourceHealthScorecardTest.test_scorecard_exposes_structured_supabase_live_proof_next_action_details"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_supabase_apply_collected_wrapper"
+  - id: SUPABASE-07
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/smoke_supabase_readonly_snapshot.ps1"
+      - "scripts/smoke_supabase_readonly_snapshot_tests.ps1"
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Supabase readonly smoke now emits a compact summary artifact and completion audit requires it."
+    evidence: "RED/GREEN PowerShell fixture proves the smoke writes supabase-readonly-snapshot.summary.json with ok/decision/import/missing-result/secret counters; live smoke writes evidence_needed summary at project_ref_missing with secret/JDBC/path counters at 0."
+    verification:
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot_tests.ps1"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_supabase_readonly_snapshot.ps1 -RequireProjectScope -SkipNetworkProbe"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_supabase_read_only_db_probe"
+      - "python .\\scripts\\awx_mcp_completion_audit.py --root ."
+  - id: SUPABASE-08
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/source_health_scorecard.py"
+      - "scripts/test_source_health_scorecard.py"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Source health now treats the Supabase readonly smoke contract as ready only when the summary artifact and summary secret/JDBC counters are present."
+    evidence: "RED/GREEN scorecard tests prove missing summaryArtifact no longer counts as localSmokeContractReady=True; ready fixtures require summaryArtifact=True, summaryHighConfidenceSecretHits=0, and summaryRawJdbcUrlHits=0."
+    verification:
+      - "python -m unittest scripts.test_source_health_scorecard.SourceHealthScorecardTest.test_supabase_component_references_latest_completion_audit_smoke_contract scripts.test_source_health_scorecard.SourceHealthScorecardTest.test_incomplete_supabase_smoke_contract_is_prioritized_before_live_project_request scripts.test_source_health_scorecard.SourceHealthScorecardTest.test_scorecard_exposes_structured_supabase_live_proof_next_action_details"
+      - "python .\\scripts\\source_health_scorecard.py --root . --output .\\verification\\source-health-scorecard.json"
+  - id: WEBSOAK-01
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "verification/websoak-kpi-smoke/websoak-kpi-provider-disabled.json"
+      - "verification/websoak-kpi-smoke/websoak-kpi-provider-disabled.summary.txt"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Provider-disabled WebSoak runtime smoke is current for the starvation/outCount proof lane."
+    evidence: "Live 1-iteration smoke returned status=200, providerDisabledOrSkipped=True, providerDisabledCount=1, outCount=5, starvationFallback.trigger=BELOW_MIN_CITATIONS, secretPatternHits=0, rawQueryHits=0."
+    verification:
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_websoak_kpi_provider_disabled_tests.ps1"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\smoke_websoak_kpi_provider_disabled.ps1 -Port 18086 -ManagementPort 18087 -StartupTimeoutSeconds 180 -TimeoutSec 30 -Iterations 1 -OutputDir .\\verification\\websoak-kpi-smoke"
+  - id: WEBSOAK-02
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Completion audit directly hard-gates the provider-disabled WebSoak runtime proof artifact."
+    evidence: "RED/GREEN completion-audit test proves websoak.provider-disabled-runtime-smoke and runtime-provider-websoak-proof require the current WebSoak JSON plus summary artifact, status=200, providerDisabledOrSkipped=True, providerDisabledCount>0, outCount>0, rawInputCount>0, starvationFallback.trigger, and zero secret/raw-query/probe-key hits."
+    verification:
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_websoak_provider_disabled_runtime_smoke"
+      - "python .\\scripts\\awx_mcp_completion_audit.py --root ."
+  - id: WEBSOAK-03
+    priority: P2
+    status: DONE
+    targetFiles:
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Malformed optional WebSoak numeric fields now make the provider-disabled proof incomplete instead of crashing completion audit."
+    evidence: "RED/GREEN unit test proves nonnumeric providerDisabledCount/outCount/rawInputCount/cacheOnlyMergedCount values are coerced to zero, websoak_provider_disabled_ready returns false, and the normal runtime smoke gate still passes."
+    verification:
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_websoak_provider_disabled_summary_treats_malformed_counts_as_not_ready scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_websoak_provider_disabled_runtime_smoke"
+  - id: HARMONY-02
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/harmony/HarmonyScoreEngine.java"
+      - "main/java/com/example/lms/harmony/HarmonyScoreController.java"
+      - "main/java/com/example/lms/harmony/ContaminationAccumulator.java"
+      - "src/test/java/com/example/lms/harmony/HarmonyScoreEngineTest.java"
+      - "src/test/java/com/example/lms/harmony/HarmonyDashboardTemplateTest.java"
+      - "scripts/harmony_pressure_report.py"
+      - "scripts/test_harmony_pressure_report.py"
+    claim: "Harmony score diagnostics no longer leave broad catch or LLM transport-adapter prompt-scanner ambiguity."
+    traceKeys:
+      - "harmony.score.compute.failed"
+      - "harmony.score.compute.errorType"
+      - "harmony.score.traceRead.failed"
+      - "harmony.score.stream.sendFailed"
+      - "harmony.score.stream.runtime.catchObserved"
+      - "harmony.score.push.runtime.catchObserved"
+      - "harmony.contamination.traceRead.failed"
+    evidence: "RED/GREEN focused test proved compute failures leave TraceStore breadcrumbs; continuation patch added direct catchObserved breadcrumbs in HarmonyScoreController stream/push catch blocks; harmony_pressure_report reports broadCatchWithoutLocalBreadcrumbApprox=0 and sourceHealthScorecard activeRiskCount=1."
+    verification:
+      - "gradlew test --tests com.example.lms.harmony.HarmonyScoreEngineTest.computeFailureLeavesTraceBreadcrumb"
+      - "gradlew test --tests *HarmonyScoreControllerTest"
+      - "gradlew test --tests com.example.lms.harmony.*"
+      - "python -m unittest scripts.test_harmony_pressure_report"
+      - "python scripts/harmony_pressure_report.py --root . --output verification/dynamic-rag-harmony-pressure-metrics.json"
+      - "python scripts/source_health_scorecard.py --root . --out verification/source-health-scorecard.json"
+  - id: HARMONY-03
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/harmony/HarmonyBreakLedger.java"
+      - "scripts/awx_mcp_toolbox.py"
+      - "src/test/java/com/example/lms/harmony/HarmonyScoreEngineTest.java"
+      - "scripts/test_awx_mcp_toolbox.py"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "HB-01 source scan no longer reports silent catch contamination in harmony score surfaces."
+    traceKeys:
+      - "harmony.breakLedger.traceRead.failed"
+      - "harmony.breakLedger.traceRead.key"
+      - "harmony.breakLedger.traceRead.errorType"
+    evidence: "RED/GREEN tests prove HarmonyBreakLedger trace read failures leave redacted TraceStore breadcrumbs and harmony_scan recognizes HarmonyScoreController.recordStreamFailure as a breadcrumb helper; refreshed harmony_scan reports score=100.0, HB-01 DONE, catchWithoutBreadcrumbCount=0, secretPatternHits=0."
+    verification:
+      - "gradlew test --tests com.example.lms.harmony.HarmonyScoreEngineTest.breakLedgerTraceReadFailureLeavesRedactedBreadcrumb"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_harmony_scan_recognizes_harmony_stream_failure_helper"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest passed 119 tests"
+      - "gradlew test --tests com.example.lms.harmony.*"
+      - "gradlew test"
+      - "python scripts/awx_mcp_toolbox.py harmony_scan -> harmonyScore.score=100.0, HB-01 DONE, catchWithoutBreadcrumbCount=0"
+  - id: TEST-01
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/verify_full_test_refresh.ps1"
+      - "logs/compileTestJava_rerun_latest.log"
+    claim: "Stale class-output recovery path resolves broad NoClassDefFoundError/classpath symptoms without a source patch."
+    evidence: "Focused RetrievalOrderServiceTest passed after compileJava output regeneration; verify_full_test_refresh.ps1 then passed rerun-tasks fail-fast and normal test."
+    verification:
+      - "gradlew test --tests com.example.lms.strategy.RetrievalOrderServiceTest --rerun-tasks"
+      - "gradlew compileJava --rerun-tasks"
+      - "gradlew compileTestJava --rerun-tasks"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\verify_full_test_refresh.ps1"
+  - id: TEST-02
+    priority: P2
+    status: DONE
+    targetFiles:
+      - "scripts/test_awx_mcp_toolbox.py"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Completion-audit source-health test no longer pins volatile broad runtime suite/test counts."
+    evidence: "After a fresh full Gradle test run, source-health broadRuntimeTestSuites/Test counts changed to 783/3768 while failures/errors stayed 0; the test now asserts current numeric proof plus zero failures/errors instead of stale exact counts."
+    verification:
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_source_health_scorecard_artifact"
+  - id: HARMONY-TRACE-01
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/tools/HarmonyBuildScanner.java"
+      - "src/test/java/com/example/lms/tools/HarmonyBuildScannerTest.java"
+      - "verification/harmony-build-report.txt"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "9h comprehensive S01-S08 TraceStore coverage audit now includes directive-required Overdrive, CFVM, chain, LLM purity/port, and strategy-conflict keys."
+    evidence: "harmonyScoreReport reports overdrive.trigger.sparse, overdrive.trigger.lowAuth, overdrive.trigger.contradicted, overdrive.blackbox.available, cfvm.triggered, chain.steps.planned, llm.versionPurity, llm.primary.port, and strategy.conflict.overdriveDeferred as FOUND; HB-01..HB-12 are DONE with duplicateCount=0 and secretPatternHits=0."
+    verification:
+      - "gradlew test --tests com.example.lms.tools.HarmonyBuildScannerTest"
+      - "gradlew harmonyScoreReport -PharmonyScoreOutput=verification/harmony-build-report.txt"
+      - "python scripts/source_health_scorecard.py --root . --output verification/source-health-scorecard.json"
+      - "count-only secret scan over changed scanner/test files"
+  - id: SAFEDELETE-01
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "scripts/safe_delete_path_presence.ps1"
+      - "scripts/safe_delete_path_presence_tests.ps1"
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/awx_mcp_toolbox_tests.ps1"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "9h safe-delete directive cleanup candidates are converted into a read-only presence gate instead of destructive deletion."
+    evidence: "Live audit wrote var/codex-smoke/safe-delete-path-presence-current.json with candidateCount=20, presentCount=2, reviewCandidateCount=1, secretPathPresentCount=1, mutationAllowed=False, deleteCommandEmitted=False, and rawSecretPatternHits=0; present candidates are __reports__ as REVIEW_REPORT_OUTPUT and apikey.txt as HOLD_SECRET_PATH."
+    verification:
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\safe_delete_path_presence_tests.ps1"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\safe_delete_path_presence.ps1 -Root . -OutputPath var\\codex-smoke\\safe-delete-path-presence-current.json -Json"
+      - "python scripts\\awx_mcp_completion_audit.py --root . --output var\\codex-smoke\\awx-mcp-completion-audit-current.json"
+      - "python -m py_compile scripts\\awx_mcp_completion_audit.py"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\awx_mcp_toolbox_tests.ps1 -Suite CompletionAudit"
+  - id: COMPUTERUSE-01
+    priority: P2
+    status: DONE
+    targetFiles:
+      - "var/codex-smoke/computer-use-smoke.json"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Computer Use lane has fresh count-only Windows helper reachability evidence without storing app names, window titles, or secrets."
+    evidence: "The Windows helper returned ok=True with appCount=41, runningCount=18, and windowCount=295; the repo artifact stores only counts plus storesRawAppNames=False, storesWindowTitles=False, secretHits=0, and rawSecretPatternHits=0."
+    verification:
+      - "mcp__node_repl.js Computer Use lightweight list_apps smoke"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\goal_next.ps1 -Root . -Topic mcp-control-loop"
+      - "python scripts\\awx_mcp_completion_audit.py --root . --output var\\codex-smoke\\awx-mcp-completion-audit-current.json"
+      - "count-only secret scan over computer-use-smoke and goal-next artifacts"
+  - id: ARCHIVE-01
+    priority: P1
+    status: MONITOR
+    targetFiles:
+      - "BackupsXS/index.jsonl"
+    claim: "Archive search two-pass index path proof is available from the Desktop checkout; zero-result archive queries stay demand-driven evidence_needed."
+    blockers:
+      - "No source mutation is allowed from archive.search; restore work still requires archive.restore pre-review and checksum proof."
+      - "Individual archive queries can still return evidence_needed when the two-pass search returns 0 results."
+    recentVerification:
+      - "Test-Path BackupsXS/index.jsonl returned True; current file length is 206663 bytes."
+      - "completion audit reports archive-search-two-pass-index satisfied via default.BackupsXS;exists=True."
+      - "archive.search q=mcp-control-loop top_k=3 used payload.index_path, passCount=2, outputCount=0, and returned query-specific evidence_needed without source mutation."
+    nextActions:
+      - "use archive.search with a task-specific q and filters before claiming archive evidence"
+      - "if search returns 0, report the expanded queries and evidence_needed instead of restoring blindly"
+      - "use archive.restore only after pre-review, checksum, and explicit target_dir proof"
+  - id: EXT-01
+    priority: P0
+    status: EVIDENCE_NEEDED
+    targetFiles:
+      - ".mcp.json"
+      - "data/db-gap-report/supabase-execute-sql-collection.packet.json"
+      - "data/db-gap-report/supabase-query-results.template.json"
+      - "data/db-gap-report/supabase-readonly-snapshot.sql"
+    claim: "Supabase read-only project-scoped schema/advisor proof"
+    blockers:
+      - "SUPABASE_PROJECT_REF is not available in this environment."
+      - "Supabase MCP OAuth or CI PAT authentication is not complete."
+      - "supabase CLI is not installed or not visible on PATH."
+      - "execute_sql and get_advisors result sets are not collected."
+    docs:
+      - "https://supabase.com/docs/guides/ai-tools/mcp"
+      - "https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically"
+      - "https://supabase.com/docs/guides/api/securing-your-api"
+    recentVerification:
+      - "curl https://mcp.supabase.com/mcp returned HTTP 401, proving endpoint reachable but unauthenticated."
+      - "smoke_supabase_readonly_snapshot.ps1 -RequireProjectScope -SkipNetworkProbe exited evidence_needed: project_ref_missing and recorded mcpProbeSkipped=True / mcpDecision=mcp_endpoint_probe_skipped."
+      - "Supabase readonly smoke reported mutationAllowed=False, highConfidenceSecretHits=0, bearerPatternHits=0, rawJdbcUrlHits=0."
+      - "db_gap_scanner reported CRITICAL=0, MEDIUM=0, LOW=8, Action Required=0; Supabase live result sets remain uncollected."
+      - "tool_search did not expose callable Supabase execute_sql/get_advisors tools in this session."
+      - "Desktop env probe reported SUPABASE_PROJECT_REF absent and SUPABASE_ACCESS_TOKEN absent; supabase CLI reported cli_missing."
+    nextActions:
+      - "set SUPABASE_PROJECT_REF"
+      - "authenticate Supabase MCP or CLI"
+      - "execute each read-only SQL packet once"
+      - "collect get_advisors rows"
+      - "run supabase_schema_snapshot_import"
+      - "rerun db_gap_scanner and completion audit"
+  - id: EXT-02
+    priority: P1
+    status: EVIDENCE_NEEDED
+    targetFiles:
+      - "data/agent-handoff/mcp-control-tower"
+      - "__patch_drop__/external-node-proof"
+    claim: "Mac mini and Notebook producer proof"
+    blockers:
+      - "macmini-node-smoke.json is not present on Desktop."
+      - "macmini-producer-handoff.json is not present on Desktop."
+      - "notebook-node-smoke.json is not present on Desktop."
+      - "notebook-producer-handoff.json is not present on Desktop."
+      - "PatchDrop v3 sidecars from producer-local worktrees are not present."
+    recentVerification:
+      - "external_evidence_audit reported ok=False, decision=external_evidence_incomplete, rawSecretPatternHits=0, evidenceNeededCount=6."
+      - "missing: macmini/notebook node smoke, producer handoff JSON, and PatchDrop v3 manifest/patch/pendingNotice/report/sha256/verifyLog sidecars."
+    nextActions:
+      - "run awx_mcp_node_smoke.py on producer-local worktrees"
+      - "run awx_mcp_producer_handoff.py on producer-local worktrees"
+      - "copy producer proof JSON to Desktop evidence path"
+      - "run external_evidence_intake and external_evidence_audit"
+  - id: EXT-03
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/external_apply_collected_evidence.ps1"
+      - "scripts/external_apply_collected_evidence_tests.ps1"
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+    claim: "Collected Mac mini/Notebook external evidence can now be applied automatically through intake, audit, completion audit, secret-hit fail-close gates, and summary JSON."
+    evidence: "RED/GREEN PowerShell fixture proves partial evidence exits evidence_needed, complete evidence exits 0, summary artifacts are written for partial/complete/secret paths, absolute repo-root paths are passed to toolbox payloads, and raw secret-hit summaries exit secret-leak-risk."
+    verification:
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\external_apply_collected_evidence_tests.ps1"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\external_apply_collected_evidence.ps1 -Root . -Topic mcp-control-loop"
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_reports_external_apply_collected_wrapper"
+  - id: EXT-04
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/test_awx_mcp_toolbox.py"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "External producer proof next-action details now include the Desktop apply-collected-evidence command."
+    evidence: "RED/GREEN completion-audit test proves both Mac mini and Notebook collect-external-evidence-files actions expose a secret-free relative external_apply_collected_evidence.ps1 command for the mcp-control-loop topic."
+    verification:
+      - "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest.test_completion_audit_exposes_structured_external_producer_proof_actions"
+      - "python .\\scripts\\awx_mcp_completion_audit.py --root ."
+  - id: BOOT-01
+    priority: P1
+    status: MONITOR
+    targetFiles:
+      - "verify_boot.ps1"
+      - "scripts/awx_mcp_completion_audit.py"
+      - "scripts/source_health_scorecard.py"
+      - "logs/verify_boot_application_ready_event_proof.log"
+      - "logs/verify_boot_source_runtime_current.log"
+    claim: "Boot verifier distinguishes full startup proof from runtime precheck proof"
+    evidence: "verify_boot.ps1 observed webServerStartedProven=True, wiringPrecheckProven=True, runtimePrecheckProven=True, springStartedLogProven=False, applicationReadyEventProven=True, bootStartedProven=True, bootSuccessProven=False in logs/verify_boot_after_topology_split_refresh_120s.log."
+    nextActions:
+      - "Only claim boot success after a boot command proves completion."
+      - "Use application-ready-event-proven when ApplicationReadyEvent listener logs are observed but Spring startup-info logging is suppressed."
+      - "Use runtime-precheck-proven only for Tomcat plus WiringPrecheck evidence before intentional timeout stop."
+      - "Keep bootSuccessProven=False wording in reports until full boot proof exists."
+  - id: BOOT-02
+    priority: P1
+    status: DONE
+    targetFiles:
+      - "scripts/verify_control_plane_topology.ps1"
+      - "src/test/java/com/example/lms/boot/RuntimeVerificationRunbookTest.java"
+      - "agent-prompts/data/patch_backlog.yaml"
+    claim: "Topology verifier refreshes split main classes before sequential bootRun smokes."
+    evidence: "RED/GREEN runbook test reproduced the missing --rerun-tasks contract; full topology rerun passed focused tests, build-surface, macmini-learning-ops-collector, desktop-gpu-node, and macmini-gpu-gateway-simulated after compileJava --rerun-tasks populated build/desktop/classes with NightmareBreakerProperties."
+    verification:
+      - "gradlew test --tests com.example.lms.boot.RuntimeVerificationRunbookTest"
+      - "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\verify_control_plane_topology.ps1 -BasePort 18160 -StartupTimeoutSeconds 120 -CollisionGraceSeconds 60"
+  - id: FAITH-01
+    priority: P0
+    status: DONE
+    targetFiles:
+      - "main/java/com/example/lms/moe/NormalizedRagMetrics.java"
+      - "main/java/com/example/lms/service/rag/AnswerQualityEvaluator.java"
+      - "main/java/com/example/lms/metrics/FaithfulnessMetricController.java"
+      - "main/java/com/example/lms/metrics/FaithfulnessMetricSnapshotStore.java"
+      - "main/java/com/example/lms/metrics/FaithfulnessPromptTracePublisher.java"
+      - "main/java/com/example/lms/service/soak/metrics/SoakMetricRegistry.java"
+      - "main/java/com/example/lms/api/ChatRequestSettingsMerger.java"
+      - "main/java/com/example/lms/dto/ChatRequestDto.java"
+      - "main/java/com/example/lms/service/ChatWorkflow.java"
+      - "main/java/com/example/lms/resilience/RagConstitutionalScorecard.java"
+      - "src/test/java/com/example/lms/moe/NormalizedRagMetricsTest.java"
+      - "src/test/java/com/example/lms/service/rag/AnswerQualityEvaluatorTest.java"
+      - "src/test/java/com/example/lms/metrics/FaithfulnessMetricControllerTest.java"
+      - "src/test/java/com/example/lms/service/soak/metrics/SoakMetricRegistryTraceTest.java"
+      - "src/test/java/com/example/lms/api/ChatRequestSettingsMergerTest.java"
+      - "src/test/java/com/example/lms/resilience/RagFailureBlackboxServiceTest.java"
+      - "scripts/test_faithfulness_prompt_trace_contract.py"
+    claim: "Faithfulness quantitative API exposes canonical TraceStore metrics from normalized RAG, answer quality, scorecard, and harmony lanes."
+    traceKeys:
+      - "rag.eval.normalized.balancedScore"
+      - "rag.eval.normalized.retrievalHitRate"
+      - "rag.eval.normalized.evidenceCoverage"
+      - "rag.eval.normalized.schemaVersion"
+      - "rag.answerQuality.faithfulnessScore"
+      - "rag.blackbox.compositeRisk"
+      - "rag.blackbox.routingDecision"
+      - "harmony.score.lastComputed"
+      - "soak.fpFilterLegacyBypassCount"
+      - "soak.webCalls"
+      - "soak.webCallsWithNaver"
+      - "soak.webMergedTotal"
+      - "soak.naverCallInclusionRate"
+      - "soak.naverMergedShare"
+    requirementMatrix:
+      G-01: "DONE: NormalizedRagMetrics.putTrace writes rag.eval.normalized.* and UnifiedRagOrchestrator invokes it after retrieval metrics are computed."
+      G-02: "DONE: AnswerQualityEvaluator.evaluateRetrieval publishes rag.answerQuality.* plus last-known faithfulness snapshot keys."
+      G-03: "DONE: ChatWorkflow projects RagFailureBlackboxService.projectCurrentTrace after PromptBuilder output and before LLM call; RagConstitutionalScorecard.writeTrace writes canonical rag.blackbox.* aliases."
+      G-04: "DONE: GET /api/metrics/faithfulness returns normalized RAG, answer quality, scorecard, harmony, and Soak metrics."
+      G-05: "DONE: SoakMetricRegistry.snapshotCurrent exists and recordWebCall/recordWebMerge publish soak.* to TraceStore and the last-known snapshot store."
+      G-06: "DONE: HarmonyScoreController exposes /api/harmony/push for immediate SSE snapshots and records catchObserved breadcrumbs on stream/push failures."
+      runtimeSmokeGuard: "DONE: ChatRequestSettingsMerger preserves explicit useWebSearch=false so faithfulness smokes do not accidentally invoke external web providers; FaithfulnessPromptTracePublisher.publishBeforeLlm fills missing count-only normalized/answer-quality metrics before LLM routing without overwriting richer evaluator metrics; runtime smoke observed providerOutboundPatterns naver=0 brave=0 serpapi=0."
+    evidence: "RED/GREEN focused tests proved missing canonical normalized keys, unweighted faithfulness proxy, narrow /api/metrics/faithfulness payload, missing cross-request last-known metric visibility, missing Soak KPI exposure in the faithfulness REST/snapshot lane, missing web-call-only Soak snapshot publication, explicit-false web search coercion, missing canonical rag.blackbox.* projection, and missing pre-LLM prompt-context faithfulness metrics before the Safe Patch."
+    verification:
+      - "gradlew test --tests com.example.lms.api.ChatRequestSettingsMergerTest.explicitFalseWebSearchSurvivesSettingsDefaultAndExplicitFlag"
+      - "gradlew test --tests com.example.lms.resilience.RagFailureBlackboxServiceTest.chatWorkflowProjectsScorecardAfterPromptBuildBeforeLlmCall"
+      - "gradlew test --tests com.example.lms.resilience.RagFailureBlackboxServiceTest.constitutionalScorecardProjectsFiveChannelsAndRoutingDecision"
+      - "gradlew test --tests *NormalizedRagMetricsTest --tests *AnswerQualityEvaluatorTest --tests *FaithfulnessMetricControllerTest"
+      - "gradlew test --tests *FaithfulnessMetricControllerTest --tests *SoakMetricRegistryTraceTest"
+      - "gradlew test --tests *NormalizedRagMetricsTest --tests *AnswerQualityEvaluatorTest --tests *RagFailureBlackboxServiceTest --tests *HarmonyScoreControllerTest --tests *FaithfulnessMetricControllerTest --tests *SoakMetric* --tests *AppSecurityConfigContractTest"
+      - "python -m unittest scripts.test_faithfulness_prompt_trace_contract"
+      - "gradlew checkLangchain4jVersionPurity checkSourceSetHygiene compileJava -x test"
+      - "gradlew :app:classes bootJar -x test"
+      - "java -jar build/desktop/libs/src111_merge15.jar on ports 18086/18087; POST /api/chat/sync with useWebSearch=false observed chatStatus=http_200, providerOutboundPatterns naver=0 brave=0 serpapi=0, /api/metrics/faithfulness rag.retrievalHitRate=0.0 rag.evidenceCoverage=0.0 quality.faithfulnessScore=0.06 quality.decision=REPAIR_WITH_WEB scorecard.routingDecision=BLOCK harmony.score=0.0"
+      - "gradlew sourceScoreReport harmonyScoreReport sourceHealthScorecard"
+      - "active main secret scan: activeMainSecretHits=0"
+currentScore:
+  sourceHealthScorecard: 82.5772
+  sourceHealthRiskCount: 5
+  activeRiskCount: 0
+  scorecardEvidenceNeeded: 2
+  harmonyRuntimeProof: "live-runtime"
+  broadRuntimeProof: "gradlew test BUILD SUCCESSFUL; source-health broadRuntimeTestProof remains passed"
+  latestCompletionAudit: "var/codex-smoke/awx-mcp-completion-audit-current.json"
+  controlTowerAuditTests: "python -m unittest scripts.test_awx_mcp_toolbox.HarmonyBreakStatusTest passed 119 tests"
+  verifyBootCurrent: "verify_boot.ps1 120s standard no blocking patterns; webServerStartedProven=True wiringPrecheckProven=True runtimePrecheckProven=True applicationReadyEventProven=True bootStartedProven=True bootSuccessProven=False"
+  topologyVerifier: "PASS; controlPlane=macmini-control-plane gpuExecutor=desktop-rtx3090-rtx3060 collector=read_only_curation queue=verified"
+  sourceHealthTests: "python -m unittest scripts.test_source_health_scorecard passed 14 tests"
+  dbGapScannerTests: "PYTHONPATH=scripts python -m unittest scripts.test_db_gap_scanner passed 30 tests"
+  externalEvidenceRisk: "supabase_live_proof_missing"
+  nextSingleAction: "provide_supabase_project_ref_and_authenticated_readonly_mcp_or_cli_for_schema_advisor_snapshot"

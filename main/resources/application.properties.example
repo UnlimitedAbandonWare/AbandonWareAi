@@ -1,0 +1,2 @@
+# Example properties for the Dynamic RAG Orchestration Platform.
+# Keep local secrets in environment-specific files outside source control.

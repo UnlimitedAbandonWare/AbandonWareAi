@@ -1,0 +1,14 @@
+name: demo1_quant_metric_normalization_antigravity
+version: "1.0.0"
+language: ko
+scope: antigravity-design-audit-and-metric-normalization
+parent: demo1_design_selfask_corrector
+description: >
+  첨부 설계 문서의 과장/누락/조합 파손 가능성을 active sourceSet과 정량 지표로 검증하고,
+  Antigravity가 바로 실행할 수 있는 read-only 우선 진단 및 Safe Patch handoff 프롬프트.
+tags:
+  - antigravity
+  - quantitative-normalization
+  - design-audit
+  - source-evidence
+  - dynamic-rag

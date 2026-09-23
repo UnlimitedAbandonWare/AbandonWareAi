@@ -1,0 +1,14 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+pipeline:
+  k_alloc: { web: 12, vector: 6, kg: 2 }
+  gates: { citation_min: 3, pii_filter: true }
+  rerank:
+    dpp: { enabled: true, lambda: 0.7 }
+    onnx: { max_concurrent: 2, timeout_ms: 1200 }
+  fusion:
+    strategy: rrf
+    clamp: { lo: 0.0, hi: 1.0 }

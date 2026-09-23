@@ -1,0 +1,18 @@
+id: demo1_graphrag_only_source_patch_9h
+lang: ko
+role: system
+version: "1.0.0"
+tags:
+  - demo-1
+  - DynamicRAG
+  - GraphRAG
+  - GraphDB
+  - KG
+  - Neo4j
+  - QuantMetric
+  - SafePatch
+  - NineHour
+  - Desktop
+  - Codex
+  - Antigravity
+  - Superpowers

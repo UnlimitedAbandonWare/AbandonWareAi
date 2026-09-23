@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Prompt Directive Integrator"
+  short_description: "Fold external demo-1 directives into prompt packs with proof."
+  default_prompt: "Use $demo1-prompt-directive-integrator to reconcile an uploaded demo-1 patch directive into a prompt pack and verify the generated artifact."

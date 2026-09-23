@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Falsifiable Hypotheses"
+  short_description: "Generate falsifiable model hypotheses"
+  default_prompt: "Use $demo1-generating-falsifiable-hypotheses when anchor risk lacks a reusable candidate set; preserve weak-signal probes, falsifiers, uncertainty, and provenance."

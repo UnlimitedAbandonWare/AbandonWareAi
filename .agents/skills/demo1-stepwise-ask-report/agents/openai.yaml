@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Stepwise Ask Report"
+  short_description: "모르면 검색·보고 후 진행 여부 확인"
+  default_prompt: "Use $demo1-stepwise-ask-report: web-search unknowns, write a short go/no-go report with plugin needs, and wait for approval before large or irreversible steps."

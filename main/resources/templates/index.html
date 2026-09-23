@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RAG Development Ops Gateway</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d7deea;
+      --nav: #101624;
+      --blue: #2463eb;
+      --green: #16784a;
+      --amber: #9a6500;
+      --red: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    a { color: inherit; text-decoration: none; }
+    .layout {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 270px minmax(0, 1fr);
+    }
+    .side {
+      background: var(--nav);
+      color: #e7edf7;
+      padding: 24px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand { font-size: 18px; font-weight: 700; letter-spacing: 0; }
+    .nav { display: grid; gap: 8px; }
+    .nav a {
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: #c7d2e4;
+      font-size: 14px;
+    }
+    .nav a.active, .nav a:hover { background: #1d2738; color: #fff; }
+    .legacy {
+      margin-top: auto;
+      display: grid;
+      gap: 8px;
+      color: #c7d2e4;
+      font-size: 13px;
+    }
+    .legacy-title { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .main { padding: 30px; min-width: 0; }
+    .top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    h1, h2, p { margin-top: 0; }
+    h1 { margin-bottom: 8px; font-size: 30px; letter-spacing: 0; }
+    .sub { color: var(--muted); margin-bottom: 0; max-width: 780px; line-height: 1.5; }
+    .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .grid { display: grid; gap: 16px; }
+    .cards { grid-template-columns: repeat(4, minmax(160px, 1fr)); }
+    .two { grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); margin-top: 16px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      min-width: 0;
+    }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+    .detail { color: var(--muted); font-size: 12px; margin-top: 8px; overflow-wrap: anywhere; }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .section-title h2 { margin-bottom: 0; font-size: 17px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #e5e7eb;
+      color: #364153;
+      white-space: nowrap;
+    }
+    .ok { background: #dcfce7; color: var(--green); }
+    .warn { background: #fef3c7; color: var(--amber); }
+    .bad { background: #fee2e2; color: var(--red); }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); background: #f8fafc; font-weight: 600; white-space: nowrap; }
+    td { overflow-wrap: anywhere; }
+    .links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .link-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcff;
+    }
+    .link-card strong { display: block; margin-bottom: 4px; }
+    .link-card span { display: block; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    @media (max-width: 1050px) {
+      .cards, .two, .links { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 760px) {
+      .layout { grid-template-columns: 1fr; }
+      .cards, .two, .links { grid-template-columns: 1fr; }
+      .top { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .main { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="side">
+    <div class="brand">RAG Dev Ops</div>
+    <nav class="nav" aria-label="Primary navigation">
+      <a class="active" th:href="@{/}" href="/">Ops Gateway</a>
+      <a th:href="@{/admin/dashboard}" href="/admin/dashboard">Development Ops Center</a>
+      <a th:href="@{/admin/learning-data}" href="/admin/learning-data">Development Data Review</a>
+      <a th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
+      <a href="/api/diagnostics/rag/learning-ops/metrics/prometheus">Prometheus Metrics</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div class="top">
+      <div>
+        <h1>RAG/Agent Development Operations</h1>
+        <p class="sub">Metadata-filtered legacy surfaces, Chatbot feedback corpus, training samples, failure patterns, quarantine, and retraining signals are now the primary development evidence surface.</p>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" class="button primary" type="button">Refresh</button>
+        <a class="button" th:href="@{/admin/dashboard}" href="/admin/dashboard">Open Center</a>
+        <a class="button" th:href="@{/admin/learning-data}" href="/admin/learning-data">Review Data</a>
+      </div>
+    </div>
+
+    <section class="grid cards" aria-label="Learning operations summary">
+      <div class="panel">
+        <div class="label">Training samples</div>
+        <div id="sampleTotal" class="value">-</div>
+        <div id="sampleDetail" class="detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="label">Quarantine</div>
+        <div id="quarantineTotal" class="value">-</div>
+        <div id="quarantineDetail" class="detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="label">Failure patterns</div>
+        <div id="failureTotal" class="value">-</div>
+        <div id="failureDetail" class="detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="label">Evidence rate</div>
+        <div id="evidenceRate" class="value">-</div>
+        <div id="evidenceDetail" class="detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="label">Legacy dev candidates</div>
+        <div id="legacyCandidateTotal" class="value">-</div>
+        <div id="legacyCandidateDetail" class="detail">loading</div>
+      </div>
+    </section>
+
+    <div class="grid two">
+      <section class="panel">
+        <div class="section-title">
+          <h2>Recent Training Samples</h2>
+          <span id="datasetBadge" class="badge">unknown</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+            <tr>
+              <th>model</th>
+              <th>quality</th>
+              <th>final</th>
+              <th>question</th>
+              <th>answer</th>
+            </tr>
+            </thead>
+            <tbody id="sampleRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <h2>Operations Links</h2>
+          <span id="diagnosticBadge" class="badge">loading</span>
+        </div>
+        <div class="links">
+          <a class="link-card" th:href="@{/admin/dashboard}" href="/admin/dashboard">
+            <strong>Development Ops Center</strong>
+            <span>Samples, failures, model cards, 9-Matrix, quarantine.</span>
+          </a>
+          <a class="link-card" th:href="@{/admin/learning-data}" href="/admin/learning-data">
+            <strong>Development Dataset Review</strong>
+            <span>AutoLearn cycles, validation, retrain reflection.</span>
+          </a>
+          <a class="link-card" href="/api/diagnostics/rag/learning-ops/metrics/prometheus">
+            <strong>Prometheus</strong>
+            <span>Scrape-ready quantitative learning metrics.</span>
+          </a>
+          <a class="link-card" th:href="@{/admin/vector-diagnostics}" href="/admin/vector-diagnostics">
+            <strong>Vector Diagnostics</strong>
+            <span>Embedding store, DLQ, quarantine, ingest protection.</span>
+          </a>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Legacy Development Candidates</h2>
+        <span id="legacyCandidateBadge" class="badge">unknown</span>
+      </div>
+      <div class="detail" id="legacyCandidateFeatures">loading</div>
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead>
+          <tr>
+            <th>feature</th>
+            <th>action</th>
+            <th>source</th>
+            <th>created</th>
+            <th>function</th>
+          </tr>
+          </thead>
+          <tbody id="legacyCandidateRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function text(value, fallback = '-') {
+    if (value === null || value === undefined || value === '') return fallback;
+    return String(value);
+  }
+
+  function pct(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '-';
+    return Math.round(n * 1000) / 10 + '%';
+  }
+
+  function setBadge(el, label, level) {
+    if (!el) return;
+    el.textContent = label;
+    el.className = 'badge ' + (level || '');
+  }
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(url + ' -> ' + res.status + ' ' + body.slice(0, 120));
+    }
+    return res.json();
+  }
+
+  function addCell(tr, value, className) {
+    const td = document.createElement('td');
+    if (className) td.className = className;
+    td.textContent = text(value, '');
+    tr.appendChild(td);
+  }
+
+  function renderRows(samples) {
+    const body = $('sampleRows');
+    body.textContent = '';
+    if (!samples.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.textContent = 'No train_rag samples found in the bounded tail.';
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    samples.slice(0, 6).forEach((sample) => {
+      const tr = document.createElement('tr');
+      addCell(tr, sample.model || sample.provider, 'mono');
+      addCell(tr, sample.qualityScore);
+      addCell(tr, sample.finalSigmoid !== null && sample.finalSigmoid !== undefined ? sample.finalSigmoid : (sample.finalGate ? 'gate:pass' : 'gate:block'));
+      addCell(tr, sample.questionPreview);
+      addCell(tr, sample.answerPreview);
+      body.appendChild(tr);
+    });
+  }
+
+  function renderLegacyCandidates(legacy) {
+    const data = legacy || {};
+    const rows = $('legacyCandidateRows');
+    const items = Array.isArray(data.items) ? data.items : [];
+    const status = text(data.status, 'unknown');
+    $('legacyCandidateTotal').textContent = text(data.itemCount, '0');
+    $('legacyCandidateDetail').textContent = text(data.reportFile, 'legacy-development-candidates.tsv') + ' / active=' + text(data.activeCount, '0');
+    $('legacyCandidateFeatures').textContent = 'feature buckets: ' + JSON.stringify(data.byFeature || {});
+    setBadge($('legacyCandidateBadge'), status, status === 'ready' ? 'ok' : (status === 'report_missing' ? 'warn' : ''));
+    rows.textContent = '';
+    if (!items.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.textContent = status === 'report_missing'
+        ? 'Run contextPurityReport to generate metadata-based legacy development candidates.'
+        : 'No non-chatbot legacy development candidate matched the metadata cutoff.';
+      tr.appendChild(td);
+      rows.appendChild(tr);
+      return;
+    }
+    items.slice(0, 8).forEach((item) => {
+      const tr = document.createElement('tr');
+      addCell(tr, item.featureBucket, 'mono');
+      addCell(tr, item.candidateAction, 'mono');
+      addCell(tr, item.sourcePath, 'mono');
+      addCell(tr, item.creationTime, 'mono');
+      addCell(tr, item.developmentFunction, 'mono');
+      rows.appendChild(tr);
+    });
+  }
+
+  async function refresh() {
+    setBadge($('diagnosticBadge'), 'loading', '');
+    try {
+      const data = await fetchJson('/api/diagnostics/rag/learning-ops/overview?limit=20');
+      const dataset = data.dataset || {};
+      const metrics = data.metrics || {};
+      const quarantine = data.quarantine || {};
+      const dlq = quarantine.vectorDlq || {};
+      const dlqTotal = Number(dlq.pending || 0) + Number(dlq.inflight || 0) + Number(dlq.blocked || 0) + Number(dlq.failed || 0);
+
+      $('sampleTotal').textContent = text(dataset.parsedLines, '0');
+      $('sampleDetail').textContent = text(dataset.datasetFile, 'train_rag.jsonl') + ' / ' + text(dataset.status);
+      $('quarantineTotal').textContent = String(Number(dataset.quarantineCount || 0) + dlqTotal);
+      $('quarantineDetail').textContent = 'dataset=' + text(dataset.quarantineCount, '0') + ' dlq=' + dlqTotal;
+      $('failureTotal').textContent = text(data.failurePatterns?.eventCount, '0');
+      $('failureDetail').textContent = text(data.failurePatterns?.logFile, 'failure-pattern.jsonl') + ' / ' + text(data.failurePatterns?.status);
+      $('evidenceRate').textContent = pct(metrics.evidenceRate);
+      $('evidenceDetail').textContent = 'bounded tail';
+      setBadge($('datasetBadge'), text(dataset.status, 'unknown'), dataset.exists === false ? 'warn' : 'ok');
+      setBadge($('diagnosticBadge'), 'live', 'ok');
+      renderRows(Array.isArray(data.samples) ? data.samples : []);
+      renderLegacyCandidates(data.legacyDevelopmentCandidates);
+    } catch (error) {
+      setBadge($('diagnosticBadge'), 'unavailable', 'bad');
+      $('sampleDetail').textContent = error.message;
+      renderLegacyCandidates({ status: 'unavailable', items: [] });
+    }
+  }
+
+  $('refreshBtn').addEventListener('click', refresh);
+  refresh();
+</script>
+</body>
+</html>

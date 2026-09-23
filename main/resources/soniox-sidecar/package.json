@@ -1,0 +1,8 @@
+{
+  "name": "awx-soniox-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "@soniox/node": "2.3.0", "ws": "8.21.3" }
+}

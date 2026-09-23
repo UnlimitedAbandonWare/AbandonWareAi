@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Long Think Goal Composer"
+  short_description: "9h causal goal decomposition"
+  default_prompt: "Use $demo1-long-think-goal-composer to turn an ambiguous demo-1 9-hour objective into evidence-backed Safe Patch lanes."

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 Resilience"
+  short_description: "Trace, failure learning, and autolearn diagnostics"
+  default_prompt: "Use $demo1-rag-resilience-observability to add redacted diagnostics for a demo-1 RAG failure path."
+policy:
+  allow_implicit_invocation: true
+

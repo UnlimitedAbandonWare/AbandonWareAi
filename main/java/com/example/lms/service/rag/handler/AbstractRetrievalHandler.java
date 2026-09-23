@@ -1,0 +1,155 @@
+package com.example.lms.service.rag.handler;
+
+import com.example.lms.trace.SafeRedactor;
+import dev.langchain4j.rag.content.Content;
+import dev.langchain4j.rag.query.Query;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 책임 연쇄 패턴을 위한 추상 베이스 클래스입니다.
+ * <p>
+ * 템플릿 메서드 패턴을 사용하여 예외 발생 시에도 체인이 끊기지 않는 안정적인 실행을 보장합니다.
+ * </p>
+ */
+public abstract class AbstractRetrievalHandler implements RetrievalHandler {
+    protected static final Logger log = LoggerFactory.getLogger(AbstractRetrievalHandler.class);
+
+    private RetrievalHandler next;
+
+    /**
+     * 다음 핸들러를 체인에 연결하고, 연결된 핸들러를 반환하여 유연한 체인 구성을 지원합니다.
+     * 예: handler1.linkWith(handler2).linkWith(handler3);
+     */
+    @Override
+    public RetrievalHandler linkWith(RetrievalHandler nextHandler) {
+        this.next = nextHandler;
+        return nextHandler;
+    }
+
+    /**
+     * 핸들러의 실행 흐름을 제어하는 템플릿 메서드입니다. (수정 불가)
+     * <p>
+     * 이 메서드는 하위 클래스의 {@code doHandle}을 호출하고, 예외를 안전하게 처리하며,
+     * 다음 핸들러를 자동으로 호출하는 역할을 합니다.
+     * </p>
+     */
+    @Override
+    public void handle(Query query, List<Content> accumulator) {
+        final long startNs = System.nanoTime();
+        final int beforeSize = (accumulator != null) ? accumulator.size() : -1;
+        final String handler = this.getClass().getSimpleName();
+        final String queryForTrace = (query != null) ? query.text() : null;
+        final String queryHash = SafeRedactor.hashValue(queryForTrace);
+        final int queryLength = queryForTrace == null ? 0 : queryForTrace.length();
+        final int queryTokenEstimate = approxTokenCount(queryForTrace);
+
+        // Breadcrumb: stage start
+        appendTraceEvent("start", handler, beforeSize, beforeSize, 0L, true, null,
+                queryHash, queryLength, queryTokenEstimate);
+
+        boolean shouldContinue = true;
+        Throwable err = null;
+        try {
+            // 1. 하위 클래스에 실제 로직 실행을 위임
+            //    doHandle의 반환값에 따라 체인 지속 여부 결정
+            shouldContinue = doHandle(query, accumulator);
+        } catch (Throwable t) {
+            err = t;
+            // 2. 예외 발생 시, 로그를 남기고 체인은 계속 진행되도록 보장 (안정성 핵심)
+            log.warn("[RetrievalChain] Handler handlerHash={} handlerLength={} failed, but the chain will continue. Error: errorHash={} errorLength={}",
+                    SafeRedactor.hashValue(handler), handler == null ? 0 : handler.length(),
+                    SafeRedactor.hashValue(t.getMessage()), t.getMessage() == null ? 0 : t.getMessage().length());
+            shouldContinue = true; // 예외 시에도 다음 핸들러는 실행
+        } finally {
+            long ms = Math.max(0L, (System.nanoTime() - startNs) / 1_000_000L);
+            int afterSize = (accumulator != null) ? accumulator.size() : -1;
+            boolean continued = shouldContinue && next != null;
+            // Breadcrumb: stage end (with duration + delta)
+            appendTraceEvent("end", handler, beforeSize, afterSize, ms, continued, err,
+                    queryHash, queryLength, queryTokenEstimate);
+        }
+
+        // 3. 체인을 계속 진행해야 하고, 다음 핸들러가 존재하면 실행
+        if (shouldContinue && next != null) {
+            next.handle(query, accumulator);
+        }
+    }
+
+    private static void appendTraceEvent(
+            String phase,
+            String handler,
+            int before,
+            int after,
+            long ms,
+            boolean continued,
+            Throwable err,
+            String queryHash,
+            int queryLength,
+            int queryTokenEstimate) {
+        try {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("ts", java.time.Instant.now().toString());
+            ev.put("phase", phase);
+            ev.put("handler", handler);
+            ev.put("acc.before", before);
+            ev.put("acc.after", after);
+            if (before >= 0 && after >= 0) {
+                ev.put("acc.added", after - before);
+            }
+            ev.put("ms", ms);
+            ev.put("continued", continued);
+            if (queryHash != null && !queryHash.isBlank()) {
+                ev.put("queryHash", queryHash);
+            }
+            ev.put("queryLength", Math.max(0, queryLength));
+            ev.put("queryTokenEstimate", Math.max(0, queryTokenEstimate));
+            if (err != null) {
+                ev.put("err", "retrieval_handler_failed");
+                String msg = err.getMessage();
+                if (msg != null && !msg.isBlank()) {
+                    ev.put("errMsgHash", SafeRedactor.hashValue(msg));
+                    ev.put("errMsgLength", msg.length());
+                }
+            }
+
+            com.example.lms.search.TraceStore.append("retrieval.chain.events", ev);
+            com.example.lms.search.TraceStore.put("retrieval.chain.last", handler);
+            com.example.lms.search.TraceStore.put("retrieval.chain.last.phase", phase);
+            com.example.lms.search.TraceStore.put("retrieval.chain.last.ms", ms);
+            if (err != null) {
+                com.example.lms.search.TraceStore.put("retrieval.chain.last.err", "retrieval_handler_failed");
+            }
+        } catch (Throwable t) {
+            log.debug("[RetrievalChain] fail-soft stage={} err={}",
+                    "trace",
+                    SafeRedactor.traceLabelOrFallback(t.getClass().getSimpleName(), "unknown"));
+            // fail-soft
+        }
+    }
+
+    private static String safeClip(String s, int max) {
+        if (s == null) return null;
+        String t = s.replaceAll("\\s+", " ").trim();
+        if (t.length() <= max) return t;
+        return t.substring(0, Math.max(0, max)) + "...";
+    }
+
+    private static int approxTokenCount(String s) {
+        if (s == null || s.isBlank()) return 0;
+        return s.trim().split("\\s+").length;
+    }
+
+    /**
+     * 하위 클래스에서 실제 검색 로직을 구현해야 하는 추상 메서드입니다.
+     *
+     * @param query       사용자 쿼리
+     * @param accumulator 검색 결과를 추가할 리스트
+     * @return 체인을 계속 진행하려면 {@code true}, 중단하려면 {@code false}를 반환합니다.
+     */
+    protected abstract boolean doHandle(Query query, List<Content> accumulator);
+}

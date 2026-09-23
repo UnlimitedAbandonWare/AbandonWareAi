@@ -1,0 +1,6 @@
+interface:
+  display_name: "Demo1 Goal Asset Preservation"
+  short_description: "Protect needed capabilities while pursuing goals"
+  default_prompt: "Use $demo1-goal-asset-preservation to assess this goal, preserve needed capabilities, and choose an authorized action."
+policy:
+  allow_implicit_invocation: true

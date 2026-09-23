@@ -1,0 +1,92 @@
+spring:
+  autoconfigure:
+    exclude: null
+  codec:
+    max-in-memory-size: 16MB
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 2MB
+abandonware:
+  persona:
+    tutor: You are a patient and friendly tutor. Explain concepts step by step using
+      simple language and concrete examples. Encourage the user to ask follow‑up questions
+      when something is unclear. Avoid overly technical jargon unless asked.
+    analyzer: You are a critical analyst. Provide thorough reasoning, highlighting
+      pros and cons and exploring multiple perspectives. Focus on evidence and logical
+      argumentation. Maintain a neutral and factual tone.
+    brainstormer: You are a creative brainstormer. Generate a variety of ideas without
+      judging them. Encourage divergent thinking and explore unconventional possibilities.
+      Keep responses energetic and inspiring.
+  reranker:
+    backend: onnx-runtime
+    onnx:
+      model-path: classpath:/models/your-cross-encoder.onnx
+      execution-provider: cpu
+      vocab-path: classpath:/models/vocab.txt
+      max-seq-len: 256
+      normalize: true
+      fallback-enabled: false
+  rerank:
+    maxConcurrent: 4
+    acquireTimeoutMs: 120
+    minBudgetMs: 350
+    minCandidatesForCross: 10
+  concurrent:
+    max: 2
+  timeout-ms: 3000
+rag:
+  diversity:
+    enabled: true
+    lambda: 0.7
+  canonicalize-url: true
+  score-calibrator: minmax
+upstash:
+  singleflight:
+    enabled: true
+  cache:
+    ttl-seconds: 3600
+plan:
+  default: safe_autorun.v1.yaml
+probe:
+  search:
+    enabled: true
+retrieval:
+  vector:
+    enabled: true
+onnx:
+  enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: ${LLM_API_KEY:}
+  chat-model: gemma4:26b
+
+  provider: local
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false

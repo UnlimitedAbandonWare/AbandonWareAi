@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Autonomous Patch Conductor"
+  short_description: "Run bounded safe-patch cycles"
+  default_prompt: "Use $demo1-autonomous-patch-conductor to run a bounded demo-1 Safe Patch cycle from backlog to verified report."

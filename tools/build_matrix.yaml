@@ -1,0 +1,39 @@
+# Build Error → Remediation Matrix (regex-based)
+rules:
+  - id: fix_gradle_wrapper_missing
+    when: "(gradlew: .*: exec: ./gradlew-real: not found)|(gradlew-real.*not found)"
+    actions: [ensure_gradle_wrapper_script]
+  - id: lombok_missing_symbols
+    when: "(error: cannot find symbol.*@(?:Getter|Setter|Builder|Slf4j|RequiredArgsConstructor))|(lombok)"
+    actions: [ensure_gradle_lombok, enable_idea_annotation_processing]
+  - id: invalid_java_release
+    when: "(invalid source release)|(target release)|Unsupported class file major version"
+    actions: [ensure_java_17]
+  - id: spring_boot_plugin_not_found
+    when: "Plugin with id 'org.springframework.boot' not found"
+    actions: [ensure_spring_boot_plugin]
+  - id: maven_central_missing
+    when: "Could not resolve all files for configuration|Could not find org\.projectlombok:lombok"
+    actions: [ensure_maven_central_repo]
+  - id: javax_jakarta_mismatch
+    when: "package javax\.(validation|persistence)"
+    actions: [emit_jakarta_migration_hint]
+params:
+  lombok_version: "1.18.30"
+  spring_boot_version: "3.1.5"
+  java_release: "17"
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

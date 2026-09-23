@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Work Ledger"
+  short_description: "파일 변경 작업의 저널·백업·복구·상태·인수인계 절차"
+  default_prompt: "Use $demo1-work-ledger for file-changing demo-1 work: read docs/PROJECT_STATUS.md, register a journal via scripts/work_journal.py, preserve each change-set with scripts/codex_work_checkpoint.py, record real verification, and keep recovery scoped to declared targets."

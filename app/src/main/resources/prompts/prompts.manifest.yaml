@@ -1,0 +1,11 @@
+plans:
+  - id: brave
+    file: plans/brave.v1.yaml
+  - id: zero_break
+    file: plans/zero_break.v1.yaml
+  - id: rule_break
+    file: plans/rule_break.v1.yaml
+  - id: hyper_nova
+    file: plans/hyper_nova.v1.yaml
+  - id: sidetrain
+    file: plans/sidetrain.v1.yaml

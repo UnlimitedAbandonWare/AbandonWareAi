@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 RAG Strategy"
+  short_description: "Plan DSL and RAG strategy orchestration"
+  default_prompt: "Use $demo1-rag-strategy-orchestration to tune an existing demo-1 RAG strategy without adding duplicate pipelines."
+policy:
+  allow_implicit_invocation: true
+

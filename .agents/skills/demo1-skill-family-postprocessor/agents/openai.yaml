@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Skill Family Postprocessor"
+  short_description: "Validate demo-1 skill lanes"
+  default_prompt: "Use $demo1-skill-family-postprocessor to validate and tighten demo-1 derived skill families."

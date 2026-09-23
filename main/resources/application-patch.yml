@@ -1,0 +1,110 @@
+onnx:
+  enabled: true
+  max-concurrent: 2
+  gpu-id: 0
+  max-concurrency: 2
+  budget-ms: 250
+  try-acquire-ms: 10
+ocr:
+  enabled: true
+  provider: tesseract
+  min-confidence: 0.65
+  merge-lines: true
+upstash:
+  cache:
+    ttl-seconds: 3600
+    jitter-rate: 0.1
+cache:
+  swr:
+    enabled: true
+vector:
+  routing:
+    failover: true
+    health-check-interval: 5s
+    recover-decay: 0.1
+probe:
+  search:
+    enabled: true
+  # If missing, probe endpoints should be disabled (fail-soft).
+  admin-token: ${PROBE_TOKEN:__MISSING__}
+telemetry:
+  sse:
+    heartbeat-seconds: 20
+    buffer:
+      max-events: 500
+kg:
+  max-depth: 2
+  max-fanout: 12
+  edge-allow:
+  - isa
+  - part_of
+rate:
+  limit:
+    cost:
+      search: 1
+      detail: 2
+soak:
+  stop:
+    fail-rate: 0.2
+  dataset:
+    path: classpath:soak/*.jsonl
+translate:
+  quality:
+    threshold: 0.78
+  train:
+    max-retries: 2
+naver:
+  search:
+    retry:
+      max: 2
+    error-budget:
+      fail-rate: 0.15
+    timeout-ms: 3500
+    web-top-k: 15
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+retrieval:
+  vector:
+    enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: ${LLM_API_KEY:}
+  chat-model: gemma4:26b
+
+  provider: local
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+fallback:
+  enabled: false
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true

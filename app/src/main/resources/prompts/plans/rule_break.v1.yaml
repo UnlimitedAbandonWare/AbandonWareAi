@@ -1,0 +1,17 @@
+id: rule_break
+sequence:
+  - step: retrieve
+    handler: DynamicRetrievalHandlerChain
+    params:
+      use_web: true
+      use_vector: true
+      use_kg: true
+      total_k: 8
+gates:
+  - type: CitationGate
+    min_sources: 2
+  - type: FinalSigmoidGate
+    k: 10.0
+    x0: 0.0
+attenuation:
+  policy: controlled_relaxation

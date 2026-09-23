@@ -1,0 +1,7 @@
+interface:
+  display_name: "Next.js RAG BFF"
+  short_description: "Next.js App Router UI/BFF for demo-1 RAG"
+  default_prompt: "Use $nextjs-rag-bff to connect a Next.js App Router frontend to the demo-1 RAG backend."
+policy:
+  allow_implicit_invocation: true
+

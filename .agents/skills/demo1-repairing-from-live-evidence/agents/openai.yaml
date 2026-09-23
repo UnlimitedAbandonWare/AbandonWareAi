@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Live Evidence Repair"
+  short_description: "Repair from live evidence when optional history is missing"
+  default_prompt: "Use $demo1-repairing-from-live-evidence to route an authorized Demo1 repair when optional historical evidence is missing."

@@ -1,0 +1,241 @@
+{
+  "schemaVersion": "awx.devin-task-orchestrate.v1",
+  "alwaysFirst": ["preflight"],
+  "alwaysCaptureFor": ["hint-input-context", "fold-background-listen", "fold-wear-debug-record", "nova-focus"],
+  "captureBefore": "capture-before",
+  "captureAfter": "capture-after",
+  "sourceEditSignals": [
+    "소스 수정", "최소 수정", "패치", "수정해", "구현",
+    "implement", "source patch", "authorized source", "최소 패치"
+  ],
+  "phases": {
+    "preflight": {
+      "id": "preflight",
+      "skill": "demo1-work-ledger",
+      "guard": "demo1-project-root",
+      "tools": [
+        "python -B scripts/agent_preflight.py --root .",
+        "python -B scripts/work_journal.py list --active",
+        "powershell -NoProfile -File __patch_drop__/source_edit_session.ps1 -Action status -Json"
+      ],
+      "skip": [],
+      "write": [],
+      "stop": "preflight JSON observed; own journal open; foreign leases listed not stolen"
+    },
+    "capture-before": {
+      "id": "capture-before",
+      "skill": "demo1-evidence-debugging",
+      "tools": [
+        "python -B scripts/devin_task_orchestrate.py capture --role wear --invoke"
+      ],
+      "skip": [],
+      "write": [],
+      "stop": "data/agent-handoff/display-debug/latest.json exists with patchHints; read it before any write"
+    },
+    "capture-after": {
+      "id": "capture-after",
+      "skill": "demo1-evidence-debugging",
+      "tools": [
+        "python -B scripts/devin_task_orchestrate.py capture --role wear --invoke"
+      ],
+      "skip": [],
+      "write": [],
+      "stop": "After-snapshot stored under data/agent-handoff/display-debug/; compare with the previous stamp file; journal refs the path"
+    },
+    "trace-hint-path": {
+      "id": "trace-hint-path",
+      "skill": "demo1-evidence-debugging",
+      "guard": "demo1-conversate-hint-context",
+      "tools": [
+        "python -B scripts/devin_task_orchestrate.py capture --role wear --invoke",
+        "python -B .agents/skills/demo1-adaptive-rule-lab/scripts/catalog.py search --query \"hint context memory\""
+      ],
+      "skip": ["demo1-triad-deliberation", "demo1-source-edit-three-way-preflight"],
+      "write": [],
+      "stop": "For one cue: request id, model, included past, settings version, leftover-on-screen vs newly generated; snapshot file named"
+    },
+    "select-hint-input": {
+      "id": "select-hint-input",
+      "skill": "demo1-conversate-hint-context",
+      "guard": "demo1-meta-display-simple-caption",
+      "tools": [
+        "python -B scripts/work_journal.py note --kind plan",
+        "python -B scripts/codex_work_checkpoint.py begin"
+      ],
+      "skip": ["demo1-triad-deliberation", "demo1-source-edit-three-way-preflight"],
+      "write": [
+        "main/java/com/example/lms/assist/ConversateSessionService.java",
+        "main/java/com/example/lms/assist/ConversateCardPrompt.java",
+        "main/java/com/example/lms/assist/ConversateApiCueService.java",
+        "main/java/com/example/lms/assist/DisplayConversateController.java",
+        "main/resources/static/assets/display/index.html",
+        "main/resources/static/assets/display/app.js"
+      ],
+      "stop": "Fold settings persist; next cue uses one snapshot; hint-target-chars and display TTL untouched"
+    },
+    "stale-response-gate": {
+      "id": "stale-response-gate",
+      "skill": "demo1-conversate-hint-context",
+      "tools": ["python -B scripts/devin_task_orchestrate.py capture --role wear --invoke"],
+      "skip": ["new-versioner"],
+      "write": [
+        "main/java/com/example/lms/assist/ConversateApiCueService.java",
+        "main/java/com/example/lms/assist/ConversateSessionService.java"
+      ],
+      "stop": "Late request A cannot overwrite B; epoch/requestId/hintId checked before shared state and display"
+    },
+    "verify-hint-context": {
+      "id": "verify-hint-context",
+      "skill": "demo1-toolchain-auto-select",
+      "tools": [
+        ".\\gradlew.bat test --tests ConversateApiCueServiceTest --tests ConversateSessionServiceTest --tests DisplayConversateHttpTest",
+        "python -B scripts/devin_task_orchestrate.py capture --role wear --invoke"
+      ],
+      "skip": [],
+      "write": [],
+      "stop": "Focused tests green; diagnostics show applied window/amount/epoch without full dialogue"
+    },
+    "trace-listen": {
+      "id": "trace-listen",
+      "skill": "frontend-display-debug",
+      "guard": "demo1-evidence-debugging",
+      "tools": ["python -B scripts/devin_task_orchestrate.py capture --role wear --invoke"],
+      "skip": ["unused-websocket-guess"],
+      "write": [],
+      "stop": "First stop among mic, ASR, server, session, lens identified from live source; snapshot named"
+    },
+    "patch-listen": {
+      "id": "patch-listen",
+      "skill": "frontend-display-debug",
+      "tools": ["python -B scripts/codex_work_checkpoint.py begin"],
+      "skip": ["android-helper-app"],
+      "write": [
+        "main/resources/static/assets/display/display-voice.js",
+        "main/resources/static/assets/display/display-conversate.js",
+        "main/resources/static/conversate/app.js",
+        "main/java/com/example/lms/assist/DisplayConversateController.java"
+      ],
+      "stop": "Hidden page is not user-stop; display tab does not steal capture; last-audio and last-transcript times visible"
+    },
+    "verify-listen": {
+      "id": "verify-listen",
+      "skill": "frontend-display-debug",
+      "tools": ["python -B scripts/devin_task_orchestrate.py capture --role wear --invoke"],
+      "skip": [],
+      "write": [],
+      "stop": "Foreground audio+transcript continues; other-tab/lock classified; user-stop actually stops capture"
+    },
+    "nova-focus-contract": {
+      "id": "nova-focus-contract",
+      "skill": "demo1-nova-focus",
+      "guard": "demo1-core-request-router",
+      "tools": [
+        "python -B scripts/work_journal.py open",
+        "powershell -NoProfile -File __patch_drop__/source_edit_session.ps1 -Action status -Json"
+      ],
+      "skip": ["demo1-triad-deliberation"],
+      "write": [],
+      "stop": "Canonical seams confirmed on live source; declared-target lease conflicts resolved or deferred; spec read from agent-prompts/nova-focus/ (addendum supersedes paged display + first-render timer); OFF-baseline tests planned first"
+    },
+    "nova-focus-implement": {
+      "id": "nova-focus-implement",
+      "skill": "demo1-nova-focus",
+      "tools": ["python -B scripts/codex_work_checkpoint.py begin"],
+      "skip": ["new-mic-or-asr", "focus-answers-in-hint-field", "page-number-ui-for-focus", "shared-cancelWork-for-focus"],
+      "write": [
+        "main/java/com/example/lms/assist/ConversateSessionService.java",
+        "main/java/com/example/lms/assist/ConversateAsrBridge.java",
+        "main/java/com/example/lms/assist/ConversateQuestionPolicy.java",
+        "main/java/com/example/lms/assist/DisplayConversateController.java",
+        "main/java/com/example/lms/assist/DisplayRelay.java",
+        "main/java/com/example/lms/service/ChatService.java",
+        "main/java/com/example/lms/service/ChatWorkflow.java",
+        "main/resources/static/assets/display/",
+        "src/test/"
+      ],
+      "stop": "Wake routing before hints-OFF early return; focus work lifecycle separate from cancelWork/inflight; one persistent room; bounded context reaches provider messages (fake-model capture); additive focus field on /lens/text; sequential display on real mountLens path"
+    },
+    "nova-focus-verify": {
+      "id": "nova-focus-verify",
+      "skill": "demo1-toolchain-auto-select",
+      "tools": [
+        ".\\gradlew.bat test --tests <NovaFocusTests>",
+        "python -B scripts/devin_task_orchestrate.py capture --role wear --invoke"
+      ],
+      "skip": ["claim-from-http-200-or-dom-only"],
+      "write": [],
+      "stop": "OFF regression green; hints-OFF + Nova-ON works; duplicate interim/final never double-submits; idle timer starts at presentation_done only; unrun device items marked unverified"
+    },
+    "investigate-then-patch": {
+      "id": "investigate-then-patch",
+      "skill": "demo1-evidence-debugging",
+      "guard": "demo1-core-request-router",
+      "tools": [
+        "python -B scripts/agent_preflight.py --root .",
+        "Debug-RAG.bat -Action status"
+      ],
+      "skip": [],
+      "write": [],
+      "stop": "Live path named; smallest existing skill chosen; no new stack"
+    }
+  },
+  "playbooks": [
+    {
+      "id": "fold-wear-debug-record",
+      "order": 5,
+      "signals": [
+        "디버깅", "디버그 남", "재현했", "재현 남", "wear-test",
+        ".mp4", "2383", "debug snapshot", "디버깅 내역"
+      ],
+      "phases": []
+    },
+    {
+      "id": "nova-focus",
+      "order": 8,
+      "signals": [
+        "노바", "nova focus", "nova-focus", "novafocus", "집중 대화",
+        "집중창", "호출어", "wake word", "wake-word", "wakeListenTimeout",
+        "presentation_done", "NovaFocus"
+      ],
+      "suppress": ["hint-input-context", "fold-background-listen"],
+      "phases": ["nova-focus-contract", "nova-focus-implement", "nova-focus-verify"]
+    },
+    {
+      "id": "hint-input-context",
+      "order": 10,
+      "signals": [
+        "과거 대화", "힌트 참고", "새 맥락", "주제 전환", "늦은 응답",
+        "맥락 범위", "TokenWindow", "previous_response_id", "과거 맥락",
+        "지금부터 새", "old topic", "late fallback", "hint context",
+        "대화 기억", "참고 시간", "past context"
+      ],
+      "phases": ["trace-hint-path", "select-hint-input", "stale-response-gate", "verify-hint-context"]
+    },
+    {
+      "id": "fold-background-listen",
+      "order": 20,
+      "signals": [
+        "백그라운드 수음", "다른 창", "다른 탭", "visibilitychange",
+        "pagehide", "1~2분", "1-2분", "wakeLock", "안경 표시 탭",
+        "수음이 끊", "background listen", "capture pause"
+      ],
+      "phases": ["trace-listen", "patch-listen", "verify-listen"]
+    },
+    {
+      "id": "investigate-then-patch",
+      "order": 90,
+      "fallback": true,
+      "signals": [],
+      "phases": ["investigate-then-patch"]
+    }
+  ],
+  "forbidden": [
+    "wipe-stored-transcripts",
+    "new-memory-framework-first",
+    "mix-hint-output-length-with-input-window",
+    "restore-excluded-past-on-fallback",
+    "void-every-cue-on-one-char-edit",
+    "steal-foreign-lease",
+    "patch-without-latest-snapshot"
+  ]
+}

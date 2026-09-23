@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="_csrf" th:if="${_csrf != null}" th:content="${_csrf.token}">
+    <meta name="_csrf_header" th:if="${_csrf != null}" th:content="${_csrf.headerName}">
+    <title>AbandonWare AI</title>
+    <link rel="stylesheet" href="/css/chat-style.css?v=conversation-20260923-document-1">
+    <script defer src="/js/fetch-wrapper.js"></script>
+    <script defer src="/js/brain-state-ui.js"></script>
+    <script defer src="/js/vendor/chat/marked-18.0.14.min.js"></script>
+    <script defer src="/js/vendor/chat/dompurify-3.4.15.min.js"></script>
+    <script defer src="/js/vendor/chat/katex-0.18.7.min.js"></script>
+    <script defer src="/js/chat-answer-renderer.js?v=20260923-document-1"></script>
+  <script defer src="/js/chat.js?v=chat-conversation-20260923-v15"></script>
+  <script defer src="/js/chat-model-picker.js?v=20260923-dialog-1"></script>
+</head>
+<body class="chat-app" data-auth-mode="form-login" data-vibe-feature-pool="open" data-feature-pool="open" th:attr="data-chat-surface=${chatSurface}">
+<span hidden data-testid="feature-pool" data-vibe-feature-pool-state="open">open</span>
+<header class="top-utility-bar">
+    <a class="brand-mark" href="/chat" aria-label="AbandonWare AI"><span class="brand-symbol" aria-hidden="true">a<span>•</span></span>AbandonWare <span class="brand-ai">AI</span></a>
+    <nav class="app-menu-bar" aria-label="Primary">
+        <details class="admin-tools">
+            <summary>운영 도구</summary>
+            <div class="admin-tools-menu">
+                <a href="/admin/brain-state" data-menu-action="open-brain-state" data-admin-surface="protected" aria-label="Open protected Brain state console" title="Open protected Brain state console">Brain</a>
+                <a href="/admin/pipeline-status" data-menu-action="open-pipeline-status" data-admin-surface="protected" aria-label="Open protected Pipeline status console" title="Open protected Pipeline status console"><span>Pipeline Status</span></a>
+                <a href="/admin/rag-ops-cockpit" data-menu-action="open-rag-ops" data-admin-surface="protected" aria-label="Open protected RAG operations console" title="Open protected RAG operations console">RAG Ops</a>
+                <a href="/admin/vector-diagnostics" data-menu-action="open-vector-diagnostics" data-admin-surface="protected" aria-label="Open protected Vector diagnostics console" title="Open protected Vector diagnostics console">Vector</a>
+                <a href="/model-settings" data-menu-action="open-model-settings" data-admin-surface="protected" aria-label="Open protected Model settings console" title="Open protected Model settings console">Models</a>
+            </div>
+        </details>
+        <a class="sign-in-link" href="/login">운영자 로그인</a>
+    </nav>
+    <strong data-current-model th:text="${currentModel}">모델 확인 중</strong>
+</header>
+<main class="chat-layout">
+    <details class="conversation-sidebar" id="historyPanel" open>
+        <summary aria-label="대화 기록 접기 또는 펼치기"><span aria-hidden="true">☰</span><span class="history-label">대화 기록</span></summary>
+        <div class="sidebar-body">
+            <button id="newChatBtn" class="new-chat-action" type="button" title="새 대화" data-testid="chat-new-chat-button"><span aria-hidden="true">＋</span> 새 대화</button>
+            <p class="sidebar-label">최근 대화</p>
+            <div class="session-mode-list" data-session-mode-list aria-label="내 대화 기록" aria-live="polite"></div>
+            <p class="sidebar-note">생각의 흐름을 이어가세요.<br>답변과 근거는 대화에 함께 남습니다.</p>
+        </div>
+    </details>
+    <section class="chat-area-wrapper" aria-label="Chat">
+        <header class="conversation-header">
+            <div class="conversation-copy"><h1>대화</h1><span class="workspace-caption">생각을 이어가는 공간</span></div>
+            <details class="answer-tools">
+                <summary>이번 답변 진단 <span aria-hidden="true">↗</span></summary>
+                <div class="answer-tools-panel">
+                    <p class="panel-heading">이번 답변의 진행 상태</p>
+<div class="status-rail" id="coreStatusRail" data-core-status="idle" data-testid="chat-core-status-rail" >
+            <div class="status-pill" aria-label="Route: idle" title="Route: idle"><strong>Route</strong> <span id="streamStatus" data-orch-field="route" data-testid="chat-stream-status">idle</span></div>
+            <div class="status-pill" aria-label="Model: gemma4:26b" title="Model: gemma4:26b"><strong>Model</strong> <span id="modelStatus" data-testid="chat-model-status" th:text="${currentModel} ?: 'gemma4:26b'">gemma4:26b</span></div>
+            <div class="status-pill" aria-label="Context: AUTO" title="Context: AUTO"><strong>Context</strong> <span id="searchStatus" data-orch-field="contextCounts" data-testid="chat-search-status">AUTO</span></div>
+            <div class="status-pill" aria-label="RAG: OFF" title="RAG: OFF"><strong>RAG</strong> <span id="ragStatus" data-orch-field="rag" data-testid="chat-rag-status">OFF</span></div>
+            <div class="status-pill" aria-label="Trace: ready" title="Trace: ready"><strong>Trace</strong> <span id="traceStatus" data-orch-field="traceTurn" data-testid="chat-trace-status">ready</span></div>
+            <div class="status-pill" aria-label="Quality: not assessed" title="Quality: not assessed"><strong>Quality</strong> <span id="qualityStatus" data-orch-field="quality" data-testid="chat-quality-status">미평가</span></div>
+            <div class="status-pill" data-health-pill role="status" aria-live="polite" aria-atomic="true" aria-label="Health: checking" title="Health: checking"><strong>Health</strong> <span id="healthStatus" data-orch-field="health" data-status="warn" data-testid="chat-health-status">checking</span></div>
+            <div id="decisionRibbon"
+                 class="decision-ribbon"
+                 data-testid="chat-decision-ribbon"
+                 aria-label="Observed decision: state not observed">
+                <strong class="decision-ribbon__title">Decision</strong>
+                <ol class="decision-ribbon__stages">
+                    <li data-decision-stage="route" data-state="not-observed" aria-label="Route: state not observed">
+                        <span class="decision-ribbon__stage">Route</span>
+                        <span data-decision-state-label>Not observed</span>
+                    </li>
+                    <li data-decision-stage="context" data-state="not-observed" aria-label="Context: state not observed">
+                        <span class="decision-ribbon__stage">Context</span>
+                        <span data-decision-state-label>Not observed</span>
+                    </li>
+                    <li data-decision-stage="retrieve" data-state="not-observed" aria-label="Retrieve: state not observed">
+                        <span class="decision-ribbon__stage">Retrieve</span>
+                        <span data-decision-state-label>Not observed</span>
+                    </li>
+                    <li data-decision-stage="evidence" data-state="not-observed" aria-label="Evidence: state not observed">
+                        <span class="decision-ribbon__stage">Evidence</span>
+                        <span data-decision-state-label>Not observed</span>
+                    </li>
+                    <li data-decision-stage="answer" data-state="not-observed" aria-label="Answer: state not observed">
+                        <span class="decision-ribbon__stage">Answer</span>
+                        <span data-decision-state-label>Not observed</span>
+                    </li>
+                    <li data-decision-stage="recover" data-state="not-observed" aria-label="Recover: state not observed">
+                        <span class="decision-ribbon__stage">Recover</span>
+                        <span data-decision-state-label>Not observed</span>
+                    </li>
+                </ol>
+            </div>
+        </div>
+<details class="diagnostics-disclosure" data-testid="chat-diagnostics" data-admin-diagnostics th:if="${chatDiagnosticsEnabled}">
+            <summary id="diagnosticsSummaryControl" aria-label="Diagnostics: Checking signals"><span>Diagnostics</span><span id="diagnosticsSummary" data-status="WARN">Checking signals</span></summary>
+            <div class="diagnostics-stack">
+                <section aria-label="Runtime toolkit">
+                    <div id="runtimeToolkitStatus" role="status" data-status="WARN">런타임 검증 대기</div>
+                    <pre id="runtimeToolkitServices" style="white-space:pre-wrap;overflow-wrap:anywhere">현재 런타임 증거가 없습니다.</pre>
+                </section>
+                <div class="debug-heartbeat-bar" id="debugHeartbeatBar" data-debug-heartbeat="root" aria-label="Debug heartbeat">
+            <div class="debug-heartbeat-summary" data-debug-heartbeat-summary data-status="WARN">
+                <strong>Core wait / UI wait / External wait</strong>
+                <small>loading</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="core" data-status="WARN">
+                <strong>Core</strong><small>loading</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="ui" data-status="WARN">
+                <strong>UI</strong><small>loading</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="external" data-status="WARN">
+                <strong>External</strong><small>loading</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="supabase" data-status="WARN">
+                <strong>Supabase</strong><small>evidence</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="browser" data-status="WARN">
+                <strong>Browser</strong><small>evidence</small>
+            </div>
+            <div class="debug-heartbeat-card debug-heartbeat-card--wide" data-debug-heartbeat-field="action" data-status="WARN">
+                <strong>Action</strong><small>none</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="gate" data-status="WARN">
+                <span>Gate</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="model" data-status="WARN">
+                <span>Model</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="search" data-status="WARN">
+                <span>Search</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="ladder" data-status="WARN">
+                <span>Ladder</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="trace" data-status="WARN">
+                <span>Trace</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card debug-heartbeat-card--wide" data-debug-heartbeat-field="harmony" data-status="WARN">
+                <span>Harmony</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card debug-heartbeat-card--wide" data-debug-heartbeat-field="traceMemory" data-status="WARN">
+                <span>Trace Memory</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="metrics" data-status="WARN">
+                <span>Metrics</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="memory" data-status="WARN">
+                <span>Memory</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="lanes" data-status="WARN">
+                <span>Lanes</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="strategy" data-status="WARN">
+                <span>Strategy</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="failures" data-status="WARN">
+                <span>Failures</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="qtx" data-status="WARN">
+                <span>QTX</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card debug-heartbeat-card--wide" data-debug-heartbeat-field="causal" data-status="WARN">
+                <span>Probe Round</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="retrievers" data-status="WARN">
+                <span>Retrievers</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="breaker" data-status="WARN">
+                <span>Breaker</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="liveStream" data-status="WARN">
+                <span>Live</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="modelWait" data-status="WARN">
+                <span>Wait</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="timeout" data-status="WARN">
+                <span>Timeout</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="cancel" data-status="WARN">
+                <span>Cancel</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="answer" data-status="WARN">
+                <span>Answer</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="computer" data-status="WARN">
+                <span>Computer</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="noether" data-status="WARN">
+                <span>Noether</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="freshness" data-status="WARN">
+                <span>Fresh</span><small>unknown</small>
+            </div>
+            <div class="debug-heartbeat-card" data-debug-heartbeat-field="patchdrop" data-status="WARN">
+                <span>PatchDrop</span><small>unknown</small>
+            </div>
+        </div>
+
+        <div class="debug-heartbeat-matrix" data-debug-matrix="root" aria-label="Debug matrix">
+            <div class="debug-matrix-cell" data-debug-matrix-cell="core-ui" data-status="warn"><strong>Core/UI</strong><small>loading</small></div>
+            <div class="debug-matrix-cell" data-debug-matrix-cell="model-answer" data-status="warn"><strong>Model/Answer</strong><small>loading</small></div>
+            <div class="debug-matrix-cell" data-debug-matrix-cell="search-trace" data-status="warn"><strong>Search/Trace</strong><small>loading</small></div>
+            <div class="debug-matrix-cell" data-debug-matrix-cell="external-proof" data-status="warn"><strong>External Proof</strong><small>loading</small></div>
+        </div>
+
+        <div class="debug-cockpit-rail" data-debug-cockpit="root" aria-label="Debug cockpit">
+            <div class="debug-cockpit-cell" data-debug-cockpit-cell="stream" data-status="warn"><strong>Stream</strong><small>loading</small></div>
+            <div class="debug-cockpit-cell" data-debug-cockpit-cell="model" data-status="warn"><strong>Model</strong><small>loading</small></div>
+            <div class="debug-cockpit-cell" data-debug-cockpit-cell="search" data-status="warn"><strong>Search</strong><small>loading</small></div>
+            <div class="debug-cockpit-cell" data-debug-cockpit-cell="external" data-status="warn"><strong>External</strong><small>loading</small></div>
+            <div class="debug-cockpit-cell" data-debug-cockpit-cell="next" data-status="warn"><strong>Next</strong><small>loading</small></div>
+        </div>
+
+        <div class="debug-mission-strip" data-debug-mission="root" aria-label="Debug mission">
+            <div class="debug-mission-axis" data-debug-mission-axis="core" data-status="warn"><strong>Core</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-mission-axis" data-debug-mission-axis="ui" data-status="warn"><strong>UI</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-mission-axis" data-debug-mission-axis="external" data-status="warn"><strong>External</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-mission-axis" data-debug-mission-axis="next" data-status="warn"><strong>Next</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-mission-axis" data-debug-mission-axis="focus" data-status="warn"><strong>Focus</strong><span>pipeline</span><small>loading</small></div>
+        </div>
+
+        <div class="debug-flow-rail" data-debug-flow="root" aria-label="Debug flow">
+            <div class="debug-flow-step" data-debug-flow-step="input" data-status="warn"><strong>Input</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-flow-step" data-debug-flow-step="model" data-status="warn"><strong>Model</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-flow-step" data-debug-flow-step="search" data-status="warn"><strong>Search</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-flow-step" data-debug-flow-step="trace" data-status="warn"><strong>Trace</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-flow-step" data-debug-flow-step="external" data-status="warn"><strong>External</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-flow-step" data-debug-flow-step="action" data-status="warn"><strong>Action</strong><span>WAIT</span><small>loading</small></div>
+        </div>
+
+        <div class="debug-proof-strip" data-debug-proof="root" aria-label="Debug proof">
+            <div class="debug-proof-cell" data-debug-proof-cell="local" data-status="warn"><strong>Local</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-proof-cell" data-debug-proof-cell="browser" data-status="warn"><strong>Browser</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-proof-cell" data-debug-proof-cell="computer" data-status="warn"><strong>Computer</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-proof-cell" data-debug-proof-cell="supabase" data-status="warn"><strong>Supabase</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-proof-cell" data-debug-proof-cell="producer" data-status="warn"><strong>Producer</strong><span>WAIT</span><small>loading</small></div>
+            <div class="debug-proof-cell" data-debug-proof-cell="action" data-status="warn"><strong>Action</strong><span>WAIT</span><small>loading</small></div>
+        </div>
+
+        <div class="brain-state-panel brain-state-panel--compact" data-brain-state-root>
+            <div data-brain-list="sources"></div>
+            <div data-brain-list="recent"></div>
+            <div data-brain-list="anchor-map"></div>
+            <div data-brain-list="query-time"></div>
+        </div>
+            </div>
+        </details>
+                </div>
+            </details>
+        </header>
+        <div class="response-settings" data-testid="chat-response-settings">
+            <div class="control-panel" aria-label="Chat controls">
+                <label class="model-control"><span>모델</span>
+<select id="modelSelect" name="model" aria-label="Model" data-testid="chat-model-select">
+                        <option th:if="${models == null || #lists.isEmpty(models)}"
+                                th:value="${currentModel} ?: 'gemma4:26b'"
+                                th:text="${currentModel} ?: 'gemma4:26b'"
+                                selected>gemma4:26b</option>
+                        <option th:each="model : ${models}"
+                                th:value="${model.modelId}"
+                                th:text="${model.modelId}"
+                                th:selected="${model.modelId == currentModel}">model</option>
+                    </select>
+                
+                </label>
+                <button id="modelBrowserTrigger" class="model-browser-trigger" type="button" aria-haspopup="dialog" aria-controls="modelBrowser">모델 탐색 ⌄</button>
+                <dialog id="modelBrowser" class="model-browser" aria-labelledby="modelBrowserTitle" aria-modal="true">
+                    <div class="model-browser-panel">
+                        <header class="model-browser-heading"><h2 id="modelBrowserTitle">다음 질문에 사용할 모델</h2><button type="button" data-model-close aria-label="모델 탐색 닫기">닫기</button></header>
+                        <input type="search" data-model-search aria-label="모델 또는 제공업체 검색" placeholder="모델 또는 제공업체 검색">
+                        <div class="model-browser-filters">
+                            <select data-model-filter aria-label="모델 목록 필터">
+                                <option value="available">선택 가능</option><option value="all">전체 카탈로그</option>
+                                <option value="unavailable">연결 필요</option><option value="favorites">즐겨찾기</option><option value="recent">최근 선택</option>
+                            </select>
+                            <button type="button" data-model-refresh>다시 확인</button>
+                        </div>
+                        <p data-model-catalog-status role="status">모델 상태 확인 중</p>
+                        <p data-model-count role="status" tabindex="-1"></p>
+                        <div class="model-browser-results" data-model-results></div>
+                        <button type="button" data-model-more hidden>모델 더 보기</button>
+                    </div>
+                </dialog>
+                <label><span>검색</span>
+                    <select id="searchModeSelect" name="searchMode" aria-label="Search" data-testid="chat-search-mode-select">
+                        <option value="AUTO">자동 검색</option>
+                        <option value="OFF" selected>검색 끔</option>
+                        <option value="FORCE_LIGHT">빠른 검색</option>
+                        <option value="FORCE_DEEP">깊이 검색</option>
+                    </select>
+                </label>
+                <label class="toggle-row"><input id="useRagToggle" type="checkbox" aria-label="Use RAG context" data-testid="chat-rag-toggle"><span>RAG</span></label>
+            </div>
+            <span id="responseSettingsSummary" class="sr-only">설정 확인 중</span>
+        </div>
+        <div id="chatAccessNotice" class="chat-access-notice" role="status" hidden></div>
+        <div class="chat-transcript-region">
+            <div id="chatEmptyState" class="chat-empty-state">
+                <div class="welcome-symbol" aria-hidden="true">✦</div>
+                <p class="eyebrow">당신의 다음 생각</p>
+                <h2>무엇을 함께 생각해 볼까요?</h2>
+                <p>궁금한 것을 묻고, 아이디어를 넓히고, 근거를 확인하세요.</p>
+                <div class="quick-prompts" aria-label="Quick prompts">
+                    <button class="qa" type="button" data-testid="quick-prompt-operational-stability" data-q="어려운 개념을 쉬운 비유와 예시로 설명해줘. 먼저 내가 궁금한 개념을 물어봐." aria-label="개념을 쉽게 설명하는 질문 작성"><span aria-hidden="true">◎</span><strong>개념을 쉽게</strong><small>복잡한 이야기를 명료하게</small></button>
+                    <button class="qa" type="button" data-testid="quick-prompt-compare-claims" data-q="내 아이디어의 장점과 반례를 함께 검토해줘. 먼저 아이디어를 물어봐." aria-label="아이디어를 검토하는 질문 작성"><span aria-hidden="true">◇</span><strong>아이디어 넓히기</strong><small>다른 관점과 가능성 찾기</small></button>
+                    <button class="qa" type="button" data-testid="quick-prompt-verify-facts" data-q="이 질문의 사실관계를 증거에 따라 확인해줘. 확인 가능한 출처와 반례를 함께 제시하고, 근거가 부족하면 불확실하다고 알려줘." aria-label="근거를 확인하는 질문 작성"><span aria-hidden="true">⌕</span><strong>근거 확인하기</strong><small>주장과 사실을 구분하기</small></button>
+                </div>
+                <p class="empty-note">예시를 누르면 입력창에 채워집니다. 전송하기 전까지 보내지 않습니다.</p>
+            </div>
+            <div id="chatWindow" role="log" aria-live="polite" aria-label="대화 내용"></div>
+        </div>
+        <div class="composer-dock">
+            <form id="chatForm" class="composer" method="post" action="/api/chat" data-testid="chat-composer">
+                <textarea id="messageInput" name="message" rows="2" autocomplete="off" placeholder="질문이나 떠오른 생각을 적어 주세요…" aria-label="Message" data-testid="chat-message-input"></textarea>
+                <button id="sendBtn" class="primary" type="button" title="전송" data-testid="chat-send-button" aria-label="질문 전송">↑</button>
+                <button id="stopBtn" class="ghost" type="button" title="중지" data-testid="chat-stop-button" disabled hidden>중지</button>
+            </form>
+            <p class="composer-note"><span>Enter로 전송 · Shift+Enter로 줄바꿈</span><span>답변의 중요한 정보는 근거를 확인하세요.</span></p>
+        </div>
+    </section>
+</main>
+<!-- === Scripts -->
+</body>
+</html>

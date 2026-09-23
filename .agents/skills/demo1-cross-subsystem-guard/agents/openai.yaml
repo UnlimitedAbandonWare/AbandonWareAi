@@ -1,0 +1,4 @@
+interface:
+  display_name: "demo1 cross subsystem guard"
+  short_description: "Gate patches that touch multiple Dynamic RAG subsystems"
+  default_prompt: "Use $demo1-cross-subsystem-guard to map changed files to affected subsystems and run focused guard tests."

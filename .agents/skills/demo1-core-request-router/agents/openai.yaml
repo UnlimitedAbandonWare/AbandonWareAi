@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Core Request Router"
+  short_description: "Display / RAG / LLM 요청을 기존 스킬로만 라우팅"
+  default_prompt: "Use $demo1-core-request-router to classify this demo-1 ask, load one primary existing skill (Display caption, RAG, or API/LLM), run $demo1-api-spec-drift-guard if specs disagree, and avoid adding more docs or mixed stacks."

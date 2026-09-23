@@ -1,0 +1,10 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: recency_first.v1
+k_schedule: [16, 12, 8]
+overdrive: false
+official_sources_only: true
+onnx_enabled: true

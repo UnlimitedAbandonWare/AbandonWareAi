@@ -1,0 +1,17 @@
+spring:
+  config:
+    activate:
+      on-profile: ablation-conservative
+
+# Stage penalty presets (conservative)
+uaw:
+  ablation:
+    penalty:
+      default: 0.08
+      websearch:
+        base: 0.25
+        starvation: 0.18
+        domain-misroute: 0.15
+      query-transformer: 0.12
+      retrieval: 0.15
+      rerank: 0.10

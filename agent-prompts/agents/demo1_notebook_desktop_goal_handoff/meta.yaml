@@ -1,0 +1,7 @@
+id: demo1_notebook_desktop_goal_handoff
+version: "1.0.0"
+language: ko
+scope: notebook-readonly-goal-to-desktop-prompt-tooling-handoff
+system: system_ko.md
+manifest_registered: true
+owner: desktop

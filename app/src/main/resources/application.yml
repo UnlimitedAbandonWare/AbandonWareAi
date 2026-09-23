@@ -1,0 +1,104 @@
+# [AWX][runtime-config] imports are owned by root application.yml/profile overrides.
+# spring.config.import: optional:application-proj-override.yml, ${spring.config.import:}
+spring:
+  application:
+    name: nova-app
+  profiles:
+    default: ${SPRING_PROFILES_DEFAULT:local}
+server:
+  port: ${SERVER_PORT:8080}
+rag:
+  langgraph:
+    mode: ${RAG_LANGGRAPH_MODE:off}
+    max-steps: ${RAG_LANGGRAPH_MAX_STEPS:8}
+    timeout-ms: ${RAG_LANGGRAPH_TIMEOUT_MS:15000}
+    checkpoint: ${RAG_LANGGRAPH_CHECKPOINT:memory}
+onnx:
+  enabled: ${ONNX_ENABLED:false}
+gate:
+  citation:
+    enabled: true
+    min: ${GATE_CITATION_MIN:2}
+  finalSigmoid:
+    enabled: true
+    k: 8.0
+    x0: 0.0
+    threshold: ${GATE_FINAL_SIGMOID_THRESHOLD:0.70}
+  contextDiversity:
+    min: ${GATE_CONTEXT_DIVERSITY_MIN:0.20}
+selfask:
+  enabled: false
+train_idle:
+  enabled: false
+autolearn:
+  enabled: false
+llm:
+  provider: local
+  base-url: ${LLM_BASE_URL:http://localhost:11434/v1}
+  chat-model: ${LLM_CHAT_MODEL:gemma4:26b}
+  api-key: ${LLM_API_KEY:}
+fallback:
+  enabled: false
+local-llm:
+  autostart: false
+  health-check-url: http://localhost:8000/health
+  health-check-timeout: 30s
+  start-command: docker-compose -f vllm-compose.yml up -d
+  enabled: ${LOCAL_LLM_ENABLED:false}
+  base-url: ${LOCAL_LLM_BASE_URL:http://localhost:11434/v1}
+zsys:
+  onnx:
+    enabled: ${ONNX_ENABLED:false}
+    gpu-id: ${ONNX_DEVICE_ID:${ZSYS_ONNX_GPU_ID:0}}
+    max-concurrency: ${ZSYS_ONNX_MAX_CONCURRENCY:1}
+jammini:
+  guard:
+    mode: soft
+    profile: PROFILE_MEMORY
+    evidence:
+      mode: RELAXED
+      min-coverage: 0.35
+      allow-no-citation-for:
+        - GAME
+        - SUBCULTURE
+        - LONGTAIL_PERSON
+  memory:
+    enabled: true
+    low-guardrail: true
+    progressive: true
+  rag:
+    flush:
+      enabled: true
+      min-results: 3
+      aggressive-top-k: 32
+    mode-default: BALANCED
+
+verifier:
+  coverage:
+    threshold:
+      default: 0.2
+      high-risk: 0.4
+websearch:
+naver:
+  filters:
+    enable-domain-filter: true
+    domain-policy: boost
+  patch-query:
+    official-domains:
+    - hoyoverse.com
+    - hoyolab.com
+    - playlostark.com
+    - playoverwatch.com
+    - playvalorant.com
+    - leagueoflegends.com
+    community-domains:
+    - inven.co.kr
+    - namu.wiki
+    - arca.live
+
+gpt-search:
+  soak:
+    enabled: true
+  hybrid:
+    primary: BRAVE
+

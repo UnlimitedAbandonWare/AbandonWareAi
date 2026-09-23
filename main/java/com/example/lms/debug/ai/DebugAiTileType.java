@@ -1,0 +1,15 @@
+package com.example.lms.debug.ai;
+
+public enum DebugAiTileType {
+    SPRING_CONTEXT,
+    QUERY_TRANSFORMER,
+    WEB_SEARCH,
+    VECTOR_RETRIEVAL,
+    KG_GRAPH,
+    LLM_MODEL_GUARD,
+    EVIDENCE_OUTPUT,
+    IMAGE_JOB,
+    EXTERNAL_EVIDENCE,
+    AGENT_TOOL_USAGE,
+    VERIFICATION_BUILD
+}

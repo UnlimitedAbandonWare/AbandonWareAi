@@ -1,0 +1,15 @@
+{
+  "tools": [
+    {
+      "id": "web.search",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}

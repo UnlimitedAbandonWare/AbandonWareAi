@@ -1,0 +1,11 @@
+id: sidetrain
+sequence:
+  - step: retrieve_shadow
+    handler: TrustedSourceVerifier
+  - step: compare
+    method: answer_consistency
+    params:
+      threshold: 0.8
+action_on_mismatch: re_search
+attenuation:
+  secondary_weight_scale: 0.6

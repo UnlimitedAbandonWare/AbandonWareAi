@@ -1,0 +1,37 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+plan:
+  id: safe_autorun.v1
+  description: "기본 안전 경로 — 비용/지연 균형, 인용/품질 게이트 활성"
+  when:
+    any: [ true ]
+  overrides:
+    properties:
+      llm.provider: local
+      llm.route.mode: tp
+      retrieval.vector.enabled: true
+      naver.search.timeout-ms: 2500
+      naver.search.web-top-k: 10
+      onnx.enabled: true
+      upstash.cache.ttl-seconds: 3600
+      gate.citation.enabled: true
+      gate.citation.min: 3
+      gate.finalSigmoid.enabled: true
+      gate.finalSigmoid.k: 12.0
+      gate.finalSigmoid.x0: 0.0
+      zsys.llm.max-concurrency: 4
+      zsys.onnx.max-concurrency: 2
+  pipeline:
+    - analyze.selfAsk
+    - retrieve.dynamicChain
+    - fuse.rrf.weighted
+    - rerank.biEncoder
+    - rerank.crossEncoder.onnx
+    - prompt.build
+    - answer.generate
+
+guard:
+  profile: PROFILE_MEMORY

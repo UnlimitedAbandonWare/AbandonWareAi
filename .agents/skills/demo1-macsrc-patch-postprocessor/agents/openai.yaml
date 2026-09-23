@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 MacSrc Patch Postprocessor"
+  short_description: "Adjudicate one completed or held MacSrc session"
+  default_prompt: "Use $demo1-macsrc-patch-postprocessor to validate one MacSrc patch outcome, paired integrity evidence, tri-query decision, and optional Supabase read-only proof."

@@ -1,0 +1,81 @@
+id: projection_agent.v1
+label: "Projection Agent (Dual Jammini View)"
+version: 1
+
+meta:
+  kind: plan
+  description: >
+    stuff11(기억저장 Jammini) + stuff2(메모리 없는 Pro Jammini)를
+    병렬로 돌린 뒤 ProjectionMerge로 합성하는 투영식 에이전트 플랜.
+
+defaults:
+  guard-profile: balanced
+  memory-profile: projection
+
+triggers:
+  by-intent:
+    - when: "chat.generic"
+      weight: 0.8
+    - when: "chat.subculture"
+      weight: 1.0
+    - when: "chat.game"
+      weight: 1.0
+
+pipeline:
+  # 1단계: 의도 분석
+  - id: analyze_intent
+    agent: "self_ask"
+    use-plan: "kg_first.v1"
+    output:
+      - slot: "intent.type"
+      - slot: "safety.level"
+      - slot: "memory.intent"
+
+  # 2단계: 두 시선 병렬 드래프트
+  - id: draft_dual_view
+    mode: "parallel"
+    branches:
+      # stuff11 — Jammini Memory 시선
+      - id: view_memory_safe
+        agent: "chat"
+        model: "llmrouter.light"
+        traits: ["stuff11_ko"]
+        guard-profile: "balanced"
+        memory-profile: "deep_memory"
+        max-tokens: 1024
+      # stuff2 — 자유로운 Pro Jammini
+      - id: view_free_projection
+        agent: "chat"
+        model: "llmrouter.gemma"
+        traits: ["stuff2_ko"]
+        guard-profile: "brave"
+        memory-profile: "wild_pro"
+        max-tokens: 1024
+
+  # 3단계: Projection Merge
+  - id: projection_merge
+    agent: "projection_merge"
+    impl: "com.example.lms.service.rag.ProjectionMergeService"
+    inputs:
+      - from-branch: "view_memory_safe"
+        as: "grounded"
+      - from-branch: "view_free_projection"
+        as: "creative"
+    guard-profile: "balanced"
+    memory-profile: "projection"
+    config:
+      strategy: "weighted_mix"
+      weights:
+        grounded: 0.6
+        creative: 0.4
+      inject-evidence: true
+      keep-free-side-notes: true
+
+  # 4단계: 최종 답변
+  - id: final_answer
+    agent: "chat"
+    model: "auto"
+    system-prompt: "projection.final"
+    guard-profile: "balanced"
+    memory-profile: "projection"
+    max-tokens: 2048

@@ -1,0 +1,21 @@
+# sample-merge156.yml
+retrieval:
+  kalloc:
+    temperature: 0.7
+onnx:
+  enabled: true
+  maxConcurrency: 4
+  timeBudgetMs: 120
+
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+  vector:
+    enabled: true

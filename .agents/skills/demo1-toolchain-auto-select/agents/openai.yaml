@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 쨌 Toolchain Auto-Select"
+  short_description: "Detect existing Gradle/Start-RAG/scripts/frontend tools; pick smallest verify path; no drive-by new deps."
+  default_prompt: "Use $demo1-toolchain-auto-select: detect Project Root markers, select the smallest matching Gradle/Start-RAG/scripts/frontend verify path, run and prove it, then reuse. Do not install new tools when an in-repo equivalent exists."

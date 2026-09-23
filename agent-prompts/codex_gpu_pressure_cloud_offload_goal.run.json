@@ -1,0 +1,207 @@
+{
+  "schemaVersion": "1.0",
+  "userRequest": "게임·스트리밍 중 RTX 3060/3090의 실제 GPU 압력을 감지해 로컬 LLM의 새 요청을 자동으로 클라우드 모델로 전환하는 기능을 더 정교한 Desktop 구현 지시서와 재사용 가능한 도구 계약으로 만든다.",
+  "evidenceSnapshot": {
+    "summary": "canonicalWorkspace=Y:\\; backingShareIdentityVerified=true; backingShareIdentityReason=match. 활성 root main/java에는 예약 실행, GPU별 진단, 단일 LLM 라우터, 클라우드 적격성, 요청별 런타임 계보 경계가 존재한다. Notebook은 문서만 수정하며 Desktop 런타임 증명은 아직 없다.",
+    "evidenceRows": [
+      {
+        "evidenceId": "E01",
+        "owner": "notebook-filesystem",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"boolean": true},
+        "verificationCommand": "$r=(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='Y:'\").ProviderName; $n=$r.Trim().TrimEnd('\\').ToLowerInvariant(); $a=[Security.Cryptography.SHA256]::Create(); try{$h=([BitConverter]::ToString($a.ComputeHash([Text.Encoding]::UTF8.GetBytes($n)))).Replace('-','')}finally{$a.Dispose()}; $h -eq '30239E454C37CEFC507B305B4E828BB2AC291620C552BEC314D28909C189F8E9'"
+      },
+      {
+        "evidenceId": "E02",
+        "owner": "notebook-design",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"sha256": "f31a023c18d664801c5b003731e269c8692e9cc4a302be2586fb19ad01c12bfa"},
+        "verificationCommand": "(Get-FileHash -Algorithm SHA256 docs\\superpowers\\specs\\2026-08-01-gpu-pressure-cloud-offload-design.md).Hash.ToLowerInvariant()"
+      },
+      {
+        "evidenceId": "E03",
+        "owner": "desktop-source",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"sha256": "5bfb5946ed0d63cc53869a647b8a1188a5c1e7e9e8ca9d144cc0d72f06ed630a"},
+        "verificationCommand": "(Get-FileHash -Algorithm SHA256 main\\java\\com\\example\\lms\\health\\GpuHardwareDiagnostics.java).Hash.ToLowerInvariant()"
+      },
+      {
+        "evidenceId": "E04",
+        "owner": "desktop-source",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"sha256": "1b792feab7fa5e95d6572c9fd9056780d5297a6e10c455f41f0b8520af009ddd"},
+        "verificationCommand": "(Get-FileHash -Algorithm SHA256 main\\java\\ai\\abandonware\\nova\\orch\\aop\\LlmRouterAspect.java).Hash.ToLowerInvariant()"
+      },
+      {
+        "evidenceId": "E05",
+        "owner": "desktop-source",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"sha256": "3cf1452dc68db546a128f98dfad8c4f250866c2e9d43d19438daf80f30de05b7"},
+        "verificationCommand": "(Get-FileHash -Algorithm SHA256 main\\java\\com\\example\\lms\\llm\\gateway\\LlmGatewayProperties.java).Hash.ToLowerInvariant()"
+      },
+      {
+        "evidenceId": "E06",
+        "owner": "desktop-source",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"count": 1},
+        "verificationCommand": "(Select-String main\\java\\com\\example\\lms\\LmsApplication.java -Pattern '@EnableScheduling' -AllMatches).Matches.Count"
+      },
+      {
+        "evidenceId": "E07",
+        "owner": "desktop-source",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"sha256": "47bec2aac6ad560a6f12f4f387cf939e4893e6aca25b97f1611b866e20e6e4b9"},
+        "verificationCommand": "(Get-FileHash -Algorithm SHA256 main\\java\\com\\example\\lms\\llm\\ModelRuntimeHealthTracker.java).Hash.ToLowerInvariant()"
+      },
+      {
+        "evidenceId": "E08",
+        "owner": "desktop-test",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"sha256": "03a086ecc46a958c1c6f6131660fd6cdc25b561698a9fe6192459cc6cf3cdae3"},
+        "verificationCommand": "(Get-FileHash -Algorithm SHA256 src\\test\\java\\ai\\abandonware\\nova\\orch\\aop\\LlmRouterRequestTimelineTest.java).Hash.ToLowerInvariant()"
+      },
+      {
+        "evidenceId": "E09",
+        "owner": "notebook-runtime",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"boolean": false},
+        "verificationCommand": "[bool](Get-Command java -ErrorAction SilentlyContinue)"
+      },
+      {
+        "evidenceId": "E10",
+        "owner": "user-request",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"reason": "system-delegated-policy"},
+        "verificationCommand": "Review the current user instruction that delegates choices and forbids clarification questions."
+      },
+      {
+        "evidenceId": "E11",
+        "owner": "notebook-filesystem",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"reason": "main"},
+        "verificationCommand": "(Get-Content .git\\HEAD -TotalCount 1).Replace('ref: refs/heads/','')"
+      },
+      {
+        "evidenceId": "E12",
+        "owner": "notebook-filesystem",
+        "observedAt": "2026-08-01T16:51:54+09:00",
+        "observation": {"boolean": false},
+        "verificationCommand": "Test-Path .git\\index.lock"
+      }
+    ]
+  },
+  "evidenceSnapshotHash": "a475d44fd209cacdac08d15de746e680d50d2f3e0bff212cedf56be5c0786dbd",
+  "requiresLiteralSubagents": false,
+  "processMode": "single-agent-logical-roles",
+  "actualAgentCount": 1,
+  "packets": {
+    "POSITIVE_QUERY": {
+      "packetType": "POSITIVE_QUERY",
+      "evidenceSnapshotHash": "a475d44fd209cacdac08d15de746e680d50d2f3e0bff212cedf56be5c0786dbd",
+      "candidateGoal": "예약 GPU 샘플러와 역할별 압력 가드를 기존 단일 라우터에 결합해 새 로컬 채팅 요청만 클라우드로 선제 전환한다.",
+      "scenarioWorlds": [
+        {
+          "scenarioId": "S-FIRST-REQUEST",
+          "premise": "서비스 기동 후 첫 LLM 요청 전에 최신 GPU 샘플이 존재한다.",
+          "causalMechanism": "기존 예약 실행 경계가 2초 주기로 진단을 갱신하고 첫 샘플 부재 시 요청 스레드가 한 번만 제한 샘플링한다.",
+          "expectedObservation": "첫 요청도 하드 임계치를 넘으면 로컬 모델 생성 전에 클라우드 선택으로 끝난다.",
+          "evidenceNeeded": ["E03", "E06"],
+          "falsifier": "첫 요청이 샘플 없이 로컬 HTTP 교환을 시작한다."
+        },
+        {
+          "scenarioId": "S-DUAL-GPU",
+          "premise": "RTX 3060과 3090의 압력 상태가 서로 다르다.",
+          "causalMechanism": "명시적 route-to-role 매핑과 역할당 정확히 한 장의 장치 규칙이 포트·인덱스 추정을 금지한다.",
+          "expectedObservation": "3090 전용 경로의 압력은 3060 전용 경로를 불필요하게 클라우드로 보내지 않는다.",
+          "evidenceNeeded": ["E03", "E04"],
+          "falsifier": "한 장의 과부하가 모든 로컬 경로를 동일하게 전환한다."
+        },
+        {
+          "scenarioId": "S-GOVERNED-OFFLOAD",
+          "premise": "압력이 지속되지만 클라우드 자격·쿼터·응답 상태는 요청마다 달라질 수 있다.",
+          "causalMechanism": "기존 적격성 검사, 시간창 요청 한도, 단일 시도 고정, 직접 HTTP 계보 검증을 함께 적용한다.",
+          "expectedObservation": "가능하면 클라우드 한 번만 호출하고 불가능하면 로컬 재시도 없이 유형화된 기대 실패를 남긴다.",
+          "evidenceNeeded": ["E04", "E05", "E07", "E08"],
+          "falsifier": "클라우드 오류 뒤 같은 요청이 로컬 GPU를 사용하거나 물리 시도가 둘 이상이다."
+        }
+      ],
+      "validatedAssumptions": ["활성 GPU 진단은 장치별 역할·사용률·VRAM 비율을 제공한다.", "활성 라우터가 로컬·클라우드 선택의 단일 권한 경계다.", "요청 계보는 직접 HTTP 교환/응답과 해시를 기록할 수 있다."],
+      "reusableAssets": ["GpuHardwareDiagnostics", "LlmRouterAspect", "HybridLlmGatewayProbeService", "ModelRuntimeHealthTracker", "LlmGatewayBreadcrumbPublisher"],
+      "expectedUserValue": "게임·스트리밍 프레임 안정성을 우선하면서 평상시에는 로컬 비용 이점을 유지한다.",
+      "minimalVerification": "가짜 시계·가짜 스냅샷으로 상태 전이를 검증하고 루프백 서버로 로컬 0회/클라우드 1회 계보를 증명한다.",
+      "evidenceIds": ["E03", "E04", "E05", "E06", "E07", "E08", "E10"],
+      "unknowns": ["Desktop의 실제 nvidia-smi 샘플 분포", "사용 가능한 클라우드 자격 증명", "실제 게임 중 프레임타임 개선량"]
+    },
+    "NEGATIVE_QUERY": {
+      "packetType": "NEGATIVE_QUERY",
+      "evidenceSnapshotHash": "a475d44fd209cacdac08d15de746e680d50d2f3e0bff212cedf56be5c0786dbd",
+      "challengedGoal": "자동 전환이 첫 요청, 다중 GPU, 비용, 오류 상황에서도 게임 우선 원칙을 실제로 보장하는가.",
+      "scenarioAttacks": [
+        {
+          "scenarioId": "S-FIRST-REQUEST",
+          "counterExample": "서비스 직후 예약 샘플이 아직 없거나 nvidia-smi가 1초 동안 멈춘다.",
+          "alternativeCause": "GPU가 아니라 샘플 지연 때문에 결정이 늦을 수 있다.",
+          "boundaryOrAuthorityRisk": "요청 스레드의 반복 샘플링은 지연과 프로세스 폭증을 만든다.",
+          "costAndBlastRadius": "모든 요청이 외부 프로세스를 실행하면 처리량이 저하된다.",
+          "smallestDisconfirmingProbe": "동시 첫 요청 20개에서 nvidia-smi 실행 횟수가 1회인지 검증한다.",
+          "evidenceIds": ["E03", "E06"]
+        },
+        {
+          "scenarioId": "S-DUAL-GPU",
+          "counterExample": "동일 역할 GPU가 두 장이거나 장치명이 예상과 달라 역할이 중복·누락된다.",
+          "alternativeCause": "포트 설정이 실제 GPU 소유권과 어긋났을 수 있다.",
+          "boundaryOrAuthorityRisk": "추정 매핑은 관련 없는 장치 압력을 경로 정책으로 오인한다.",
+          "costAndBlastRadius": "불필요한 유료 호출 또는 게임 GPU 침범이 발생한다.",
+          "smallestDisconfirmingProbe": "역할 0개·1개·2개 스냅샷에서 누락/모호 상태가 닫힌 실패인지 검증한다.",
+          "evidenceIds": ["E03", "E04"]
+        },
+        {
+          "scenarioId": "S-GOVERNED-OFFLOAD",
+          "counterExample": "클라우드 한도가 소진되거나 429/timeout 뒤 기존 fallback 래퍼가 로컬을 다시 호출한다.",
+          "alternativeCause": "적격성 성공과 실제 전송 성공은 동일하지 않다.",
+          "boundaryOrAuthorityRisk": "비용 정책이나 재시도가 두 번째 라우팅 권한으로 변질될 수 있다.",
+          "costAndBlastRadius": "무제한 비용 또는 게임 중 로컬 부하 재발이 가능하다.",
+          "smallestDisconfirmingProbe": "압력 latch에서 429를 주고 로컬 교환 0회·전체 물리 시도 1회를 검증한다.",
+          "evidenceIds": ["E04", "E05", "E07", "E08"]
+        }
+      ],
+      "falsifiers": ["첫 요청이 하드 압력에서 로컬로 전송됨", "역할이 다른 GPU 압력이 교차 전파됨", "압력 중 클라우드 실패가 로컬 재시도를 유발함"],
+      "counterExamples": ["텔레메트리 부재", "역할 중복", "쿼터 소진", "클라우드 429/timeout"],
+      "authorityRisks": ["Desktop 소스 소유권과 최종 검증이 아직 없음"],
+      "safetyRisks": ["무제한 유료 호출", "원시 프로세스/프롬프트/키 노출"],
+      "missingEvidence": ["실제 Desktop GPU 부하 전이", "실제 클라우드 응답 계보"],
+      "smallestDisconfirmingProbe": "Desktop 루프백 통합 테스트에서 하드 압력 첫 요청의 로컬 교환 0회·클라우드 교환 1회를 증명한다.",
+      "evidenceIds": ["E03", "E04", "E05", "E06", "E07", "E08", "E09", "E11", "E12"]
+    },
+    "NEUTRAL_QUERY": {
+      "packetType": "NEUTRAL_QUERY",
+      "evidenceSnapshotHash": "a475d44fd209cacdac08d15de746e680d50d2f3e0bff212cedf56be5c0786dbd",
+      "forwardOrder": ["POSITIVE_QUERY", "NEGATIVE_QUERY"],
+      "reverseOrder": ["NEGATIVE_QUERY", "POSITIVE_QUERY"],
+      "forwardVerdict": "APPLY",
+      "reverseVerdict": "APPLY",
+      "forwardDecisiveEvidenceIds": ["E03", "E04", "E06", "E07", "E08", "E10"],
+      "reverseDecisiveEvidenceIds": ["E03", "E04", "E06", "E07", "E08", "E10"],
+      "orderStable": true,
+      "verdict": "APPLY",
+      "selectedOrRewrittenGoal": "Desktop이 기존 예약 실행·GPU 진단·단일 라우터·계보 경계 안에서 첫 요청 보호, 역할별 hysteresis, 최소 체류, 요청 쿼터, cloud-only 오류 정책을 구현하고 실제 계보를 증명한다.",
+      "scoreInputs": {
+        "evidenceStrength": {"value": 0.91, "evidenceIds": ["E03", "E04", "E07", "E08"]},
+        "causalStrength": {"value": 0.89, "evidenceIds": ["E03", "E04", "E06"]},
+        "verificationFeasibility": {"value": 0.84, "evidenceIds": ["E08", "E09"]},
+        "userValue": {"value": 0.92, "evidenceIds": ["E10"]},
+        "reversibility": {"value": 0.96, "evidenceIds": ["E05"]},
+        "costEfficiency": {"value": 0.83, "evidenceIds": ["E05", "E07"]},
+        "timeFit": {"value": 0.78, "evidenceIds": ["E03", "E04"]},
+        "blastRadius": {"value": 0.35, "evidenceIds": ["E04", "E05"]},
+        "ambiguity": {"value": 0.12, "evidenceIds": ["E03", "E08"]},
+        "authorityOrSafetyExpansion": {"value": 0.02, "evidenceIds": ["E10", "E11", "E12"]}
+      },
+      "goalScore": 79.55,
+      "decisiveEvidence": ["E03", "E04", "E06", "E07", "E08", "E10"],
+      "rejectedClaims": ["providerAttemptObserved=true가 직접 HTTP 성공의 필수 조건", "게임 프로세스명 감지가 필요함", "텔레메트리 실패 시 자동 유료 전환"],
+      "nextSingleProof": "Desktop에서 첫 요청 하드 압력 루프백 테스트로 로컬 HTTP 0회·클라우드 HTTP 1회와 prompt/options hash를 증명한다.",
+      "confidence": "H"
+    }
+  }
+}

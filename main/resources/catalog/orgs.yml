@@ -1,0 +1,53 @@
+---
+# Sample organisation catalog used by the Entity/Concept Generalization patch.
+#
+# Each entry defines a canonical organisation name together with a list of
+# alternative spellings (aliases), regions in which the organisation is
+# primarily located and sites which may host official information about the
+# organisation.
+#
+# IMPORTANT:
+# - This file must remain a pure top-level YAML list.
+# - Runtime configuration (alias/probe/retrieval, etc.) belongs in application.yml.
+
+- id: hanwha_vision_veda
+  canonical: "한화비전 VEDA"
+  aliases:
+    - "한화비전 베다"
+    - "Hanwha Vision VEDA"
+    - "VEDA"
+    - "베다"
+  regions:
+    - "용인"
+    - "판교"
+    - "성남"
+    - "수원"
+  sites:
+    - "hanwhavision.com"
+    - "place.naver.com"
+
+- id: eulji_university_hospital
+  canonical: "을지대학교 병원"
+  aliases:
+    - "을지대학교 병원"
+    - "을지대학병원"
+    - "을지 병원"
+  regions:
+    - "대전"
+    - "세종"
+  sites:
+    - "eulji.ac.kr"
+    - "place.naver.com"
+
+- id: makein_kr
+  canonical: "메이크인"
+  aliases:
+    - "Makein"
+    - "makein"
+    - "Make In"
+    - "make in"
+    - "make-in"
+    - "메이크 인"
+  regions:
+    - "KR"
+  sites: []

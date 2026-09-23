@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Lease Conflict Autoflow"
+  short_description: "Overlapping source-edit lease detected: scan→plan, continue free targets, deliver one standard release request per conflict fingerprint — never force-release"
+  default_prompt: "Use $demo1-lease-conflict-autoflow when lease begin/checkpoint begin hits a foreign overlapping lease: run scripts/lease_conflict_autoflow.py plan --goal-files <files> --task <id> --execute, continue the proceed_without targets, and let the once-only request reach the owner."

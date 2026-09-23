@@ -1,0 +1,4 @@
+﻿interface:
+  display_name: "Demo1 · Conversate Hint Evidence"
+  short_description: "근거 부족 고정문구 대신 FAST/일반힌트 보존"
+  default_prompt: "Use $demo1-conversate-hint-evidence for Conversate/Fold6 hint failures: FAST for stable concepts, preserve useful hints when evidence is empty or fragmented, never overwrite with fixed evidence-refusal boilerplate, keep diagnostics on Fold6 and simple captions on the lens."

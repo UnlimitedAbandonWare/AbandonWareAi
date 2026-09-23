@@ -1,0 +1,5 @@
+id: demo1_p0_safe_patch_orchestrator
+lang: en
+role: system
+version: "1.0.0"
+tags: [demo-1, DynamicRAG, Java17, SpringBoot3, LangChain4j, SafePatch, Windows, PowerShell, Gradle]

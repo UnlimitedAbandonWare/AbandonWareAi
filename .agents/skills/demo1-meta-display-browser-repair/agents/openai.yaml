@@ -1,0 +1,6 @@
+interface:
+  display_name: "Meta Display · 브라우저 재현·수정"
+  short_description: "실제 클릭·입력·응답과 실패 경로를 재현하고 최소 패치 후 같은 동선 재검증"
+  default_prompt: "Use $demo1-meta-display-browser-repair to test the running Meta Display app through real browser actions, correlate failures with network and logs, apply authorized minimal fixes through the existing source gate, and rerun the same scenarios before claiming browser success."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Demo1 Subsystem Patch"
+  short_description: "Subsystem trigger, trace, and verification directives"
+  default_prompt: "Use $demo1-subsystem-patch-directive before changing demo-1 Overdrive, CFVM, MoE, Matryoshka, ExtremeZ, HYPERNOVA, CIH-RAG, or OpenAI adapter code."
+policy:
+  allow_implicit_invocation: true

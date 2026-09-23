@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Source-Edit Three-Way Preflight"
+  short_description: "Bound source edits to three review roles"
+  default_prompt: "Use $demo1-source-edit-three-way-preflight before any explicitly authorized demo-1 application-source mutation."

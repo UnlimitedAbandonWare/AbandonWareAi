@@ -1,0 +1,3 @@
+display_name: Verify Boot
+short_description: Generate role-local Gradle and boot verification commands.
+default_prompt: Use verify_boot through scripts\awx_mcp_toolbox.ps1 to get role-local verification commands, then run Desktop final proof from the canonical root.

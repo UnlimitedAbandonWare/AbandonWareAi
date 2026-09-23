@@ -1,0 +1,21 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: brave.v1
+retrieval:
+  webTopK: [12, 18, 24]
+  vectorTopK: [6, 8, 10]
+  extremeZ: true
+  angerOverdrive:
+    pruneKs: [48, 32, 16, 8]
+safety:
+  citationMin: 3
+  domainTier: ["gov","edu","journal"]
+budget:
+  timeMs: 3500
+  onnxMaxConcurrent: 4
+
+guard:
+  profile: PROFILE_MEMORY

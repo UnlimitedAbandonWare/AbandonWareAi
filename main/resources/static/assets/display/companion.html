@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="mrbd-web-app-capable" content="yes"><meta name="description" content="폴드6 수음 · 한국어 실시간 전사"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#000000">
+<title>AWX Lens · 휴대폰 수음</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="styles.css?v=fold6-20260915b">
+<script src="display-core.js" defer></script><script src="display-conversate.js?v=phone-test-1" defer></script><script src="display-voice.js?v=phone-test-1" defer></script><script src="app.js?v=phone-test-1" defer></script>
+</head><body>
+<main id="app" class="transcription" aria-label="한국어 실시간 전사">
+<header><h1>AWX Lens <span>LIVE</span></h1><span id="connection" role="status">서버 연결 중</span></header>
+<section id="caption-card" class="focusable" tabindex="0" aria-label="현재 발화">
+<div class="card-heading"><h2 id="caption-label">마이크 대기</h2><span id="caption-page"></span></div>
+<p id="caption-text" aria-live="polite">폴드6에서 들어오는 대화가 여기에 표시됩니다.</p><p id="hint-text" hidden></p>
+</section>
+<p id="link-status" class="hint" role="status">첫 연결은 아래 휴대폰 연결에서 시작하세요.</p>
+<section id="pair-panel" hidden aria-label="기기 연결"><p id="pair-message"></p>
+<form id="pair-form" hidden><label for="pair-code">안경에 표시된 연결 번호</label><input id="pair-code" class="focusable" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off"><button class="focusable" type="submit">연결 요청</button></form>
+<div class="actions"><button id="approve" class="focusable" type="button" hidden>확인 번호 일치 · 승인</button><button id="pair-close" class="focusable" type="button">닫기</button></div></section>
+<div id="phone-controls" hidden><button id="microphone" class="focusable" type="button" aria-pressed="false">폴드6 수음 시작</button>
+<button id="finish" class="focusable" type="button" hidden disabled>마지막 전사 받고 중지</button>
+<p id="microphone-status" class="hint" role="status">시작을 누르기 전에는 수음하지 않습니다.</p>
+<meter id="input-level" min="0" max="100" value="0" aria-label="마이크 입력 크기" hidden></meter>
+<details><summary class="focusable" tabindex="0">입력 장치</summary><label for="input-device">휴대폰 입력 장치</label><select id="input-device" class="focusable"><option value="">시스템 기본 입력</option></select><button id="refresh-devices" class="focusable" type="button">장치 새로고침</button><p id="input-label" class="hint">장치명만으로 내장 마이크가 확인되지는 않습니다. 폴드6 가까이와 안경 가까이에서 번갈아 말해 비교하세요.</p></details></div>
+<nav class="actions" aria-label="전사 제어"><button id="pair" class="focusable" type="button">휴대폰 연결</button><button id="phone-mode" class="focusable" type="button">휴대폰에서 수음</button><button id="hints" class="focusable" type="button" aria-pressed="false">힌트 꺼짐</button></nav>
+<nav class="actions" aria-label="연결 제어"><button id="reconnect" class="focusable" type="button" hidden>다시 연결</button><button id="stop" class="focusable" type="button">수음 중지</button><button id="unlink" class="focusable" type="button" hidden>연결 해제</button></nav>
+<p id="error" role="alert" class="hint"></p>
+<noscript>실시간 전사에는 JavaScript가 필요합니다.</noscript></main></body></html>

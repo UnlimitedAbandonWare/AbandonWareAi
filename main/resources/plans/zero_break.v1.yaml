@@ -1,0 +1,42 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+plan:
+  id: zero_break.v1
+  description: "ZeroBreak verified override path. Requires validated RuleBreak context before guardrail relaxation."
+  when:
+    any:
+      - request.context.rulebreak.valid == true
+      - risk.contradiction_score >= 0.6
+  overrides:
+    properties:
+      llm.provider: local
+      llm.route.mode: tp
+      naver.search.web-top-k: 24
+      onnx.enabled: ${ONNX_ENABLED:false}
+      zsys.llm.max-concurrency: 4
+      zsys.onnx.max-concurrency: 2
+      gate.citation.min: 4
+      gate.finalSigmoid.k: 14.0
+      gate.finalSigmoid.x0: 0.1
+      domainWhitelist.override: ${request.context.rulebreak.allowWhitelistBypass:false}
+    knobs:
+      expand.selfAsk.count: 3
+      expand.queryBurst.count: 18
+      extremeZ.enabled: true
+      overdrive.enabled: true
+      diversity.dpp.enabled: true
+  pipeline:
+    - analyze.selfAsk
+    - expand.queryBurst
+    - expand.extremeZ
+    - retrieve.dynamicChain
+    - fuse.rrf.weighted
+    - narrow.overdrive.anchor
+    - rerank.biEncoder
+    - rerank.crossEncoder.onnx
+    - diversity.dpp
+    - prompt.build
+    - answer.generate

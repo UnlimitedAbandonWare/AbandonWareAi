@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Agent Scope Lease"
+  short_description: "Parallel-agent work-scope coordinator: check who owns which paths/features, claim a lease, auto-release on done/abort"
+  default_prompt: "Use $agent-scope-lease when several agents work this checkout in parallel: run scripts/agent_scope_lease.py check --path <p> before editing, claim a work unit, and release it with done or abort. Local files only; expired foreign leases still block overlapping targets."

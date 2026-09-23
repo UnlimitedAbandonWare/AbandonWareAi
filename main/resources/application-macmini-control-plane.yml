@@ -1,0 +1,165 @@
+spring:
+  config:
+    activate:
+      on-profile: macmini-control-plane
+  datasource:
+    url: ${MACMINI_DB_URL:jdbc:h2:mem:lms_macmini;MODE=MariaDB;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false}
+    username: ${MACMINI_DB_USERNAME:sa}
+    password: ${MACMINI_DB_PASSWORD:}
+    driver-class-name: ${MACMINI_DB_DRIVER:org.h2.Driver}
+  jpa:
+    database-platform: ${MACMINI_DB_DIALECT:}
+    hibernate:
+      ddl-auto: ${MACMINI_JPA_DDL_AUTO:update}
+  sql:
+    init:
+      mode: ${MACMINI_SQL_INIT_MODE:never}
+
+rag:
+  ops-ledger:
+    enabled: ${MACMINI_RAG_OPS_LEDGER_ENABLED:true}
+    capture-rag: ${MACMINI_RAG_OPS_LEDGER_CAPTURE_RAG:true}
+    capture-autolearn: ${MACMINI_RAG_OPS_LEDGER_CAPTURE_AUTOLEARN:true}
+
+awx:
+  node:
+    role: macmini-control-plane
+    execution-node: macmini-m4-16gb
+    control-plane: true
+    heavy-workloads-allowed: false
+    learning-loop-mode: curate-observe-schedule
+  gpu-gateway:
+    enabled: ${MACMINI_DESKTOP_GPU_GATEWAY_ENABLED:false}
+    target-role: desktop-gpu-executor
+    target-execution-node: desktop-rtx3090-rtx3060
+    primary-chat-base-url: ${MACMINI_DESKTOP_GPU_3090_BASE_URL:${LLM_3090_BASE_URL:}}
+    fast-base-url: ${MACMINI_DESKTOP_GPU_3060_BASE_URL:${LLM_3060_BASE_URL:}}
+    embedding-base-url: ${MACMINI_DESKTOP_GPU_EMBED_BASE_URL:${EMBED_3060_BASE_URL:}}
+    allowed-hosts: ${MACMINI_DESKTOP_GPU_ALLOWED_HOSTS:${LLM_PROVIDER_GUARD_ALLOWED_HOSTS:}}
+    require-auth-for-remote: ${MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE:true}
+    preflight:
+      admission-enabled: ${MACMINI_DESKTOP_GPU_PREFLIGHT_ADMISSION_ENABLED:true}
+      timeout-ms: ${MACMINI_DESKTOP_GPU_PREFLIGHT_TIMEOUT_MS:750}
+  gpu-hardware:
+    telemetry:
+      enabled: ${MACMINI_GPU_TELEMETRY_ENABLED:false}
+      timeout-ms: ${MACMINI_GPU_TELEMETRY_TIMEOUT_MS:1000}
+    admission:
+      enabled: ${MACMINI_GPU_ADMISSION_ENABLED:false}
+      rerank-gate-enabled: false
+  learning-ops:
+    collector:
+      enabled: ${MACMINI_LEARNING_OPS_COLLECTOR_ENABLED:true}
+      output-path: ${MACMINI_LEARNING_OPS_COLLECTOR_OUTPUT_PATH:data/macmini/learning-ops-curation.jsonl}
+      interval-ms: ${MACMINI_LEARNING_OPS_COLLECTOR_INTERVAL_MS:300000}
+      initial-delay-ms: ${MACMINI_LEARNING_OPS_COLLECTOR_INITIAL_DELAY_MS:60000}
+      max-items: ${MACMINI_LEARNING_OPS_COLLECTOR_MAX_ITEMS:20}
+      max-overview-limit: ${MACMINI_LEARNING_OPS_COLLECTOR_MAX_OVERVIEW_LIMIT:50}
+
+local-llm:
+  enabled: false
+  autostart: false
+  warmup:
+    enabled: false
+    pull: false
+    show: false
+    embed: false
+
+llmrouter:
+  fallback-when-openai-missing: false
+  models:
+    light:
+      enabled: false
+      weight: 0.0
+      node-role: desktop-gpu-executor
+      device: rtx3060
+      workload: fast-helper-disabled-on-control-plane
+    gemma:
+      enabled: false
+      weight: 0.0
+      node-role: desktop-gpu-executor
+      device: rtx3090
+      workload: primary-chat-disabled-on-control-plane
+    judge:
+      enabled: false
+      weight: 0.0
+      node-role: desktop-gpu-executor
+      device: rtx3090
+      workload: judge-disabled-on-control-plane
+    coder:
+      enabled: false
+      weight: 0.0
+      node-role: desktop-gpu-executor
+      device: rtx3090
+      workload: coder-disabled-on-control-plane
+    vision:
+      enabled: false
+      weight: 0.0
+      node-role: desktop-gpu-executor
+      device: rtx3060
+      workload: vision-disabled-on-control-plane
+    macmini:
+      enabled: false
+      weight: 0.0
+      node-role: macmini-control-plane
+      device: m4-16gb
+      workload: observe-curate-schedule
+    external:
+      enabled: false
+      weight: 0.0
+
+embedding:
+  cross-gpu-fallback:
+    enabled: false
+  port-fallback:
+    enabled: false
+  fallback:
+    enabled: false
+
+onnx:
+  enabled: false
+
+zsys:
+  onnx:
+    enabled: false
+
+abandonware:
+  reranker:
+    onnx:
+      enabled: false
+      runtime-enabled: false
+
+uaw:
+  dataset-api:
+    enabled: ${MACMINI_DATASET_API_ENABLED:false}
+    key: ${MACMINI_DATASET_API_KEY:}
+  autolearn:
+    enabled: ${MACMINI_AUTOLEARN_ENABLED:false}
+    tickMs: ${MACMINI_AUTOLEARN_TICK_MS:120000}
+    max-cycle-seconds: ${MACMINI_AUTOLEARN_MAX_CYCLE_SECONDS:10}
+    batch-size: ${MACMINI_AUTOLEARN_BATCH_SIZE:1}
+    runtime-node:
+      role: macmini-control-plane
+      execution-node: macmini-m4-16gb
+      control-plane: true
+      heavy-workloads-allowed: false
+      scheduling-assistant: true
+      learning-loop-mode: curate-observe-schedule
+    idle-trigger:
+      enabled: ${MACMINI_AUTOLEARN_IDLE_TRIGGER_ENABLED:false}
+      breadcrumb-enabled: true
+    dataset:
+      path: ${MACMINI_AUTOLEARN_DATASET_PATH:data/macmini/train_rag_curated.jsonl}
+      name: ${MACMINI_AUTOLEARN_DATASET_NAME:macmini-curated-rag}
+    retrain:
+      enabled: false
+      max-runs-per-day: 0
+    budget:
+      max-runs-per-day: ${MACMINI_AUTOLEARN_MAX_RUNS_PER_DAY:4}
+      probe-max-runs-per-day: ${MACMINI_AUTOLEARN_PROBE_MAX_RUNS_PER_DAY:1}
+      min-interval-seconds: ${MACMINI_AUTOLEARN_MIN_INTERVAL_SECONDS:1800}
+
+train_idle:
+  enabled: false
+  cron:
+    enabled: false

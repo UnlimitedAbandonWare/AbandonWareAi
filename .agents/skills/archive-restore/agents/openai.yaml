@@ -1,0 +1,3 @@
+display_name: Archive Restore
+short_description: Restore archive files with audit rows and checksums.
+default_prompt: Use archive.restore through scripts\awx_mcp_toolbox.ps1 only after review, with mode=restore, glob, target_dir, audit_log, and checksum evidence.

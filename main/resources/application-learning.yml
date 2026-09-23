@@ -1,0 +1,32 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:lms_learning;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: ${LEARNING_JPA_DDL_AUTO:validate}
+    properties:
+      hibernate:
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+  h2:
+    console:
+      enabled: true
+
+# Learning/perf profile knobs
+memory:
+  pending-soak:
+    enabled: false
+
+soak:
+  export:
+    enabled: true
+    dir: ./data/soak
+    file: seed10.jsonl
+
+logging:
+  level:
+    org.hibernate.SQL: WARN

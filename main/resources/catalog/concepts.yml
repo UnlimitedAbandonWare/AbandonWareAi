@@ -1,0 +1,28 @@
+---
+# Sample concept catalog used by the Entity/Concept Generalization patch.
+#
+# Each entry defines a canonical concept together with a list of alternative
+# spellings (aliases). Sites may optionally bias search towards authoritative sources.
+#
+# IMPORTANT:
+# - This file must remain a pure top-level YAML list.
+# - Runtime configuration (alias/probe/retrieval, etc.) belongs in application.yml.
+
+- id: pandemic
+  canonical: "판데믹"
+  aliases:
+    - "팬데믹"
+    - "세계적 대유행"
+    - "pandemic"
+  sites:
+    - "wikipedia.org"
+    - "who.int"
+
+- id: skunk
+  canonical: "스컹크"
+  aliases:
+    - "스컹크"
+    - "skunk"
+  sites:
+    - "wikipedia.org"
+    - "britannica.com"

@@ -1,0 +1,124 @@
+{
+  "schemaVersion": "awx.three-way-long-tail.design-eval.v1",
+  "designId": "three-way-long-tail-v2",
+  "designRevision": "2026-07-31",
+  "canonicalQueryCount": 3,
+  "canonicalQueries": ["POSITIVE_QUERY", "NEGATIVE_QUERY", "NEUTRAL_QUERY"],
+  "scopeSeparation": {
+    "exactlyThreeQueries": true,
+    "majorityVoteEnabled": false,
+    "verdictScopesSeparate": true,
+    "offlineOnly": true,
+    "runtimeImprovementSelfAsserted": false
+  },
+  "fixtureAuthority": {
+    "sealedFixtureEnvelope": true,
+    "candidateMaySubmitClaimRegistry": false,
+    "candidateMaySubmitEvidenceRegistry": false,
+    "candidateMaySubmitBaseline": false,
+    "candidateMaySubmitCaseCount": false,
+    "candidateMaySubmitAuthorityMetadata": false,
+    "candidateMaySubmitThresholdOrDelta": false,
+    "symmetricArmRegrading": true
+  },
+  "evidenceRelationContract": {
+    "registeredTupleOnly": true,
+    "allowedRelations": ["supports", "contradicts", "qualifies", "context"],
+    "freeTextUnscored": true,
+    "semanticFamiliesFixtureOwned": true
+  },
+  "causalContract": {
+    "registeredFieldsComplete": true,
+    "distinctHypothesisAndAlternative": true,
+    "expectedOutcomesMustDiffer": true,
+    "falsifierRegistered": true,
+    "probeRegistered": true
+  },
+  "neutralDerivationContract": {
+    "derivedNeutralDecision": true,
+    "selfDeclarationEqualityOnly": true,
+    "orderStabilityDerived": true,
+    "decisiveEvidenceDerived": true
+  },
+  "metamorphicContract": {
+    "reorderInvariant": true,
+    "authorityWordingInvariant": true,
+    "fillerCannotIncreaseScore": true,
+    "missingDecisiveEvidenceDegrades": true,
+    "injectionFailsClosed": true,
+    "branchSwapInvariant": true
+  },
+  "statisticalContract": {
+    "rubricVersionLocked": true,
+    "scorerVersionLocked": true,
+    "formulaHashLocked": true,
+    "fixtureDeckHashLocked": true,
+    "generationConditionHashLocked": true,
+    "policyVersionLocked": true,
+    "pairedCaseSetsLocked": true,
+    "pairedCaseCountDerived": true,
+    "stratumIdsLocked": true,
+    "clusterIdsLocked": true,
+    "safetyLabelsLocked": true,
+    "resamplingUnit": "clusterId",
+    "deterministicSeedLocked": true,
+    "rngAlgorithm": "sha256-counter-v1",
+    "bootstrapMethod": "stratified-cluster-paired-percentile-v1",
+    "bootstrapIterations": 10000,
+    "confidenceLevel": 0.95,
+    "quantileMethod": "linear-r7",
+    "tieEpsilonLocked": true,
+    "thresholdsUsedAsWeights": false
+  },
+  "safetyContract": {
+    "safetyLabelsLocked": true,
+    "safetyRegressionOutcome": "REJECT",
+    "acceptedSafetyRegression": false
+  },
+  "compatibilityContract": {
+    "v1CompatibilityMode": "v1-readonly",
+    "v1StatisticalUpliftVerdict": "INCONCLUSIVE",
+    "legacyScoreAutoConversion": false,
+    "rollbackDocumented": true
+  },
+  "resourceContract": {
+    "inputLimitBytes": 262144,
+    "outputLimitBytes": 524288,
+    "maxRuleRows": 64,
+    "maxRuntimeSeconds": 10,
+    "targetRuntimeSeconds": 5,
+    "modelOrNetworkRequired": false,
+    "boundedTraversal": true
+  },
+  "releaseGate": {
+    "minimumMetaScore": 95,
+    "hardGateCount": 0,
+    "requiredRuleCategoryCoverage": 1.0,
+    "adversarialExpectedOutcomeAccuracy": 1.0,
+    "falseAcceptCount": 0,
+    "canonicalFalseRejectCount": 0
+  },
+  "ruleMatrix": [
+    {"category": "canonical-valid", "expectedVerdict": "APPLY", "expectedReason": "none"},
+    {"category": "claim-padding", "expectedVerdict": "HOLD", "expectedReason": "claim-padding-detected"},
+    {"category": "same-family-paraphrase-duplication", "expectedVerdict": "HOLD", "expectedReason": "claim-semantic-family-duplicate"},
+    {"category": "unrelated-evidence-relation", "expectedVerdict": "HOLD", "expectedReason": "claim-evidence-semantic-mismatch"},
+    {"category": "inline-evidence-registry", "expectedVerdict": "HOLD", "expectedReason": "inline-evidence-registry-prohibited"},
+    {"category": "evidence-independence-laundering", "expectedVerdict": "HOLD", "expectedReason": "evidence-independence-laundering"},
+    {"category": "authority-wording-only", "expectedVerdict": "APPLY", "expectedReason": "none"},
+    {"category": "tautological-falsifier", "expectedVerdict": "HOLD", "expectedReason": "falsifier-tautological"},
+    {"category": "non-discriminating-probe", "expectedVerdict": "HOLD", "expectedReason": "probe-nondiscriminating"},
+    {"category": "identical-intervention-control-expectations", "expectedVerdict": "HOLD", "expectedReason": "causal-contract-nondiscriminating"},
+    {"category": "non-distinct-alternative-cause", "expectedVerdict": "HOLD", "expectedReason": "alternative-cause-not-distinct"},
+    {"category": "duplicated-scenario-family", "expectedVerdict": "HOLD", "expectedReason": "scenario-family-duplicate"},
+    {"category": "branch-semantic-collusion", "expectedVerdict": "HOLD", "expectedReason": "branch-semantic-collusion"},
+    {"category": "inconsistent-neutral-declaration", "expectedVerdict": "HOLD", "expectedReason": "neutral-verdict-inconsistent"},
+    {"category": "candidate-baseline-or-case-count-injection", "expectedVerdict": "HOLD", "expectedReason": "candidate-baseline-prohibited"},
+    {"category": "unmatched-paired-case-sets", "expectedVerdict": "HOLD", "expectedReason": "paired-case-set-unlocked"},
+    {"category": "missing-cluster-ids", "expectedVerdict": "HOLD", "expectedReason": "resampling-unit-undefined"},
+    {"category": "undefined-bootstrap-quantile", "expectedVerdict": "HOLD", "expectedReason": "bootstrap-semantics-undefined"},
+    {"category": "deterministic-replay", "expectedVerdict": "APPLY", "expectedReason": "none"},
+    {"category": "safety-critical-regression", "expectedVerdict": "REJECT", "expectedReason": "safety-regression-observed"},
+    {"category": "v1-compatibility-without-v2-uplift", "expectedVerdict": "HOLD", "expectedReason": "v1-readonly-inconclusive"}
+  ]
+}

@@ -1,0 +1,81 @@
+spring:
+  config.activate.on-profile: novanext
+nova:
+  next:
+    enabled: true
+    alphaCvar: 0.9
+    lambdaCvar: 0.35
+    p0: 1.2
+    alphaTwpm: 0.8
+    kTotal: 24
+    tempSoftmax: 0.85
+    floorWeb: 4
+    floorVec: 4
+    floorKg: 2
+    grandas:
+      maxAdjustment: 0.18
+      pMax: 3.0
+      bodeC: 1.6
+whitening:
+  enabled: true
+onnx:
+  enabled: true
+  max-concurrency: 3
+budget:
+  request-time-ms: 3500
+naver:
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+ocr:
+  enabled: true
+  min-confidence: 0.78
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+retrieval:
+  kalloc:
+    enabled: true
+    max-source-share: 0.65
+    hypernova-max-source-share: 0.75
+  vector:
+    enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: ${LLM_API_KEY:}
+  chat-model: gemma4:26b
+
+  provider: local
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+fallback:
+  enabled: false
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true

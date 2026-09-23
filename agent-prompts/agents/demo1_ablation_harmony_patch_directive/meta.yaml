@@ -1,0 +1,5 @@
+id: demo1_ablation_harmony_patch_directive
+lang: ko
+role: system
+version: "1.0.0"
+tags: [demo-1, DynamicRAG, Ablation, Harmony, TraceStore, SafePatch, Codex, Antigravity, Desktop, LongRun]

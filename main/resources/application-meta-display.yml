@@ -1,0 +1,204 @@
+# Opt-in only: the integrated launcher activates local,meta-display.
+# CLI port arguments also pin these values against development environment overrides.
+spring:
+  datasource:
+    # Reuse the existing ChatSession/ChatMessage store across local server restarts.
+    # An explicitly configured LMS_DB_URL continues to take precedence.
+    url: ${LMS_DB_URL:jdbc:h2:file:./var/meta-display-db/lmsdb;MODE=MariaDB;DATABASE_TO_UPPER=false}
+server:
+  port: 18180
+management:
+  server:
+    port: 18181
+netty:
+  port: 18182
+conversate:
+  cost:
+    # Fold6 testing: keep usage estimates, never require dollar-budget approvals.
+    enforce-limits: false
+  asr:
+    cloud:
+      # Complete local-fallback utterances only; Soniox/Deepgram continuous streaming is unchanged.
+      utterance-provider: ${CONVERSATE_STT_UTTERANCE_PROVIDER:economy}
+      # Renew only the provider stream before this bound; microphone session has no timer.
+      stream-seconds: 75
+  transcript:
+    rolling-enabled: true
+    visible-chars: ${CONVERSATE_VISIBLE_CHARS:200}
+    context-chars: ${CONVERSATE_CONTEXT_CHARS:2000}
+  display-ttl-ms: ${CONVERSATE_DISPLAY_TTL_MS:20000}
+  context-ttl-ms: ${CONVERSATE_CONTEXT_TTL_MS:120000}
+  cue:
+    cooldown-ms: 10000
+    trigger-min-delta-chars: ${CONVERSATE_CUE_TRIGGER_MIN_DELTA:120}
+    trigger-quiet-ms: ${CONVERSATE_CUE_TRIGGER_QUIET_MS:2500}
+    force-after-ms: ${CONVERSATE_CUE_FORCE_AFTER_MS:180000}
+    force-min-delta-chars: ${CONVERSATE_CUE_FORCE_MIN_DELTA:50}
+    total-timeout-ms: 12000
+    gate-timeout-ms: 3000
+    hint-timeout-ms: 6500
+    max-attempts-per-stage: 3
+    # Hangul runs ~1 token/char: 1000-char target + JSON envelope needs ~1.5k headroom.
+    hint-target-chars: ${CONVERSATE_CUE_HINT_TARGET_CHARS:1000}
+    # Hint-input past window (not output length, not display TTL). Fold UI wiring is separate.
+    use-past: ${CONVERSATE_CUE_USE_PAST:true}
+    past-max-turns: ${CONVERSATE_CUE_PAST_MAX_TURNS:4}
+    past-max-chars: ${CONVERSATE_CUE_PAST_MAX_CHARS:1600}
+    max-output-tokens: ${CONVERSATE_CUE_MAX_OUTPUT_TOKENS:1536}
+    max-request-usd: ${CONVERSATE_MAX_REQUEST_USD:0.50}
+    local-support-enabled: true
+    # Process-local spending ceilings. A fresh, externally verified snapshot may
+    # supply verified-balance-usd / verified-requests-remaining; absence is unknown.
+    accounts:
+      openai:
+        daily-budget-usd: ${CONVERSATE_OPENAI_DAILY_USD:0.50}
+        observed-at-ms: ${CONVERSATE_OPENAI_QUOTA_OBSERVED_AT_MS:0}
+        verified-free-requests-remaining: ${CONVERSATE_OPENAI_VERIFIED_FREE_REMAINING:0}
+      gemini:
+        daily-budget-usd: ${CONVERSATE_GEMINI_DAILY_USD:0.50}
+        observed-at-ms: ${CONVERSATE_GEMINI_QUOTA_OBSERVED_AT_MS:0}
+        verified-free-requests-remaining: ${CONVERSATE_GEMINI_VERIFIED_FREE_REMAINING:0}
+      groq:
+        # Paid Groq fallback is prohibited, regardless of cost.enforce-limits.
+        daily-budget-usd: 0
+        observed-at-ms: ${CONVERSATE_GROQ_QUOTA_OBSERVED_AT_MS:0}
+        verified-free-requests-remaining: ${CONVERSATE_GROQ_VERIFIED_FREE_REMAINING:0}
+    # Official standard USD / 1M tokens, checked 2026-09-16. Never assume a cache hit.
+    # A model-name override also needs a matching priced-model and verified prices.
+    routes:
+      openai-economy:
+        gate: true
+        quality: 1
+        priced-model: gpt-5.6-luna
+        input-usd-per-million: 0.20
+        output-usd-per-million: 1.20
+        expected-latency-ms: 1000
+        daily-request-limit: ${CONVERSATE_OPENAI_DAILY_REQUEST_LIMIT:1000}
+      openai-balanced:
+        quality: 3
+        priced-model: gpt-5.6-terra
+        input-usd-per-million: 2.00
+        output-usd-per-million: 12.00
+        expected-latency-ms: 2200
+        daily-request-limit: ${CONVERSATE_OPENAI_REASONING_DAILY_REQUEST_LIMIT:100}
+      openai-premium:
+        quality: 4
+        priced-model: gpt-5.6-sol
+        input-usd-per-million: 4.00
+        output-usd-per-million: 20.00
+        expected-latency-ms: 3000
+        daily-request-limit: ${CONVERSATE_PREMIUM_DAILY_REQUEST_LIMIT:20}
+      gemini-cue:
+        gate: true
+        quality: 1
+        priced-model: gemini-3.5-flash-lite
+        input-usd-per-million: 0.30
+        output-usd-per-million: 2.50
+        expected-latency-ms: 900
+        daily-request-limit: ${CONVERSATE_GEMINI_DAILY_REQUEST_LIMIT:1000}
+      gemini-pro:
+        quality: 3
+        priced-model: gemini-3.8-flash
+        # Introductory rate through 2026-12-31; policy applies published 2027 rates.
+        input-usd-per-million: 0.75
+        output-usd-per-million: 3.75
+        expected-latency-ms: 1800
+        daily-request-limit: ${CONVERSATE_GEMINI_PRO_DAILY_REQUEST_LIMIT:100}
+      api3:
+        gate: false
+        quality: 3
+        priced-model: openai/gpt-oss-120b
+        input-usd-per-million: 0.15
+        output-usd-per-million: 0.60
+        expected-latency-ms: 800
+        daily-request-limit: ${CONVERSATE_GROQ_DAILY_REQUEST_LIMIT:500}
+      groq-gate:
+        gate: true
+        quality: 1
+        priced-model: openai/gpt-oss-20b
+        input-usd-per-million: 0.075
+        output-usd-per-million: 0.30
+        expected-latency-ms: 800
+        daily-request-limit: ${CONVERSATE_GROQ_DAILY_REQUEST_LIMIT:500}
+  display:
+    enabled: true
+    segment-seconds: ${CONVERSATE_DISPLAY_SEGMENT_SECONDS:0}
+    # Rolling transcript share sent to the glasses lens; the newest tail is kept.
+    lens-conversation-chars: ${CONVERSATE_LENS_CONVERSATION_CHARS:280}
+    # Anonymous, owner-bound Fold6 development path; other profiles stay opt-in.
+    phone-test-enabled: ${CONVERSATE_DISPLAY_PHONE_TEST_ENABLED:true}
+    audio:
+      enabled: ${CONVERSATE_DISPLAY_AUDIO_ENABLED:true}
+demo:
+  interview:
+    # Conversate uses the existing authenticated owner and generation boundary.
+    enabled: false
+    # Trust this explicit HTTPS origin only through the existing loopback/host guard.
+    fixed-public-origin: ${APP_PUBLIC_BASE_URL:https://abandonwareai.kro.kr}
+
+# Existing routes remain fallback-only for unrelated llmrouter.auto consumers.
+# Conversate explicitly selects these API roles after credential/health checks.
+llmrouter:
+  models:
+    openai-economy:
+      enabled: ${LLMROUTER_OPENAI_ECONOMY_ENABLED:true}
+      provider: openai
+      stage: chat
+      fallback-only: true
+      name: ${LLMROUTER_OPENAI_ECONOMY_NAME:gpt-5.6-luna}
+      base-url: ${LLMROUTER_OPENAI_ECONOMY_BASE_URL:https://api.openai.com/v1}
+      credential-env: OPENAI_API_KEY
+      weight: 0.0
+    openai-balanced:
+      enabled: ${LLMROUTER_OPENAI_BALANCED_ENABLED:true}
+      name: ${LLMROUTER_OPENAI_BALANCED_NAME:gpt-5.6-terra}
+    openai-premium:
+      enabled: ${LLMROUTER_OPENAI_PREMIUM_ENABLED:true}
+      name: ${LLMROUTER_OPENAI_PREMIUM_NAME:gpt-5.6-sol}
+    gemini-pro:
+      enabled: ${LLMROUTER_GEMINI_PRO_ENABLED:true}
+      name: ${LLMROUTER_GEMINI_PRO_NAME:gemini-3.8-flash}
+    api3:
+      credential-env: GROQ_API_KEY
+    groq-gate:
+      enabled: true
+      provider: groq
+      stage: chat
+      fallback-only: true
+      name: openai/gpt-oss-20b
+      base-url: https://api.groq.com/openai/v1
+      credential-env: GROQ_API_KEY
+      weight: 0.0
+    gemini-cue:
+      enabled: ${LLMROUTER_GEMINI_CUE_ENABLED:true}
+      provider: gemini
+      stage: chat
+      fallback-only: true
+      name: ${LLMROUTER_GEMINI_CUE_NAME:gemini-3.5-flash-lite}
+      base-url: ${LLMROUTER_GEMINI_CUE_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai}
+      credential-env: GEMINI_API_KEY
+      weight: 0.0
+
+# Only the registered router purpose is enabled for these real-time cue calls.
+gemini:
+  gateway:
+    speech:
+      enabled: ${GEMINI_GATEWAY_SPEECH_ENABLED:true}
+    purpose:
+      router:
+        enabled: ${GEMINI_GATEWAY_ROUTER_ENABLED:true}
+
+# Official and account Limits checked 2026-09-16; fresh account evidence is mandatory.
+# All devices using this organization must point to the same ledger. It is not a balance API.
+groq:
+  free-tier:
+    safety-margin: ${GROQ_FREE_SAFETY_MARGIN:0.10}
+    evidence: ${GROQ_FREE_EVIDENCE:data/usage/groq-free-plan.json}
+    ledger: ${GROQ_FREE_LEDGER:data/usage/groq-free-reservations.jsonl}
+
+# Local/display-only opt-in for the read-only agent DB context surface
+# (/agent/db-context/*). The public default stays disabled; kill switch:
+# set agent.db-context.enabled=false or drop this block.
+agent:
+  db-context:
+    enabled: true

@@ -1,0 +1,47 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: hyper_nova.v1
+version: "0.1.0"
+description: "TWPM+CVaR fusion, risk-aware K allocation, DPP control, hardened gates"
+budget:
+  time_ms: 18000
+concurrency:
+  reranker_max_parallel: 2
+k_allocation:
+  total: 24
+  max_source_share: 0.75
+  floor:
+    web: 4
+    vec: 4
+    kg: 2
+whitening:
+  enabled: true
+expansion:
+  self_ask: 3
+fusion:
+  rrf: weighted
+  post: hypernova
+  grandas_tail:
+    max_adjustment: 0.18
+    p_max: 3.0
+    bode_c: 1.6
+rerank:
+  pass1: bi_encoder_fast
+  dpp:
+    enabled: true
+    sigma: 0.7
+  pass2: onnx_cross_encoder_strict
+gates:
+  citation_min: 3
+  final_sigmoid: { k: 8.0, x0: 0.72, pass: 0.90 }
+
+probe:
+  search:
+    enabled: false
+
+retrieval:
+  vector:
+    enabled: true

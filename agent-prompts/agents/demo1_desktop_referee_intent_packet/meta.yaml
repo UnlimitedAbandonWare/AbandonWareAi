@@ -1,0 +1,6 @@
+id: demo1_desktop_referee_intent_packet
+version: "1.0"
+description: >
+  Desktop referee-node prompt for non-applyable Mac mini intent packets,
+  PatchDrop queue matrix triage, priority indexing, and runtime verifier gates.
+created: "2026-06-11"

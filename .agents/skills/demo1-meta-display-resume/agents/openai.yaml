@@ -1,0 +1,4 @@
+interface:
+  display_name: "Display · 작업 재개"
+  short_description: "완료 근거와 변경된 파일을 확인해 다음 Display 작업을 선택"
+  default_prompt: "Use $demo1-meta-display-resume to reuse the current selector result or inspect it once, then continue the next authorized stage without inventing Desktop execution or repeating unchanged checks."

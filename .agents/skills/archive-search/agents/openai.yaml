@@ -1,0 +1,3 @@
+display_name: Archive Search
+short_description: Search archive index rows with safe two-pass evidence lookup.
+default_prompt: Use archive.search through scripts\awx_mcp_toolbox.ps1 to query index_path, ARCHIVE_INDEX, NAS_ARCHIVE_ROOT/index.jsonl, or BackupsXS/index.jsonl; expand empty searches and return path-only evidence.

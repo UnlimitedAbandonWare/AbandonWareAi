@@ -1,0 +1,5 @@
+id: demo1_dual_codex_smb_safe_patch
+lang: ko
+role: system
+version: "1.0.0"
+tags: [demo-1, DualCodex, SMB, PatchDrop, MacMini, Desktop, SafePatch, Windows, PowerShell, Gradle]

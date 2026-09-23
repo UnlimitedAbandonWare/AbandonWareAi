@@ -1,0 +1,51 @@
+id: zero100.v1
+
+description: "Zero-100 timeboxed 3-lane RAG rotation and consensus overlay."
+
+retrieval:
+  k: { web: 8, vector: 4, kg: 2 }
+  officialSourcesOnly: false
+
+guards:
+  whitelist_profile: jul14
+
+params:
+  # === Zero100 engine activation ===
+  search.zero100.enabled: true
+
+  # === absolute session timebox ===
+  search.zero100.maxMinutes: 100
+
+  # === micro-slice compass tick ===
+  search.zero100.sliceMs: 400
+
+  # === hybrid web timebox ===
+  search.zero100.webTimeboxMs: 2500
+  search.zero100.webTimeboxMsWhenRateLimited: 650
+
+  # === backoff cap override (per-request) ===
+  search.zero100.backoffHardCapMs: 2500
+
+  # === branch scheduler / consensus overlay ===
+  search.zero100.crossVerifyStartPct: 55
+  search.zero100.consensusStartPct: 80
+  search.zero100.queryBurstMax: 9
+  search.zero100.strictWeight: 1.0
+  search.zero100.relaxedWeight: 1.0
+  search.zero100.exploreWeight: 1.0
+
+  # === 3-lane risk consensus overlay ===
+  search.zero100.riskConsensus.enabled: true
+  search.zero100.riskConsensus.riskPenaltyLambda: 0.45
+  search.zero100.riskConsensus.minLaneCoverage: 2
+  search.zero100.riskConsensus.minRrfWeight: 0.05
+  search.zero100.riskConsensus.maxRrfWeight: 1.25
+  search.zero100.strictCallBudgetRatio: 0.34
+  search.zero100.relaxedCallBudgetRatio: 0.33
+  search.zero100.exploreCallBudgetRatio: 0.33
+  search.zero100.strictTimeboxRatio: 0.38
+  search.zero100.relaxedTimeboxRatio: 0.32
+  search.zero100.exploreTimeboxRatio: 0.30
+
+gates:
+  citationMin: 3

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Goal Complete Stop"
+  short_description: "목표 달성 시 자연 종료, 옛 인계는 참고만"
+  default_prompt: "Use $demo1-goal-complete-stop when the asked demo-1 goal is verified: confirm src/URL, summarize briefly, treat stale handoffs as reference-only, and stop without autonomous continuation."

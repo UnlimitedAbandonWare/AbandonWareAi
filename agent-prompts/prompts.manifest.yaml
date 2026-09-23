@@ -1,0 +1,368 @@
+agents:
+  - id: resume_llm_mcp
+    system: agents/resume_llm_mcp/system_ko.md
+    traits:
+      - traits/stuff2_ko.md
+    merge:
+      order: [trait, system]
+      conflict: project_overrides_global
+    output:
+      path: out/resume_agent.prompt
+      encoding: utf-8
+  - id: cmux_rag_parallel
+    system: agents/cmux_rag_parallel/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/cmux_rag_parallel.prompt
+      encoding: utf-8
+  - id: demo1_p0_safe_patch_orchestrator
+    system: agents/demo1_p0_safe_patch_orchestrator/system.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_p0_safe_patch_orchestrator.prompt
+      encoding: utf-8
+  - id: demo1_desktop_autonomous_safe_patch
+    system: agents/demo1_desktop_autonomous_safe_patch/system.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_desktop_autonomous_safe_patch.prompt
+      encoding: utf-8
+  - id: demo1_abandon_ui_orchestration_patch
+    system: agents/demo1_abandon_ui_orchestration_patch/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_abandon_ui_orchestration_patch.prompt
+      encoding: utf-8
+  - id: demo1_macmini_subserver_integration
+    system: agents/demo1_macmini_subserver_integration/system.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_macmini_subserver_integration.prompt
+      encoding: utf-8
+  - id: demo1_dual_codex_smb_safe_patch
+    system: agents/demo1_dual_codex_smb_safe_patch/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_dual_codex_smb_safe_patch.prompt
+      encoding: utf-8
+  - id: demo1_graphrag_kg_macmini_patchdrop
+    system: agents/demo1_graphrag_kg_macmini_patchdrop/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_graphrag_kg_macmini_patchdrop.prompt
+      encoding: utf-8
+  - id: demo1_dynamic_rag_autonomous_patch_directive
+    system: agents/demo1_dynamic_rag_autonomous_patch_directive/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_dynamic_rag_autonomous_patch_directive.prompt
+      encoding: utf-8
+  - id: demo1_spire_debug_operator_9h
+    system: agents/demo1_spire_debug_operator_9h/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_spire_debug_operator_9h.prompt
+      encoding: utf-8
+  - id: demo1_orchestration_feature_expansion_plan
+    system: agents/demo1_orchestration_feature_expansion_plan/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_orchestration_feature_expansion_plan.prompt
+      encoding: utf-8
+  - id: demo1_desktop_patchdrop_janitor
+    system: agents/demo1_desktop_patchdrop_janitor/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_desktop_patchdrop_janitor.prompt
+      encoding: utf-8
+  - id: demo1_desktop_referee_intent_packet
+    system: agents/demo1_desktop_referee_intent_packet/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_desktop_referee_intent_packet.prompt
+      encoding: utf-8
+  - id: demo1_desktop_referee_ablation_postprocess
+    system: agents/demo1_desktop_referee_ablation_postprocess/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_desktop_referee_ablation_postprocess.prompt
+      encoding: utf-8
+  - id: demo1_orch_patch_scanner
+    system: agents/demo1_orch_patch_scanner/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_orch_patch_scanner.prompt
+      encoding: utf-8
+  - id: demo1_orch_debug_scan
+    system: agents/demo1_orch_debug_scan/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_orch_debug_scan.prompt
+      encoding: utf-8
+  - id: demo1_orch_directive_generator
+    system: agents/demo1_orch_directive_generator/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_orch_directive_generator.prompt
+      encoding: utf-8
+  - id: demo1_orch_kpi_dashboard
+    system: agents/demo1_orch_kpi_dashboard/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_orch_kpi_dashboard.prompt
+      encoding: utf-8
+  - id: demo1_context_contamination_scout_directive
+    system: agents/demo1_context_contamination_scout_directive/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_context_contamination_scout_directive.prompt
+      encoding: utf-8
+  - id: demo1_macsrc_defect_intake
+    system: agents/demo1_macsrc_defect_intake/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_macsrc_defect_intake.prompt
+      encoding: utf-8
+  - id: demo1_macsrc_guarded_patch_session
+    system: agents/demo1_macsrc_guarded_patch_session/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_macsrc_guarded_patch_session.prompt
+      encoding: utf-8
+  - id: demo1_macsrc_patch_postprocess
+    system: agents/demo1_macsrc_patch_postprocess/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_macsrc_patch_postprocess.prompt
+      encoding: utf-8
+  - id: demo1_ai_debug_metrics_ledger
+    system: agents/demo1_ai_debug_metrics_ledger/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_ai_debug_metrics_ledger.prompt
+      encoding: utf-8
+  - id: demo1_three_node_smb_codex
+    system: agents/demo1_three_node_smb_codex/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_three_node_smb_codex.prompt
+      encoding: utf-8
+  - id: demo1_notebook_desktop_goal_handoff
+    system: agents/demo1_notebook_desktop_goal_handoff/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_notebook_desktop_goal_handoff.prompt
+      encoding: utf-8
+  - id: demo1_desktop_canonical_goal_intake
+    system: agents/demo1_desktop_canonical_goal_intake/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_desktop_canonical_goal_intake.prompt
+      encoding: utf-8
+  - id: demo1_mcp_control_tower
+    system: agents/demo1_mcp_control_tower/system.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_mcp_control_tower.prompt
+      encoding: utf-8
+  - id: demo1_design_selfask_corrector
+    system: agents/demo1_design_selfask_corrector/system.md
+    directive: agents/demo1_design_selfask_corrector/patch_directive_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_design_selfask_corrector.prompt
+      encoding: utf-8
+  - id: demo1_quant_metric_normalization_antigravity
+    system: agents/demo1_quant_metric_normalization_antigravity/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_quant_metric_normalization_antigravity.prompt
+      encoding: utf-8
+  - id: demo1_ablation_harmony_patch_directive
+    system: agents/demo1_ablation_harmony_patch_directive/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_ablation_harmony_patch_directive.prompt
+      encoding: utf-8
+  - id: demo1_quant_harmony_9h_safe_patch
+    system: agents/demo1_quant_harmony_9h_safe_patch/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_quant_harmony_9h_safe_patch.prompt
+      encoding: utf-8
+  - id: demo1_db_schema_source_patch_9h
+    system: agents/demo1_db_schema_source_patch_9h/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_db_schema_source_patch_9h.prompt
+      encoding: utf-8
+  - id: demo1_graphrag_only_source_patch_9h
+    system: agents/demo1_graphrag_only_source_patch_9h/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_graphrag_only_source_patch_9h.prompt
+      encoding: utf-8
+  - id: demo1_legacy_300_metadata_9h_patch
+    system: agents/demo1_legacy_300_metadata_9h_patch/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_legacy_300_metadata_9h_patch.prompt
+      encoding: utf-8
+  - id: demo1_agent_tools_library_patch_9h
+    system: agents/demo1_agent_tools_library_patch_9h/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_agent_tools_library_patch_9h.prompt
+      encoding: utf-8
+  - id: demo1_claude_peers_web_probe_agent_upgrade_5h
+    system: agents/demo1_claude_peers_web_probe_agent_upgrade_5h/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_claude_peers_web_probe_agent_upgrade_5h.prompt
+      encoding: utf-8
+  - id: demo1_three_perspective_chat_postprocess
+    system: agents/demo1_three_perspective_chat_postprocess/system_ko.md
+    traits:
+      - agents/demo1_three_perspective_chat_postprocess/positive_scenarios_ko.md
+      - agents/demo1_three_perspective_chat_postprocess/negative_counter_ko.md
+      - agents/demo1_three_perspective_chat_postprocess/neutral_judge_ko.md
+      - agents/demo1_three_perspective_chat_postprocess/scenario_matrix_ko.md
+    merge:
+      order: [system, trait]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_three_perspective_chat_postprocess.prompt
+      encoding: utf-8
+  - id: demo1_stuff3_sapa_command_router
+    system: agents/demo1_stuff3_sapa_command_router/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_stuff3_sapa_command_router.prompt
+      encoding: utf-8
+  - id: demo1_artifact_trace_integrity_harness
+    system: agents/demo1_artifact_trace_integrity_harness/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_artifact_trace_integrity_harness.prompt
+      encoding: utf-8
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

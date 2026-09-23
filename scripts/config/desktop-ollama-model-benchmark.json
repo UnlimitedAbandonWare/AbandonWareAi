@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 2,
+  "corpusId": "awx.desktop-ollama-benchmark.v2",
+  "options": {
+    "temperature": 0,
+    "seed": 42,
+    "num_ctx": 8192,
+    "num_predict": 192,
+    "stream": false,
+    "think": false,
+    "keep_alive": "5m"
+  },
+  "ontologies": {
+    "gpu": ["RTX 3060", "RTX 3090"],
+    "role": ["fast", "main", "high", "coder", "rewrite", "explore", "vision", "embedding"],
+    "port": [11434, 11435],
+    "instructionToken": ["PASS", "FAIL", "HOLD"],
+    "meaningUnit": ["DOWNLOAD_MODEL", "VERIFY_BEFORE_DEFAULT_CHANGE", "CHANGE_DEFAULT_ONLY_AFTER_PASS", "CHANGE_DEFAULT_BEFORE_VERIFY", "AUTO_DELETE_BASELINE"],
+    "groundedClaim": ["QWEN35_IS_3060_CANDIDATE", "GPU_LOAD_CHECK_BEFORE_PROMOTION", "QWEN35_IS_3090_BASELINE", "PROMOTION_BEFORE_GPU_CHECK"],
+    "evidenceState": ["SUPPORTED", "INSUFFICIENT", "CONFLICTING"],
+    "answerKind": ["NUMERIC", "NO_VALUE"],
+    "unit": ["MIB", "GIB", "NONE"],
+    "uncertaintyReason": ["EVIDENCE_MISSING", "EVIDENCE_CONFLICT", "EVIDENCE_PRESENT", "OUT_OF_SCOPE"],
+    "promotionDecision": ["PROMOTE", "HOLD", "REJECT"],
+    "promotionReason": ["CPU_OFFLOAD", "QUALITY_REGRESSION", "DIGEST_MISMATCH", "INSUFFICIENT_VRAM", "LATENCY_REGRESSION", "LINEAGE_MISSING", "ALL_GATES_PASS"]
+  },
+  "cases": [
+    {
+      "id": "fast-rewrite-ko",
+      "role": "fast",
+      "metrics": ["rewriteAndExtractionQuality"],
+      "prompt": "다음 문장을 의미를 유지한 한 문장으로 간결하게 고쳐라: 시스템은 모델을 다운로드한 뒤 검증을 통과한 경우에만 기본값을 바꾼다. rewrite에는 고친 문장을, meaningUnits에는 문장이 보존한 의미 단위를 선택해라.",
+      "responseSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rewrite", "meaningUnits"],
+        "properties": {
+          "rewrite": {"type": "string", "minLength": 1, "maxLength": 160},
+          "meaningUnits": {"type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": {"type": "string", "enum": ["DOWNLOAD_MODEL", "VERIFY_BEFORE_DEFAULT_CHANGE", "CHANGE_DEFAULT_ONLY_AFTER_PASS", "CHANGE_DEFAULT_BEFORE_VERIFY", "AUTO_DELETE_BASELINE"]}}
+        }
+      }
+    },
+    {
+      "id": "fast-json-extract",
+      "role": "fast",
+      "metrics": ["rewriteAndExtractionQuality", "toolAndStructuredOutput"],
+      "prompt": "문장 'RTX 3060은 fast 역할이고 포트는 11435다'에서 gpu, role, port를 추출하라.",
+      "responseSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gpu", "role", "port"],
+        "properties": {
+          "gpu": {"type": "string", "enum": ["RTX 3060", "RTX 3090"]},
+          "role": {"type": "string", "enum": ["fast", "main", "high", "coder", "rewrite", "explore", "vision", "embedding"]},
+          "port": {"type": "integer", "enum": [11434, 11435]}
+        }
+      }
+    },
+    {
+      "id": "fast-instruction",
+      "role": "fast",
+      "metrics": ["instructionFollowing"],
+      "prompt": "오직 PASS라는 의미를 token field로 표현하라.",
+      "responseSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token"],
+        "properties": {
+          "token": {"type": "string", "enum": ["PASS", "FAIL", "HOLD"]}
+        }
+      }
+    },
+    {
+      "id": "main-grounded-ko",
+      "role": "main",
+      "metrics": ["koreanRagQuality", "factualityAndCitationDiscipline"],
+      "prompt": "근거 [A]: qwen3.5:9b는 3060 후보이다. 근거 [B]: 승격 전 GPU 적재를 확인한다. 근거만 사용해 summary를 작성하고, claims에는 각 주장과 그 근거 label을 연결하라.",
+      "responseSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "claims"],
+        "properties": {
+          "summary": {"type": "string", "minLength": 1, "maxLength": 400},
+          "claims": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["claimCode", "citation"],
+              "properties": {
+                "claimCode": {"type": "string", "enum": ["QWEN35_IS_3060_CANDIDATE", "GPU_LOAD_CHECK_BEFORE_PROMOTION", "QWEN35_IS_3090_BASELINE", "PROMOTION_BEFORE_GPU_CHECK"]},
+                "citation": {"type": "string", "enum": ["A", "B", "NONE"]}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "main-uncertainty-ko",
+      "role": "main",
+      "metrics": ["factualityAndCitationDiscipline"],
+      "prompt": "제공된 근거에는 RTX 3060의 실제 VRAM 용량이 없다. evidenceState, answerKind, value, unit, reasonCodes로 답하라. 근거가 지원하는 숫자만 value에 넣어라.",
+      "responseSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidenceState", "answerKind", "value", "unit", "reasonCodes"],
+        "properties": {
+          "evidenceState": {"type": "string", "enum": ["SUPPORTED", "INSUFFICIENT", "CONFLICTING"]},
+          "answerKind": {"type": "string", "enum": ["NUMERIC", "NO_VALUE"]},
+          "value": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+          "unit": {"type": "string", "enum": ["MIB", "GIB", "NONE"]},
+          "reasonCodes": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "enum": ["EVIDENCE_MISSING", "EVIDENCE_CONFLICT", "EVIDENCE_PRESENT", "OUT_OF_SCOPE"]}}
+        }
+      }
+    },
+    {
+      "id": "main-policy-ko",
+      "role": "main",
+      "metrics": ["instructionFollowing", "codingAndToolUse"],
+      "prompt": "다운로드 성공, CPU offload 발견, 기준선보다 품질 하락이라는 조건에서 승격 결정을 decision과 reasonCodes로 답하라.",
+      "responseSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "reasonCodes"],
+        "properties": {
+          "decision": {"type": "string", "enum": ["PROMOTE", "HOLD", "REJECT"]},
+          "reasonCodes": {"type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true, "items": {"type": "string", "enum": ["CPU_OFFLOAD", "QUALITY_REGRESSION", "DIGEST_MISMATCH", "INSUFFICIENT_VRAM", "LATENCY_REGRESSION", "LINEAGE_MISSING", "ALL_GATES_PASS"]}}
+        }
+      }
+    }
+  ]
+}

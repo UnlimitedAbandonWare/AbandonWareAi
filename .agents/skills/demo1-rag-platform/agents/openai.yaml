@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 RAG Platform"
+  short_description: "Safe backend patching for demo-1 RAG"
+  default_prompt: "Use $demo1-rag-platform to verify the active demo-1 runtime path and make a minimal backend patch."
+policy:
+  allow_implicit_invocation: true
+

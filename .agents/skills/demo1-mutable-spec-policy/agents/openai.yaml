@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Mutable Spec Policy"
+  short_description: "가변 규격은 SSOT 재조회, 하드 제약만 상수"
+  default_prompt: "Use $demo1-mutable-spec-policy before demo-1 API/model/Display/routing/port work: re-read the SSOT (configs/api-routing.yaml, docs/API_ROUTING_SPEC.md, ollama ls), never hardcode spec values, and keep only the hard constraints as constants."

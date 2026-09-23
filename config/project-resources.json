@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "awx.project-resources.v1",
+  "enabled": true,
+  "probeTimeoutSeconds": 3,
+  "probeBudgetSeconds": 20,
+  "registryTtlSeconds": 300,
+  "runtimeEnvironmentNames": [
+    "CONVERSATE_ENABLED", "CONVERSATE_ASR_ENABLED", "CONVERSATE_ASR_PROVIDER",
+    "CONVERSATE_ASR_CLOUD_ENABLED", "CONVERSATE_ASR_CLOUD_LEDGER", "CONVERSATE_ASR_CLOUD_MODE",
+    "CONVERSATE_ASR_CLOUD_VERIFICATION_USD", "CONVERSATE_ASR_CLOUD_MONTHLY_USD",
+    "CONVERSATE_MAX_REQUEST_USD", "CONVERSATE_DISPLAY_TTL_MS", "CONVERSATE_DISPLAY_STICKY_LENS", "CONVERSATE_CONTEXT_TTL_MS",
+    "CONVERSATE_OPENAI_DAILY_USD", "CONVERSATE_GEMINI_DAILY_USD", "CONVERSATE_GROQ_DAILY_USD"
+  ],
+  "providers": {
+    "openai": ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"],
+    "gemini": ["GEMINI_API_KEY", "GEMINI_GATEWAY_BASE_URL", "GEMINI_GATEWAY_OPENAI_COMPATIBLE_BASE_URL", "GEMINI_GATEWAY_ENABLED"],
+    "anthropic": ["ANTHROPIC_API_KEY"],
+    "deepgram": ["DEEPGRAM_API_KEY", "DEEPGRAM_API_KEY_SECONDARY"],
+    "soniox": ["SONIOX_API_KEY", "SONIOX_STT_ENABLED", "SONIOX_STT_MODEL", "SONIOX_STT_REGION"],
+    "groq": ["GROQ_API_KEY"],
+    "zai": ["ZAI_API_KEY"],
+    "vercel": ["AI_GATEWAY_API_KEY"],
+    "devin": ["DEVIN_API_KEY"],
+    "opencode": ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"],
+    "brave": ["BRAVE_API_KEY", "BRAVE_API_KEY_FREE"],
+    "naver": ["NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET", "NAVER_KEYS"],
+    "kakao": ["KAKAO_REST_API_KEY"],
+    "serpapi": ["SERPAPI_API_KEY"],
+    "tavily": ["TAVILY_API_KEY"],
+    "pinecone": ["PINECONE_API_KEY", "PINECONE_HOST", "PINECONE_INDEX"],
+    "upstash": ["UPSTASH_VECTOR_API_KEY", "UPSTASH_VECTOR_REST_URL", "UPSTASH_VECTOR_URL", "UPSTASH_VECTOR_TOKEN", "UPSTASH_VECTOR_KEY", "UPSTASH_VECTOR_NS", "UPSTASH_VECTOR_RO", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN", "UPSTASH_REDIS_ENABLED"],
+    "supabase": ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ACCESS_TOKEN"],
+    "database": ["DATABASE_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USERNAME", "DB_PASSWORD", "SPRING_DATASOURCE_URL", "SPRING_DATASOURCE_USERNAME", "SPRING_DATASOURCE_PASSWORD", "LMS_DB_URL", "LMS_DB_USERNAME", "LMS_DB_PASSWORD", "LMS_DB_DRIVER"],
+    "neo4j": ["NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD", "NEO4J_DATABASE", "RETRIEVAL_KG_NEO4J_URI", "RETRIEVAL_KG_NEO4J_USER", "RETRIEVAL_KG_NEO4J_PASSWORD", "RETRIEVAL_KG_NEO4J_DATABASE"],
+    "redis": ["REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD", "REDIS_URL"],
+    "ollama": ["OLLAMA_HOST", "LOCAL_LLM_HEALTH_CHECK_URL"],
+    "awx": ["AWX_ADMIN_TOKEN", "AWX_ADMIN_BASE_URL"]
+  },
+  "configurationFiles": ["main/resources/application.yml", "main/resources/application.properties", "main/resources/application-local.yml", "main/resources/application-llm.yaml", "main/resources/application-deepgram-local.yml", "main/resources/application-ultra.properties", "main/resources/application-secrets.yml", "main/resources/application-meta-display.yml"],
+  "configurationPrefixes": {
+    "database": ["spring.datasource."],
+    "redis": ["spring.data.redis.", "spring.redis.", "redis."],
+    "upstash": ["upstash.", "vector.upstash."],
+    "neo4j": ["spring.neo4j.", "retrieval.kg.neo4j."]
+  }
+}

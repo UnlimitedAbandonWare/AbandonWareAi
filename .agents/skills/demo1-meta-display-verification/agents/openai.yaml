@@ -1,0 +1,4 @@
+interface:
+  display_name: "Display · 실제 동작 검증"
+  short_description: "Display 서버·Ollama 시작 준비와 실제 sync·Simulator 증거 검증"
+  default_prompt: "Use $demo1-meta-display-verification to prepare an authorized Display server start through the existing launcher and Ollama manager, diagnose dependencies, and verify current E3/E4 evidence."

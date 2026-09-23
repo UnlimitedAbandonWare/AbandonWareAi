@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · API Spec Drift Guard"
+  short_description: "낡은 API 문서/주석보다 라이브 규격에 맞게 자동 교정"
+  default_prompt: "Use $demo1-api-spec-drift-guard to refresh live API/Ollama inventory, diff against configs/api-routing.yaml, and patch demo-1 seams to the current vendor contract instead of stale docs."

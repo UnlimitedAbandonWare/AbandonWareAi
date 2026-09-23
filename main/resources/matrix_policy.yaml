@@ -1,0 +1,49 @@
+# resources/matrix_policy.yaml
+axes:
+  freshness: [low, mid, high]
+  evidence: [relax, normal, official]
+plan:
+  high+official:
+    useWeb: true
+    officialSourcesOnly: true
+    domainProfile: government_strict
+    webTopK: 12
+    rrf: { web: 1.0, vector: 0.3, kg: 0.0 }
+    crossEncoder: { enabled: true, topK: 30, cutoff: 0.55 }
+    kg: { enabled: false }
+    web: { hedge: true, timeoutMs: 2500 }
+  high+normal:
+    # DUPFIX: commented duplicate key 'useWeb'
+#     useWeb: true
+    officialSourcesOnly: false
+    domainProfile: news_balanced
+    webTopK: 10
+    rrf: { web: 0.8, vector: 0.6, kg: 0.2 }
+    crossEncoder: { enabled: true, topK: 20, cutoff: 0.50 }
+    kg: { enabled: true }
+    web: { hedge: true, timeoutMs: 2500 }
+  low+relax:
+    # DUPFIX: commented duplicate key 'useWeb'
+#     useWeb: false
+    # DUPFIX: commented duplicate key 'officialSourcesOnly'
+#     officialSourcesOnly: false
+    domainProfile: default
+    webTopK: 0
+    rrf: { web: 0.0, vector: 1.0, kg: 0.3 }
+    crossEncoder: { enabled: false }
+    kg: { enabled: true }
+    web: { hedge: false, timeoutMs: 2000 }
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

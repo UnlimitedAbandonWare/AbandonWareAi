@@ -1,0 +1,106 @@
+spring:
+  config:
+    activate:
+      on-profile: __never__
+selfask:
+  enabled: true
+orchestrator:
+  gate:
+    complexity:
+      enabled: true
+planner:
+  dsl:
+    enabled: true
+guard:
+  preflight:
+    enabled: true
+  pii:
+    enabled: true
+  citation:
+    min-sources: 2
+  final-quality:
+    enabled: true
+    tau: 0.9
+    max-concurrency: 4
+budget:
+  request-time-ms: 3500
+naver:
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+ocr:
+  enabled: true
+  min-confidence: 0.78
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+retrieval:
+  vector:
+    enabled: true
+onnx:
+  enabled: true
+  gpu-id: 0
+  max-concurrency: 2
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: ${LLM_API_KEY:}
+  chat-model: gemma4:26b
+
+  provider: local
+  # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
+  # MERGED_DUP llm.provider :: provider: local
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+fallback:
+  enabled: false
+
+zsys:
+  onnx:
+    enabled: true
+    gpu-id: 0
+    max-concurrency: 2
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+
+# ---------------------------------------------------------------------------
+# Nova web fail-soft (operators can tune)
+# ---------------------------------------------------------------------------
+# nova:
+#   orch:
+#     web-failsoft:
+#       officialOnlyStarvationFallbackQualityGateEnabled: true
+#       officialOnlyStarvationFallbackQualityGateUnverifiedRatioThreshold: 0.75
+#       officialOnlyStarvationFallbackQualityGateRequireForceInsert: false
+#       allowExtraSearchCalls: true
+#       maxExtraSearchCalls: 1
+#       officialDocsRescueQueries:
+#         - "{entity} official site"
+#         - "{entity} documentation"
+#         - "{canonical} official docs"
+#         - "{canonical} site:github.com {entity}"

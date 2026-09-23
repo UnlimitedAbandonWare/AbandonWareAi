@@ -1,0 +1,5 @@
+"model_verbosity" = "high"
+"model_reasoning_summary" = "detailed"
+
+# Shared definitions: shared-runtime.json. Host paths belong in the local Codex config.
+# Bootstrap: python -B scripts/awx_mcp_node_setup.py --register-codex

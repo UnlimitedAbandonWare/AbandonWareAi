@@ -1,0 +1,57 @@
+# MERGE_HOOK:PROJ_AGENT::ORCH_STAGE_POLICY_YAML
+# OPTIONAL/CRITICAL stage policy (externalized)
+#
+# Notes:
+# - First match wins.
+# - `enableIn` is case-insensitive; omit or empty means "all modes".
+# - Patterns are glob-like (e.g., "query-transformer:*", "retrieval:*",
+#   "chat:draft*").
+
+orchestration:
+  stage-policy:
+    enabled: true
+    # Default irregularity bump weights when the stage is fault-masked.
+    defaultOptionalIrregularityDelta: 0.12
+    defaultCriticalIrregularityDelta: 0.22
+    rules:
+      # === Core answer path ===
+      - id: chat-draft
+        pattern: "chat:draft*"
+        importance: CRITICAL
+        enableIn: [NORMAL, COMPRESSION, STRIKE]
+      - id: guard-evidence
+        pattern: "guard:*"
+        importance: CRITICAL
+        enableIn: [NORMAL, COMPRESSION, STRIKE, BYPASS]
+
+      # === Planning / Amplify (aux stages) ===
+      - id: query-planner
+        pattern: "plan:queryPlanner"
+        importance: OPTIONAL
+        enableIn: [NORMAL, COMPRESSION]
+      - id: query-transformer
+        pattern: "query-transformer:*"
+        importance: OPTIONAL
+        # Cap fault-mask irregularity impact for this optional stage.
+        irregularityDelta: 0.04
+        enableIn: [NORMAL, COMPRESSION]
+
+      # === Retrieval ===
+      - id: retrieval-web
+        pattern: "retrieval:web"
+        importance: OPTIONAL
+        enableIn: [NORMAL, COMPRESSION, STRIKE]
+      - id: retrieval-vector
+        pattern: "retrieval:vector"
+        importance: OPTIONAL
+        enableIn: [NORMAL, COMPRESSION, STRIKE]
+
+      # === Refine ===
+      - id: rerank
+        pattern: "rerank:*"
+        importance: OPTIONAL
+        enableIn: [NORMAL, COMPRESSION]
+      - id: verify-fact
+        pattern: "verify:*"
+        importance: OPTIONAL
+        enableIn: [NORMAL, COMPRESSION]

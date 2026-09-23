@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Codex Usage Triage"
+  short_description: "Reduce repeated Codex tool loops"
+  default_prompt: "Use $demo1-codex-usage-triage to cut repeated scans, dispatches, and proof loops without hiding missing evidence."

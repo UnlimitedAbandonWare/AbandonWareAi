@@ -1,0 +1,71 @@
+{
+  "description": "Bound explicit demo-1 source edits to the repo-local three-way preflight.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'd=\"$PWD\"; while [ \"$d\" != / ]; do if [ -f \"$d/config/project-resources.json\" ] && [ -f \"$d/scripts/awx_device_bus.py\" ]; then exec python3 -B \"$d/scripts/awx_device_bus.py\" hook --root \"$d\"; fi; d=$(dirname \"$d\"); done; exit 0'",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$d=(Get-Location).ProviderPath; for($i=0;$i -lt 32;$i++){ $p=Join-Path $d 'scripts\\awx_device_bus.py'; if((Test-Path -LiteralPath $p) -and (Test-Path -LiteralPath (Join-Path $d 'config\\project-resources.json'))){ & python -B $p hook --root $d; exit $LASTEXITCODE }; $n=Split-Path $d -Parent; if(!$n -or $n -eq $d){break}; $d=$n }; exit 0\"",
+            "timeout": 40,
+            "statusMessage": "Checking project resource capabilities",
+            "additionalContextLimit": 512
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'd=\"$PWD\"; n=0; i=0; found=\"\"; while [ \"$i\" -lt 32 ]; do if [ -e \"$d/.git\" ] && [ -f \"$d/AGENTS.md\" ] && [ -f \"$d/settings.gradle.kts\" ] && [ -f \"$d/build.gradle.kts\" ] && [ -f \"$d/.codex/hooks/source_edit_triage.sh\" ]; then n=$((n+1)); found=\"$d/.codex/hooks/source_edit_triage.sh\"; fi; [ \"$d\" = \"/\" ] && break; d=$(dirname \"$d\"); i=$((i+1)); done; if [ \"$n\" -eq 1 ]; then exec sh \"$found\"; fi; if [ \"$n\" -gt 1 ]; then echo source-edit-preflight-root-ambiguous >&2; else echo source-edit-preflight-root-unresolved >&2; fi; exit 2' ",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$dir = (Get-Location).ProviderPath; $roots = [Collections.Generic.List[string]]::new(); for ($remaining = 32; $remaining -gt 0; $remaining--) { $candidate = Join-Path $dir '.codex\\hooks\\source_edit_triage.ps1'; if ((Test-Path -LiteralPath (Join-Path $dir '.git')) -and (Test-Path -LiteralPath (Join-Path $dir 'AGENTS.md') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $dir 'settings.gradle.kts') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $dir 'build.gradle.kts') -PathType Leaf) -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { [void]$roots.Add($candidate) }; $parent = Split-Path -Path $dir -Parent; if ([string]::IsNullOrEmpty($parent) -or $parent -eq $dir) { break }; $dir = $parent }; if ($roots.Count -eq 1) { & $roots[0]; exit $LASTEXITCODE }; if ($roots.Count -gt 1) { [Console]::Error.Write('source-edit-preflight-root-ambiguous'); exit 2 }; [Console]::Error.Write('source-edit-preflight-root-unresolved'); exit 2\"",
+            "timeout": 2,
+            "statusMessage": "Checking source-edit preflight",
+            "additionalContextLimit": 512
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(apply_patch|write|edit|notebook_edit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/devin_pre_edit_guard.ps1",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/devin_pre_edit_guard.ps1",
+            "timeout": 15,
+            "statusMessage": "Checking source-edit lease conflicts"
+          }
+        ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+            "timeout": 12,
+            "statusMessage": "Checking path/retry work guard"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+            "timeout": 12,
+            "statusMessage": "Recording path/retry work guard"
+          }
+        ]
+      }
+    ]
+  }
+}

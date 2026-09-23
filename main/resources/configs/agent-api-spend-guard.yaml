@@ -1,0 +1,50 @@
+# Agent/dev spend guard — does NOT hard-cap production traffic.
+version: "2026-09-17"
+activation:
+  env_any_true: [AWX_AGENT_SPEND_GUARD]
+  env_present: [AWX_AGENT_HOST]
+  spring_profiles: [agent-spend-guard]
+
+policy:
+  production_hard_caps: false
+  dedupe_identical_probes: true
+  skip_successful_verification_replay: true
+  connectivity_max_tokens: 16
+  max_classified_retries: 1
+  forbid_multi_model_fanout_unless_explicit: true
+  prefer_local_ollama_first: true
+  block_stale_auto_models_in_agent_mode:
+    - gpt-4
+    - gpt-4o
+    - gpt-5
+    - gpt-5-mini
+    - gpt-5-chat-latest
+  allow_explicit_override_env: AWX_AGENT_ALLOW_PAID_MODELS
+  failure_classify_before_retry: true
+
+why_codes:
+  - user_request
+  - connectivity_min
+  - verification_required
+  - verification_replay_blocked
+  - cache_hit_skip
+  - model_auto_blocked_stale
+  - local_failover
+  - cloud_escalation
+  - soak_iteration
+  - compare_fanout_blocked
+  - explicit_override
+
+hotspots:
+  scripts:
+    - scripts/chat_ui_vibe_soak.ps1
+    - scripts/device_probe_gpt_run_all.ps1
+    - scripts/device_probe_gpt_compare.ps1
+    - scripts/smoke_local_llm_generation.ps1
+    - scripts/smoke_chat_debug_fx_sse.ps1
+  java:
+    - com.example.lms.llm.DynamicChatModelFactory
+    - ai.abandonware.nova.orch.aop.LlmRouterAspect
+    - ai.abandonware.nova.orch.aop.FallbackBannerAspect
+    - com.example.lms.service.web.BraveSearchService
+    - com.example.lms.debug.ai.ChatUsageLedger

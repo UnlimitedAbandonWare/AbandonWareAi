@@ -1,0 +1,20 @@
+# Recovery path policy: FailureClass -> RecoveryAction
+# This is separate from application*.yml so existing configuration keys stay intact.
+recovery:
+  max-rounds: 2
+  min-citations: 3
+  budget-soft-ms: 500
+
+map:
+  TRANSIENT: BACKOFF
+  LOGIC:     DEGRADE
+  DATA:      FALLBACK
+  POLICY:    ESCALATE
+  BUDGET:    DEGRADE
+  UNKNOWN:   ESCALATE
+
+degrade-map:
+  hypernova.v2:       safe_autorun.v1
+  brave.v1:           safe_autorun.v1
+  recency_first.v1:   default.v1
+  rulebreak.v1:       default.v1

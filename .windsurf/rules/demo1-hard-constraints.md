@@ -1,0 +1,20 @@
+---
+trigger: always_on
+---
+
+# demo-1 hard constraints
+
+- Project Root: this workspace (`demo-1/src`).
+- Java 17 + Gradle/Spring Boot; prefer existing Start-RAG/DevWatch/smoke|verify. No spring-boot-devtools drive-by.
+- Minimal diff. Do not delete unrelated code. No secret values in logs/commits (env names only).
+- openssl-related key name/value/format/structure: immutable.
+- Git is read-only evidence, not the healthy baseline: working tree + active sourceSets + passing compile/test/runtime win. Do not start ordinary work with git status/history/branch checks; a clean tree is never a completion condition; no commit/push/pull/init/stash/branch/worktree/restore or `reset --hard`/`clean`/`checkout .`/`add -A`/mass commit/history rewrite without explicit user request; old HEAD is not a restore source. See AGENTS.md `DEMO1-GIT-LOCAL-FIRST`.
+- File-changing work follows AGENTS.md `DEMO1-WORK-LEDGER`: read `docs/PROJECT_STATUS.md` first, register scope via `scripts/work_journal.py`, preserve each change-set via `scripts/codex_work_checkpoint.py`, then record real verification.
+- Fold 안경 표시 설정 drives **display hold/page interval and cue/generation cycle**. YAML `display-ttl-ms` 20s, page floor ~2s, `trigger-quiet-ms` 2.5s, `cooldown-ms` 10s, `force-after-ms` 180s are **factory defaults**, not locks. Persist last saved prefs (`lensSettings` / `saveSetting('lensDisplay')`); after save and after refresh/reconnect the running cycle must change. Do not silently clamp a saved 180s force-hint. Last-page interval shrink is forbidden. This supersedes older “do not arbitrarily change force-hint 180s” / “generation knobs stay untouched” lines in glob rules or skills.
+- Nova Focus (`노바` wake-word focused conversation on existing Conversate + Meta lens): route to `.agents/skills/demo1-nova-focus/SKILL.md`; spec copies in `agent-prompts/nova-focus/` (Text-Flow addendum supersedes the base doc's paged-answer + first-render-timer design). Focus answers are a separate `focus` field — never `hint`; their followup-idle starts at `presentation_done` (last char rendered). General hint TTL/paging/`ld-*` and `hintsEnabled` stay untouched.
+- verify/report verdict separation (`awx.debug.verify.v2`): keep "the tool ran" vs "the target is verified" vs "build/tests ran" vs "full verification complete" as distinct fields — a contract-test pass, an expected `exit 6` fixture, HTTP 200, or a present config file is never a target-health verdict. Unrun required checks report `run=skipped|blocked|not_observed` and stay out of any pass count; 401/403 = `auth-blocked`, not DOWN; `stale-candidate` = unproven mtime suspicion (confirmed staleness needs stronger evidence); `fullVerification` requires the declared scope's build+tests to have actually run.
+- UAW/handoff directives are a reference map, not source authority: cross-check every claimed file/behavior against the live tree before patching; mark `사실`(verified in this checkout) vs `추정`/`근거 부족` explicitly; never re-patch a claim the live source already satisfies; contradictions + supplemental rules go in `Abandon_X.txt`.
+- Reasoning/working language: non-trivial calls pick one of 설계/제작/검토/실험 with a one-line reason; reasoning and code comments in Korean; hypotheses → counterexamples/risks → neutral fact-vs-inference judgement; minimal-line edits; no secrets ever emitted; Git is never used (read-only evidence at most).
+- Do not rely on manual `@rules:` — these files + AGENTS.md apply automatically.
+- Vibe-Max-Agency: `Vibe-Max-Agency.bat -Check|-Apply` applies only the documented read-path ignore exceptions and local `agent.db-context` enablement (AGENTS.md `DEMO1-VIBE-MAX-AGENCY`); it never permits forced lease release or hard-constraint relaxation.
+- Mutable spec policy (`$demo1-mutable-spec-policy`, AGENTS.md `DEMO1-MUTABLE-SPEC-POLICY`): spec values — models, ports, Display timings, routing, UI copy — are variables re-read from SSOT (`configs/api-routing.yaml`, `docs/API_ROUTING_SPEC.md`, `ollama ls`) before implement/verify; only hard constraints are constants.

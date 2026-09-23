@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "awx.shared-runtime.v1",
+  "pythonMinimum": "3.11",
+  "skillConflictPolicy": "personal-first-disable-shared-path",
+  "glm": {
+    "env_vars": ["AI_GATEWAY_API_KEY", "AGENT_SUBAGENT_GLM_ENABLED", "GLM_EXTERNAL_READY"],
+    "startup_timeout_sec": 20,
+    "tool_timeout_sec": 180,
+    "enabled": true,
+    "required": false,
+    "enabled_tools": ["glm_delegate_task", "glm_review_change", "glm_consensus_check", "glm_agent_status"],
+    "default_tools_approval_mode": "prompt"
+  }
+}

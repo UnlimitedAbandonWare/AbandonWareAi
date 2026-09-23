@@ -1,0 +1,14 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+id: zero_break
+steps:
+  - task: RetrieveWeb
+  - task: RetrieveVector
+  - task: RetrieveKG
+  - task: FusionRRF
+  - task: BiEncoderRerank
+  - task: CrossEncoderRerank
+  - task: DirectAnswer

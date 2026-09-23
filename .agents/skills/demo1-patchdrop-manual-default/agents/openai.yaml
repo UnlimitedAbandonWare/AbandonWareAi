@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 PatchDrop Manual Default"
+  short_description: "PatchDrop manual handoff guard"
+  default_prompt: "Use $demo1-patchdrop-manual-default to keep PatchDrop safe but out of default Desktop-only work."

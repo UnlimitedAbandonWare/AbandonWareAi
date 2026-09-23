@@ -1,0 +1,17 @@
+rag:
+  brain-state:
+    enabled: ${RAG_BRAIN_STATE_ENABLED:true}
+    chunking:
+      max-chunk-size: ${RAG_BRAIN_STATE_CHUNK_SIZE:400}
+      overlap: ${RAG_BRAIN_STATE_CHUNK_OVERLAP:50}
+      max-entities-per-chunk: ${RAG_BRAIN_STATE_MAX_ENTITIES_PER_CHUNK:20}
+    indexing:
+      enabled: ${RAG_BRAIN_STATE_INDEXING_ENABLED:true}
+      capture-chat-workflow: ${RAG_BRAIN_STATE_CAPTURE_CHAT_WORKFLOW:true}
+      max-entities-per-domain: ${RAG_BRAIN_STATE_MAX_ENTITIES_PER_DOMAIN:200}
+      snapshot-cache-ttl-seconds: ${RAG_BRAIN_STATE_SNAPSHOT_CACHE_TTL_SECONDS:30}
+      meaningful-gate-enabled: ${RAG_BRAIN_STATE_MEANINGFUL_GATE_ENABLED:true}
+      min-entities-per-chunk: ${RAG_BRAIN_STATE_MIN_ENTITIES_PER_CHUNK:1}
+      min-chunk-confidence: ${RAG_BRAIN_STATE_MIN_CHUNK_CONFIDENCE:0.50}
+    neo4j:
+      ingest-batch-size: ${RAG_BRAIN_STATE_NEO4J_INGEST_BATCH_SIZE:10}

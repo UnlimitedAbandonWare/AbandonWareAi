@@ -1,0 +1,153 @@
+spring:
+  config:
+    activate:
+      on-profile: desktop-gpu-node
+  datasource:
+    url: ${DESKTOP_DB_URL:jdbc:h2:mem:lms_desktop_gpu;MODE=MariaDB;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false}
+    username: ${DESKTOP_DB_USERNAME:sa}
+    password: ${DESKTOP_DB_PASSWORD:}
+    driver-class-name: ${DESKTOP_DB_DRIVER:org.h2.Driver}
+  jpa:
+    database-platform: ${DESKTOP_DB_DIALECT:}
+    hibernate:
+      ddl-auto: ${DESKTOP_JPA_DDL_AUTO:update}
+  sql:
+    init:
+      mode: ${DESKTOP_SQL_INIT_MODE:never}
+
+rag:
+  ops-ledger:
+    # Desktop-only opt-in history for the read-only learning-data admin page.
+    enabled: ${DESKTOP_RAG_OPS_LEDGER_ENABLED:false}
+    capture-autolearn: ${DESKTOP_RAG_OPS_LEDGER_CAPTURE_AUTOLEARN:true}
+
+awx:
+  desktop-status-bridge:
+    enabled: ${DESKTOP_STATUS_BRIDGE_ENABLED:true}
+  node:
+    role: desktop-gpu-executor
+    execution-node: desktop-rtx3090-rtx3060
+    control-plane: true
+    heavy-workloads-allowed: true
+    learning-loop-mode: execute-and-curate
+  gpu-gateway:
+    enabled: true
+    target-role: desktop-gpu-executor
+    target-execution-node: desktop-rtx3090-rtx3060
+    primary-chat-base-url: ${llm.base-url:${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11435/v1}}}
+    fast-base-url: ${llm.fast.base-url:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}}
+    embedding-base-url: ${embedding.base-url:${EMBED_BASE_URL:${EMBED_3060_BASE_URL:http://127.0.0.1:11435/api/embed}}}
+    allowed-hosts: ${LLM_PROVIDER_GUARD_ALLOWED_HOSTS:}
+    require-auth-for-remote: ${LLM_PROVIDER_GUARD_REQUIRE_AUTH_FOR_REMOTE:true}
+    owner-token: ${LLM_OWNER_TOKEN:}
+    owner-token-header: ${LLM_OWNER_TOKEN_HEADER:X-Owner-Token}
+  gpu-hardware:
+    telemetry:
+      enabled: ${DESKTOP_GPU_TELEMETRY_ENABLED:true}
+      timeout-ms: ${DESKTOP_GPU_TELEMETRY_TIMEOUT_MS:1000}
+    admission:
+      enabled: ${DESKTOP_GPU_ADMISSION_ENABLED:true}
+      rerank-gate-enabled: ${DESKTOP_GPU_RERANK_ADMISSION_ENABLED:true}
+      memory-warn-threshold: ${DESKTOP_GPU_MEMORY_WARN_THRESHOLD:0.82}
+      memory-block-threshold: ${DESKTOP_GPU_MEMORY_BLOCK_THRESHOLD:0.90}
+      block-when-unavailable: ${DESKTOP_GPU_BLOCK_WHEN_UNAVAILABLE:true}
+  learning-ops:
+    collector:
+      enabled: ${DESKTOP_LEARNING_OPS_COLLECTOR_ENABLED:false}
+
+local-llm:
+  enabled: true
+  autostart: ${LOCAL_LLM_AUTOSTART:true}
+  cuda-visible-device: ${LOCAL_LLM_CUDA_VISIBLE_DEVICE:}
+  cuda-auto-discover: ${LOCAL_LLM_CUDA_AUTO_DISCOVER:true}
+  warmup:
+    enabled: ${LOCAL_LLM_WARMUP_ENABLED:true}
+
+llm:
+  provider: local
+  base-url: ${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11435/v1}}
+  fast:
+    base-url: ${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}
+  high:
+    base-url: ${LLM_HIGH_BASE_URL:${LLM_3090_BASE_URL:${llm.base-url}}}
+  judge:
+    base-url: ${LLM_JUDGE_BASE_URL:${LLM_3090_BASE_URL:${llm.high.base-url}}}
+  coder:
+    base-url: ${LLM_CODER_BASE_URL:${LLM_3090_BASE_URL:${llm.high.base-url}}}
+  vision:
+    base-url: ${LLM_VISION_BASE_URL:${LLM_3060_BASE_URL:${llm.fast.base-url}}}
+
+llmrouter:
+  models:
+    light:
+      enabled: ${LLMROUTER_LIGHT_ENABLED:true}
+      base-url: ${LLMROUTER_LIGHT_BASE_URL:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}}
+      weight: ${LLMROUTER_LIGHT_WEIGHT:0.45}
+      node-role: desktop-gpu-executor
+      device: rtx3060
+      workload: fast-helper
+    gemma:
+      enabled: ${LLMROUTER_GEMMA_ENABLED:true}
+      base-url: ${LLMROUTER_GEMMA_BASE_URL:${LLM_3090_BASE_URL:${llm.base-url}}}
+      weight: ${LLMROUTER_GEMMA_WEIGHT:0.55}
+      node-role: desktop-gpu-executor
+      device: rtx3090
+      workload: primary-chat
+    judge:
+      enabled: ${LLMROUTER_JUDGE_ENABLED:true}
+      base-url: ${LLMROUTER_JUDGE_BASE_URL:${LLM_3090_BASE_URL:${llm.high.base-url}}}
+      weight: ${LLMROUTER_JUDGE_WEIGHT:0.0}
+      node-role: desktop-gpu-executor
+      device: rtx3090
+      workload: judge
+    coder:
+      enabled: ${LLMROUTER_CODER_ENABLED:true}
+      base-url: ${LLMROUTER_CODER_BASE_URL:${LLM_3090_BASE_URL:${llm.high.base-url}}}
+      weight: ${LLMROUTER_CODER_WEIGHT:0.0}
+      node-role: desktop-gpu-executor
+      device: rtx3090
+      workload: coder
+    vision:
+      enabled: ${LLMROUTER_VISION_ENABLED:true}
+      base-url: ${LLMROUTER_VISION_BASE_URL:${LLM_3060_BASE_URL:${llm.fast.base-url}}}
+      weight: ${LLMROUTER_VISION_WEIGHT:0.0}
+      node-role: desktop-gpu-executor
+      device: rtx3060
+      workload: vision-helper
+    macmini:
+      enabled: false
+      weight: 0.0
+      node-role: macmini-control-plane
+      device: m4-16gb
+      workload: observe-curate-schedule
+
+embedding:
+  base-url: ${EMBED_BASE_URL:${EMBED_3060_BASE_URL:http://127.0.0.1:11435/api/embed}}
+  cross-gpu-fallback:
+    enabled: ${EMBED_CROSS_GPU_FALLBACK_ENABLED:false}
+  fallback:
+    enabled: ${EMBED_FALLBACK_ENABLED:false}
+
+onnx:
+  enabled: ${ONNX_ENABLED:false}
+  gpu-id: ${ONNX_DEVICE_ID:${ZSYS_ONNX_GPU_ID:0}}
+
+zsys:
+  onnx:
+    enabled: ${ONNX_ENABLED:false}
+    gpu-id: ${ONNX_DEVICE_ID:${ZSYS_ONNX_GPU_ID:0}}
+
+uaw:
+  autolearn:
+    enabled: ${DESKTOP_AUTOLEARN_ENABLED:false}
+    idle-trigger:
+      enabled: ${DESKTOP_AUTOLEARN_IDLE_TRIGGER_ENABLED:false}
+    runtime-node:
+      role: desktop-gpu-executor
+      execution-node: desktop-rtx3090-rtx3060
+      control-plane: false
+      heavy-workloads-allowed: true
+      scheduling-assistant: false
+      learning-loop-mode: execute-and-curate
+    retrain:
+      enabled: ${DESKTOP_AUTOLEARN_RETRAIN_ENABLED:false}

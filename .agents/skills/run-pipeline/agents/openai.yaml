@@ -1,0 +1,3 @@
+display_name: Run Pipeline
+short_description: Probe pipeline script availability and exact command shapes.
+default_prompt: Use run_pipeline through scripts\awx_mcp_toolbox.ps1 to find verify_boot, run_pipeline, and build-error-miner command availability.

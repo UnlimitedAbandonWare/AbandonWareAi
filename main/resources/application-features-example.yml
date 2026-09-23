@@ -1,0 +1,103 @@
+features:
+  telemetry:
+    virtual-point:
+      enabled: false
+  alias:
+    corrector:
+      enabled: false
+  mpc:
+    enabled: false
+telemetry:
+  virtual-point:
+    path: /var/log/app/virt/virt_points.ndjson
+alias:
+  corrector:
+    enabled: true
+adapter:
+  rag-light:
+    enabled: false
+onnx:
+  enabled: true
+  max-concurrency: 3
+budget:
+  request-time-ms: 3500
+naver:
+  search:
+    timeout-ms: 1200
+    web-top-k: 12
+
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+ocr:
+  enabled: true
+  min-confidence: 0.78
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+retrieval:
+  chain:
+    mode: dynamic # fixed | dynamic
+  order:
+    mode: heuristic # fixed | heuristic | dynamic
+  vector:
+    enabled: true
+gate:
+  citation:
+    enabled: true
+    min: 3
+  finalSigmoid:
+    enabled: true
+    k: 12.0
+    x0: 0.0
+upstash:
+  cache:
+    ttl-seconds: 3600
+llm:
+  base-url: http://localhost:11434/v1
+  api-key: ${LLM_API_KEY:}
+  chat-model: gemma4:26b
+
+  provider: local
+selfask:
+  enabled: false
+
+train_idle:
+  enabled: true
+
+autolearn:
+  enabled: true
+
+fallback:
+  enabled: false
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+# ---------------------------------------------------------------------------
+# Soak quick runner (fixed query set + provider split + gate)
+# ---------------------------------------------------------------------------
+soak:
+  enabled: false
+  quick-runner:
+    enabled: false
+    topic: naver-brave-fixed10
+    k: 10
+    output-path: artifacts/soak/quick_report.json
+    providers: [NAVER, BRAVE]
+    on-startup: false
+    scheduled: false
+    cron: "0 30 4 * * *"
+    cli: false
+    exit-after-run: true
+    gate:
+      warn-evidence-min: 0.75
+      fail-evidence-min: 0.60
+      warn-hit-min: 0.85
+      fail-hit-min: 0.60
+      warn-exit-code: 0
+      fail-exit-code: 2

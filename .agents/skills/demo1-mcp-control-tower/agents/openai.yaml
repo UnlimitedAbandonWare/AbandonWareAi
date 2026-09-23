@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 외부 스킬 · 장비 제어"
+  short_description: "외부 Codex·Desktop·Notebook·Mac mini의 도구와 인계 절차 안내"
+  default_prompt: "$demo1-mcp-control-tower 스킬로 장비와 Codex 작업의 연결 상태를 점검하고, 필요한 외부 스킬과 기존 인계 절차를 선택해 요청한 작업을 검증까지 진행해줘."

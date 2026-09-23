@@ -1,0 +1,26 @@
+id: UAW_thumbnail.v1
+version: 1
+kind: uaw_thumbnail
+
+anchors:
+  count: 12
+  model: fast
+  max_tokens: 256
+  temperature: 0.0
+
+evidence:
+  web_topk_per_anchor: 4
+  evidence_topk_per_anchor: 2
+  final_k: 6
+  require_unique_domains: true
+
+render:
+  mode: STRICT
+  model: mini
+  max_tokens: 480
+  temperature: 0.2
+
+persist:
+  domain: UAW_THUMB
+  entity_type: THUMBNAIL
+  min_confidence: 0.55

@@ -1,0 +1,5 @@
+id: demo1_dynamic_rag_autonomous_patch_directive
+lang: ko
+role: system
+version: "2.2.0"
+tags: [demo-1, DynamicRAG, PlanDSL, MoE, MLA, SSE, LangGraph, FailurePattern, HybridLLMGateway, Codex, SafePatch, LongRun, ScoreDriven]

@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "awx-control-tower": {
+      "command": "python",
+      "args": [
+        "scripts/awx_mcp_stdio_server.py"
+      ],
+      "cwd": "<producer-local-worktree-or-desktop-canonical-root>",
+      "env": {
+        "AWX_AGENT_HOST": "<desktop|macmini|notebook>",
+        "AWX_MCP_NODE_ROLE": "<desktop|macmini|notebook>"
+      }
+    }
+  },
+  "allowedEnvRefs": [
+    "NAVER_KEYS",
+    "NAVER_CLIENT_ID",
+    "NAVER_CLIENT_SECRET",
+    "SUPABASE_PROJECT_REF",
+    "SUPABASE_ACCESS_TOKEN"
+  ],
+  "notes": [
+    "Set cwd to a producer-local worktree for Mac mini or Notebook; never point producer nodes at the Desktop canonical source root.",
+    "Supabase entries are environment variable names only; set project_ref in the Supabase MCP URL after target selection and keep token values outside this file.",
+    "Do not put raw API keys, tokens, cookies, private env dumps, or large base64 values in this client config.",
+    "Desktop remains the only final source applier and verifier."
+  ]
+}

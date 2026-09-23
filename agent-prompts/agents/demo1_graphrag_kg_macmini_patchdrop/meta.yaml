@@ -1,0 +1,5 @@
+id: demo1_graphrag_kg_macmini_patchdrop
+lang: ko
+role: system
+version: "1.0.0"
+tags: [demo-1, GraphRAG, KG, MacMini, PatchDrop, DualCodex, SafePatch, LangChain4j, Java17, SpringBoot3]

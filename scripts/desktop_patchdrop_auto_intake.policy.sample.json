@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "awx.desktop-patchdrop-auto-intake.policy.v1",
+  "enabled": false,
+  "mode": "OBSERVE",
+  "expectedBackingShareIdentitySha256": "",
+  "expectedShareAclSha256": "",
+  "allowedNodes": [],
+  "allowedTopics": [],
+  "allowedPathPrefixes": [],
+  "maxPatchBytes": 1048576,
+  "maxChangedFiles": 20,
+  "maxHunks": 100,
+  "pollIntervalMinutes": 5,
+  "verificationProfile": "focused"
+}

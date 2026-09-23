@@ -1,0 +1,7 @@
+id: demo1_desktop_canonical_goal_intake
+version: "1.0.0"
+language: ko
+scope: y-smb-evidence-to-c-canonical-execution-intake
+system: system_ko.md
+manifest_registered: true
+owner: desktop

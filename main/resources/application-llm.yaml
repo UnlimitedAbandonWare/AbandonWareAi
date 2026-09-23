@@ -1,0 +1,840 @@
+# AWX model-defaults remapped 2026-09-17: legacy ollama names -> installed (3090 chat/judge/coder, 3060 fast/vision).
+# --- application-llm.yaml (patched by GPT-5 Pro) ---
+# Local OpenAI-compatible endpoints (Ollama/vLLM): 3090-class chat on 11434,
+# Fast/vision lanes use 11435 only when explicit; embedding keeps its dedicated 11435 default.
+awx:
+  gpu-hardware:
+    telemetry:
+      enabled: ${DESKTOP_GPU_TELEMETRY_ENABLED:true}
+      timeout-ms: ${DESKTOP_GPU_TELEMETRY_TIMEOUT_MS:1000}
+llm:
+  provider: local
+  # Mac mini-safe default; heavier local models should be enabled only by env override.
+  base-url: ${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11435/v1}}
+  api-key: ${LLM_API_KEY:ollama}
+  owner-token: ${LLM_OWNER_TOKEN:}
+  owner-token-header: ${LLM_OWNER_TOKEN_HEADER:X-Owner-Token}
+  chat-model: ${LLM_CHAT_MODEL:gemma4:26b}
+  provider-guard:
+    allow-private-remote: ${LLM_PROVIDER_GUARD_ALLOW_PRIVATE_REMOTE:false}
+    allowed-hosts: ${LLM_PROVIDER_GUARD_ALLOWED_HOSTS:${MACMINI_API_ROUTER_ALLOWED_HOSTS:}}
+    require-auth-for-remote: ${LLM_PROVIDER_GUARD_REQUIRE_AUTH_FOR_REMOTE:true}
+  gateway:
+    enabled: ${LLM_GATEWAY_ENABLED:true}
+    enforcement: ${LLM_GATEWAY_ENFORCEMENT:enforce}
+    min-route-score: ${LLM_GATEWAY_MIN_ROUTE_SCORE:55}
+    throw-on-empty-failure: ${LLM_GATEWAY_THROW_ON_EMPTY_FAILURE:false}
+    local-device-failover:
+      enabled: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_ENABLED:true}
+      enforcement: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_ENFORCEMENT:ENFORCE}
+      hard-cooldown-ms: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_HARD_COOLDOWN_MS:600000}
+      runner-failure-window-ms: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_RUNNER_WINDOW_MS:60000}
+      runner-failure-threshold: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_RUNNER_THRESHOLD:2}
+      recovery-successes: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_RECOVERY_SUCCESSES:2}
+      max-endpoints: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_MAX_ENDPOINTS:16}
+      transient-failure-threshold: ${LLM_GATEWAY_LOCAL_TRANSIENT_FAILURE_THRESHOLD:3}
+      transient-cooldown-ms: ${LLM_GATEWAY_LOCAL_TRANSIENT_COOLDOWN_MS:60000}
+      recovery-stable-ms: ${LLM_GATEWAY_LOCAL_RECOVERY_STABLE_MS:30000}
+      probe-timeout-ms: ${LLM_GATEWAY_LOCAL_PROBE_TIMEOUT_MS:60000}
+      health-sample-interval-ms: ${LLM_GATEWAY_LOCAL_HEALTH_SAMPLE_INTERVAL_MS:10000}
+    cloud:
+      enabled: ${LLM_GATEWAY_CLOUD_ENABLED:true}
+      route-key: ${LLM_GATEWAY_CLOUD_ROUTE_KEY:api3}
+    probe:
+      enabled: ${LLM_GATEWAY_PROBE_ENABLED:true}
+      timeout-ms: ${LLM_GATEWAY_PROBE_TIMEOUT_MS:1500}
+      ttl-ms: ${LLM_GATEWAY_PROBE_TTL_MS:30000}
+    spec-registry:
+      enabled: ${LLM_GATEWAY_SPEC_REGISTRY_ENABLED:true}
+      path: ${LLM_GATEWAY_SPEC_REGISTRY_PATH:./data/model-spec-registry.json}
+  fast:
+    base-url: ${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}
+    model: ${LLM_FAST_MODEL:qwen3.5:9b}
+    temperature: 0.0
+    timeout-seconds: 5
+    max-retries: 0
+    max-tokens: 256
+  high:
+    base-url: ${LLM_HIGH_BASE_URL:${LLM_3090_BASE_URL:${llm.base-url}}}
+    model: ${LLM_HIGH_MODEL:${llm.chat-model:gemma4:26b}}
+    temperature: 0.3
+    timeout-seconds: 30
+    max-retries: 0
+    max-tokens: ${LLM_HIGH_MAX_TOKENS:1024}
+  explore:
+    base-url: ${LLM_EXPLORE_BASE_URL:${llm.fast.base-url}}
+    model: ${LLM_EXPLORE_MODEL:${llm.fast.model}}
+    temperature: 0.85
+    timeout-seconds: 6
+    max-retries: 0
+    max-tokens: 512
+  judge:
+    base-url: ${LLM_JUDGE_BASE_URL:${llm.high.base-url}}
+    model: ${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
+    timeout-seconds: 6
+    max-retries: 0
+    max-tokens: 512
+  coder:
+    base-url: ${LLM_CODER_BASE_URL:${llm.high.base-url}}
+    model: ${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
+    temperature: 0.1
+    timeout-seconds: 45
+    max-retries: 0
+    max-tokens: 2048
+  vision:
+    base-url: ${LLM_VISION_BASE_URL:${llm.fast.base-url}}
+    model: ${LLM_VISION_MODEL:qwen3-vl:8b}
+    temperature: 0.0
+    timeout-seconds: 15
+    max-retries: 0
+    max-tokens: 1024
+
+
+# Stage-specific models (EXPLORE / JUDGE)
+# Canonical settings are under llm.explore.* and llm.judge.*.
+
+
+
+  # ?????????????????????????????????????????????????????????????????????
+  # Remote(OpenAI / OpenAI-compatible) ?먭꺽利앸챸 (GPT/O-series 紐⑤뜽??
+  #
+  # 以묒슂:
+  # - DynamicChatModelFactory媛 api.openai.com ?몄텧 ??llm.api-key-openai ?ъ슜
+  # - ??媛믪씠 ?놁쑝硫?llm.api-key(LLM_API_KEY)濡??대갚 ???ㅻⅨ provider ???쇱엯 媛??
+  # - Groq ??gsk_*)媛 OpenAI濡??ㅼ뼱媛硫?invalid_api_key 諛쒖깮
+  #
+  # OpenAI API key
+  # - KeyResolver???꾨옒 3媛?以?"?섎굹留? ?ㅼ젙?섍만 ?붽뎄?⑸땲??
+  #     1) llm.api-key-openai
+  #     2) llm.openai.api-key
+  #     3) OPENAI_API_KEY
+  # - ?댁쁺/濡쒖뺄 紐⑤몢 env(OPENAI_API_KEY) ?ъ슜??沅뚯옣?⑸땲??
+  # - ?꾨옒 ?쇱씤??耳쒖꽌 YAML??吏곸젒 ?ㅻ? ?ｊ퀬 ?띕떎硫? 諛섎뱶??OPENAI_API_KEY env???쒓굅?섏꽭??
+  # api-key-openai: ${OPENAI_API_KEY:}
+  # OpenAI ?명솚 ?붾뱶?ъ씤???ㅻ쾭?쇱씠??(?꾩슂 ??
+  base-url-openai: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+
+  # ?????????????????????????????????????????????????????????????????????
+  # Compatibility aliases (DynamicChatModelFactory expects llm.openai.* / llm.ollama.*)
+  # - ?쇰? 肄붾뱶: llm.openai.api-key / llm.openai.base-url (nested)
+  # - ?ㅼ젙 臾몄꽌: llm.api-key-openai / llm.base-url-openai (flat)
+  # ??????媛숈? env瑜?媛由ы궎?꾨줉 alias ?쒓났
+  openai:
+    # ?좑툘 llm.openai.api-key ??strict-key ?뗭뿉 ?ы븿?⑸땲??
+    # 以묐났 ?ㅼ젙(?? OPENAI_API_KEY + llm.openai.api-key)? KeyResolver?먯꽌 異⑸룎濡?泥섎━?⑸땲??
+    # ??湲곕낯? "誘몄꽕???쇰줈 ?먭퀬 OPENAI_API_KEY env瑜??ъ슜?섏꽭??
+    # api-key: ${llm.api-key-openai:${OPENAI_API_KEY:}}
+    base-url: ${llm.base-url-openai:${OPENAI_BASE_URL:https://api.openai.com/v1}}
+    endpoint-compat:
+      # When a configured model is not compatible with /v1/chat/completions, try /v1/completions once.
+      fallback-to-completions: true
+      # When chat/completions is unsupported (or model hints /v1/responses), try /v1/responses once.
+      fallback-to-responses: true
+      # Extra diagnostics for endpoint-compat fallbacks (logs include response body summaries)
+      fallback-debug: false
+      # Save-time guard for likely completion-only models: BLOCK|WARN|ALLOW
+      save-guard:
+        mode: BLOCK
+  ollama:
+    enabled: ${LLM_OLLAMA_ENABLED:false}
+    base-url: ${llm.base-url:http://127.0.0.1:11434/v1}
+    chat-model: ${llm.chat-model:gemma4:26b}
+    embed-model: ${embedding.model:qwen3-embedding:4b}
+    timeout-ms: ${LLM_OLLAMA_TIMEOUT_MS:12000}
+  ollama-native:
+    num-gpu: ${LLM_OLLAMA_NATIVE_NUM_GPU:}
+
+  # MERGED_DUP llm.base-url :: base-url: http://127.0.0.1:11435/v1
+  # MERGED_DUP llm.provider :: provider: local
+
+local-llm:
+  enabled: ${LOCAL_LLM_ENABLED:true}
+  autostart: ${LOCAL_LLM_AUTOSTART:true}
+  ollama-host: ${OLLAMA_HOST:127.0.0.1:11435}
+  health-check-url: ${LOCAL_LLM_HEALTH_CHECK_URL:http://127.0.0.1:11435/api/version}
+  health-check-timeout: ${LOCAL_LLM_HEALTH_CHECK_TIMEOUT:20s}
+  health-check-interval: ${LOCAL_LLM_HEALTH_CHECK_INTERVAL:1s}
+  health-check-attempt-timeout: ${LOCAL_LLM_HEALTH_CHECK_ATTEMPT_TIMEOUT:2s}
+  fail-fast: ${LOCAL_LLM_FAIL_FAST:true}
+  cuda-auto-discover: ${LOCAL_LLM_CUDA_AUTO_DISCOVER:true}
+  log-dir: ${LOCAL_LLM_LOG_DIR:var/codex-runtime}
+  warmup:
+    enabled: ${LOCAL_LLM_WARMUP_ENABLED:true}
+    pull: ${LOCAL_LLM_WARMUP_PULL:false}
+    show: ${LOCAL_LLM_WARMUP_SHOW:true}
+    embed: ${LOCAL_LLM_WARMUP_EMBED:true}
+    model: ${LOCAL_LLM_WARMUP_MODEL:${llm.chat-model:gemma4:26b}}
+    embed-model: ${LOCAL_LLM_WARMUP_EMBED_MODEL:${embedding.model:qwen3-embedding:4b}}
+    dimensions: ${LOCAL_LLM_WARMUP_DIMENSIONS:${embedding.dimensions:1536}}
+    keep-alive: ${LOCAL_LLM_WARMUP_KEEP_ALIVE:5m}
+    timeout-ms: ${LOCAL_LLM_WARMUP_TIMEOUT_MS:120000}
+
+# Web / retrieval timeouts tuned to reduce false timeouts
+tavily.enabled: ${TAVILY_ENABLED:false}
+tavily.timeout-ms: 5000
+tavily.max-results: 6
+
+naver.search.timeout-ms: 3000
+# Sync facade blockOptional(...) timeout. Default ties to naver.search.timeout-ms, but can be
+# overridden when needed for soak/bootRun tuning.
+naver.search.sync-block-timeout-ms: 3000
+naver.search.web-top-k: 12
+
+filters.domain_filter.enabled: false
+selfask.enabled: ${SELFASK_ENABLED:false}
+selfask.use-llm-seeds: false
+selfask.use-llm-followups: false
+
+# RAG defaults
+retrieval:
+  mode: RETRIEVAL_ON
+  reranker: cross
+
+vector:
+  routing:
+    min-per-store: 1
+    topics:
+      default:
+        default: 1.0
+
+filters:
+  fail_safe:
+    take-first-n: 8
+
+onnx:
+  device-id: 0   # RTX 3060 (GPU0)
+  enabled: ${ONNX_ENABLED:false}
+  gpu-id: 0
+  max-concurrency: ${ZSYS_ONNX_MAX_CONCURRENCY:1}
+
+zsys:
+  onnx:
+    enabled: ${ONNX_ENABLED:false}
+    gpu-id: 0
+    max-concurrency: ${ZSYS_ONNX_MAX_CONCURRENCY:1}
+
+# --- Embedding (local Ollama) ---
+embedding:
+  provider: ${EMBED_PROVIDER:ollama}
+  base-url: ${EMBED_BASE_URL:${EMBED_3060_BASE_URL:http://127.0.0.1:11435/api/embed}}
+  base-url-fallback: ${EMBED_BASE_URL_FALLBACK:}
+  cross-gpu-fallback:
+    enabled: ${EMBED_CROSS_GPU_FALLBACK_ENABLED:false}
+  port-fallback:
+    enabled: ${EMBED_PORT_FALLBACK_ENABLED:false}
+  ollama:
+    keep-alive: ${EMBED_OLLAMA_KEEP_ALIVE:}
+  fast-fail:
+    enabled: ${EMBED_FAST_FAIL_ENABLED:true}
+    fail-threshold: ${EMBED_FAST_FAIL_THRESHOLD:1}
+    cooldown-seconds: ${EMBED_FAST_FAIL_COOLDOWN_SECONDS:60}
+    cooldown:
+      strategy: ${EMBED_FAST_FAIL_COOLDOWN_STRATEGY:fixed}
+    force-open: ${EMBED_FAST_FAIL_FORCE_OPEN:false}
+    force-open-seconds: ${EMBED_FAST_FAIL_FORCE_OPEN_SECONDS:0}
+    health:
+      enabled: ${EMBED_FAST_FAIL_HEALTH_ENABLED:true}
+      mode: ${EMBED_FAST_FAIL_HEALTH_MODE:version}
+      url: ${EMBED_FAST_FAIL_HEALTH_URL:}
+      timeout-ms: ${EMBED_FAST_FAIL_HEALTH_TIMEOUT_MS:750}
+      ok-ttl-seconds: ${EMBED_FAST_FAIL_HEALTH_OK_TTL_SECONDS:30}
+      concurrent-guard: ${EMBED_FAST_FAIL_HEALTH_CONCURRENT_GUARD:true}
+      embed-probe:
+        timeout-ms: ${EMBED_FAST_FAIL_HEALTH_EMBED_PROBE_TIMEOUT_MS:1500}
+        input: ${EMBED_FAST_FAIL_HEALTH_EMBED_PROBE_INPUT:ping}
+        keep-alive: ${EMBED_FAST_FAIL_HEALTH_EMBED_PROBE_KEEP_ALIVE:0}
+  model: ${EMBED_MODEL:qwen3-embedding:4b}
+  # qwen3-embedding:4b raw output is 2560; index/cache/fallback contract remains 1536.
+  provider-raw-dimensions: ${EMBED_PROVIDER_RAW_DIMENSIONS:2560}
+  dimensions: ${EMBED_DIMENSIONS:1536}
+  normalization-mode: ${EMBED_NORMALIZATION_MODE:SLICE_TO_CONFIGURED_DIM}
+  dimension-guard-mode: ${EMBEDDING_DIM_GUARD_MODE:WARN_ONLY}
+  log-dimension-mismatch: ${EMBEDDING_LOG_DIM_MISMATCH:true}
+  timeout-seconds: ${EMBED_TIMEOUT_SECONDS:30}
+
+  fallback:
+    enabled: ${EMBED_FALLBACK_ENABLED:false}
+    provider: openai
+    base-url: https://api.openai.com/v1
+    api-key: ${OPENAI_EMBED_FALLBACK_KEY:${OPENAI_API_KEY:}}
+    model: text-embedding-3-small
+    dimensions: 1536
+
+rag:
+  cognitive:
+    enabled: ${RAG_COGNITIVE_ENABLED:true}
+    model-id: ${RAG_COGNITIVE_MODEL_ID:light}
+    max-tokens: ${RAG_COGNITIVE_MAX_TOKENS:512}
+    timeout-ms: ${RAG_COGNITIVE_TIMEOUT_MS:5000}
+  overdrive:
+    trigger:
+      error-rate-th: 0.35
+      error-weight: 0.10
+
+gpt-search:
+  brave:
+    enabled: true
+    base-url: https://api.search.brave.com/res/v1/web/search
+    # Boot must not fail on missing placeholders, but runtime must NOT proceed
+    # with a blank token. We use a sentinel and disable the provider when the
+    # key is missing/blank.
+    api-key: ${BRAVE_API_KEY:__MISSING__}
+    qps-limit: 1.0
+    monthly-quota: ${GPT_SEARCH_BRAVE_MONTHLY_QUOTA:950}
+    acquire-timeout-ms: 500
+    # Align with Hybrid awaitWithDeadline (~2s) and remove core 4s floor via overlay.
+    timeout-ms: 1800
+    # Margin carved out from the outer hybrid await deadline (ms).
+    # Default follows gpt-search.hybrid.await.deadline-margin-ms unless overridden.
+    timeout-margin-ms: ${GPT_SEARCH_BRAVE_TIMEOUT_MARGIN_MS:${gpt-search.hybrid.await.deadline-margin-ms:120}}
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+
+
+
+# LLM ?몄텧(?뱁엳 ?먭꺽 OpenAI) ?⑤컻 ?ㅻ쪟 ?鍮??ъ떆??
+openai:
+  retry:
+    max-attempts: 1
+    backoff-ms: 350
+    # Total retry budget (0 = auto: timeout + backoff).
+    max-total-ms: ${OPENAI_RETRY_MAX_TOTAL_MS:0}
+    # Prevent single-timeout cliff when evidence exists.
+    # 1 = legacy behavior, >=2 disables fast-bail so retries can run.
+    fast-bailout-min-timeout-hits-with-evidence: ${OPENAI_FAST_BAIL_MIN_HITS_WITH_EVIDENCE:2}
+    # Bound worst-case latency when fast-bail is suppressed (caps apply only when min-hits >= 2)
+    fast-bailout-max-attempts-with-evidence: ${OPENAI_FAST_BAIL_MAX_ATTEMPTS_WITH_EVIDENCE:1}
+    fast-bailout-timeout-seconds-cap: ${OPENAI_FAST_BAIL_TIMEOUT_SECONDS_CAP:6}
+    fast-bailout-max-total-ms-with-evidence: ${OPENAI_FAST_BAIL_MAX_TOTAL_MS_WITH_EVIDENCE:0}
+
+# ?????????????????????????????????????????????????????????????????????
+# Nova orchestration overlay toggles (fail-soft)
+# ?????????????????????????????????????????????????????????????????????
+nova:
+  orch:
+    overdrive:
+      enabled: true
+      auto-activate-compression: true
+      mark-compression-mode: true
+
+    # Massive Parallel Query Expansion (disabled by default)
+    extremez:
+      enabled: false
+      min-base-docs: 3
+      max-sub-queries: 6
+      budget-ms: 1500
+      max-merged-docs: 16
+      skip-when-strike-mode: true
+      skip-when-web-rate-limited: true
+      skip-when-aux-down: true
+      risk-gate-enabled: true
+      risk-score-threshold: 0.55
+      contradiction-trigger-threshold: 0.60
+      error-rate-trigger-threshold: 0.35
+      scarcity-weight: 0.50
+      contradiction-weight: 0.30
+      error-rate-weight: 0.20
+      starvation-weight: 0.20
+      retrieval-failure-weight: 0.20
+      starvation-trigger-threshold: 0.50
+      max-contradiction-pairs: 3
+      debug-events-enabled: true
+      pattern-id-enabled: true
+
+    # Thread-interrupt hygiene for pooled web-search threads
+    interrupt-hygiene:
+      enabled: true
+
+    # ?????????????????????????????????????????????????????????????????????
+    # OpenAI Chat/Responses endpoint compatibility guard
+    # - Prevents "This is not a chat model" hard breaks on /v1/chat/completions
+    # - Modes: SUBSTITUTE_CHAT | ROUTE_RESPONSES | FAIL_FAST
+    # ?????????????????????????????????????????????????????????????????????
+    model-guard:
+      enabled: true
+      mode: ${NOVA_MODEL_GUARD_MODE:SUBSTITUTE_CHAT}
+      open-ai-base-only: true
+      substitute-chat-model: ${NOVA_MODEL_GUARD_SUBSTITUTE_CHAT_MODEL:${llm.chat-model}}
+      # Exact Responses-only IDs; Spring list binding replaces the Java defaults.
+      responses-only-prefixes:
+        - gpt-5.5-pro
+        - gpt-5-pro
+        - gpt-5.1-codex
+        - gpt-5-codex
+        - o3-deep-research
+        - o4-mini-deep-research
+
+    # ?????????????????????????????????????????????????????????????????????
+    # Web retrieval fail-soft ladder (selection-stage), starvation/quality caps
+    # - Enable SOAK_WEB_KPI JSON emission during soak runs
+    # - Cap official-only starvation fallback to prevent NOFILTER_SAFE monopoly
+    # ?????????????????????????????????????????????????????????????????????
+
+    web-failsoft:
+      emit-soak-kpi-json: ${NOVA_WEB_FAILSOFT_EMIT_SOAK_KPI_JSON:false}
+      # Optional: emit a 1-minute rolling summary for SOAK_WEB_KPI signals
+      # (avg outCount, outCount=0 ratio, budget_exhausted ratio,
+      # brave cooldown/disabled ratio). Useful for 5~10min soak runs.
+      soak-kpi-summary:
+        enabled: ${NOVA_WEB_FAILSOFT_SOAK_KPI_SUMMARY_ENABLED:false}
+        interval-ms: ${NOVA_WEB_FAILSOFT_SOAK_KPI_SUMMARY_INTERVAL_MS:60000}
+        initial-delay-ms: ${NOVA_WEB_FAILSOFT_SOAK_KPI_SUMMARY_INITIAL_DELAY_MS:65000}
+        emit-empty-windows: ${NOVA_WEB_FAILSOFT_SOAK_KPI_SUMMARY_EMIT_EMPTY:false}
+      official-only-starvation-fallback-max-ratio: ${NOVA_WEB_FAILSOFT_OFFICIAL_ONLY_MAX_RATIO:0.55}
+
+    # Provider 429/荑⑤떎???곗뇙(Brave ?? ?꾪솕: Retry-After + exp backoff ?⑹꽦(max)
+    web:
+      failsoft:
+        # Hybrid empty fallback ratio cap: NOFILTER_SAFE (low-trust) results dominance limiter
+        hybrid-empty-fallback:
+          nofilter-safe:
+            max-low-trust-ratio: ${NOVA_WEB_FAILSOFT_NOFILTER_SAFE_MAX_LOW_TRUST_RATIO:0.55}
+        ratelimit-backoff:
+          enabled: true
+          # Global defaults (provider-specific override 媛??
+          min-backoff-ms: 800
+          max-backoff-ms: 30000
+          jitter-ms: 150
+          consecutive-reset-ms: 60000
+          provider-specific:
+            brave:
+              # Brave??429媛 ?곗뇙濡??곗쭏 ?뚭? 留롮븘(荑⑤떎???ㅽ궢 ??＜), 湲곕낯媛믪쓣 ??蹂댁닔?곸쑝濡?
+              min-backoff-ms: 2000
+
+    # EvidenceList UX: fill blank title/snippet on DEGRADE_EVIDENCE_LIST (URL-only results)
+    evidence-list:
+      snippet-fallback:
+        enabled: true
+        # Mark derived snippets so they are not mistaken for an actual summary.
+        annotate: true
+        prefix: ${EVIDENCE_SNIPPET_FALLBACK_PREFIX:URL 湲곕컲 ?뚯깮}
+
+    degraded-storage:
+      drain:
+        enabled: false
+        batch-size: 50
+        initial-delay-ms: 60000
+        fixed-delay-ms: 300000
+        require-evidence: true
+        min-snippet-len: 80
+
+    # {?ㅽ꽣??} KB persist=SKIPPED ???ㅼ젣 DB ????곌껐 (AOP 湲곕컲)
+    kb-persistence:
+      enabled: true
+
+    # {?ㅽ꽣??} Brave QueryBurst: Brave/怨듦꺽 ?뚮옖?먯꽌 SmartQueryPlanner 寃곌낵瑜??뺤옣
+    brave-query-burst:
+      enabled: true
+      min: 9
+      max: 18
+      cap: 18
+      similarity-threshold: 0.80
+
+    # ?????????????????????????????????????????????????????????????????????
+    # Nova Overlay ??failure-pattern metrics + weak feedback
+    # ?????????????????????????????????????????????????????????????????????
+    failure:
+      enabled: true
+      # log-based detection (install logback appender at runtime)
+      log-appender-enabled: true
+
+      metrics:
+        enabled: true
+        counter-name: nova.failure.pattern
+
+      jsonl:
+        write-enabled: true
+        path: logs/failure-pattern.jsonl
+        max-file-bytes: 10485760
+        read-tail-lines: 2000
+        lookback-seconds: 900
+        reload-interval-ms: 30000
+
+      feedback:
+        enabled: true
+        # WEAK_REORDER (default) | SKIP_TURN (stronger)
+        mode: WEAK_REORDER
+        naver-trace-timeout-cooldown-seconds: 30
+        circuit-open-cooldown-seconds: 60
+        disambig-fallback-cooldown-seconds: 15
+
+      # Optional: more precise circuit-open counting via Resilience4j events
+      resilience4j-events:
+        enabled: false
+
+# ?????????????????????????????????????????????????????????????????????
+# LLM Router configuration
+# - Allows plan YAML to use logical model ids like: llmrouter.light
+# ?????????????????????????????????????????????????????????????????????
+llmrouter:
+  enabled: true
+  fallback-when-openai-missing: ${LLMROUTER_FALLBACK_WHEN_OPENAI_MISSING:true}
+  cooldown-ms: 20000
+
+  # Model aliases: keep role lanes distinct; do not collapse qwen/vision/coder into the chat model.
+  aliases:
+    gemma4-26b: ${LLM_CHAT_MODEL:gemma4:26b}
+    fast: ${LLM_FAST_MODEL:qwen3.5:9b}
+    cheap: ${LLM_FAST_MODEL:qwen3.5:9b}
+    judge: ${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
+    critic: ${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
+    coder: ${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
+    vision: ${LLM_VISION_MODEL:qwen3-vl:8b}
+  models:
+    light:
+      enabled: ${LLMROUTER_LIGHT_ENABLED:true}
+      provider: local
+      stage: chat
+      name: ${LLMROUTER_LIGHT_NAME:${LLM_FAST_MODEL:qwen3.5:9b}}
+      base-url: ${LLMROUTER_LIGHT_BASE_URL:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url:http://127.0.0.1:11435/v1}}}}
+      device-role: ${LLMROUTER_LIGHT_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_LIGHT_DEVICE_FALLBACK_KEY:}
+      weight: 0.45
+    gemma:
+      enabled: ${LLMROUTER_GEMMA_ENABLED:true}
+      provider: local
+      stage: chat
+      name: ${LLMROUTER_GEMMA_NAME:${llm.chat-model:gemma4:26b}}
+      base-url: ${LLMROUTER_GEMMA_BASE_URL:${LLM_3090_BASE_URL:${llm.base-url:http://127.0.0.1:11434/v1}}}
+      device-role: ${LLMROUTER_GEMMA_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_GEMMA_DEVICE_FALLBACK_KEY:}
+      weight: 0.55
+    api3:
+      enabled: ${LLMROUTER_API3_ENABLED:true}
+      provider: groq
+      stage: chat
+      fallback-only: ${LLMROUTER_API3_FALLBACK_ONLY:true}
+      response-model-verification-required: true
+      name: ${LLMROUTER_API3_NAME:openai/gpt-oss-120b}
+      base-url: ${LLMROUTER_API3_BASE_URL:https://api.groq.com/openai/v1}
+      weight: 0.0
+    openai-premium:
+      enabled: ${LLMROUTER_OPENAI_PREMIUM_ENABLED:false}
+      provider: openai
+      stage: chat
+      fallback-only: true
+      response-model-verification-required: true
+      name: ${LLMROUTER_OPENAI_PREMIUM_NAME:gpt-5.5}
+      base-url: ${LLMROUTER_OPENAI_PREMIUM_BASE_URL:https://api.openai.com/v1}
+      credential-env: OPENAI_API_KEY
+      min-context-tokens: ${LLMROUTER_OPENAI_PREMIUM_MIN_CONTEXT_TOKENS:1048576}
+      weight: ${LLMROUTER_OPENAI_PREMIUM_WEIGHT:0.0}
+    openai-balanced:
+      enabled: ${LLMROUTER_OPENAI_BALANCED_ENABLED:false}
+      provider: openai
+      stage: chat
+      fallback-only: true
+      name: ${LLMROUTER_OPENAI_BALANCED_NAME:gpt-5.4-mini}
+      base-url: ${LLMROUTER_OPENAI_BALANCED_BASE_URL:https://api.openai.com/v1}
+      credential-env: OPENAI_API_KEY
+      min-context-tokens: ${LLMROUTER_OPENAI_BALANCED_MIN_CONTEXT_TOKENS:400000}
+      weight: ${LLMROUTER_OPENAI_BALANCED_WEIGHT:0.0}
+    gemini-pro:
+      enabled: ${LLMROUTER_GEMINI_PRO_ENABLED:false}
+      provider: gemini
+      stage: chat
+      fallback-only: true
+      response-model-verification-required: true
+      name: ${LLMROUTER_GEMINI_PRO_NAME:gemini-2.5-pro}
+      base-url: ${LLMROUTER_GEMINI_PRO_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai}
+      credential-env: GEMINI_API_KEY
+      min-context-tokens: ${LLMROUTER_GEMINI_PRO_MIN_CONTEXT_TOKENS:1048576}
+      weight: ${LLMROUTER_GEMINI_PRO_WEIGHT:0.0}
+    mistral-medium:
+      enabled: ${LLMROUTER_MISTRAL_MEDIUM_ENABLED:false}
+      provider: mistral
+      stage: chat
+      fallback-only: true
+      name: ${LLMROUTER_MISTRAL_MEDIUM_NAME:mistral-medium-3-5}
+      base-url: ${LLMROUTER_MISTRAL_MEDIUM_BASE_URL:https://api.mistral.ai/v1}
+      credential-env: MISTRAL_API_KEY
+      min-context-tokens: ${LLMROUTER_MISTRAL_MEDIUM_MIN_CONTEXT_TOKENS:262144}
+      weight: ${LLMROUTER_MISTRAL_MEDIUM_WEIGHT:0.0}
+    macmini:
+      enabled: ${LLMROUTER_MACMINI_ENABLED:false}
+      provider: local
+      stage: chat
+      name: ${LLMROUTER_MACMINI_NAME:${MACMINI_API_ROUTER_MODEL:llmrouter.auto}}
+      base-url: ${LLMROUTER_MACMINI_BASE_URL:${MACMINI_API_ROUTER_BASE_URL:}}
+      weight: ${LLMROUTER_MACMINI_WEIGHT:0.0}
+      node-role: macmini-router-only-node
+      device: m4-16gb
+      workload: optional-subserver-route
+    external:
+      enabled: ${LLMROUTER_EXTERNAL_ENABLED:false}
+      provider: opencode
+      stage: chat
+      fallback-only: ${LLMROUTER_EXTERNAL_FALLBACK_ONLY:true}
+      name: ${LLMROUTER_EXTERNAL_NAME:deepseek-v4-flash-free}
+      base-url: ${LLMROUTER_EXTERNAL_BASE_URL:https://opencode.ai/zen/v1}
+      weight: ${LLMROUTER_EXTERNAL_WEIGHT:0.0}
+    judge:
+      enabled: ${LLMROUTER_JUDGE_ENABLED:true}
+      provider: local
+      stage: judge
+      name: ${LLMROUTER_JUDGE_NAME:${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}}
+      base-url: ${LLMROUTER_JUDGE_BASE_URL:${LLM_JUDGE_BASE_URL:${llm.high.base-url:http://127.0.0.1:11434/v1}}}
+      device-role: ${LLMROUTER_JUDGE_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_JUDGE_DEVICE_FALLBACK_KEY:}
+      weight: 0.0
+    coder:
+      enabled: ${LLMROUTER_CODER_ENABLED:true}
+      provider: local
+      stage: coder
+      name: ${LLMROUTER_CODER_NAME:${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}}
+      base-url: ${LLMROUTER_CODER_BASE_URL:${LLM_CODER_BASE_URL:${llm.high.base-url:http://127.0.0.1:11434/v1}}}
+      device-role: ${LLMROUTER_CODER_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_CODER_DEVICE_FALLBACK_KEY:}
+      weight: 0.0
+    vision:
+      enabled: ${LLMROUTER_VISION_ENABLED:true}
+      provider: local
+      stage: vision
+      name: ${LLMROUTER_VISION_NAME:${LLM_VISION_MODEL:qwen3-vl:8b}}
+      base-url: ${LLMROUTER_VISION_BASE_URL:${LLM_VISION_BASE_URL:${llm.fast.base-url:http://127.0.0.1:11435/v1}}}
+      device-role: ${LLMROUTER_VISION_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_VISION_DEVICE_FALLBACK_KEY:}
+      weight: 0.0
+
+prompt-pose:
+  enabled: ${PROMPT_POSE_ENABLED:false}
+  draft:
+    enabled: ${PROMPT_POSE_DRAFT_ENABLED:true}
+    model: ${PROMPT_POSE_DRAFT_MODEL:llmrouter.light}
+    timeout-ms: ${PROMPT_POSE_DRAFT_TIMEOUT_MS:2500}
+    max-input-chars: ${PROMPT_POSE_DRAFT_MAX_INPUT_CHARS:360}
+    max-output-chars: ${PROMPT_POSE_DRAFT_MAX_OUTPUT_CHARS:2400}
+  policy:
+    max-draft-lines: ${PROMPT_POSE_MAX_DRAFT_LINES:6}
+    max-selfask-count: ${PROMPT_POSE_MAX_SELFASK_COUNT:3}
+    max-queryburst-count: ${PROMPT_POSE_MAX_QUERYBURST_COUNT:18}
+    min-queryburst-count: ${PROMPT_POSE_MIN_QUERYBURST_COUNT:2}
+    max-temperature: ${PROMPT_POSE_MAX_TEMPERATURE:0.55}
+    allow-external-free: ${PROMPT_POSE_ALLOW_EXTERNAL_FREE:false}
+  application:
+    enabled: ${PROMPT_POSE_APPLICATION_ENABLED:true}
+    max-queryburst-count: ${PROMPT_POSE_APPLICATION_MAX_QUERYBURST_COUNT:16}
+    explore-queryburst-count: ${PROMPT_POSE_APPLICATION_EXPLORE_QUERYBURST_COUNT:14}
+    strict-queryburst-count: ${PROMPT_POSE_APPLICATION_STRICT_QUERYBURST_COUNT:8}
+    failure-queryburst-count: ${PROMPT_POSE_APPLICATION_FAILURE_QUERYBURST_COUNT:10}
+    min-citations-explore: ${PROMPT_POSE_APPLICATION_MIN_CITATIONS_EXPLORE:2}
+    min-citations-strict: ${PROMPT_POSE_APPLICATION_MIN_CITATIONS_STRICT:3}
+    min-citations-failure: ${PROMPT_POSE_APPLICATION_MIN_CITATIONS_FAILURE:4}
+    max-answer-temperature: ${PROMPT_POSE_APPLICATION_MAX_ANSWER_TEMPERATURE:0.35}
+    max-self-ask-temperature: ${PROMPT_POSE_APPLICATION_MAX_SELF_ASK_TEMPERATURE:0.55}
+    low-reward-threshold: ${PROMPT_POSE_APPLICATION_LOW_REWARD_THRESHOLD:0.35}
+    high-reward-threshold: ${PROMPT_POSE_APPLICATION_HIGH_REWARD_THRESHOLD:0.70}
+  reward:
+    enabled: ${PROMPT_POSE_REWARD_ENABLED:false}
+
+# ?????????????????????????????????????????????????????????????????????
+# UAW (Autolearn) gate / dataset internal API (Nova Overlay)
+# ?????????????????????????????????????????????????????????????????????
+query-transformer:
+  llm:
+    timeout-ms-hint: 2000
+    inflight-timeout-ms: ${QUERY_TRANSFORMER_INFLIGHT_TIMEOUT_MS:4000}
+    # Coalesce window for qtx soft-cooldown pulses (ms).
+    # Helps avoid cooldown accumulation spikes when LLM loading/timeout repeats in a tight loop.
+    soft-cooldown-coalesce-window-ms: ${QUERY_TRANSFORMER_SOFT_COOLDOWN_COALESCE_WINDOW_MS:750}
+
+uaw:
+  # Autolearn "?ъ슜??遺?? ?먮떒?먯꽌 GET/HEAD ?대쭅???ъ슜???쒕룞?쇰줈 蹂댁? ?딅룄濡?
+  # 硫붿꽌??湲곗? ?꾪꽣瑜?湲곕낯 ?쒖꽦??(肄붾뱶 湲곕낯媛믨낵 ?숈씪)
+  presence:
+    include-methods: [POST, PUT, PATCH, DELETE]
+    exclude-methods: [OPTIONS]
+
+  # ?대? ?먮룞?숈뒿 seed("?대? ?먮룞?숈뒿:") ?붿껌??媛뺤젣 ?꾧꺽 紐⑤뱶濡??ㅽ뻾 (?좏깮)
+  autolearn:
+    min-evidence-count: ${UAW_AUTOLEARN_MIN_EVIDENCE_COUNT:3}
+    min-context-diversity: ${UAW_AUTOLEARN_MIN_CONTEXT_DIVERSITY:0.30}
+    validation:
+      metrics-enabled: true
+      dynamic-threshold-enabled: true
+      window-size: ${UAW_AUTOLEARN_VALIDATION_WINDOW_SIZE:64}
+      ewma-alpha: ${UAW_AUTOLEARN_VALIDATION_EWMA_ALPHA:0.20}
+      contradiction-threshold: ${UAW_AUTOLEARN_CONTRADICTION_THRESHOLD:0.60}
+      contradiction-threshold-min: ${UAW_AUTOLEARN_CONTRADICTION_THRESHOLD_MIN:0.50}
+      contradiction-threshold-max: ${UAW_AUTOLEARN_CONTRADICTION_THRESHOLD_MAX:0.75}
+      target-error-rate: ${UAW_AUTOLEARN_TARGET_ERROR_RATE:0.25}
+      tuning-scale: ${UAW_AUTOLEARN_TUNING_SCALE:0.20}
+      tuning-delta-min: ${UAW_AUTOLEARN_TUNING_DELTA_MIN:-0.04}
+      tuning-delta-max: ${UAW_AUTOLEARN_TUNING_DELTA_MAX:0.08}
+      max-train-error-rate: ${UAW_AUTOLEARN_MAX_TRAIN_ERROR_RATE:0.35}
+      spike-error-rate: ${UAW_AUTOLEARN_SPIKE_ERROR_RATE:0.50}
+      spike-error-rate-rise: ${UAW_AUTOLEARN_SPIKE_ERROR_RATE_RISE:0.25}
+      spike-contamination-score: ${UAW_AUTOLEARN_SPIKE_CONTAMINATION_SCORE:0.55}
+      spike-contamination-rise: ${UAW_AUTOLEARN_SPIKE_CONTAMINATION_RISE:0.20}
+      drift-min-window: ${UAW_AUTOLEARN_DRIFT_MIN_WINDOW:8}
+      drift-sample-score-drop: ${UAW_AUTOLEARN_DRIFT_SAMPLE_SCORE_DROP:0.20}
+      drift-contamination-rise: ${UAW_AUTOLEARN_DRIFT_CONTAMINATION_RISE:0.15}
+      auto-quarantine-enabled: true
+      cycle-debug-enabled: true
+    safety-pin:
+      allow-zero-evidence-for-static-seeds: false
+      max-zero-evidence-accepted-per-cycle: 0
+    strict:
+      enabled: false
+      prefix: "?대? ?먮룞?숈뒿:"
+
+      model: ${UAW_AUTOLEARN_STRICT_MODEL:${llm.chat-model}}
+      max-tokens: ${UAW_AUTOLEARN_STRICT_MAX_TOKENS:1024}
+      memory-mode: ${UAW_AUTOLEARN_STRICT_MEMORY_MODE:ephemeral}
+      search-mode: FORCE_DEEP
+      temperature: 0.2
+
+    external-quota:
+      enabled: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_ENABLED:false}
+      route-model: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_ROUTE_MODEL:llmrouter.external}
+      provider-host: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_PROVIDER_HOST:opencode.ai}
+      free-model: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_FREE_MODEL:deepseek-v4-flash-free}
+      max-calls-per-day: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_MAX_CALLS_PER_DAY:3}
+      max-output-tokens-per-day: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_MAX_OUTPUT_TOKENS_PER_DAY:1536}
+      max-output-tokens-per-call: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_MAX_OUTPUT_TOKENS_PER_CALL:512}
+      max-calls-per-cycle: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_MAX_CALLS_PER_CYCLE:1}
+      rate-limit-cooldown-seconds: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_RATE_LIMIT_COOLDOWN_SECONDS:86400}
+      strict-free-model-only: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_STRICT_FREE_MODEL_ONLY:true}
+      reset-zone: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_RESET_ZONE:UTC}
+      privacy-mode: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_PRIVACY_MODE:STATIC_SYNTHETIC_ONLY}
+      canonical-training-policy: ${UAW_AUTOLEARN_EXTERNAL_QUOTA_CANONICAL_TRAINING_POLICY:EXTERNAL_FREE_CURATE_ONLY}
+
+    # Training-data 理쒖쥌 ?덉쟾?μ튂: UAW strict 寃곌낵瑜?dataset???ｊ린 吏곸쟾???ㅼ뿼 媛???섑뵆???쒖쇅
+    # - hard exclude: 諛곕꼫/?ㅻ뜑 釉붾줉 ?⑦꽩 ??(allow濡?override 遺덇?)
+    # - soft exclude: modelUsed ?쒓렇(?? fallback:*) ??(allow濡??덉쇅 ?덉슜 媛??
+    dataset-filter:
+      enabled: true
+      override-policy:
+        # strict 紐⑤뱶?먯꽌??allow 猷곗씠 ?꾨옒 洹몃９(????SOFT EXCLUDE留?override ?????덉쓬
+        # (?? allow??modelUsed 怨꾩뿴 ?쒖쇅留??덉쇅 ?덉슜)
+        strict-allow-overrides: true
+        allow-overrides-soft-exclude-groups:
+          - modelUsed
+        # Optional: per-ALLOW-group matrix (key = allow rule.group, value = soft-exclude groups it can override).
+        # If an ALLOW rule declares override-soft-exclude-groups, that takes precedence.
+        allow-group-override-matrix:
+          modelUsed:
+            - modelUsed
+
+        # When multiple allow-group matrix keys (globs) match the allow rule.group:
+        # - MOST_SPECIFIC: choose the single most-specific key (default)
+        # - FIRST_MATCH: choose the first matching key (config order)
+        # - MERGE_ALL_MATCHES: union all matching keys' override groups
+        allow-group-override-matrix-match-policy: MOST_SPECIFIC
+
+        # If MOST_SPECIFIC yields a tie (same specificity):
+        # - PICK_LEXICOGRAPHIC: choose lexicographically smallest key (default, deterministic)
+        # - PICK_FIRST_IN_CONFIG: choose first key in config order
+        # - MERGE_TIED: union tied keys' override groups
+        # - DENY_TIED: deny overrides when tied (safe default for ambiguous configs)
+        allow-group-override-matrix-tie-policy: PICK_LEXICOGRAPHIC
+
+        # Optional: add override_source (global/rule/matrix/none) tag to decision metrics.
+        # Off by default to avoid changing metric series.
+        include-override-source-in-decision-metrics: false
+
+        # Optional: add override_matrix_resolution (e.g., single_match|multi_tie_lex) tag to decision metrics.
+        # Low-cardinality, but still off by default to avoid changing metric series.
+        include-override-matrix-resolution-in-decision-metrics: false
+
+        # Optional: warn (rate-limited) when override-matrix matching hits an ambiguity tie.
+        # Use metrics uaw.autolearn.dataset_filter.override_matrix_tie_total for dashboards.
+        warn-on-override-matrix-tie: false
+
+      # Sample-level trace logging (DEBUG only). Metrics are recorded regardless of this setting.
+      trace:
+        enabled: false
+        include-sample-hash: false
+      rules:
+        # --- HARD EXCLUDE (allow濡?override 遺덇?) ---
+        - name: hard_answer_degraded_banner
+          group: banner
+          priority: 1000
+          action: EXCLUDE
+          hard: true
+          scope: ANSWER
+          patterns:
+            # FallbackBannerAspect 媛 prepend ?섎뒗 諛곕꼫 (以??쒖옉 湲곗?)
+            - '^\s*※\s*\[DEGRADED\s+MODE\]'
+            # ?뱀떆 Markdown ?ㅻ뜑濡??섑븨???뺥깭
+            - '^\s*#{1,6}\s*\[DEGRADED\s+MODE\]'
+
+        - name: hard_question_degraded_banner
+          group: banner
+          priority: 900
+          action: EXCLUDE
+          hard: true
+          scope: PROMPT
+          patterns:
+            - '^\s*※\s*\[DEGRADED\s+MODE\]'
+
+        # --- ALLOW (soft exclude留?override) ---
+        # ?? fallback:*???꾨? ?쒖쇅?섎릺, ?뱀젙 fallback 留?dataset ?덉슜?섍퀬 ?띠쓣 ???ъ슜
+        # - name: allow_model_used_fallback_whitelist
+        #   group: modelUsed
+        #   priority: 200
+        #   action: ALLOW
+        #   scope: MODEL_USED
+        #   patterns:
+        #     - '^fallback:allowed:'
+
+        # --- SOFT EXCLUDE (allow濡??덉쇅 ?덉슜 媛?? ---
+        - name: soft_model_used_fallback
+          group: modelUsed
+          priority: 100
+          action: EXCLUDE
+          hard: false
+          scope: MODEL_USED
+          patterns:
+            # ?? gemma4:26b:fallback:evidence / fallback:* ??
+            - 'fallback:'
+  # ?대? ?꾩슜 dataset append API (?좏깮)
+  dataset-api:
+    enabled: false
+    # 媛믪씠 鍮꾩뼱?덉? ?딆쑝硫??붿껌 ?ㅻ뜑 X-Internal-Key? ?쇱튂?댁빞 ??
+    key: ""
+
+ensemble:
+  sampling:
+    enabled: ${ENSEMBLE_SAMPLING_ENABLED:false}
+    alternative-support:
+      enabled: ${ENSEMBLE_ALTERNATIVE_SUPPORT_ENABLED:false}
+    api-triad:
+      support-primary-route: ${ENSEMBLE_API_TRIAD_SUPPORT_PRIMARY_ROUTE:llmrouter.openai-premium}
+      support-alternative-route: ${ENSEMBLE_API_TRIAD_SUPPORT_ALTERNATIVE_ROUTE:llmrouter.api3}
+      falsify-route: ${ENSEMBLE_API_TRIAD_FALSIFY_ROUTE:llmrouter.gemini-pro}
+
+# (Optional) expose actuator metrics endpoints locally
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# ?????????????????????????????????????????????????????????????????????
+# Privacy / sensitive boundary defaults
+# ?????????????????????????????????????????????????????????????????????
+privacy:
+  sensitive:
+    enabled: true
+    answer-temperature: 0.2
+    explore-temp-cap: 0.7
+  boundary:
+    mask-web-query: true
+    max-query-length: 220
+    # Stronger mode (DROP 諛⑺뼢 ?뺤옣):
+    # - on sensitive topics, block outbound web search entirely
+    block-web-search-on-sensitive: false
+    # - always block outbound web search (global kill switch)
+    block-web-search: false
+
+# Nova Orch Guards block added

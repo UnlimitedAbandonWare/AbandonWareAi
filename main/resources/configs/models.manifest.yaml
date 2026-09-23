@@ -1,0 +1,81 @@
+version: "2026-05-28"
+
+bindings:
+  default: "gemma4:26b"
+  moe: "gemma4:26b"
+
+aliases:
+  cheap: "qwen3.5:9b"
+  fast: "qwen3.5:9b"
+  light: "qwen3.5:9b"
+  rewrite: "qwen3.5:9b"
+  explore: "qwen3.5:9b"
+  vision: "qwen3-vl:8b"
+  vl: "qwen3-vl:8b"
+  judge: "smtek/Qwen3.8-27B:Q3_K_XL"
+  critic: "smtek/Qwen3.8-27B:Q3_K_XL"
+  coder: "smtek/Qwen3.8-27B:Q3_K_XL"
+  code: "smtek/Qwen3.8-27B:Q3_K_XL"
+  "gemma4-26b": "gemma4:26b"
+
+models:
+  - id: "gemma4:26b"
+    provider: "local"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11434/v1}}"
+      key_env: "${LLM_API_KEY:ollama}"
+    capabilities: [chat, reasoning]
+    ctx: 8192
+    price: {}
+    tags: [default, moe, high, local, 3090]
+  - id: "qwen3.5:9b"
+    provider: "local"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11435/v1}}}"
+      key_env: "${LLM_API_KEY:ollama}"
+    capabilities: [chat, reasoning]
+    ctx: 8192
+    price: {}
+    tags: [cheap, fast, light, rewrite, explore, local, 3060]
+  - id: "smtek/Qwen3.8-27B:Q3_K_XL"
+    provider: "local"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${LLM_JUDGE_BASE_URL:${LLM_3090_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}}"
+      key_env: "${LLM_API_KEY:ollama}"
+    capabilities: [chat, reasoning, judge]
+    ctx: 8192
+    price: {}
+    tags: [judge, critic, local, 3090]
+  - id: "smtek/Qwen3.8-27B:Q3_K_XL"
+    provider: "local"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${LLM_CODER_BASE_URL:${LLM_3090_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}}"
+      key_env: "${LLM_API_KEY:ollama}"
+    capabilities: [chat, code]
+    ctx: 8192
+    price: {}
+    tags: [coder, code, local, 3090]
+  - id: "qwen3-vl:8b"
+    provider: "local"
+    endpoint:
+      type: "openai_compat"
+      base_url: "${LLM_VISION_BASE_URL:${LLM_3060_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11435/v1}}}"
+      key_env: "${LLM_API_KEY:ollama}"
+    capabilities: [chat, vision]
+    ctx: 8192
+    price: {}
+    tags: [vision, vl, local, 3060]
+  - id: "qwen3-embedding:4b"
+    provider: "local"
+    endpoint:
+      type: "ollama_embed"
+      base_url: "${EMBED_BASE_URL:${EMBED_3060_BASE_URL:http://127.0.0.1:11435/api/embed}}"
+      key_env: "${LLM_API_KEY:ollama}"
+    capabilities: [embedding]
+    ctx: 0
+    price: {}
+    tags: [embedding, local]

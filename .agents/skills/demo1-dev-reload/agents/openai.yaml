@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Dev Reload (Start-RAG / Spring)"
+  short_description: "Java/Spring edits must compile then ForceRestart or DevWatch—never stale bootRun."
+  default_prompt: "Use $demo1-dev-reload: after Java/config edits under demo-1, ensure Start-RAG ForceRestart or DevWatch recompiled and recycled Spring on 18180–18182; wait for [DEV-RELOAD] socket ready before claiming the change is live. Do not reuse a stale process or old build outputs."

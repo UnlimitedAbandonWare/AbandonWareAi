@@ -1,0 +1,6 @@
+interface:
+  display_name: "MacMini Safe Patch"
+  short_description: "PatchDrop v3 single-bundle safety for Mac mini to Desktop handoff"
+  default_prompt: "Use $macmini-safe-patch-assistant to produce or consume one cumulative PatchDrop v3 bundle without SMB source conflicts."
+policy:
+  allow_implicit_invocation: true

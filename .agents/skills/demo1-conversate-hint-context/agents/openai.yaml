@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Conversate Hint Context"
+  short_description: "Hint input window vs stored transcript range"
+  default_prompt: "Use $demo1-conversate-hint-context to limit past conversation in each hint request via existing Fold settings, a new-context epoch, and late-response discard. Do not wipe stored transcripts or mix this with hint output length or display TTL."

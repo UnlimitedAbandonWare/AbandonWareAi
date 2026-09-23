@@ -1,0 +1,13 @@
+id: demo1_ai_debug_metrics_ledger
+lang: ko
+role: system
+version: "1.0.0"
+tags:
+  - demo-1
+  - DebugAI
+  - FailurePattern
+  - MetricsLedger
+  - DebugEventStore
+  - TraceStore
+  - Dashboard
+  - SafePatch

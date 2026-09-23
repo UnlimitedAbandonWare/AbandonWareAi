@@ -1,0 +1,1403 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline Status</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1e2430;
+      --border: #30363d;
+      --ink: #e6edf3;
+      --muted: #8b949e;
+      --nav: #010409;
+      --nav2: #1d2738;
+      --blue: #2f81f7;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+    }
+    a { color: inherit; text-decoration: none; }
+    .shell {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .sidebar {
+      background: var(--nav);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      padding: 22px 16px;
+    }
+    .brand {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .nav {
+      display: grid;
+      gap: 7px;
+    }
+    .nav a {
+      border-radius: 8px;
+      color: #c7d2e4;
+      font-size: 14px;
+      padding: 10px 12px;
+    }
+    .nav a:hover,
+    .nav a.active {
+      background: var(--nav2);
+      color: #fff;
+    }
+    .sidebar-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: auto;
+    }
+    .main {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      min-width: 0;
+      padding: 28px 32px;
+    }
+    .topbar {
+      align-items: flex-start;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+    }
+    .page-title {
+      font-size: 28px;
+      letter-spacing: 0;
+      margin: 0 0 8px;
+    }
+    .captured-at {
+      color: var(--muted);
+      font-size: 13px;
+      min-height: 18px;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .button {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 13px;
+      min-height: 38px;
+      padding: 9px 12px;
+    }
+    .button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+    .button:hover { filter: brightness(1.08); }
+    .error-banner {
+      background: rgba(248, 81, 73, .12);
+      border: 1px solid rgba(248, 81, 73, .5);
+      border-radius: 8px;
+      color: #ffd2cf;
+      display: none;
+      font-size: 13px;
+      padding: 12px 14px;
+    }
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .section h2 {
+      font-size: 17px;
+      letter-spacing: 0;
+      margin: 0 0 14px;
+    }
+    .ops-control-strip {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .ops-control-cell {
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 4px;
+      min-height: 54px;
+      padding: 10px 12px;
+    }
+    .ops-control-cell[data-status="warn"] {
+      border-color: rgba(210, 153, 34, .55);
+    }
+    .ops-control-cell[data-status="ok"] {
+      border-color: rgba(63, 185, 80, .55);
+    }
+    .ops-control-cell strong {
+      color: var(--ink);
+      font-size: 13px;
+    }
+    .ops-control-cell small,
+    .debug-rollup-chip,
+    .external-rollup-chip {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .debug-rollup-strip,
+    .external-rollup-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .mem-grid,
+    .debug-overview-grid,
+    .ui-fetch-grid,
+    .debug-event-health-grid,
+    .debug-ai-metrics-grid,
+    .local-llm-smoke-grid,
+    .lane-grid,
+    .model-runtime-grid,
+    .answer-output-grid,
+    .trace-snapshot-grid,
+    .provider-runtime-grid,
+    .fail-soft-ladder-grid,
+    .provider-grid,
+    .external-grid,
+    .debug-fingerprint-list,
+    .hotspot-list {
+      display: grid;
+      gap: 10px;
+    }
+    .mem-row {
+      align-items: center;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(110px, 150px) minmax(120px, 1fr) 72px minmax(120px, 220px);
+      min-height: 34px;
+    }
+    .mem-label,
+    .debug-overview-name,
+    .ui-fetch-name,
+    .debug-event-health-name,
+    .debug-ai-metrics-name,
+    .local-llm-smoke-name,
+    .lane-name,
+    .model-runtime-name,
+    .answer-output-name,
+    .trace-snapshot-name,
+    .provider-runtime-name,
+    .fail-soft-ladder-name,
+    .provider-name,
+    .external-name,
+    .debug-fingerprint-name,
+    .hotspot-name {
+      color: var(--ink);
+      font-weight: 650;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .bar-track {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      height: 12px;
+      overflow: hidden;
+      width: 100%;
+    }
+    .bar-fill {
+      border-radius: 999px;
+      height: 100%;
+      min-width: 0;
+      transition: width .18s ease;
+    }
+    .bar-active { background: var(--green); }
+    .bar-pending,
+    .bar-stale { background: var(--yellow); }
+    .bar-quarantined { background: var(--red); }
+    .count,
+    .lane-detail,
+    .recent-failure-class,
+    .recent-ts {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .lane-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 28px minmax(120px, 160px) 96px minmax(0, 1fr);
+      min-height: 44px;
+      padding: 8px 10px;
+    }
+    .debug-overview-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .ui-fetch-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .debug-event-health-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .debug-ai-metrics-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .model-runtime-row,
+    .local-llm-smoke-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .answer-output-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .trace-snapshot-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .provider-runtime-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .fail-soft-ladder-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(120px, 170px) 92px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .provider-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(110px, 150px) 92px 140px minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .external-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(110px, 150px) 92px 130px minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 42px;
+      padding: 8px 10px;
+    }
+    .lane-icon {
+      font-size: 18px;
+      text-align: center;
+    }
+    .badge {
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 750;
+      justify-content: center;
+      padding: 4px 8px;
+    }
+    .badge-ok {
+      background: rgba(63, 185, 80, .14);
+      color: var(--green);
+    }
+    .badge-warn {
+      background: rgba(210, 153, 34, .16);
+      color: var(--yellow);
+    }
+    .badge-disabled {
+      background: rgba(248, 81, 73, .15);
+      color: var(--red);
+    }
+    .strat-table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    .strat-table th,
+    .strat-table td {
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: middle;
+    }
+    .strat-table th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .success-cell {
+      align-items: center;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 64px minmax(90px, 1fr);
+      min-width: 180px;
+    }
+    .hotspot-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) 60px minmax(120px, 180px) 180px;
+      min-height: 40px;
+      padding: 8px 10px;
+    }
+    .debug-fingerprint-row {
+      align-items: center;
+      background: rgba(13, 17, 23, .55);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) 92px 118px 110px;
+      min-height: 40px;
+      padding: 8px 10px;
+    }
+    .hotspot-count {
+      color: var(--yellow);
+      font-weight: 800;
+      text-align: right;
+    }
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+      padding: 8px 0;
+    }
+    @media (max-width: 860px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { border-bottom: 1px solid var(--border); border-right: 0; }
+      .topbar { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .main { padding: 18px; }
+      .mem-row,
+      .debug-overview-row,
+      .ui-fetch-row,
+      .debug-event-health-row,
+      .debug-ai-metrics-row,
+      .lane-row,
+      .model-runtime-row,
+      .answer-output-row,
+      .trace-snapshot-row,
+      .provider-runtime-row,
+      .fail-soft-ladder-row,
+      .provider-row,
+      .external-row,
+      .debug-fingerprint-row,
+      .hotspot-row {
+        grid-template-columns: 1fr;
+      }
+      .hotspot-count { text-align: left; }
+      .ops-control-strip { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">RAG Ops Cockpit</div>
+    <nav class="nav" aria-label="Operations navigation">
+      <a th:href="@{/admin/dashboard}" href="/admin/dashboard">Dashboard</a>
+      <a th:href="@{/admin/brain-state}" href="/admin/brain-state">Brain State</a>
+      <a class="active" th:href="@{/admin/pipeline-status}" href="/admin/pipeline-status">Pipeline Status</a>
+      <a th:href="@{/admin/vector-diagnostics}" href="/admin/vector-diagnostics">Vector Diagnostics</a>
+      <a th:href="@{/admin/learning-data}" href="/admin/learning-data">Learning Data</a>
+      <a th:href="@{/admin/debug-events}" href="/admin/debug-events">Debug Events</a>
+      <a th:href="@{/admin/trace-snapshots}" href="/admin/trace-snapshots">Trace Snapshots</a>
+      <a th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
+    </nav>
+    <div class="sidebar-note">
+      Read-only pipeline health view. Credential fields are represented only as presence and disabled reasons.
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1 class="page-title">Pipeline Status</h1>
+        <div id="capturedAt" class="captured-at">capturedAt -</div>
+      </div>
+      <div class="actions">
+        <button id="btnAutoRefresh" class="button" type="button">Auto Refresh OFF</button>
+        <button id="btnRefresh" class="button primary" type="button">Refresh</button>
+      </div>
+    </div>
+
+    <div id="errorBanner" class="error-banner"></div>
+
+    <section class="section" aria-labelledby="opsControlTitle">
+      <h2 id="opsControlTitle">Ops Control</h2>
+      <div id="opsControlStrip" class="ops-control-strip">
+        <div class="ops-control-cell" data-ops-control-cell="core-ui" data-status="warn">
+          <strong>Core/UI</strong><small>-</small>
+        </div>
+        <div class="ops-control-cell" data-ops-control-cell="model-answer" data-status="warn">
+          <strong>Model/Answer</strong><small>-</small>
+        </div>
+        <div class="ops-control-cell" data-ops-control-cell="search-trace" data-status="warn">
+          <strong>Search/Trace</strong><small>-</small>
+        </div>
+        <div class="ops-control-cell" data-ops-control-cell="external-proof" data-status="warn">
+          <strong>External Proof</strong><small>-</small>
+        </div>
+      </div>
+      <div id="debugRollupStrip" class="debug-rollup-strip"></div>
+      <div id="externalRollupStrip" class="external-rollup-strip"></div>
+    </section>
+
+    <section class="section" aria-labelledby="debugOverviewTitle">
+      <h2 id="debugOverviewTitle">Core/UI Debug Overview</h2>
+      <div id="debugOverviewGrid" class="debug-overview-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="uiFetchTitle">
+      <h2 id="uiFetchTitle">UI Fetch Status</h2>
+      <div id="uiFetchGrid" class="ui-fetch-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="debugEventHealthTitle">
+      <h2 id="debugEventHealthTitle">Debug Event Store Health</h2>
+      <div id="debugEventHealthGrid" class="debug-event-health-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="debugAiMetricsTitle">
+      <h2 id="debugAiMetricsTitle">Debug AI Metrics Readiness</h2>
+      <div id="debugAiMetricsGrid" class="debug-ai-metrics-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="memoryGateTitle">
+      <h2 id="memoryGateTitle">Memory Gate</h2>
+      <div id="memGrid" class="mem-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="laneTitle">
+      <h2 id="laneTitle">Pipeline Terminals</h2>
+      <div id="laneGrid" class="lane-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="modelRuntimeTitle">
+      <h2 id="modelRuntimeTitle">Default Model Runtime</h2>
+      <div id="modelRuntimeGrid" class="model-runtime-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="localLlmSmokeTitle">
+      <h2 id="localLlmSmokeTitle">Local LLM Route Pressure</h2>
+      <div id="localLlmSmokeGrid" class="local-llm-smoke-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="answerOutputTitle">
+      <h2 id="answerOutputTitle">Answer Output Health</h2>
+      <div id="answerOutputGrid" class="answer-output-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="traceSnapshotTitle">
+      <h2 id="traceSnapshotTitle">Trace Snapshot Readiness</h2>
+      <div id="traceSnapshotGrid" class="trace-snapshot-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="providerRuntimeTitle">
+      <h2 id="providerRuntimeTitle">Provider Runtime Pressure</h2>
+      <div id="providerRuntimeGrid" class="provider-runtime-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="failSoftLadderTitle">
+      <h2 id="failSoftLadderTitle">Fail-Soft Ladder Health</h2>
+      <div id="failSoftLadderGrid" class="fail-soft-ladder-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="providerTitle">
+      <h2 id="providerTitle">Web Provider Credentials</h2>
+      <div id="providerGrid" class="provider-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="externalTitle">
+      <h2 id="externalTitle">External Evidence Readiness</h2>
+      <div id="externalGrid" class="external-grid"></div>
+    </section>
+
+    <section class="section" aria-labelledby="strategyTitle">
+      <h2 id="strategyTitle">Strategy Performance</h2>
+      <div id="stratBody"></div>
+    </section>
+
+    <section class="section" aria-labelledby="debugFingerprintTitle">
+      <h2 id="debugFingerprintTitle">Debug Event Fingerprints</h2>
+      <div id="debugFingerprintList" class="debug-fingerprint-list"></div>
+    </section>
+
+    <section class="section" aria-labelledby="hotspotTitle">
+      <h2 id="hotspotTitle">Failure Terminal Distribution</h2>
+      <div id="hotspotList" class="hotspot-list"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const API = '/agent/db-context/pipeline-health';
+  const DEBUG_FP_API = '/api/diagnostics/debug/fingerprints?limit=5';
+  const LOCAL_LLM_SMOKE_API = '/api/diagnostics/local-llm/smoke-history?limit=12';
+  let autoRefresh = false;
+  let autoTimer = null;
+
+  const byId = (id) => document.getElementById(id);
+
+  async function fetchJson(url) {
+    const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  }
+
+  function textEl(tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    el.textContent = text == null || text === '' ? '-' : String(text);
+    return el;
+  }
+
+  function badge(status) {
+    const normalized = String(status || 'DISABLED').toUpperCase();
+    const el = textEl('span', 'badge', normalized);
+    if (normalized === 'OK') el.classList.add('badge-ok');
+    else if (normalized === 'WARN') el.classList.add('badge-warn');
+    else el.classList.add('badge-disabled');
+    return el;
+  }
+
+  function laneIcon(status) {
+    const normalized = String(status || 'DISABLED').toUpperCase();
+    if (normalized === 'OK') return '\uD83D\uDFE2';
+    if (normalized === 'WARN') return '\uD83D\uDFE1';
+    return '\uD83D\uDD34';
+  }
+
+  function pct(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.min(100, numeric));
+  }
+
+  function yesNo(value) {
+    return value ? 'yes' : 'no';
+  }
+
+  function setOpsControlCell(name, status, title, detail) {
+    const cell = document.querySelector(`[data-ops-control-cell="${name}"]`);
+    if (!cell) return;
+    const normalized = String(status || 'WARN').toUpperCase() === 'OK' ? 'ok' : 'warn';
+    cell.dataset.status = normalized;
+    const strong = cell.querySelector('strong');
+    const small = cell.querySelector('small');
+    if (strong) strong.textContent = title;
+    if (small) small.textContent = detail || '-';
+  }
+
+  function renderOpsControlStrip(data, healthResult, debugResult, localLlmResult) {
+    const safe = data || {};
+    const coreUiStatus = healthResult && healthResult.status === 'fulfilled' ? 'OK' : 'WARN';
+    const modelAnswerStatus = safe.modelRuntime && safe.answerOutput ? 'OK' : 'WARN';
+    const searchTraceStatus = safe.providerRuntime || safe.traceSnapshotHealth ? 'OK' : 'WARN';
+    const externalProofStatus = debugResult && debugResult.status === 'fulfilled' && localLlmResult && localLlmResult.status === 'fulfilled' ? 'OK' : 'WARN';
+    const coreUiDetail = healthResult && healthResult.status === 'fulfilled' ? 'pipeline health loaded' : 'pipeline_health_unavailable';
+    const modelAnswerDetail = `model:${safe.modelRuntime?.status || 'unknown'} answer:${safe.answerOutput?.status || 'unknown'}`;
+    const searchTraceDetail = `search:${safe.providerRuntime?.status || 'unknown'} trace:${safe.traceSnapshotHealth?.status || 'unknown'}`;
+    const externalProofDetail = `debug:${debugResult?.status || 'missing'} local:${localLlmResult?.status || 'missing'}`;
+    setOpsControlCell('core-ui', coreUiStatus, 'Core/UI', coreUiDetail);
+    setOpsControlCell('model-answer', modelAnswerStatus, 'Model/Answer', modelAnswerDetail);
+    setOpsControlCell('search-trace', searchTraceStatus, 'Search/Trace', searchTraceDetail);
+    setOpsControlCell('external-proof', externalProofStatus, 'External Proof', externalProofDetail);
+  }
+
+  function renderMemory(gate) {
+    const grid = byId('memGrid');
+    grid.replaceChildren();
+    const safeGate = gate || {};
+    const counts = safeGate.statusCounts || {};
+    const total = Number(safeGate.total || 0);
+    const rows = [
+      ['ACTIVE', 'bar-active'],
+      ['PENDING', 'bar-pending'],
+      ['QUARANTINED', 'bar-quarantined'],
+      ['STALE', 'bar-stale']
+    ];
+    rows.forEach(([name, colorClass], index) => {
+      const count = Number(counts[name] || safeGate[name.toLowerCase()] || 0);
+      const row = document.createElement('div');
+      row.className = 'mem-row';
+      row.appendChild(textEl('div', 'mem-label', name));
+
+      const track = document.createElement('div');
+      track.className = 'bar-track';
+      const fill = document.createElement('div');
+      fill.className = `bar-fill ${colorClass}`;
+      fill.style.width = `${pct(total === 0 ? 0 : (count / total) * 100)}%`;
+      track.appendChild(fill);
+      row.appendChild(track);
+
+      row.appendChild(textEl('div', 'count', count));
+      row.appendChild(textEl('div', 'lane-detail', index === 0 ? `${safeGate.status || '-'} / ${safeGate.reason || '-'}` : ''));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderDebugOverview(overview, debugResult) {
+    const grid = byId('debugOverviewGrid');
+    grid.replaceChildren();
+    const rows = Array.isArray(overview) ? overview.map((item) => ({ ...item })) : [];
+    const debugFetchStatus = debugResult ? debugResult.status : 'missing';
+    const debugIndex = rows.findIndex((item) => item && item.name === 'debugRollup');
+    const blockerIndex = rows.findIndex((item) => item && item.name === 'debugBlocker');
+    const debugRow = debugIndex >= 0 ? rows[debugIndex] : { name: 'debugRollup' };
+    const blockerRow = blockerIndex >= 0 ? rows[blockerIndex] : { name: 'debugBlocker' };
+    if (debugFetchStatus === 'fulfilled') {
+      const fingerprints = Array.isArray(debugResult.value) ? debugResult.value.length : 0;
+      Object.assign(debugRow, {
+        status: 'OK',
+        reason: 'debug_fingerprints_available',
+        detail: `fingerprints=${fingerprints}`,
+        source: DEBUG_FP_API
+      });
+    } else if (debugFetchStatus === 'rejected') {
+      Object.assign(debugRow, {
+        status: 'WARN',
+        reason: 'debug_fingerprints_unavailable',
+        detail: debugResult.reason && debugResult.reason.message ? debugResult.reason.message : 'fetch_failed',
+        source: DEBUG_FP_API
+      });
+    }
+    if (debugIndex >= 0) rows[debugIndex] = debugRow;
+    else rows.push(debugRow);
+    Object.assign(blockerRow, {
+      status: debugFetchStatus === 'fulfilled' ? 'OK' : 'WARN',
+      reason: debugFetchStatus === 'fulfilled' ? 'no_debug_fetch_blocker' : 'debug_fingerprints_unavailable',
+      detail: debugFetchStatus === 'fulfilled' ? 'fingerprint lane ready' : 'debug fingerprint fetch failed',
+      source: DEBUG_FP_API
+    });
+    if (blockerIndex >= 0) rows[blockerIndex] = blockerRow;
+    else rows.push(blockerRow);
+
+    if (!rows.length) {
+      grid.appendChild(textEl('div', 'empty', 'No debug overview data'));
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'debug-overview-row';
+      row.appendChild(textEl('div', 'debug-overview-name', item.name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(item.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', item.reason || 'healthy'));
+      row.appendChild(textEl('div', 'lane-detail', [item.detail, item.source].filter(Boolean).join(' / ')));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderDebugRollupStrip(overview, debugResult) {
+    const strip = byId('debugRollupStrip');
+    strip.replaceChildren();
+    const rows = Array.isArray(overview) ? overview : [];
+    const debugRollupRow = rows.find((item) => item && item.name === 'debugRollup') || {};
+    const debugBlockerRow = rows.find((item) => item && item.name === 'debugBlocker') || {};
+    strip.appendChild(textEl('span', 'debug-rollup-chip', `rollup:${debugRollupRow.status || debugResult?.status || 'unknown'}`));
+    strip.appendChild(textEl('span', 'debug-rollup-chip', `blocker:${debugBlockerRow.status || 'unknown'}`));
+    strip.appendChild(textEl('span', 'debug-rollup-chip', `debugFingerprintFetch:${debugResult?.status || 'missing'}`));
+  }
+
+  function renderUiFetchStatus(healthResult, debugResult, localLlmResult, lastRefreshAt) {
+    const grid = byId('uiFetchGrid');
+    grid.replaceChildren();
+    const healthOk = healthResult && healthResult.status === 'fulfilled';
+    const debugOk = debugResult && debugResult.status === 'fulfilled';
+    const localLlmOk = localLlmResult && localLlmResult.status === 'fulfilled';
+    const autoState = autoRefresh ? 'auto:on interval:30s' : 'auto:off';
+    const rows = [
+      ['Pipeline health', healthOk ? 'OK' : 'WARN', healthOk ? 'fetch_ok' : 'pipeline_health_unavailable', API],
+      ['Debug fingerprints', debugOk ? 'OK' : 'WARN', debugOk ? 'fetch_ok' : 'debug_fingerprints_unavailable', DEBUG_FP_API],
+      ['Local LLM smoke', localLlmOk ? 'OK' : 'WARN', localLlmOk ? 'fetch_ok' : 'local_llm_smoke_unavailable', LOCAL_LLM_SMOKE_API],
+      ['Last refresh', 'OK', lastRefreshAt || '-', autoState],
+      ['Admin page', 'OK', 'page_loaded', location.pathname || '-']
+    ];
+    rows.forEach(([name, status, detail, source]) => {
+      const row = document.createElement('div');
+      row.className = 'ui-fetch-row';
+      row.appendChild(textEl('div', 'ui-fetch-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', source));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderDebugEventHealth(health) {
+    const grid = byId('debugEventHealthGrid');
+    grid.replaceChildren();
+    const safe = health || {};
+    const rows = [
+      ['Status', safe.status || 'WARN', safe.reason || 'unavailable', `available:${yesNo(safe.available)} error:${safe.errorType || '-'}`],
+      ['Recent events', safe.recentEventCount ?? 0, `warn/error:${safe.recentWarnOrErrorCount ?? 0}`, `fingerprints:${safe.fingerprintCount ?? 0}`],
+      ['Latest event', safe.latestLevel || '-', safe.latestProbe || '-', safe.latestFingerprintHash || '-'],
+      ['Fingerprint size', safe.latestFingerprintLength ?? 0, `windowMax:${safe.maxWindowCount ?? 0}`, `suppressed:${safe.totalSuppressed ?? 0}`]
+    ];
+    rows.forEach(([name, status, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'debug-event-health-row';
+      row.appendChild(textEl('div', 'debug-event-health-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(name === 'Status' ? status : safe.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderDebugAiMetrics(metrics) {
+    const grid = byId('debugAiMetricsGrid');
+    grid.replaceChildren();
+    const safe = metrics || {};
+    const rows = [
+      ['Status', safe.status || 'WARN', safe.reason || 'unavailable', `available:${yesNo(safe.available)} error:${safe.errorType || '-'}`],
+      ['Events', safe.totalEvents ?? 0, `warn:${safe.warnEvents ?? 0}`, `error:${safe.errorEvents ?? 0}`],
+      ['Tiles', safe.tileCount ?? 0, safe.topTile || '-', safe.topTileStatus || '-'],
+      ['Hotspots', safe.hotspotCount ?? 0, `recommendations:${safe.recommendationCount ?? 0}`, safe.topFailureClass || '-']
+    ];
+    rows.forEach(([name, status, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'debug-ai-metrics-row';
+      row.appendChild(textEl('div', 'debug-ai-metrics-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(name === 'Status' ? status : safe.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderLocalLlmSmoke(result) {
+    const grid = byId('localLlmSmokeGrid');
+    grid.replaceChildren();
+    if (!result || result.status !== 'fulfilled') {
+      const row = document.createElement('div');
+      row.className = 'local-llm-smoke-row';
+      row.appendChild(textEl('div', 'local-llm-smoke-name', 'Smoke history'));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge('WARN'));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', 'local_llm_smoke_unavailable'));
+      row.appendChild(textEl('div', 'lane-detail', LOCAL_LLM_SMOKE_API));
+      grid.appendChild(row);
+      return;
+    }
+
+    const safe = result.value || {};
+    const latest = safe.latest || {};
+    const cumulative = safe.latest.cumulativeSignals || {};
+    const attempts = safe.latest.attemptScores || {};
+    const operatorAction = safe.latest.operatorAction || {};
+    const operatorTriggered = operatorAction.triggered === true;
+    const openAi = attempts.openAiCompatible || {};
+    const nativeOllama = attempts.nativeOllama || {};
+    const thresholdExceeded = cumulative.thresholdExceeded === true;
+    const status = thresholdExceeded || latest.debugTrigger ? 'WARN' : 'OK';
+    const rows = [
+      ['Route', status, latest.recommendedRoute || '-', `report:${yesNo(safe.reportFound)} history:${yesNo(safe.historyFound)}`],
+      ['Threshold', thresholdExceeded ? 'WARN' : 'OK', `exceeded:${yesNo(thresholdExceeded)}`, `pressure:${cumulative.negativeSignalPressure ?? '-'}`],
+      ['Debug trigger', latest.debugTrigger ? 'WARN' : 'OK', `triggered:${yesNo(latest.debugTrigger)}`, `negative:${latest.negativeSignalCount ?? 0} secrets:${latest.secretPatternHits ?? 0}`],
+      ['Operator action', operatorTriggered ? 'WARN' : 'OK',
+        operatorAction.nextAction || 'monitor_local_llm_route',
+        `reason:${operatorAction.triggerReason || 'none'} score:${operatorAction.actionScore ?? '-'} failure:${operatorAction.failureClass || 'none'} delta:${operatorAction.scoreDelta ?? '-'}`],
+      ['OpenAI-compatible', openAi.negativeSignal ? 'WARN' : 'OK', `${openAi.score ?? '-'} / ${openAi.verdict || '-'}`, `len:${openAi.contentLength ?? '-'}`],
+      ['Native Ollama', nativeOllama.negativeSignal ? 'WARN' : 'OK', `${nativeOllama.score ?? '-'} / ${nativeOllama.verdict || '-'}`, `len:${nativeOllama.contentLength ?? '-'}`],
+      ['Cumulative window', status, `samples:${cumulative.sampleCount ?? 0}`, `negative:${cumulative.negativeSignalCount ?? latest.negativeSignalCount ?? 0}`]
+    ];
+    rows.forEach(([name, rowStatus, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'local-llm-smoke-row';
+      row.appendChild(textEl('div', 'local-llm-smoke-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(rowStatus));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderLanes(lanes) {
+    const grid = byId('laneGrid');
+    grid.replaceChildren();
+    const rows = Array.isArray(lanes) ? lanes : [];
+    if (!rows.length) {
+      grid.appendChild(textEl('div', 'empty', 'No pipeline lane data'));
+      return;
+    }
+    rows.forEach((lane) => {
+      const row = document.createElement('div');
+      row.className = 'lane-row';
+      row.appendChild(textEl('div', 'lane-icon', laneIcon(lane.status)));
+      row.appendChild(textEl('div', 'lane-name', lane.name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(lane.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', [lane.detail, lane.source].filter(Boolean).join(' / ') || lane.disabledReason || lane.note || 'ready'));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderModelRuntime(runtime) {
+    const grid = byId('modelRuntimeGrid');
+    grid.replaceChildren();
+    const safe = runtime || {};
+    const rows = [
+      ['Status', safe.status || 'OK', safe.reason || 'healthy', `source:${safe.source || 'none'} / route:${safe.route || '-'}`],
+      ['Default wait', safe.waiting ? 'waiting' : 'idle', safe.defaultWaitCode || '-', ''],
+      ['Final delivery', safe.finalDeliveryExpected ? 'expected' : 'not pending', safe.deliveryState || 'normal', `guard:${yesNo(safe.modelGuardTriggered)}`],
+      ['Fast bail', safe.fastBailTimeout ? 'active' : 'clear', `hits:${safe.timeoutHits ?? '-'}`, `attempt:${safe.attempt ?? '-'}/${safe.maxAttempts ?? '-'}`],
+      ['Query rewrite', safe.queryRewriteStatus || '-', `sub-models:${safe.queryRewriteSubModelCount ?? 0}`, `branch-titles:${safe.queryRewriteBranchTitleCount ?? 0} title-hashes:${safe.queryRewriteBranchTitleHashCount ?? 0} axes:${safe.queryRewriteBranchAxisCount ?? 0} padded:${safe.queryRewritePaddedCount ?? 0}`],
+      ['Answer mode', safe.answerMode || '-', safe.errorCode || 'no_error', ''],
+      ['Model fingerprint', safe.modelHash || '-', safe.modelLength == null ? '-' : `len:${safe.modelLength}`, '']
+    ];
+    rows.forEach(([name, status, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'model-runtime-row';
+      row.appendChild(textEl('div', 'model-runtime-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(name === 'Status' ? status : safe.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderAnswerOutput(output) {
+    const grid = byId('answerOutputGrid');
+    grid.replaceChildren();
+    const safe = output || {};
+    const rows = [
+      ['Status', safe.status || 'OK', safe.reason || 'healthy', `source:${safe.source || 'none'}`],
+      ['Answer mode', safe.answerMode || '-', `emptyGuard:${yesNo(safe.emptyAnswerGuardTriggered)}`, safe.emptyAnswerFallback || '-'],
+      ['Evidence list trace', safe.evidenceListTraceInjected ? 'active' : 'clear', `blankBase:${yesNo(safe.blankBaseFallback)}`, `docs:${safe.evidenceDocs ?? 0}`],
+      ['Derived evidence text', safe.derivedSnippetCount ?? 0, `titles:${safe.derivedTitleCount ?? 0}`, `snippets:${safe.derivedSnippetCount ?? 0}`]
+    ];
+    rows.forEach(([name, status, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'answer-output-row';
+      row.appendChild(textEl('div', 'answer-output-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(name === 'Status' ? status : safe.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderTraceSnapshotHealth(snapshot) {
+    const grid = byId('traceSnapshotGrid');
+    grid.replaceChildren();
+    const safe = snapshot || {};
+    const rows = [
+      ['Status', safe.status || 'WARN', safe.reason || 'unavailable', `available:${yesNo(safe.available)} error:${safe.errorType || '-'}`],
+      ['Latest snapshot', safe.summaryCount ?? 0, safe.latestReason || '-', `status:${safe.latestStatusCode ?? '-'}`],
+      ['Path fingerprint', safe.latestPathHash || '-', safe.latestPathLength == null ? '-' : `len:${safe.latestPathLength}`, ''],
+      ['Stored view', safe.latestHasHtml ? 'html' : 'metadata', `truncated:${yesNo(safe.latestHtmlTruncated)}`, `error:${yesNo(safe.latestErrorPresent)}`],
+      ['Trace counts', safe.latestTraceEntryCount ?? 0, `events:${safe.latestEventCount ?? 0}`, `controls:${safe.latestControlCount ?? 0}`]
+    ];
+    rows.forEach(([name, status, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'trace-snapshot-row';
+      row.appendChild(textEl('div', 'trace-snapshot-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(name === 'Status' ? status : safe.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderWebProviders(providers) {
+    const grid = byId('providerGrid');
+    grid.replaceChildren();
+    const rows = Array.isArray(providers) ? providers : [];
+    if (!rows.length) {
+      grid.appendChild(textEl('div', 'empty', 'No provider credential data'));
+      return;
+    }
+    rows.forEach((provider) => {
+      const row = document.createElement('div');
+      row.className = 'provider-row';
+      row.appendChild(textEl('div', 'provider-name', provider.provider));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(provider.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'count', provider.keySource || 'missing'));
+      row.appendChild(textEl('div', 'lane-detail', provider.disabledReason || (provider.hasKey ? 'ready' : 'missing')));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderProviderRuntime(runtime) {
+    const grid = byId('providerRuntimeGrid');
+    grid.replaceChildren();
+    const safe = runtime || {};
+    const cancelled = Array.isArray(safe.cancelledProviders) && safe.cancelledProviders.length
+      ? safe.cancelledProviders.join(',')
+      : '-';
+    const cooldown = Array.isArray(safe.cooldownProviders) && safe.cooldownProviders.length
+      ? safe.cooldownProviders.join(',')
+      : '-';
+    const rows = [
+      ['Status', safe.status || 'OK', safe.reason || 'healthy', `source:${safe.source || 'none'}`],
+      ['Await timeouts', safe.awaitTimeoutCount ?? 0, 'timeout events', ''],
+      ['Cancellation', safe.cancelSuppressedCount ?? 0, `providers:${cancelled}`, ''],
+      ['Cooldown/backoff', safe.cooldownSkippedCount ?? 0, `providers:${cooldown}`, `delay:${safe.maxBackoffDelayMs ?? 0}ms / remaining:${safe.maxBackoffRemainingMs ?? 0}ms`]
+    ];
+    rows.forEach(([name, status, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'provider-runtime-row';
+      row.appendChild(textEl('div', 'provider-runtime-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(name === 'Status' ? status : safe.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderFailSoftLadder(ladder) {
+    const grid = byId('failSoftLadderGrid');
+    grid.replaceChildren();
+    const safe = ladder || {};
+    const rows = [
+      ['Status', safe.status || 'OK', safe.reason || 'healthy', `source:${safe.source || 'none'}`],
+      ['Out count', safe.outCount ?? 0, `stageKeys:${safe.stageSelectedKeyCount ?? 0}`, ''],
+      ['Cache rescue', safe.cacheOnlyMergedCount ?? 0, `tracePool:${safe.tracePoolSize ?? 0}`, `rescue:${yesNo(safe.rescueMergeUsed)}`],
+      ['Starvation fallback', safe.starvationFallbackTrigger || '-', `poolSafeEmpty:${yesNo(safe.poolSafeEmpty)}`, `count:${safe.starvationFallbackCount ?? 0} / added:${safe.starvationFallbackAdded ?? 0}`],
+      ['Vector fallback', safe.vectorFallbackUsed ? 'active' : 'clear', safe.vectorFallbackReason || '-', `topK:${safe.vectorFallbackEffectiveTopK ?? 0}`],
+      ['Starvation pool', safe.starvationSafePoolSize ?? 0, `safe:${safe.starvationSafePoolSize ?? 0}`, `dev:${safe.starvationDevPoolSize ?? 0}`]
+    ];
+    rows.forEach(([name, status, detail, extra]) => {
+      const row = document.createElement('div');
+      row.className = 'fail-soft-ladder-row';
+      row.appendChild(textEl('div', 'fail-soft-ladder-name', name));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(name === 'Status' ? status : safe.status));
+      row.appendChild(badgeWrap);
+      row.appendChild(textEl('div', 'lane-detail', detail));
+      row.appendChild(textEl('div', 'lane-detail', extra));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderExternalEvidence(items) {
+    const grid = byId('externalGrid');
+    grid.replaceChildren();
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) {
+      grid.appendChild(textEl('div', 'empty', 'No external evidence readiness data'));
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'external-row';
+      row.appendChild(textEl('div', 'external-name', item.service));
+      const badgeWrap = document.createElement('div');
+      badgeWrap.appendChild(badge(item.status));
+      row.appendChild(badgeWrap);
+      const boundary = item.service === 'goal-next-auto'
+        ? [
+          `decision:${item.decision || 'unknown'}`,
+          item.decision || 'evidence_needed',
+          `gate:${item.externalInputGateStatus || 'unknown'}`,
+          `mutation:${yesNo(item.externalInputMutationAllowed)}`,
+          `actions:${item.nextActionCount ?? 0}`,
+          `sources:${item.nextActionSources || 'none'}`,
+          `top:${item.topActions || 'none'}`,
+          `generated:${item.summaryGeneratedAt || 'unknown'}`,
+          `updated:${item.summaryFileUpdatedAt || 'unknown'}`,
+          `pathHash:${item.summaryPathHash || 'none'}:${item.summaryPathLength ?? 0}`,
+          `computer:${yesNo(item.computerUseReachable)} stale:${yesNo(item.computerUseStale)} apps:${item.computerUseAppCount ?? 0} windows:${item.computerUseWindowCount ?? 0}`,
+          `browser:${item.browserUseStatusClass || 'unknown'} stale:${yesNo(item.browserUseStale)} screenshot:${yesNo(item.browserUseScreenshotCaptured)} target:${yesNo(item.browserUseTargetContentVisible)}`,
+          `rerun:${item.computerUseNextAction || 'none'}|${item.browserUseNextAction || 'none'}`,
+          `source:${item.nextActionSource || 'unknown'}`,
+          `localReady:${yesNo(item.localReady)}`,
+          `scope:${item.supabaseProjectScopeStatus || 'unknown'}`,
+          `repeat:${item.repeatCount ?? 0}`,
+          item.exitSummary || 'exit:unknown',
+          `needed:supabase=${item.supabaseEvidenceNeededCount ?? 0} external=${item.externalEvidenceNeededCount ?? 0}`,
+          `copied:evidence=${item.externalCopiedEvidenceCount ?? 0} handoff=${item.externalCopiedHandoffCount ?? 0}`,
+          `roles:${item.externalRequiredRoles || 'none'}`,
+          `env:${item.supabaseRequiredEnvNames || 'none'}`,
+          `tools:${item.supabaseRequiredMcpTools || 'none'}`,
+          `results:${item.supabaseRequiredResultNames || 'none'}`,
+          `producerFiles:${item.externalRequiredProducerEvidenceFiles || 'none'}`,
+          `sidecars:${item.externalRequiredPatchDropSidecars || 'none'}`,
+          `sourceIsolation:${item.externalRequiredSourceIsolationGuard || 'unknown'}:${item.externalRequiredSourceRootKind || 'unknown'}:${yesNo(item.externalRequiredDirectCanonicalSourceEdit)}`,
+          `mcp:${item.supabaseMcpDecision || 'unknown'}`,
+          `external:${yesNo(item.externalEvidenceComplete)}`,
+          `localPatch:${yesNo(item.localPatchJustified)}`
+        ]
+        : item.service === 'computer-use'
+        ? [
+          item.evidenceScope || 'gui-supporting-only',
+          `reachable:${yesNo(item.reachable)}`,
+          `apps:${item.appCount ?? 0}`,
+          `running:${item.runningCount ?? 0}`,
+          `windows:${item.targetableWindowCount ?? item.windowCount ?? 0}`,
+          `countOnly:${yesNo(item.countOnly)}`,
+          `names:${yesNo(item.storesAppNames)}`,
+          `rawNames:${yesNo(item.storesRawAppNames)}`,
+          `titles:${yesNo(item.storesWindowTitles)}`,
+          `stale:${yesNo(item.stale)}`,
+          `age:${item.ageMinutes ?? 0}/${item.staleAfterMinutes ?? 0}m`,
+          `generated:${item.generatedAt || 'unknown'}`,
+          `next:${item.nextAction || 'none'}`,
+          `secretHits:${item.secretHits ?? 0}`,
+          `terminal:${item.noTerminalAutomation ? 'blocked' : 'unknown'}`
+        ]
+        : item.service === 'browser'
+        ? [
+          item.evidenceScope || 'local-ui-proof',
+          `reachable:${yesNo(item.reachable)}`,
+          `localhost:${yesNo(item.localhost)}`,
+          `screenshot:${yesNo(item.screenshotCaptured)}`,
+          `status:${item.statusClass || 'unknown'}`,
+          `error:${item.errorClass || 'none'}`,
+          `target:${yesNo(item.targetContentVisible)}`,
+          `surface:${item.browserSurface || 'unknown'}`,
+          `stale:${yesNo(item.stale)}`,
+          `age:${item.ageMinutes ?? 0}/${item.staleAfterMinutes ?? 0}m`,
+          `next:${item.nextAction || 'none'}`,
+          `secretHits:${item.secretHits ?? 0}`
+        ]
+        : item.service === 'patchdrop'
+        ? [
+          'read-only',
+          `active:${item.activeTopLevelPatchCount ?? 0}`,
+          `nested:${item.nestedProducerPatchCount ?? 0}`,
+          `reportOnly:${item.reportOnlyPendingCount ?? 0}`,
+          `applied:${item.appliedPatchCount ?? 0}`,
+          `pending:${item.pendingProducerNode || 'none'}:${item.pendingProducerTopic || 'none'}`,
+          `patch:${item.pendingProducerPatchName || 'none'}`,
+          `status:${item.pendingProducerStatus || 'none'}`,
+          `sidecars:report=${yesNo(item.pendingProducerReportPresent)} verify=${yesNo(item.pendingProducerVerifyLogPresent)} sha=${yesNo(item.pendingProducerShaPresent)} complete=${yesNo(item.pendingProducerBundleComplete)}`,
+          `isolation:${item.pendingProducerSourceIsolationGuard || 'unknown'} root:${item.pendingProducerSourceRootKind || 'unknown'} direct:${yesNo(item.pendingProducerDirectCanonicalSourceEdit)} shared:${yesNo(item.pendingProducerSharedSourceRoot)} ok:${yesNo(item.pendingProducerSourceIsolationOk)}`
+        ]
+        : item.service === 'noether'
+        ? [
+          `agent:${item.agentName || 'noether'}`,
+          `responded:${yesNo(item.responded)}`,
+          `id:${item.agentIdHash || 'none'}:${item.agentIdLength ?? 0}`,
+          `mcp:${item.mcpDecision || 'unknown'}`,
+          `thread:${yesNo(item.executionThread)}`,
+          `policy:${item.lanePolicy || 'external_evidence'}`,
+          `scope:${item.evidenceScope || 'external-evidence-lane'}`,
+          `needed:${item.evidenceNeededCount ?? 0}`,
+          `env:${item.requiredEnvNames || 'none'}`,
+          `tools:${item.requiredMcpTools || 'none'}`,
+          `results:${item.requiredResultNames || 'none'}`
+        ]
+        : item.service === 'supabase'
+        ? [
+          item.readOnly ? 'read-only' : 'write-capable',
+          `scope:${item.projectScopeStatus || 'unknown'}`,
+          `auth:${item.authStatus || (item.authPresent ? 'auth_present' : 'auth_missing')}`,
+          `features:${item.mcpFeatureGroups || 'unknown'}`,
+          `host:${item.mcpEndpointHost || 'unknown'}`,
+          `mutation:${yesNo(item.mutationAllowed)}`
+        ]
+        : [
+          item.readOnly ? 'read-only' : 'write-capable',
+          `project:${yesNo(item.projectScoped)}`,
+          `auth:${yesNo(item.authPresent)}`,
+          `mutation:${yesNo(item.mutationAllowed)}`
+        ];
+      row.appendChild(textEl('div', 'lane-detail', boundary.join(' / ')));
+      row.appendChild(textEl('div', 'lane-detail', item.evidenceNeeded || 'ready_for_probe'));
+      row.appendChild(textEl('div', 'lane-detail', item.nextAction || '-'));
+      grid.appendChild(row);
+    });
+  }
+
+  function renderExternalRollupStrip(items) {
+    const strip = byId('externalRollupStrip');
+    strip.replaceChildren();
+    const rows = Array.isArray(items) ? items : [];
+    const externalStatusCounts = rows.reduce((acc, item) => {
+      const status = String(item?.status || item?.statusClass || 'UNKNOWN').toUpperCase();
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+    const externalBlockedCount = rows.filter((item) => item?.decision === 'evidence_needed' || item?.externalInputGateStatus === 'external_input_needed').length;
+    const browserRow = rows.find((item) => item.service === 'browser');
+    const computerRow = rows.find((item) => item.service === 'computer-use');
+    const supabaseRow = rows.find((item) => item.service === 'supabase');
+    strip.appendChild(textEl('span', 'external-rollup-chip', `warn:${externalStatusCounts.WARN || 0}`));
+    strip.appendChild(textEl('span', 'external-rollup-chip', `blocked:${externalBlockedCount}`));
+    strip.appendChild(textEl('span', 'external-rollup-chip', `browser:${browserRow?.statusClass || 'unknown'}`));
+    strip.appendChild(textEl('span', 'external-rollup-chip', `computer:${computerRow?.reachable ? 'reachable' : 'missing'}`));
+    strip.appendChild(textEl('span', 'external-rollup-chip', `supabase:${supabaseRow?.projectScopeStatus || 'unknown'}`));
+  }
+
+  function renderStrategy(perfs) {
+    const body = byId('stratBody');
+    body.replaceChildren();
+    const rows = Array.isArray(perfs) ? perfs : [];
+    if (!rows.length) {
+      body.appendChild(textEl('div', 'empty', 'No strategy samples'));
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'strat-table';
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Strategy', 'Success Rate', 'Average Reward', 'Samples', 'Updated'].forEach((label) => {
+      headRow.appendChild(textEl('th', '', label));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    rows.forEach((item) => {
+      const row = document.createElement('tr');
+      row.appendChild(textEl('td', '', item.strategyName || item.queryCategory || 'unknown'));
+
+      const rate = Math.max(0, Math.min(1, Number(item.successRate || 0)));
+      const rateCell = document.createElement('td');
+      const rateWrap = document.createElement('div');
+      rateWrap.className = 'success-cell';
+      rateWrap.appendChild(textEl('span', '', `${Math.round(rate * 100)}%`));
+      const track = document.createElement('div');
+      track.className = 'bar-track';
+      const fill = document.createElement('div');
+      fill.className = 'bar-fill bar-active';
+      fill.style.width = `${pct(rate * 100)}%`;
+      track.appendChild(fill);
+      rateWrap.appendChild(track);
+      rateCell.appendChild(rateWrap);
+      row.appendChild(rateCell);
+
+      row.appendChild(textEl('td', '', item.averageReward == null ? '-' : Number(item.averageReward).toFixed(2)));
+      row.appendChild(textEl('td', '', item.sampleCount || 0));
+      row.appendChild(textEl('td', '', item.updatedAt || '-'));
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    body.appendChild(table);
+  }
+
+  function renderDebugFingerprints(fingerprints, failure) {
+    const list = byId('debugFingerprintList');
+    list.replaceChildren();
+    if (failure) {
+      list.appendChild(textEl('div', 'empty', `Debug events unavailable: ${failure.message || failure}`));
+      return;
+    }
+    const rows = Array.isArray(fingerprints) ? fingerprints : [];
+    if (!rows.length) {
+      list.appendChild(textEl('div', 'empty', 'No debug fingerprints'));
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'debug-fingerprint-row';
+      row.appendChild(textEl('div', 'debug-fingerprint-name', item.fingerprint || '-'));
+      row.appendChild(textEl('div', 'count', `total ${item.total || 0}`));
+      row.appendChild(textEl('div', 'count', `suppressed ${item.suppressedInWindow || 0}`));
+      row.appendChild(textEl('div', 'recent-ts', `window ${item.windowCount || 0}`));
+      list.appendChild(row);
+    });
+  }
+
+  function renderHotspots(hotspots, failures) {
+    const list = byId('hotspotList');
+    list.replaceChildren();
+    const rows = Array.isArray(hotspots) ? hotspots : [];
+    const recentFailureByHotspot = new Map();
+    (Array.isArray(failures) ? failures : []).forEach((failure) => {
+      if (failure && failure.hotspot && !recentFailureByHotspot.has(failure.hotspot)) {
+        recentFailureByHotspot.set(failure.hotspot, {
+          createdAt: failure.createdAt,
+          failureClass: failure.failureClass
+        });
+      }
+    });
+    if (!rows.length) {
+      list.appendChild(textEl('div', 'empty', 'No failure hotspots'));
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'hotspot-row';
+      const name = item.hotspot || 'unknown';
+      const recent = recentFailureByHotspot.get(name) || {};
+      row.appendChild(textEl('div', 'hotspot-name', name));
+      row.appendChild(textEl('div', 'hotspot-count', item.count || 0));
+      row.appendChild(textEl('div', 'recent-failure-class', recent.failureClass || '-'));
+      row.appendChild(textEl('div', 'recent-ts', recent.createdAt || '-'));
+      list.appendChild(row);
+    });
+  }
+
+  async function load() {
+    const errorBanner = byId('errorBanner');
+    try {
+      errorBanner.style.display = 'none';
+      const results = await Promise.allSettled([
+        fetchJson(API),
+        fetchJson(DEBUG_FP_API),
+        fetchJson(LOCAL_LLM_SMOKE_API)
+      ]);
+      const lastRefreshAt = new Date().toISOString();
+      const debugResult = results[1];
+      const localLlmResult = results[2];
+      const debugFingerprintFetch = debugResult;
+      renderDebugFingerprints(
+        debugResult.status === 'fulfilled' ? debugResult.value : [],
+        debugResult.status === 'rejected' ? debugResult.reason : null
+      );
+      const healthResult = results[0];
+      renderUiFetchStatus(healthResult, debugResult, localLlmResult, lastRefreshAt);
+      if (healthResult.status === 'rejected') throw healthResult.reason;
+      const data = healthResult.value;
+      byId('capturedAt').textContent = `capturedAt ${data.capturedAt || '-'}`;
+      renderOpsControlStrip(data, healthResult, debugResult, localLlmResult);
+      renderDebugRollupStrip(data.debugOverview, debugFingerprintFetch);
+      renderDebugOverview(data.debugOverview, debugResult);
+      renderDebugEventHealth(data.debugEventHealth);
+      renderDebugAiMetrics(data.debugAiMetrics);
+      renderLocalLlmSmoke(localLlmResult);
+      renderMemory(data.memoryGate);
+      renderLanes(data.lanes);
+      renderModelRuntime(data.modelRuntime);
+      renderAnswerOutput(data.answerOutput);
+      renderTraceSnapshotHealth(data.traceSnapshotHealth);
+      renderProviderRuntime(data.providerRuntime);
+      renderFailSoftLadder(data.failSoftLadder);
+      renderWebProviders(data.webProviders);
+      renderExternalEvidence(data.externalEvidence);
+      renderExternalRollupStrip(data.externalEvidence);
+      renderStrategy(data.strategyPerformances);
+      renderHotspots(data.hotspotDistribution, data.recentFailures);
+    } catch (error) {
+      errorBanner.textContent = `Pipeline health fetch failed: ${error.message || error}`;
+      errorBanner.style.display = 'block';
+    }
+  }
+
+  function toggleAuto() {
+    autoRefresh = !autoRefresh;
+    byId('btnAutoRefresh').textContent = autoRefresh ? 'Auto Refresh ON' : 'Auto Refresh OFF';
+    if (autoTimer) {
+      clearInterval(autoTimer);
+      autoTimer = null;
+    }
+    if (autoRefresh) {
+      autoTimer = setInterval(load, 30000);
+    }
+  }
+
+  byId('btnRefresh').addEventListener('click', load);
+  byId('btnAutoRefresh').addEventListener('click', toggleAuto);
+  document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

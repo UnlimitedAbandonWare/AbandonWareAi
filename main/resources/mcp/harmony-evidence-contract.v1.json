@@ -1,0 +1,212 @@
+{
+  "schemaVersion": "awx.harmony.evidence-contract.v1",
+  "contractId": "HB-01-12",
+  "statuses": {
+    "verified": "DONE",
+    "blocked": "BLOCKED_EVIDENCE"
+  },
+  "activeSourceRoots": [
+    { "id": "mainJava", "path": "main/java" },
+    { "id": "mainResources", "path": "main/resources" },
+    { "id": "testJava", "path": "src/test/java" },
+    { "id": "testResources", "path": "src/test/resources" },
+    { "id": "appJavaClean", "path": "app/src/main/java_clean" },
+    { "id": "appResources", "path": "app/src/main/resources" }
+  ],
+  "requiredTraceKeys": [
+    "ablation.penalties",
+    "boosterMode.active",
+    "retrievalOrder.lastSetBy",
+    "routing.executionPlan.primaryMode",
+    "hypernova.dppApplied",
+    "hypernova.twpmP",
+    "hypernova.sourceScoreScaleMismatchCount",
+    "hypernova.cvarPhi",
+    "extremeZ.cancelShieldWrapped",
+    "extremeZ.timeBudgetConsumedMs",
+    "cfvm.boltzmannTemp",
+    "cfvm.tempSource",
+    "cfvm.rawTile.enabled",
+    "moe.evolverPlateRegistered",
+    "hypernova.whitening.provider",
+    "cihRag.breadcrumb.queryRedacted",
+    "timeBudget.forceFallback",
+    "timeBudget.routeMultiplier"
+  ],
+  "breaks": [
+    {
+      "id": "HB-01",
+      "weight": 35.6,
+      "subsystem": "S01",
+      "label": "Silent catch contamination",
+      "runtimeRequirements": [
+        { "traceKey": "ablation.penalties", "rule": "EMPTY_COLLECTION" }
+      ]
+    },
+    {
+      "id": "HB-02",
+      "weight": 32.0,
+      "subsystem": "S02",
+      "label": "RetrievalOrderService authority missing",
+      "runtimeRequirements": [
+        { "traceKey": "retrievalOrder.lastSetBy", "rule": "NON_BLANK_STRING" }
+      ]
+    },
+    {
+      "id": "HB-03",
+      "weight": 24.0,
+      "subsystem": "S03",
+      "label": "Booster trigger conflict",
+      "runtimeRequirements": [
+        { "traceKey": "routing.executionPlan.primaryMode", "rule": "NON_BLANK_STRING" }
+      ]
+    },
+    {
+      "id": "HB-04",
+      "weight": 22.4,
+      "subsystem": "S06",
+      "label": "DPP-HYPERNOVA integration missing",
+      "runtimeRequirements": [
+        { "traceKey": "hypernova.dppApplied", "rule": "TRUE_BOOLEAN" }
+      ]
+    },
+    {
+      "id": "HB-05",
+      "weight": 21.0,
+      "subsystem": "S06",
+      "label": "TWPM canonical path missing",
+      "runtimeRequirements": [
+        { "traceKey": "hypernova.twpmP", "rule": "FINITE_NUMBER" }
+      ]
+    },
+    {
+      "id": "HB-06",
+      "weight": 20.0,
+      "subsystem": "S06",
+      "label": "Source score scale normalization missing",
+      "runtimeRequirements": [
+        { "traceKey": "hypernova.sourceScoreScaleMismatchCount", "rule": "ZERO_NUMBER" }
+      ]
+    },
+    {
+      "id": "HB-07",
+      "weight": 18.0,
+      "subsystem": "S05",
+      "label": "CancelShield interrupt propagation",
+      "runtimeRequirements": [
+        { "traceKey": "extremeZ.cancelShieldWrapped", "rule": "TRUE_BOOLEAN" }
+      ]
+    },
+    {
+      "id": "HB-08",
+      "weight": 16.8,
+      "subsystem": "S02",
+      "label": "CFVM Boltzmann temperature ownership missing",
+      "runtimeRequirements": [
+        { "traceKey": "cfvm.boltzmannTemp", "rule": "FINITE_NUMBER" },
+        { "traceKey": "cfvm.tempSource", "rule": "NON_BLANK_STRING" }
+      ]
+    },
+    {
+      "id": "HB-09",
+      "weight": 14.0,
+      "subsystem": "S02",
+      "label": "CFVM raw tile builder enabled path missing",
+      "runtimeRequirements": [
+        { "traceKey": "cfvm.rawTile.enabled", "rule": "TRUE_BOOLEAN" }
+      ]
+    },
+    {
+      "id": "HB-10",
+      "weight": 12.0,
+      "subsystem": "S03",
+      "label": "MoE evolver PromptBuilder boundary missing",
+      "runtimeRequirements": [
+        { "traceKey": "moe.evolverPlateRegistered", "rule": "TRUE_BOOLEAN" }
+      ]
+    },
+    {
+      "id": "HB-11",
+      "weight": 11.2,
+      "subsystem": "S05",
+      "label": "TimeBudgetGuard trace missing",
+      "runtimeRequirements": [
+        { "traceKey": "extremeZ.timeBudgetConsumedMs", "rule": "NON_NEGATIVE_NUMBER" }
+      ]
+    },
+    {
+      "id": "HB-12",
+      "weight": 10.5,
+      "subsystem": "S04",
+      "label": "ZCA whitening provider ownership missing",
+      "runtimeRequirements": [
+        { "traceKey": "hypernova.whitening.provider", "rule": "NON_BLANK_STRING" }
+      ]
+    }
+  ],
+  "parserMutationCorpus": [
+    {
+      "id": "missing-schema-version",
+      "operation": "REMOVE",
+      "path": "/schemaVersion",
+      "value": "",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "wrong-contract-id",
+      "operation": "REPLACE_TEXT",
+      "path": "/contractId",
+      "value": "HB-01-11",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "unexpected-top-level-field",
+      "operation": "ADD_TOP_LEVEL",
+      "path": "/unexpected",
+      "value": "forbidden",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "missing-source-roots",
+      "operation": "REMOVE",
+      "path": "/activeSourceRoots",
+      "value": "",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "duplicate-source-root",
+      "operation": "APPEND_DUPLICATE",
+      "path": "/activeSourceRoots",
+      "value": "",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "missing-break-board",
+      "operation": "REMOVE",
+      "path": "/breaks",
+      "value": "",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "duplicate-break-id",
+      "operation": "APPEND_DUPLICATE",
+      "path": "/breaks",
+      "value": "",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "unsupported-runtime-rule",
+      "operation": "REPLACE_TEXT",
+      "path": "/breaks/0/runtimeRequirements/0/rule",
+      "value": "HASH_ONLY",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    },
+    {
+      "id": "missing-mutation-corpus",
+      "operation": "REMOVE",
+      "path": "/parserMutationCorpus",
+      "value": "",
+      "expectedStatus": "BLOCKED_EVIDENCE"
+    }
+  ]
+}

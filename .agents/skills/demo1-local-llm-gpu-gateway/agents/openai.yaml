@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 Local LLM"
+  short_description: "Local model, GPU, and embedding routing"
+  default_prompt: "Use $demo1-local-llm-gpu-gateway to verify and adjust demo-1 local model routing safely."
+policy:
+  allow_implicit_invocation: true
+

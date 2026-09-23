@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Port Lease"
+  short_description: "Lease a free port, start an owned server, then release it"
+  default_prompt: "Use $demo1-agent-port-lease: scripts/agent_port_lease.py (Agent-Port.bat, scripts/agent_port_lease.ps1) for port.acquire, process.start, health.check, debug.trace, verify, process.stop, and port.release. Pass --owner and --session. Stop only that lease's pid. Leave ports 18180-18182 on the Meta Display BATs."

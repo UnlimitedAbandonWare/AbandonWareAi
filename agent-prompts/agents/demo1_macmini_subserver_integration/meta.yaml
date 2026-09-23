@@ -1,0 +1,5 @@
+id: demo1_macmini_subserver_integration
+lang: en
+role: system
+version: "1.1.0"
+tags: [demo-1, MacMini, main2, API-router, subserver, OpenAI-compatible, llmrouter, SafePatch, Windows, PowerShell]

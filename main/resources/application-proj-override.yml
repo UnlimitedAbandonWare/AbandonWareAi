@@ -1,0 +1,80 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+# Projection overlay ??non-destructive defaults for local-only intelligent augmentation
+# This file is imported via spring.config.import from application.yml
+llm:
+  provider: local
+  base-url: ${LLM_BASE_URL:http://localhost:11434/v1}
+  api-key: ${LLM_API_KEY:ollama}
+  chat-model: ${LLM_CHAT_MODEL:gemma4:26b}
+  high:
+    model: ${LLM_HIGH_MODEL:${llm.chat-model}}
+
+vector:
+  routing:
+    min-per-store: 1
+    topics:
+      default:
+        default: 1.0
+
+onnx:
+  enabled: ${ONNX_ENABLED:false}
+  device-id: ${ONNX_DEVICE_ID:${ZSYS_ONNX_GPU_ID:0}}
+
+zsys:
+  onnx:
+    enabled: ${ONNX_ENABLED:false}
+    gpu-id:   ${ONNX_DEVICE_ID:${ZSYS_ONNX_GPU_ID:0}}
+    device-id: ${ONNX_DEVICE_ID:${ZSYS_ONNX_GPU_ID:0}}
+    max-concurrency: ${ZSYS_ONNX_MAX_CONCURRENCY:1}
+
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    progressive: true
+
+plans:
+  auto-select:
+    document: document_evidence.v1
+
+naver:
+  filters:
+    domain-policy: boost
+    enable-domain-filter: false
+
+# MERGE_HOOK:PROJ_AGENT::config_projection
+# Jammini Projection Mode ?ㅼ젙 - 媛?쒕젅???꾪솕
+gate:
+  citation:
+    min: 1   # 湲곕낯 3 ???꾪솕 (?쒖꽑2)
+  finalSigmoid:
+    k: 6.0   # 湲곕낯 12 ???꾪솕 (?쒖꽑4)
+
+# 泥⑤? 泥섎━ ?쒕룄
+attachments:
+  inline:
+    legacy-prepend-enabled: false
+    maxDocs: 5
+    maxDocBytes: 1048576
+    maxDocChars: 8000
+    maxTotalChars: 20000
+  archive:
+    maxEntries: 300
+    maxEntryNameChars: 180
+    maxSummaryChars: 20000
+
+# ??꾩븘???ㅼ젙 (?쒖꽑4 ?붿껌)
+query:
+  transform:
+    timeout-ms: 3000
+embed:
+  timeout-ms: 5000
+
+# 硫붾え由??뺤콉
+memory:
+  reinforce:
+    mode: EXPLORE  # CONSERVATIVE ??EXPLORE ?꾪솕
+    score:
+      low-quality-threshold: 0.15  # 0.3 ??0.15 ?꾪솕
+
+# ?꾨줈???쒖꽦?? spring.profiles.active=proj-override

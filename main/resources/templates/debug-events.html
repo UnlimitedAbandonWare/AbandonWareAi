@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="_csrf" content="">
+  <meta name="_csrf_header" content="">
+  <title>Debug Events</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f8f7f4; }
+    .card { background: white; border: 1px solid #eaddc7; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .row:hover { background: #fff7ed; }
+    .badge { display:inline-block; padding:2px 6px; border-radius:9999px; font-size:11px; }
+    .b-info { background:#e0f2fe; color:#075985; }
+    .b-warn { background:#ffedd5; color:#9a3412; }
+    .b-error { background:#fee2e2; color:#991b1b; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<div class="max-w-7xl mx-auto p-6">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold">Debug Events</h1>
+      <p class="text-sm text-gray-600 mt-1">
+        DebugEventStore(링버퍼)에 쌓인 구조화 이벤트를 웹에서 확인합니다. (fail-soft 경로/컨텍스트 전파 누락/회복 로직 관찰용)
+      </p>
+      <p class="text-xs text-gray-500 mt-1">
+        JSON API:
+        <span class="mono">/api/diagnostics/debug/events</span>,
+        <span class="mono">/api/diagnostics/debug/fingerprints</span>,
+        <span class="mono">/api/diagnostics/debug/events/stream</span> (SSE),
+        <span class="mono">/api/diagnostics/local-llm/smoke-history</span>,
+        <span class="mono">/api/diagnostics/debug/triadic-adjudication</span>
+      </p>
+    </div>
+
+    <div class="flex flex-wrap items-center justify-end gap-2">
+      <a href="/admin/dashboard" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        Dashboard
+      </a>
+      <a href="/admin/pipeline-status" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        Pipeline Status
+      </a>
+
+      <label class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 border">
+        <input id="live" type="checkbox" class="w-4 h-4" />
+        <span class="text-sm text-gray-700">LIVE (SSE)</span>
+      </label>
+
+      <button id="btnClear" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        비우기
+      </button>
+
+      <button id="btnRefresh" class="px-3 py-2 rounded-lg bg-[#8d7b68] text-white hover:bg-[#65451F]">
+        새로고침
+      </button>
+
+      <span id="status" class="text-sm text-gray-600"></span>
+    </div>
+  </div>
+
+  <section class="card rounded-xl p-5 shadow-sm mt-6" aria-labelledby="apiFailuresTitle">
+    <h2 id="apiFailuresTitle" class="text-lg font-semibold">API 실패 기록</h2>
+    <p class="text-sm text-gray-600">대체 API 사용 뒤에도 최초 실패를 보존합니다. API·모델·HTTP 상태별 누적 횟수이며, 원인과 오류 코드는 가장 최근 응답 기준입니다. fallback 성공은 장애를 지우지 않습니다.</p>
+    <p id="apiFailuresStatus" class="text-sm" role="status">불러오는 중</p>
+    <div id="apiStatusLines" class="mono text-xs space-y-1 mt-2"></div>
+    <div class="overflow-auto"><table class="w-full text-xs"><thead><tr>
+      <th class="text-left p-2">API</th><th class="text-left p-2">기능</th><th class="text-left p-2">모델</th><th class="text-left p-2">HTTP</th><th class="text-left p-2">원인 · 코드</th><th class="text-left p-2">근거</th><th class="text-left p-2">연속</th><th class="text-left p-2">최초 발생</th><th class="text-left p-2">최근 발생</th><th class="text-left p-2">누적</th><th class="text-left p-2">fallback</th><th class="text-left p-2">마지막 정상</th>
+    </tr></thead><tbody id="apiFailuresRows"></tbody></table></div>
+  </section>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+
+    <section class="card rounded-xl p-5 shadow-sm lg:col-span-2">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="text-lg font-semibold">최근 이벤트</h2>
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-gray-500">limit</label>
+          <input id="limit" type="number" min="1" max="1000" value="200" class="mono text-xs px-2 py-1 border rounded" style="width:110px;" />
+        </div>
+      </div>
+
+      <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+        <input id="filter" placeholder="filter: message / fingerprint / error / where / traceId / requestId / sid" class="w-full mono text-xs px-3 py-2 border rounded" />
+        <input id="fpFilter" placeholder="fingerprint exact (optional)" class="w-full mono text-xs px-3 py-2 border rounded" />
+      </div>
+
+      <div id="eventsContainer" class="mt-3 overflow-auto max-h-[560px] border rounded">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 sticky top-0">
+            <tr>
+              <th class="text-left p-2">ts</th>
+              <th class="text-left p-2">level</th>
+              <th class="text-left p-2">error</th>
+              <th class="text-left p-2">probe</th>
+              <th class="text-left p-2">where</th>
+              <th class="text-left p-2">trace</th>
+              <th class="text-left p-2">request</th>
+              <th class="text-left p-2">sid</th>
+              <th class="text-left p-2">agg</th>
+              <th class="text-left p-2">signal</th>
+              <th class="text-left p-2">fingerprint</th>
+              <th class="text-left p-2">message</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <details class="mt-3">
+        <summary class="cursor-pointer text-gray-600 text-sm">원본 JSON 보기</summary>
+        <pre id="listJson" class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[420px]">-</pre>
+      </details>
+    </section>
+
+    <section class="card rounded-xl p-5 shadow-sm">
+      <h2 class="text-lg font-semibold">이벤트 상세</h2>
+      <p class="text-xs text-gray-500 mt-1">왼쪽 목록에서 클릭하면 상세가 표시됩니다.</p>
+
+      <div class="mt-3">
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">id</span>
+          <span id="detailId" class="mono">-</span>
+          <button id="btnCopy" class="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300">copy</button>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">traceId</span>
+          <span id="detailTraceId" class="mono">-</span>
+          <a id="linkTraceSnapshots" href="/admin/trace-snapshots" target="_blank"
+             class="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300">trace snapshots</a>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">requestId</span>
+          <span id="detailRequestId" class="mono">-</span>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">error</span>
+          <span id="detailErrorType" class="mono">-</span>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">modelRoute</span>
+          <span id="detailModelRoute" class="mono">-</span>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">signal</span>
+          <span id="detailSignal" class="mono">-</span>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">sid</span>
+          <span id="detailSid" class="mono">-</span>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">agg</span>
+          <span id="detailAgg" class="mono">-</span>
+        </div>
+      </div>
+
+      <details class="mt-3" open>
+        <summary class="cursor-pointer text-gray-600 text-sm">JSON</summary>
+        <pre id="detailJson" class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[620px]">-</pre>
+      </details>
+
+      <div class="mt-4 text-xs text-gray-500">
+        <p>Tip: 서버 콘솔/파일에서 JSON 라인으로도 확인할 수 있습니다. (logback 설정에 따라 <span class="mono">logs/debug-events.ndjson</span>)</p>
+      </div>
+    </section>
+
+  </div>
+
+  <section class="card rounded-xl p-5 shadow-sm mt-6" aria-label="Local LLM Smoke">
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="text-lg font-semibold">Local LLM Smoke</h2>
+      <span id="localLlmSmokeStatus" class="mono text-xs text-gray-500">-</span>
+    </div>
+
+    <div class="mt-3 grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-3 text-sm">
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">route</div>
+        <div id="localLlmRecommendedRoute" class="mono font-semibold mt-1">-</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">threshold</div>
+        <div id="localLlmThresholdExceeded" class="mono font-semibold mt-1">-</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">pressure</div>
+        <div id="localLlmNegativePressure" class="mono font-semibold mt-1">-</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">openai</div>
+        <div id="localLlmOpenAiScore" class="mono font-semibold mt-1">-</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">native</div>
+        <div id="localLlmNativeScore" class="mono font-semibold mt-1">-</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">negative</div>
+        <div id="localLlmNegativeSignals" class="mono font-semibold mt-1">-</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">debug trigger</div>
+        <div id="localLlmDebugTrigger" class="mono font-semibold mt-1">-</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">secret hits</div>
+        <div id="localLlmSecretPatternHits" class="mono font-semibold mt-1">-</div>
+      </div>
+    </div>
+
+    <div class="mt-3 rounded-lg border bg-gray-50 p-3 text-sm" aria-label="Local LLM Operator Action">
+      <div class="text-xs text-gray-500">operator action</div>
+      <div class="mt-2 grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div>
+          <div class="text-xs text-gray-500">next</div>
+          <div id="localLlmOperatorActionNext" class="mono font-semibold mt-1">-</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">reason</div>
+          <div id="localLlmOperatorTriggerReason" class="mono font-semibold mt-1">-</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">failure</div>
+          <div id="localLlmOperatorFailureClass" class="mono font-semibold mt-1">-</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">score</div>
+          <div id="localLlmOperatorActionScore" class="mono font-semibold mt-1">-</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500">delta</div>
+          <div id="localLlmOperatorScoreDelta" class="mono font-semibold mt-1">-</div>
+        </div>
+      </div>
+    </div>
+
+    <details class="mt-3">
+      <summary class="cursor-pointer text-gray-600 text-sm">JSON</summary>
+      <pre id="localLlmSmokeJson" class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[340px]">-</pre>
+    </details>
+  </section>
+
+  <section class="card rounded-xl p-5 shadow-sm mt-6" aria-label="Triadic Debug Adjudication">
+    <div class="flex items-center justify-between gap-3">
+      <div>
+        <h2 class="text-lg font-semibold">Evidence-Grounded Triadic Debug Adjudicator</h2>
+        <p class="text-xs text-gray-500 mt-1">SUPPORT / ALTERNATIVE SUPPORT / FALSIFY candidates are judged by a neutral HOLD role; decisions stay advisory and source changes are never auto-applied.</p>
+      </div>
+      <button id="btnTriadicAdjudicate" type="button"
+              class="px-3 py-2 rounded-lg bg-[#8d7b68] text-white hover:bg-[#65451F]">
+        Adjudicate patch candidate
+      </button>
+    </div>
+    <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+      <label class="block">
+        <span class="text-xs text-gray-500">Candidate summary</span>
+        <textarea id="triadicCandidateSummary" maxlength="600" rows="3"
+                  class="mt-1 w-full rounded-lg border p-2 mono"
+                  placeholder="Small active-source patch and the failing behavior it addresses"></textarea>
+      </label>
+      <label class="block">
+        <span class="text-xs text-gray-500">Active-source target files (one per line)</span>
+        <textarea id="triadicTargetFiles" rows="3"
+                  class="mt-1 w-full rounded-lg border p-2 mono"
+                  placeholder="main/java/com/example/lms/.../Owner.java"></textarea>
+      </label>
+      <label class="block md:col-span-2">
+        <span class="text-xs text-gray-500">Exact patch diff SHA-256</span>
+        <input id="triadicDiffSha256" type="text" maxlength="64" autocomplete="off" spellcheck="false"
+               class="mt-1 w-full rounded-lg border p-2 mono"
+               placeholder="64 lowercase hexadecimal characters">
+      </label>
+    </div>
+    <div class="mt-3 grid grid-cols-1 md:grid-cols-6 gap-3 text-sm">
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">decision</div>
+        <div id="triadicDecision" class="mono font-semibold mt-1">HOLD</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">confidence</div>
+        <div id="triadicConfidence" class="mono font-semibold mt-1">LOW</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">reason</div>
+        <div id="triadicReasonCode" class="mono font-semibold mt-1">not_run</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">support</div>
+        <div id="triadicSupportGrounding" class="mono font-semibold mt-1">0</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">falsify</div>
+        <div id="triadicFalsifyGrounding" class="mono font-semibold mt-1">0</div>
+      </div>
+      <div class="rounded-lg border bg-gray-50 p-3">
+        <div class="text-xs text-gray-500">candidate</div>
+        <div id="triadicCandidateHash" class="mono font-semibold mt-1">none</div>
+      </div>
+    </div>
+    <details class="mt-3">
+      <summary class="cursor-pointer text-gray-600 text-sm">Safe scalar JSON</summary>
+      <pre id="triadicJson" class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[340px]">-</pre>
+    </details>
+  </section>
+
+  <section class="card rounded-xl p-5 shadow-sm mt-6">
+    <div class="flex items-center justify-between gap-3">
+      <h2 class="text-lg font-semibold">Fingerprint 요약</h2>
+      <div class="flex items-center gap-2">
+        <label class="text-xs text-gray-500">limit</label>
+        <input id="fpLimit" type="number" min="1" max="1000" value="120" class="mono text-xs px-2 py-1 border rounded" style="width:110px;" />
+      </div>
+    </div>
+
+    <div class="mt-3 overflow-auto max-h-[420px] border rounded">
+      <table class="w-full text-xs">
+        <thead class="bg-gray-50 sticky top-0">
+          <tr>
+            <th class="text-left p-2">windowCount</th>
+            <th class="text-left p-2">suppressed</th>
+            <th class="text-left p-2">windowAgeMs</th>
+            <th class="text-left p-2">total</th>
+            <th class="text-left p-2">totalSuppressed</th>
+            <th class="text-left p-2">fingerprint</th>
+            <th class="text-left p-2">lastMessage</th>
+            <th class="text-left p-2">lastError</th>
+          </tr>
+        </thead>
+        <tbody id="fpRows"></tbody>
+      </table>
+    </div>
+
+    <details class="mt-3">
+      <summary class="cursor-pointer text-gray-600 text-sm">원본 JSON 보기</summary>
+      <pre id="fpJson" class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[340px]">-</pre>
+    </details>
+
+    <div class="mt-4 text-xs text-gray-500">
+      <p>
+        Tip: 콘솔에서 바로 확인하려면
+        <span class="mono">curl -sS /api/diagnostics/debug/fingerprints | jq '.[0]'</span>
+        형태로 확인할 수 있습니다.
+      </p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function csrfHeaders() {
+    const tokenMeta = document.querySelector('meta[name="_csrf"]');
+    const headerMeta = document.querySelector('meta[name="_csrf_header"]');
+    const token = tokenMeta ? String(tokenMeta.content || '') : '';
+    const header = headerMeta ? String(headerMeta.content || '') : '';
+    return token && header ? { [header]: token } : {};
+  }
+
+  async function fetchJson(url, options = {}) {
+    const res = await fetch(url, {
+      ...options,
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json', ...(options.headers || {}) }
+    });
+    if (!res.ok) {
+      throw new Error('http_' + res.status);
+    }
+    try {
+      return await res.json();
+    } catch (e) {
+      throw new Error('invalid_json');
+    }
+  }
+
+  function fmt(v) { return (v === null || v === undefined) ? '' : String(v); }
+
+  function appendTextCell(tr, value, className = '') {
+    const td = document.createElement('td');
+    td.className = ('p-2 ' + className).trim();
+    td.textContent = fmt(value);
+    tr.appendChild(td);
+    return td;
+  }
+
+  function appendLevelCell(tr, level) {
+    const s = (level || '').toUpperCase();
+    const td = document.createElement('td');
+    td.className = 'p-2';
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (s === 'WARN' ? 'b-warn' : (s === 'ERROR' ? 'b-error' : 'b-info'));
+    badge.textContent = s || 'INFO';
+    td.appendChild(badge);
+    tr.appendChild(td);
+    return td;
+  }
+
+  function eventErrorType(ev) {
+    const raw = ev && ev.error && ev.error.type ? String(ev.error.type) : '';
+    if (!raw) return '';
+    const parts = raw.split('.');
+    return parts[parts.length - 1] || raw;
+  }
+
+  function eventModelRoute(ev) {
+    const data = ev && ev.data ? ev.data : {};
+    const parts = [];
+    const reason = fmt(data.reason || data.tier || data.error);
+    const requested = fmt(data.requestedModelHash);
+    const selected = fmt(data.selectedHash);
+    const defaultHash = fmt(data.defaultModelHash);
+    const fast = fmt(data.fastModelHash);
+    const high = fmt(data.highModelHash);
+    if (reason) parts.push('reason=' + reason);
+    if (requested) parts.push('req#' + requested);
+    if (selected) parts.push('sel#' + selected);
+    if (defaultHash) parts.push('default#' + defaultHash);
+    if (fast) parts.push('fast#' + fast);
+    if (high) parts.push('high#' + high);
+    return parts.join(' ');
+  }
+
+  function eventSignalSummary(ev) {
+    const data = ev && ev.data ? ev.data : {};
+    const parts = [];
+    const nextAction = fmt(data.nextAction || data.operatorActionNext || data.localLlmNextAction);
+    const triggerReason = fmt(data.triggerReason || data.operatorTriggerReason || data.localLlmTriggerReason);
+    const failureClass = fmt(data.failureClass || data.errorType);
+    const suppressedStage = fmt(data.suppressedStage || data.stage);
+    const lanePolicy = fmt(data.lanePolicy);
+    const subModelCount = fmt(data.subModelCount);
+    const branchTitleCount = fmt(data.branchTitleCount);
+    const branchAxisCount = fmt(data.branchAxisCount);
+    const paddedCount = fmt(data.paddedCount);
+    const requestedModelHash = fmt(data.requestedModelHash);
+    const selectedHash = fmt(data.selectedHash);
+    if (nextAction) parts.push('action:' + nextAction);
+    if (triggerReason) parts.push('reason:' + triggerReason);
+    if (failureClass) parts.push('failure:' + failureClass);
+    if (suppressedStage) parts.push('stage:' + suppressedStage);
+    if (lanePolicy) parts.push('lane:' + lanePolicy);
+    if (subModelCount) parts.push('subModels:' + subModelCount);
+    if (branchTitleCount) parts.push('branchTitles:' + branchTitleCount);
+    if (branchAxisCount) parts.push('axes:' + branchAxisCount);
+    if (paddedCount) parts.push('padded:' + paddedCount);
+    if (requestedModelHash) parts.push('requested#' + requestedModelHash);
+    if (selectedHash) parts.push('selected#' + selectedHash);
+    return parts.join(' ');
+  }
+
+  function eventAggSummary(ev) {
+    const agg = ev && ev.agg ? ev.agg : {};
+    const data = ev && ev.data ? ev.data : {};
+    const windowCount = agg.windowCount ?? data.windowCount;
+    const suppressed = agg.suppressedInWindow ?? data.suppressedInWindow;
+    const total = agg.total ?? data.totalSuppressed ?? data.total;
+    const parts = [];
+    if (windowCount !== null && windowCount !== undefined && fmt(windowCount)) {
+      parts.push('win:' + fmt(windowCount));
+    }
+    if (suppressed !== null && suppressed !== undefined && fmt(suppressed)) {
+      parts.push('suppressed:' + fmt(suppressed));
+    }
+    if (total !== null && total !== undefined && fmt(total)) {
+      parts.push('total:' + fmt(total));
+    }
+    return parts.join(' ');
+  }
+
+  function matchesFilter(ev, q, fpExact) {
+    if (fpExact && fmt(ev.fingerprint) !== fpExact) return false;
+    if (!q) return true;
+    const hay = [
+      ev.id, ev.ts, ev.level, ev.probe, ev.fingerprint, ev.message, ev.where,
+      ev.sid, ev.traceId, ev.requestId, eventErrorType(ev), (ev.thread || ''),
+      (ev.data ? JSON.stringify(ev.data) : '')
+    ].map(v => (v ? String(v).toLowerCase() : '')).join(' | ');
+    return hay.indexOf(q) >= 0;
+  }
+
+  // 유지 순서: tail -f 느낌을 위해 oldest -> newest (최신이 아래)
+  let lastEvents = [];
+  let seenIds = new Set();
+  let es = null;
+  let snapshotRevision = 0;
+
+  function setStatus(msg) {
+    $('status').textContent = msg || '';
+  }
+
+  function renderLiveStatus() {
+    if (!es || es.readyState === EventSource.CLOSED) {
+      setStatus('LIVE: disconnected');
+    } else if (es.readyState === EventSource.OPEN) {
+      setStatus('LIVE: connected');
+    } else {
+      setStatus('LIVE: reconnecting...');
+    }
+  }
+
+  function renderRows(list, maybeAutoScroll) {
+    const q = ($('filter').value || '').trim().toLowerCase();
+    const fpExact = ($('fpFilter').value || '').trim();
+
+    const rows = $('rows');
+    const container = $('eventsContainer');
+
+    let stickBottom = false;
+    if (maybeAutoScroll && container) {
+      const dist = container.scrollHeight - (container.scrollTop + container.clientHeight);
+      stickBottom = dist < 80;
+    }
+
+    rows.innerHTML = '';
+
+    (Array.isArray(list) ? list : []).forEach((ev) => {
+      if (!matchesFilter(ev, q, fpExact)) return;
+      const tr = document.createElement('tr');
+      tr.className = 'row cursor-pointer border-b';
+      appendTextCell(tr, ev.ts, 'mono');
+      appendLevelCell(tr, ev.level);
+      appendTextCell(tr, eventErrorType(ev), 'mono');
+      appendTextCell(tr, ev.probe, 'mono');
+      appendTextCell(tr, ev.where, 'mono');
+      appendTextCell(tr, ev.traceId, 'mono');
+      appendTextCell(tr, ev.requestId, 'mono');
+      appendTextCell(tr, ev.sid, 'mono');
+      appendTextCell(tr, eventAggSummary(ev), 'mono');
+      appendTextCell(tr, eventSignalSummary(ev), 'mono');
+      appendTextCell(tr, ev.fingerprint, 'mono');
+      appendTextCell(tr, ev.message);
+      tr.addEventListener('click', () => loadDetail(ev.id));
+      rows.appendChild(tr);
+    });
+
+    if (stickBottom && container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  function renderFingerprintRows(list) {
+    const rows = $('fpRows');
+    rows.innerHTML = '';
+    (Array.isArray(list) ? list : []).forEach((fp) => {
+      const tr = document.createElement('tr');
+      tr.className = 'row cursor-pointer border-b';
+      const fpVal = fmt(fp.fingerprint);
+      appendTextCell(tr, fp.windowCount, 'mono');
+      appendTextCell(tr, fp.suppressedInWindow, 'mono');
+      appendTextCell(tr, fp.windowAgeMs, 'mono');
+      appendTextCell(tr, fp.total, 'mono');
+      appendTextCell(tr, fp.totalSuppressed, 'mono');
+      appendTextCell(tr, fpVal, 'mono');
+      appendTextCell(tr, fp.lastMessage);
+      appendTextCell(tr, fp.lastError, 'mono');
+      tr.addEventListener('click', () => {
+        $('fpFilter').value = fpVal;
+        renderRows(lastEvents);
+      });
+      rows.appendChild(tr);
+    });
+  }
+
+  async function refreshFingerprints() {
+    const fpLim = parseInt($('fpLimit').value || '120', 10);
+    const fps = await fetchJson('/api/diagnostics/debug/fingerprints?limit=' + encodeURIComponent(String(fpLim)));
+    $('fpJson').textContent = JSON.stringify(fps, null, 2);
+    renderFingerprintRows(fps);
+  }
+
+  function scoreSummary(score) {
+    if (!score) return '-';
+    const parts = [];
+    if (score.score !== null && score.score !== undefined) parts.push(fmt(score.score));
+    if (score.verdict) parts.push(fmt(score.verdict));
+    if (score.contentLength !== null && score.contentLength !== undefined) parts.push('len:' + fmt(score.contentLength));
+    return parts.length ? parts.join(' ') : '-';
+  }
+
+  function renderLocalLlmSmoke(data) {
+    const latest = data && data.latest ? data.latest : {};
+    const cumulative = latest.cumulativeSignals ? latest.cumulativeSignals : {};
+    const attempts = latest.attemptScores ? latest.attemptScores : {};
+    const openAi = attempts.openAiCompatible ? attempts.openAiCompatible : {};
+    const nativeOllama = attempts.nativeOllama ? attempts.nativeOllama : {};
+    const operatorAction = latest.operatorAction ? latest.operatorAction : {};
+
+    $('localLlmSmokeStatus').textContent = data && data.reportFound
+      ? 'report:present'
+      : fmt(data && data.reason ? data.reason : 'report:missing');
+    $('localLlmRecommendedRoute').textContent = fmt(latest.recommendedRoute) || '-';
+    $('localLlmThresholdExceeded').textContent = fmt(cumulative.thresholdExceeded) || '-';
+    $('localLlmNegativePressure').textContent = fmt(cumulative.negativeSignalPressure) || '-';
+    $('localLlmOpenAiScore').textContent = scoreSummary(openAi);
+    $('localLlmNativeScore').textContent = scoreSummary(nativeOllama);
+    $('localLlmNegativeSignals').textContent = fmt(latest.negativeSignalCount) || '-';
+    $('localLlmDebugTrigger').textContent = fmt(latest.debugTrigger) || '-';
+    $('localLlmSecretPatternHits').textContent = fmt(latest.secretPatternHits) || '0';
+    $('localLlmOperatorActionNext').textContent = fmt(operatorAction.nextAction || 'monitor_local_llm_route') || '-';
+    $('localLlmOperatorTriggerReason').textContent = fmt(operatorAction.triggerReason || 'none') || '-';
+    $('localLlmOperatorFailureClass').textContent = fmt(operatorAction.failureClass || 'none') || '-';
+    $('localLlmOperatorActionScore').textContent = fmt(operatorAction.actionScore) || '-';
+    $('localLlmOperatorScoreDelta').textContent = fmt(operatorAction.scoreDelta) || '-';
+    $('localLlmSmokeJson').textContent = JSON.stringify(data || {}, null, 2);
+  }
+
+  async function refreshLocalLlmSmoke() {
+    try {
+      const data = await fetchJson('/api/diagnostics/local-llm/smoke-history?limit=12');
+      renderLocalLlmSmoke(data);
+    } catch (e) {
+      renderLocalLlmSmoke({ available: false, reason: 'local_llm_smoke_unavailable' });
+    }
+  }
+
+  async function refreshEvents(revision = ++snapshotRevision) {
+    if (es) return false;
+    const lim = parseInt($('limit').value || '200', 10);
+    const data = await fetchJson('/api/diagnostics/debug/events?limit=' + encodeURIComponent(String(lim)));
+    if (revision !== snapshotRevision || es) return false;
+
+    // API는 newest-first → UI는 tail(chronological)로 보기 위해 reverse
+    const arr = Array.isArray(data) ? data.slice().reverse() : [];
+    lastEvents = arr;
+    seenIds = new Set(arr.map(e => e && e.id).filter(Boolean));
+
+    $('listJson').textContent = JSON.stringify(arr, null, 2);
+    renderRows(lastEvents, false);
+    return true;
+  }
+
+  function renderTriadicAdjudication(data) {
+    const safe = data && typeof data === 'object' ? data : {};
+    const triadicDecision = $('triadicDecision');
+    const triadicConfidence = $('triadicConfidence');
+    const triadicReasonCode = $('triadicReasonCode');
+    triadicDecision.textContent = fmt(safe.decision) || 'HOLD';
+    triadicConfidence.textContent = fmt(safe.confidence) || 'LOW';
+    triadicReasonCode.textContent = fmt(safe.reasonCode) || 'underdetermined';
+    $('triadicSupportGrounding').textContent = fmt(safe.supportGrounding) || '0';
+    $('triadicFalsifyGrounding').textContent = fmt(safe.falsifyGrounding) || '0';
+    $('triadicCandidateHash').textContent = fmt(safe.candidateHash12) || 'none';
+    $('triadicJson').textContent = JSON.stringify(safe, null, 2);
+  }
+
+  async function refreshTriadicAdjudication() {
+    const data = await fetchJson('/api/diagnostics/debug/triadic-adjudication');
+    renderTriadicAdjudication(data);
+  }
+
+  async function runTriadicAdjudication() {
+    setStatus('Triadic adjudication running...');
+    const candidate = {
+      summary: $('triadicCandidateSummary').value || '',
+      targetFiles: ($('triadicTargetFiles').value || '')
+        .split(/\r?\n|,/)
+        .map(value => value.trim())
+        .filter(Boolean),
+      diffSha256: ($('triadicDiffSha256').value || '').trim()
+    };
+    const data = await fetchJson('/api/diagnostics/debug/triadic-adjudication', {
+      method: 'POST',
+      headers: { ...csrfHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(candidate)
+    });
+    renderTriadicAdjudication(data);
+    await refreshEvents();
+    await refreshFingerprints();
+    setStatus('Triadic adjudication complete: ' + (fmt(data.decision) || 'HOLD'));
+  }
+
+  function providerStatusLine(p) {
+    const state = fmt(p.state) || 'OK';
+    const name = `${fmt(p.provider)}${p.scope ? '/' + fmt(p.scope) : ''} · ${fmt(p.model)}`;
+    if (state === 'OK') {
+      const recovered = p.recoveredAt ? ` · ${fmt(p.recoveredAt)}에 복구됨` : '';
+      return `${name} — 정상${recovered}`;
+    }
+    const parts = [`${name} — ${state}`];
+    if (p.category) parts.push(String(p.category));
+    if (p.consecutive) parts.push(`연속 ${p.consecutive}회`);
+    if (p.totalCount) parts.push(`누적 ${p.totalCount}회`);
+    if (p.evidence && p.evidence !== 'CONFIRMED'
+        && /quota|billing|payment|rate_limit/i.test(String(p.category))) parts.push('billing evidence needed');
+    else if (p.evidence && p.evidence !== 'CONFIRMED') parts.push(`${p.evidence} 근거`);
+    if (p.maskedBy) parts.push(`${p.maskedBy} fallback 성공`);
+    if (p.lastSuccessAt) parts.push(`마지막 정상 ${p.lastSuccessAt}`);
+    return parts.join(' · ');
+  }
+
+  async function refreshApiFailures() {
+    try {
+      const result = await fetchJson('/api/diagnostics/debug/api-failures');
+      const rows = Array.isArray(result.incidents) ? result.incidents : [];
+      const target = $('apiFailuresRows'); target.replaceChildren();
+      for (const row of rows) {
+        const tr = document.createElement('tr');
+        for (const value of [row.provider, row.scope, row.model, row.httpStatus ?? '미확인', `${row.category} · ${row.errorCode}`,
+            row.evidence, row.consecutive, row.firstSeen, row.lastSeen, row.count, row.maskedBy, row.lastSuccessAt]) {
+          const td = document.createElement('td'); td.className = 'p-2 mono'; td.textContent = String(value ?? ''); tr.appendChild(td);
+        }
+        target.appendChild(tr);
+      }
+      const statusLines = $('apiStatusLines'); statusLines.replaceChildren();
+      const status = result.status && typeof result.status === 'object' ? result.status : {};
+      const providers = Array.isArray(status.providers) ? status.providers : [];
+      const overall = fmt(status.overall) || 'OK';
+      const head = document.createElement('div');
+      head.className = 'font-semibold ' + (overall === 'DEGRADED' ? 'text-red-700' : overall === 'WARNING' ? 'text-amber-700' : 'text-emerald-700');
+      head.textContent = `현재 상태: ${overall}`;
+      statusLines.appendChild(head);
+      for (const p of providers.slice(0, 10)) {
+        const line = document.createElement('div');
+        line.className = p.state === 'DEGRADED' ? 'text-red-700' : p.state === 'WARNING' ? 'text-amber-700' : 'text-gray-700';
+        line.textContent = providerStatusLine(p);
+        statusLines.appendChild(line);
+      }
+      const cooldowns = (Array.isArray(result.routeHealth) ? result.routeHealth : []).filter(r => r && r.cooldownActive);
+      if (cooldowns.length) {
+        const line = document.createElement('div'); line.className = 'text-amber-700';
+        line.textContent = 'cooldown: ' + cooldowns.map(r => `${fmt(r.route)}(${fmt(r.provider)}/${fmt(r.model)}, 연속 ${fmt(r.consecutiveFailures)}회)`).join(' · ');
+        statusLines.appendChild(line);
+      }
+      $('apiFailuresStatus').textContent = result.persistenceHealthy ? (rows.length ? `${rows.length}개 오류 유형 · 서버 기록 저장 정상` : '기록된 API 실패 없음') : '기록 저장 상태를 확인해 주세요. 콘솔에 오류 원인이 표시됩니다.';
+    } catch (e) { $('apiFailuresStatus').textContent = 'API 실패 기록을 불러오지 못했습니다. 관리자 접근 권한과 서버 연결을 확인해 주세요.'; }
+  }
+
+  async function refreshAll() {
+    if (es) return false;
+    const revision = ++snapshotRevision;
+    const isCurrent = () => revision === snapshotRevision && !es;
+    setStatus('불러오는 중...');
+    try {
+      await refreshApiFailures();
+      if (!await refreshEvents(revision)) return false;
+      await refreshFingerprints();
+      if (!isCurrent()) return false;
+      await refreshLocalLlmSmoke();
+      if (!isCurrent()) return false;
+      await refreshTriadicAdjudication();
+      if (!isCurrent()) return false;
+      setStatus('업데이트 완료: ' + new Date().toLocaleString());
+      return true;
+    } catch (e) {
+      if (!isCurrent()) return false;
+      console.error(e);
+      setStatus('실패: ' + (e && e.message ? e.message : String(e)));
+      return false;
+    }
+  }
+
+  function applyQueryPrefill() {
+    try {
+      const qs = new URLSearchParams(window.location.search || '');
+      const q = (qs.get('q') || '').trim();
+      const traceId = (qs.get('traceId') || '').trim();
+      const sid = (qs.get('sid') || '').trim();
+      const fp = (qs.get('fp') || qs.get('fingerprint') || '').trim();
+      const live = (qs.get('live') || '').trim().toLowerCase();
+
+      if (fp) $('fpFilter').value = fp;
+      if (q) $('filter').value = q;
+      else if (traceId) $('filter').value = traceId;
+      else if (sid) $('filter').value = sid;
+
+      if (live === '1' || live === 'true' || live === 'yes' || live === 'on') {
+        $('live').checked = true;
+      }
+    } catch (e) { void e; }
+  }
+
+  async function loadDetail(id) {
+    if (!id) return;
+    try {
+      const data = await fetchJson('/api/diagnostics/debug/events/' + encodeURIComponent(id));
+      $('detailId').textContent = id;
+      $('detailJson').textContent = JSON.stringify(data, null, 2);
+
+      const traceId = fmt(data.traceId);
+      const requestId = fmt(data.requestId);
+      const sid = fmt(data.sid);
+      $('detailTraceId').textContent = traceId || '-';
+      $('detailRequestId').textContent = requestId || '-';
+      $('detailErrorType').textContent = eventErrorType(data) || '-';
+      $('detailModelRoute').textContent = eventModelRoute(data) || '-';
+      $('detailSignal').textContent = eventSignalSummary(data) || '-';
+      $('detailSid').textContent = sid || '-';
+      $('detailAgg').textContent = eventAggSummary(data) || '-';
+
+      const link = $('linkTraceSnapshots');
+      if (traceId) {
+        link.href = '/admin/trace-snapshots?traceId=' + encodeURIComponent(traceId);
+        link.style.display = '';
+      } else if (sid) {
+        link.href = '/admin/trace-snapshots?sid=' + encodeURIComponent(sid);
+        link.style.display = '';
+      } else {
+        link.href = '/admin/trace-snapshots';
+        link.style.display = 'none';
+      }
+    } catch (e) {
+      console.error(e);
+      $('detailId').textContent = id;
+      $('detailErrorType').textContent = '-';
+      $('detailModelRoute').textContent = '-';
+      $('detailSignal').textContent = '-';
+      $('detailAgg').textContent = '-';
+      $('detailJson').textContent = 'failed: ' + (e && e.message ? e.message : String(e));
+    }
+  }
+
+  function clearAll() {
+    snapshotRevision++;
+    lastEvents = [];
+    seenIds = new Set();
+    $('rows').innerHTML = '';
+    $('listJson').textContent = '[]';
+    $('detailId').textContent = '-';
+    $('detailTraceId').textContent = '-';
+    $('detailRequestId').textContent = '-';
+    $('detailErrorType').textContent = '-';
+    $('detailModelRoute').textContent = '-';
+    $('detailSignal').textContent = '-';
+    $('detailSid').textContent = '-';
+    $('detailAgg').textContent = '-';
+    $('detailJson').textContent = '-';
+    renderLocalLlmSmoke({ available: false, reason: 'local_llm_smoke_cleared' });
+  }
+
+  function stopLive() {
+    snapshotRevision++;
+    if (es) {
+      try { es.close(); } catch (e) { void e; }
+    }
+    es = null;
+  }
+
+  function startLive() {
+    stopLive();
+    clearAll();
+
+    const lim = parseInt($('limit').value || '200', 10);
+    const useLim = Math.max(1, Math.min(lim, 500));
+
+    setStatus('LIVE: connecting...');
+    const url = '/api/diagnostics/debug/events/stream?limit=' + encodeURIComponent(String(useLim));
+    const source = new EventSource(url);
+    es = source;
+
+    const updateStatus = () => {
+      if (es === source) renderLiveStatus();
+    };
+    source.onopen = updateStatus;
+    source.onerror = updateStatus;
+
+    source.addEventListener('hello', updateStatus);
+
+    source.addEventListener('debug-event', (e) => {
+      if (es !== source) return;
+      try {
+        const ev = JSON.parse(e.data);
+        if (!ev || !ev.id) return;
+        if (seenIds.has(ev.id)) return;
+        seenIds.add(ev.id);
+
+        // Tail append (chronological)
+        lastEvents.push(ev);
+
+        // Keep bounded list
+        if (lastEvents.length > useLim) {
+          const overflow = lastEvents.splice(0, lastEvents.length - useLim);
+          overflow.forEach(x => { if (x && x.id) seenIds.delete(x.id); });
+        }
+
+        $('listJson').textContent = JSON.stringify(lastEvents, null, 2);
+        renderRows(lastEvents, true);
+      } catch (err) {
+        console.warn('invalid_debug_event');
+      }
+    });
+  }
+
+  $('btnRefresh').addEventListener('click', async () => {
+    if ($('live').checked) {
+      // In LIVE mode, fingerprints are still useful.
+      const source = es;
+      try {
+        setStatus('LIVE: fingerprints refresh...');
+        await refreshFingerprints();
+        await refreshLocalLlmSmoke();
+        if ($('live').checked && es === source) renderLiveStatus();
+      } catch (e) {
+        console.error(e);
+        if ($('live').checked && es === source) setStatus('LIVE: fingerprints failed');
+      }
+      return;
+    }
+    await refreshAll();
+  });
+
+  $('btnClear').addEventListener('click', clearAll);
+
+  $('btnTriadicAdjudicate').addEventListener('click', async () => {
+    try {
+      await runTriadicAdjudication();
+    } catch (e) {
+      console.error(e);
+      setStatus('Triadic adjudication failed: ' + (e && e.message ? e.message : String(e)));
+    }
+  });
+
+  $('live').addEventListener('change', async () => {
+    if ($('live').checked) {
+      startLive();
+      try {
+        await refreshFingerprints();
+        await refreshLocalLlmSmoke();
+      } catch (e) { void e; }
+    } else {
+      stopLive();
+      await refreshAll();
+    }
+  });
+
+  $('filter').addEventListener('input', () => renderRows(lastEvents, false));
+  $('fpFilter').addEventListener('input', () => renderRows(lastEvents, false));
+
+  $('btnCopy').addEventListener('click', async () => {
+    try {
+      const id = $('detailId').textContent || '';
+      if (!id || id === '-') return;
+      await navigator.clipboard.writeText(id);
+    } catch (e) {
+      console.warn(e);
+    }
+  });
+
+  applyQueryPrefill();
+  const initialRefresh = refreshAll();
+  const initialRefreshRevision = snapshotRevision;
+  initialRefresh.then(() => {
+    if (initialRefreshRevision === snapshotRevision && $('live').checked && !es) startLive();
+  });
+</script>
+
+</body>
+</html>

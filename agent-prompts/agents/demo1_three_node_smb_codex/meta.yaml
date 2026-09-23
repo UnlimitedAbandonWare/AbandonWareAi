@@ -1,0 +1,6 @@
+id: demo1_three_node_smb_codex
+version: "1.0"
+description: >
+  Desktop + Mac mini + Notebook 3노드 SMB Safe Patch Codex 지침서.
+  NAS 연결 전/후 Notebook 전환 절차 포함.
+created: "2026-06-04"

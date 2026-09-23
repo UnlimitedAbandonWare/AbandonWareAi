@@ -1,0 +1,5 @@
+id: demo1_abandon_ui_orchestration_patch
+lang: ko
+role: system
+version: "1.7.0"
+tags: [demo-1, Abandon, 323-325, judge-node, GraphRAG, KGScore, FailSoft, Cancellation, RAG-Ops, SafePatch, Java17, SpringBoot3]

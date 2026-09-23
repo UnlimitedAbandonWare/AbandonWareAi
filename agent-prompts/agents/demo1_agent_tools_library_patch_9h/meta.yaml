@@ -1,0 +1,6 @@
+id: demo1_agent_tools_library_patch_9h
+version: "1.0"
+description: >
+  Desktop Safe Patch directive for hardening agent tools, MCP/Supabase evidence,
+  and library-dependency decisions without broad legacy rewrites.
+created: "2026-06-19"

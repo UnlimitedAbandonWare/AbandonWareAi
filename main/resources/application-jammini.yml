@@ -1,0 +1,72 @@
+spring:
+  config:
+    activate:
+      on-profile: jammini-no-mem
+
+# Jammini No-Memory 프로파일
+memory:
+  enabled: false       # 장기 기억/강화 비활성화
+  profile: OFF         # (향후 확장을 위한 힌트 값)
+
+# RAG 전략 기본값
+rag:
+  strategy:
+    default: universal # genshin_only 가 아닌 범용 전략 사용
+
+# 검색 필터 예시 (Jammini No-Memory 모드에서는 최대한 개방형)
+naver:
+  filters:
+    domain-allowlist: []   # 비워두면 모든 도메인 허용
+    enable-domain-filter: false
+    domain-policy: boost
+jammini:
+  guard:
+    profile: PROFILE_MEMORY
+  memory:
+    bridge:
+      enabled: true
+    min-coverage: 0.3
+    progressive: true
+  plans:
+    mapping:
+      safe_autorun.v1: SAFE
+      brave.v1: BRAVE
+      zero_break.v1: ZERO_BREAK
+      side_train.v1: SAFE
+      rule_break.v1: WILD
+  profiles:
+    SAFE:
+      guardLevel: HIGH
+      memoryMode: FULL
+      rerankerMode: HYBRID
+    BRAVE:
+      guardLevel: LOW
+      memoryMode: LIGHT
+      rerankerMode: HYBRID
+    ZERO_BREAK:
+      guardLevel: LOW
+      memoryMode: OFF
+      rerankerMode: AI_ONLY
+    WILD:
+      guardLevel: LOW
+      memoryMode: OFF
+      rerankerMode: AI_ONLY
+
+
+
+guard:
+  profiles:
+    safe.strict:
+      citationMin: 3
+      finalSigmoidK: 12.0
+    brave.lite:
+      citationMin: 2
+      finalSigmoidK: 8.0
+    hyper.free:
+      citationMin: 1
+      finalSigmoidK: 6.0
+
+web:
+  search:
+    timeout-seconds: 3
+    parallel-enabled: true

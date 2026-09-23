@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Retrieving Counter Evidence"
+  short_description: "Retrieve independent counter-evidence"
+  default_prompt: "Use $demo1-retrieving-counter-evidence only for a decision-changing gap; execute exactly three canonical counter-evidence query slots."

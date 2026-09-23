@@ -1,0 +1,17 @@
+spring:
+  config:
+    activate:
+      on-profile: ablation-aggressive
+
+# Stage penalty presets (aggressive)
+uaw:
+  ablation:
+    penalty:
+      default: 0.18
+      websearch:
+        base: 0.45
+        starvation: 0.35
+        domain-misroute: 0.30
+      query-transformer: 0.25
+      retrieval: 0.30
+      rerank: 0.22

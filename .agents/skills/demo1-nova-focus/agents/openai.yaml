@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Nova Focus"
+  short_description: "'노바' wake-word focused conversation on Conversate + lens"
+  default_prompt: "Use $demo1-nova-focus for the '노바' focused-conversation mode on the existing Fold6 Conversate transcript: separate focus work lifecycle, one persistent room, bounded model context, additive `focus` lens field, sequential answer display with idle timer at presentation_done. Spec copies live in agent-prompts/nova-focus/ (addendum supersedes paged display). Not for general hint TTL/paging or background-listen bugs."

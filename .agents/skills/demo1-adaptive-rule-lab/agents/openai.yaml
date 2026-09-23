@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 Adaptive Rule Lab"
+  short_description: "스킬·룰 의미 분류와 실제 지표 기반 실험·오차 분석·승격 검증"
+  default_prompt: "Use $demo1-adaptive-rule-lab to find related skills and rules, preserve their constraints, and improve this workflow through measured experiments and retained failure analysis."
+
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MacSrc SMB Direct Patch"
+  short_description: "Guard direct source patches on the MacSrc SMB root"
+  default_prompt: "Use $demo1-macsrc-smb-direct-patch to prepare and verify a checksum-guarded source patch on MacSrc."

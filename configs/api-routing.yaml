@@ -1,0 +1,152 @@
+# Machine-readable API routing for demo-1 (no secrets).
+# Companion: docs/API_ROUTING_SPEC.md
+# SoT inventory: live `ollama ls` on DESKTOP-M5NOV6K 2026-09-18 KST
+version: "2026-09-18"
+policy:
+  order: [free_local, low_cost, paid_quality]
+  never_log_secrets: true
+  prefer_existing_env: true
+
+ollama:
+  default_hosts:
+    - "127.0.0.1:11434"
+    - "127.0.0.1:11435"
+    - "127.0.0.1:11437"
+  openai_compat_path: "/v1"
+  native_embed_path: "/api/embed"
+  installed_models:
+    # Exact NAME:TAG from live ollama ls — do not invent
+    all:
+      - "smtek/Qwen3.8-27B:Q3_K_XL"
+      - "qwen3-embedding:4b"
+      - "qwen3.8:27b"
+      - "gemma4:31b"
+      - "qwen3.6:27b"
+      - "gemma4:12b"
+      - "qwen3.5:9b"
+      - "gemma4:latest"
+      - "gemma4:26b"
+      - "nomic-embed-text:latest"
+      - "qwen3-embedding:latest"
+      - "bge-m3:latest"
+      - "qwen3-vl:8b"
+    chat: ["gemma4:26b", "gemma4:31b", "gemma4:latest", "gemma4:12b", "qwen3.8:27b", "qwen3.6:27b", "smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.5:9b"]
+    fast: ["qwen3.5:9b", "gemma4:12b"]
+    vision: ["qwen3-vl:8b"]
+    # Prefer Q3_K_XL (14GB) over full qwen3.8:27b (17GB) for VRAM-tight judge/coder
+    judge: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.8:27b", "qwen3.6:27b", "gemma4:31b"]
+    coder: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.8:27b", "qwen3.6:27b"]
+    embed: ["qwen3-embedding:4b", "qwen3-embedding:latest", "nomic-embed-text:latest", "bge-m3:latest"]
+  # Dead tags: alias-only — never wire as Spring defaults
+  alias_to_installed:
+    "qwen3:8b": "qwen3.5:9b"
+    "qwen3:30b": "smtek/Qwen3.8-27B:Q3_K_XL"
+    "qwen3-coder:30b": "smtek/Qwen3.8-27B:Q3_K_XL"
+    "gemma3:27b": "gemma4:26b"
+    "gemma3:4b": "gemma4:12b"
+    "qwen2.5:7b-instruct": "qwen3.5:9b"
+    "qwen2.5-7b-instruct": "qwen3.5:9b"
+    "qwen3-embedding": "qwen3-embedding:4b"
+  banned_as_defaults:
+    - "qwen3:8b"
+    - "qwen3:30b"
+    - "qwen3-coder:30b"
+    - "gemma3:27b"
+    - "gemma3:4b"
+    - "qwen2.5:7b-instruct"
+    - "qwen2.5-7b-instruct"
+
+routes:
+  search:
+    - id: brave
+      tier: free_local
+      env: [BRAVE_API_KEY_FREE, BRAVE_API_KEY]  # free first; BRAVE_SUBSCRIPTION_TOKEN is retired
+      base_url: "https://api.search.brave.com/res/v1/web/search"
+      auth: "X-Subscription-Token"
+      seams: ["com.example.lms.service.web.BraveSearchService", "com.acme.aicore.adapters.search.BraveSearchProvider"]
+    - id: tavily
+      tier: low_cost
+      env: [TAVILY_API_KEY]
+      seams: ["com.abandonware.ai.agent.integrations.TavilyWebSearchRetriever"]
+    - id: serpapi
+      tier: low_cost
+      env: [SERPAPI_API_KEY]
+    - id: naver
+      tier: free_local
+      env: [NAVER_KEYS, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET]
+      seams: ["com.example.lms.service.NaverSearchService"]
+
+  asr:
+    - id: soniox
+      tier: low_cost
+      env: [SONIOX_API_KEY, SONIOX_STT_ENABLED, SONIOX_STT_MODEL, SONIOX_STT_REGION]
+      model_default: "stt-rt-v5"
+      seams: ["com.example.lms.assist.SonioxSidecarManager", "com.example.lms.service.stt.SonioxSttService"]
+    - id: deepgram
+      tier: low_cost
+      env: [DEEPGRAM_API_KEY, DEEPGRAM_API_KEY_SECONDARY]
+      seams: ["com.example.lms.service.stt.DeepgramSttService", "com.example.lms.assist.DeepgramAsrTransport"]
+
+  embed:
+    - id: ollama_embed
+      tier: free_local
+      env: [LLM_BASE_URL, EMBED_BASE_URL, OLLAMA_HOST]
+      model_pref: ["qwen3-embedding:4b", "qwen3-embedding:latest", "nomic-embed-text:latest", "bge-m3:latest"]
+      seams: ["com.example.lms.service.embedding.OllamaEmbeddingModel"]
+    - id: openai_embed
+      tier: paid_quality
+      env: [OPENAI_API_KEY]
+      model_default: "text-embedding-3-small"
+    - id: pinecone
+      tier: paid_quality
+      env: [PINECONE_API_KEY, PINECONE_INDEX, PINECONE_ENV]
+    - id: upstash_vector
+      tier: low_cost
+      env: [UPSTASH_VECTOR_URL, UPSTASH_VECTOR_TOKEN, UPSTASH_VECTOR_API_KEY]
+
+  llm:
+    - id: ollama_chat
+      tier: free_local
+      env: [LLM_BASE_URL, LLM_API_KEY, LLM_CHAT_MODEL]
+      model_pref: ["gemma4:26b", "gemma4:31b", "smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.8:27b"]
+      seams: ["ai.abandonware.nova.orch.aop.LlmRouterAspect", "com.example.lms.guard.KeyResolver"]
+    - id: ollama_fast
+      tier: free_local
+      env: [LLM_FAST_BASE_URL, LLM_FAST_MODEL]
+      model_pref: ["qwen3.5:9b", "gemma4:12b"]
+    - id: ollama_judge
+      tier: free_local
+      env: [LLM_JUDGE_BASE_URL, LLM_JUDGE_MODEL]
+      model_pref: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.8:27b", "qwen3.6:27b"]
+    - id: ollama_coder
+      tier: free_local
+      env: [LLM_CODER_BASE_URL, LLM_CODER_MODEL]
+      model_pref: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.8:27b"]
+    - id: ollama_vision
+      tier: free_local
+      env: [LLM_VISION_BASE_URL, LLM_VISION_MODEL]
+      model_pref: ["qwen3-vl:8b"]
+    - id: groq
+      tier: low_cost
+      env: [GROQ_API_KEY]
+      base_url: "https://api.groq.com/openai/v1"
+    - id: gemini
+      tier: low_cost
+      env: [GEMINI_API_KEY]
+    - id: openai
+      tier: paid_quality
+      env: [OPENAI_API_KEY]
+      base_url: "https://api.openai.com/v1"
+    - id: anthropic
+      tier: paid_quality
+      env: [ANTHROPIC_API_KEY]
+    - id: opencode
+      tier: low_cost
+      env: [OPENCODE_API_KEY, OPENCODE_GO_API_KEY]
+    - id: zai
+      tier: low_cost
+      env: [ZAI_API_KEY]
+
+debug:
+  logger: "com.example.lms.routing.ApiRoutingDebug"
+  fields: [purpose, provider, model, endpointClass, attempt, httpStatus, errorClass, fallbackTo, keyPresent, keySource]

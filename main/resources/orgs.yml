@@ -1,0 +1,39 @@
+orgs:
+  - canonical: "사이테크놀로지스"
+    aliases:
+      - "사이 테크놀로지스"
+      - "사이테크"
+      - "Sci Technologies"
+      - "Saitecnologies"
+    regions:
+      - "KR"
+    sites:
+      - "tjcctv.co.kr"
+      - "place.naver.com"
+      - "blog.naver.com"
+
+  - canonical: "메이크인"
+    aliases:
+      - "Makein"
+      - "makein"
+      - "Make In"
+      - "make in"
+      - "make-in"
+      - "메이크 인"
+    regions:
+      - "KR"
+    sites: []
+# NineTile alias corrector toggle
+alias:
+  corrector:
+    enabled: true
+
+probe:
+  search:
+    enabled: false
+  admin-token: ''
+
+
+retrieval:
+  vector:
+    enabled: true

@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "1.0",
+  "userRequest": "Y:\\ identity 확인 후 Desktop canonical 환경에서 hard-pressure 첫 요청의 local HTTP=0, cloud HTTP=1, prompt/options hash를 자동 검증하고 실제 증거가 PASS하면 desktopFinalProof HOLD를 해제한다.",
+  "evidenceSnapshot": {
+    "summary": "canonicalWorkspace=Y:\\; backingShareIdentityVerified=true; backingShareIdentityReason=match. Notebook에서 Desktop WinRM, SSH, CIM, Task Scheduler 및 관리 공유 실행 권한을 찾지 못했다. 공유 checkout에는 설계된 세 구현 클래스와 focused test method가 없고 Desktop proof artifact도 없다. 소스 수정 없이 Desktop proof 실행 가능성만 평가한다.",
+    "evidenceRows": [
+      {"evidenceId":"E01","owner":"notebook-filesystem","observedAt":"2026-08-02T09:35:45+09:00","observation":{"boolean":true},"verificationCommand":"Run the canonical Y: backing-identity SHA-256 comparison and emit only the match boolean."},
+      {"evidenceId":"E02","owner":"desktop-transport","observedAt":"2026-08-02T09:35:45+09:00","observation":{"boolean":false},"verificationCommand":"Test-WSMan -ComputerName desktop-m5nov6k -ErrorAction Stop"},
+      {"evidenceId":"E03","owner":"desktop-transport","observedAt":"2026-08-02T09:35:45+09:00","observation":{"reason":"access-denied"},"verificationCommand":"Test-Path the Desktop administrative-share canonical root and classify only success, missing, or access-denied."},
+      {"evidenceId":"E04","owner":"desktop-transport","observedAt":"2026-08-02T09:35:45+09:00","observation":{"count":0},"verificationCommand":"Count usable existing remote execution lanes among WinRM, SSH batch, CIM/DCOM, and Task Scheduler RPC."},
+      {"evidenceId":"E05","owner":"shared-source","observedAt":"2026-08-02T09:35:45+09:00","observation":{"count":0},"verificationCommand":"Count existing GpuPressureMonitor.java, GpuPressureRouteGuard.java, and CloudOffloadQuotaGuard.java files under Y:\\main\\java."},
+      {"evidenceId":"E06","owner":"shared-test","observedAt":"2026-08-02T09:35:45+09:00","observation":{"count":0},"verificationCommand":"Count hardPressureFirstRequestUsesCloudWithoutLocalExchange methods in LlmRouterRequestTimelineTest.java."},
+      {"evidenceId":"E07","owner":"shared-evidence","observedAt":"2026-08-02T09:35:45+09:00","observation":{"count":0},"verificationCommand":"Count GPU-pressure Desktop proof artifacts under data\\agent-handoff."},
+      {"evidenceId":"E08","owner":"goal-next-status","observedAt":"2026-08-02T09:35:45+09:00","observation":{"reason":"stale-latest"},"verificationCommand":"powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\goal_next_auto.ps1 -Root . -Topic gpu-pressure-cloud-offload -Status"},
+      {"evidenceId":"E09","owner":"goal-contract","observedAt":"2026-08-02T09:35:45+09:00","observation":{"sha256":"451b67ff13e5cb7c5b3ada365aba72a58c90bf81ea8715cdddcfb0970a1b59aa"},"verificationCommand":"(Get-FileHash -Algorithm SHA256 agent-prompts\\codex_gpu_pressure_cloud_offload_goal.md).Hash.ToLowerInvariant()"},
+      {"evidenceId":"E10","owner":"implementation-plan","observedAt":"2026-08-02T09:35:45+09:00","observation":{"sha256":"187aac7a9003a54c42a988283eb7897b6d363542858eb9f23be5c8cd65cbd885"},"verificationCommand":"(Get-FileHash -Algorithm SHA256 docs\\superpowers\\plans\\2026-08-01-gpu-pressure-cloud-offload.md).Hash.ToLowerInvariant()"},
+      {"evidenceId":"E11","owner":"shared-test","observedAt":"2026-08-02T09:35:45+09:00","observation":{"sha256":"03a086ecc46a958c1c6f6131660fd6cdc25b561698a9fe6192459cc6cf3cdae3"},"verificationCommand":"(Get-FileHash -Algorithm SHA256 src\\test\\java\\ai\\abandonware\\nova\\orch\\aop\\LlmRouterRequestTimelineTest.java).Hash.ToLowerInvariant()"},
+      {"evidenceId":"E12","owner":"user-request","observedAt":"2026-08-02T09:35:45+09:00","observation":{"reason":"desktop-proof-authorized"},"verificationCommand":"Review the current user instruction authorizing autonomous Desktop final proof execution."},
+      {"evidenceId":"E13","owner":"notebook-runtime","observedAt":"2026-08-02T09:35:45+09:00","observation":{"boolean":false},"verificationCommand":"[bool](Get-Command java -ErrorAction SilentlyContinue)"},
+      {"evidenceId":"E14","owner":"shared-filesystem","observedAt":"2026-08-02T09:35:45+09:00","observation":{"reason":"main"},"verificationCommand":"(Get-Content .git\\HEAD -TotalCount 1).Replace('ref: refs/heads/','')"},
+      {"evidenceId":"E15","owner":"shared-filesystem","observedAt":"2026-08-02T09:35:45+09:00","observation":{"boolean":false},"verificationCommand":"Test-Path .git\\index.lock"}
+    ]
+  },
+  "evidenceSnapshotHash": "697892084077d831893b4f36712ba5fe8e0c34873c281f968e025bb2af7d9db7",
+  "requiresLiteralSubagents": false,
+  "processMode": "single-agent-logical-roles",
+  "actualAgentCount": 1,
+  "packets": {
+    "POSITIVE_QUERY": {
+      "packetType":"POSITIVE_QUERY",
+      "evidenceSnapshotHash":"697892084077d831893b4f36712ba5fe8e0c34873c281f968e025bb2af7d9db7",
+      "candidateGoal":"Desktop canonical root에서 기존 focused test를 단 한 번 실행하고 실제 request-lineage 증거가 모두 참일 때만 HOLD를 해제한다.",
+      "scenarioWorlds":[
+        {"scenarioId":"S-REMOTE-EXEC","premise":"Notebook에서 Desktop process를 시작할 수 있는 기존 인증 채널이 있다.","causalMechanism":"원격 채널이 canonical root에서 Gradle을 실행하고 redacted result를 공유 evidence path에 기록한다.","expectedObservation":"Desktop host-owned focused test exit code와 artifact hash가 생성된다.","evidenceNeeded":["E01","E02","E03","E04"],"falsifier":"사용 가능한 원격 실행 채널이 0이다."},
+        {"scenarioId":"S-FOCUSED-TEST","premise":"Desktop revision에 hard-pressure focused test와 구현 seam이 존재한다.","causalMechanism":"테스트가 synthetic pressure와 loopback local/cloud counters를 사용한다.","expectedObservation":"local exchange 0, cloud exchange 1을 같은 test에서 assert한다.","evidenceNeeded":["E05","E06","E10","E11"],"falsifier":"구현 클래스 또는 focused method가 없다."},
+        {"scenarioId":"S-LINEAGE-PASS","premise":"focused test가 prompt/options hash와 physical attempt ledger를 검증한다.","causalMechanism":"ModelRuntimeHealthTracker row predicate를 test assertion과 Desktop output으로 교차 확인한다.","expectedObservation":"hash present true, cloud row 1, local HTTP row 0이다.","evidenceNeeded":["E07","E09","E11"],"falsifier":"Desktop proof artifact 또는 lineage row가 없다."}
+      ],
+      "validatedAssumptions":["사용자는 Desktop proof 실행을 승인했다.","Y: backing identity는 일치한다.","기존 계획에 focused verification predicate가 정의돼 있다."],
+      "reusableAssets":["goal_next_auto.ps1","LlmRouterRequestTimelineTest","ModelRuntimeHealthTracker","desktop-only proof loop"],
+      "expectedUserValue":"사람 개입 없이 실제 Desktop 증거로만 HOLD를 해제한다.",
+      "minimalVerification":"Desktop canonical root에서 정확한 focused Gradle test 한 건과 redacted ledger predicate를 실행한다.",
+      "evidenceIds":["E01","E02","E03","E04","E05","E06","E07","E09","E10","E11","E12"],
+      "unknowns":["Desktop canonical revision의 실제 구현 상태","Desktop Java/Gradle 상태","실제 focused test output"]
+    },
+    "NEGATIVE_QUERY": {
+      "packetType":"NEGATIVE_QUERY",
+      "evidenceSnapshotHash":"697892084077d831893b4f36712ba5fe8e0c34873c281f968e025bb2af7d9db7",
+      "challengedGoal":"현재 Notebook 세션이 Desktop 증명을 실제 실행하지 못했는데 HOLD를 해제하는 오류를 방지한다.",
+      "scenarioAttacks":[
+        {"scenarioId":"S-REMOTE-EXEC","counterExample":"WinRM/SSH/CIM/Task Scheduler 채널이 모두 사용할 수 없고 관리 공유도 거부된다.","alternativeCause":"네트워크 도달성과 process 실행 권한은 다르다.","boundaryOrAuthorityRisk":"Y:에서 실행한 Gradle을 Desktop 증명으로 오인할 수 있다.","costAndBlastRadius":"허위 PASS가 검증되지 않은 runtime을 활성화한다.","smallestDisconfirmingProbe":"Desktop 자체에서 focused command를 실행해 host-owned artifact를 만든다.","evidenceIds":["E02","E03","E04"]},
+        {"scenarioId":"S-FOCUSED-TEST","counterExample":"공유 revision에는 세 구현 파일과 focused method가 없다.","alternativeCause":"Desktop canonical checkout만 앞선 revision일 수 있으나 접근 증거가 없다.","boundaryOrAuthorityRisk":"존재하지 않는 test를 PASS로 추정할 수 없다.","costAndBlastRadius":"검증 대신 구현 부재를 숨기게 된다.","smallestDisconfirmingProbe":"Desktop canonical root에서 Test-Path와 focused Gradle selector를 실행한다.","evidenceIds":["E05","E06","E10","E11"]},
+        {"scenarioId":"S-LINEAGE-PASS","counterExample":"GPU-pressure Desktop proof artifact가 0개이고 latest goal status도 stale이다.","alternativeCause":"일반 test 성공은 request lineage 성공과 다르다.","boundaryOrAuthorityRisk":"UI 응답이나 compile 성공으로 runtimeLineage를 대체할 수 없다.","costAndBlastRadius":"local retry 또는 중복 cloud attempt가 감춰질 수 있다.","smallestDisconfirmingProbe":"Desktop test가 local/cloud counts와 hash booleans를 한 artifact에 기록한다.","evidenceIds":["E07","E08","E09"]}
+      ],
+      "falsifiers":["Desktop-hosted exit code 없음","focused method 없음","local/cloud/hash predicate artifact 없음"],
+      "counterExamples":["SMB에서 Notebook Gradle 실행","stale goal status 재사용","UI 응답만으로 PASS"],
+      "authorityRisks":["Desktop process 실행 권한 부재"],
+      "safetyRisks":["검증 없는 HOLD 해제","credential 또는 raw prompt 노출"],
+      "missingEvidence":["Desktop canonical test exit code","Desktop request ledger predicate"],
+      "smallestDisconfirmingProbe":"Desktop canonical root에서 hardPressureFirstRequestUsesCloudWithoutLocalExchange를 실행하고 redacted result를 게시한다.",
+      "evidenceIds":["E02","E03","E04","E05","E06","E07","E08","E09","E11","E13","E14","E15"]
+    },
+    "NEUTRAL_QUERY": {
+      "packetType":"NEUTRAL_QUERY",
+      "evidenceSnapshotHash":"697892084077d831893b4f36712ba5fe8e0c34873c281f968e025bb2af7d9db7",
+      "forwardOrder":["POSITIVE_QUERY","NEGATIVE_QUERY"],
+      "reverseOrder":["NEGATIVE_QUERY","POSITIVE_QUERY"],
+      "forwardVerdict":"HOLD",
+      "reverseVerdict":"HOLD",
+      "forwardDecisiveEvidenceIds":["E02","E03","E04","E05","E06","E07"],
+      "reverseDecisiveEvidenceIds":["E02","E03","E04","E05","E06","E07"],
+      "orderStable":true,
+      "verdict":"HOLD",
+      "selectedOrRewrittenGoal":"Desktop process가 focused test를 실제 실행하고 local 0/cloud 1/hash PASS artifact를 생성한 뒤에만 desktopFinalProof와 runtimeLineage HOLD를 해제한다.",
+      "scoreInputs":{
+        "evidenceStrength":{"value":0.90,"evidenceIds":["E02","E03","E04","E05","E06","E07"]},
+        "causalStrength":{"value":0.92,"evidenceIds":["E04","E05","E06","E07"]},
+        "verificationFeasibility":{"value":0.20,"evidenceIds":["E02","E03","E04","E13"]},
+        "userValue":{"value":0.94,"evidenceIds":["E12"]},
+        "reversibility":{"value":0.99,"evidenceIds":["E09"]},
+        "costEfficiency":{"value":0.70,"evidenceIds":["E10"]},
+        "timeFit":{"value":0.35,"evidenceIds":["E04","E06"]},
+        "blastRadius":{"value":0.05,"evidenceIds":["E12","E15"]},
+        "ambiguity":{"value":0.12,"evidenceIds":["E05","E06","E07"]},
+        "authorityOrSafetyExpansion":{"value":0.00,"evidenceIds":["E12","E14","E15"]}
+      },
+      "goalScore":73.85,
+      "decisiveEvidence":["E02","E03","E04","E05","E06","E07"],
+      "rejectedClaims":["Y:에서 실행한 test는 Desktop final proof다.","stale status는 current proof다.","identity match만으로 HOLD를 해제할 수 있다."],
+      "nextSingleProof":"Desktop canonical root에서 .\\gradlew.bat test --tests 'ai.abandonware.nova.orch.aop.LlmRouterRequestTimelineTest.hardPressureFirstRequestUsesCloudWithoutLocalExchange'를 실행하고 localHttp=0, cloudHttp=1, promptHashPresent=true, optionsHashPresent=true를 기록한다.",
+      "confidence":"H"
+    }
+  }
+}

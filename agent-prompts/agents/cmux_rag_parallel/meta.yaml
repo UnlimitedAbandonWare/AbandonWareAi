@@ -1,0 +1,5 @@
+id: cmux_rag_parallel
+lang: ko
+role: system
+version: "1.1.0"
+tags: [cmux, nas, parallel-agents, orchestration, Java17, SpringBoot3, LangChain4j, RAG, AbandonWare]

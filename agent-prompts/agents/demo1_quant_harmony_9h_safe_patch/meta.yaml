@@ -1,0 +1,17 @@
+id: demo1_quant_harmony_9h_safe_patch
+lang: ko
+role: system
+version: "1.0.0"
+tags:
+  - demo-1
+  - DynamicRAG
+  - QuantMetric
+  - AblationHarmony
+  - SafePatch
+  - NineHour
+  - Desktop
+  - Codex
+  - Antigravity
+  - Superpowers
+  - Supabase
+  - ComputerUse

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="mrbd-web-app-capable" content="yes"><meta name="description" content="폴드6 수음 · 한국어 실시간 전사"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#000000">
+<title>AWX · Fold6 수음</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="styles.css?v=meta-relay-1">
+<script src="display-core.js" defer></script><script src="display-conversate.js?v=nova-focus-1" defer></script><script src="display-voice.js?v=meta-relay-1" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=nova-focus-1" defer></script><script src="display-focus-controls.js?v=nova-focus-1" defer></script><script src="app.js?v=nova-focus-1" defer></script>
+<style>
+#app.transcription { display:block; height:auto; max-height:none; min-height:100dvh; }
+#app > * { margin-bottom:16px; }
+#app header { display:block; }
+#app header h1 { margin-bottom:8px; }
+#caption-card { min-height:160px; max-height:320px; overflow:auto; }
+#nova-fold { position:fixed; z-index:20; inset:16px; width:min(620px,calc(100% - 32px)); max-height:calc(100dvh - 32px); box-sizing:border-box; margin:auto; overflow:auto; background:#090d11; border:1px solid #a4bdcb; border-radius:16px; padding:18px; box-shadow:0 0 0 100vmax #0009; }
+#nova-fold[hidden],#nova-history[hidden] { display:none; }
+#nova-fold-draft { color:#a8adb3; font-size:20px; line-height:1.45; max-height:58px; overflow:hidden; white-space:pre-wrap; }
+#nova-fold-answer { height:288px; overflow:hidden; font-size:26px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+#nova-question { width:100%; font-size:18px; }
+#nova-history-list { max-height:65vh; overflow:auto; white-space:pre-wrap; }
+#nova-history-list article { border-bottom:1px solid #58626a; padding:12px 0; }
+#app details > * { margin-top:12px; }
+#app summary { cursor:pointer; font-size:18px; }
+#display-url { display:block; color:#fff; }
+#lens-address { width:100%; font-size:16px; }
+#phone-controls { padding:0; }
+#microphone { width:100%; }
+.lens-grid { display:grid; grid-template-columns:1fr auto; gap:6px 10px; align-items:center; max-width:360px; }
+.lens-grid input { width:96px; font-size:16px; }
+</style></head><body data-fold6-test>
+<main id="app" class="transcription" aria-label="한국어 실시간 전사">
+<header><h1>AWX Lens <span>LIVE</span></h1><span id="connection" role="status">서버 연결 중</span></header>
+<div id="phone-controls" hidden><button id="microphone" class="focusable" type="button" aria-pressed="false">폴드6 수음 시작</button>
+<button id="finish" class="focusable" type="button" hidden disabled>마지막 전사 받고 중지</button>
+<p id="microphone-status" class="hint" role="status">시작을 누르기 전에는 수음하지 않습니다.</p>
+<meter id="input-level" min="0" max="100" value="0" aria-label="마이크 입력 크기" hidden></meter>
+</div>
+<button id="hints" class="focusable" type="button" aria-pressed="false">필요할 때만 자동 힌트</button>
+<p id="error" role="alert" class="hint"></p>
+<section id="caption-card" class="focusable" tabindex="0" aria-label="현재 발화">
+<div class="card-heading"><h2 id="caption-label">마이크 대기</h2><span id="caption-page"></span></div>
+<p id="caption-text" aria-live="polite">폴드6에서 들어오는 대화가 여기에 표시됩니다.</p><p id="hint-text" hidden></p>
+</section>
+<button id="connect-lens" class="focusable" type="button" disabled>안경 연결 주소 만들기</button>
+<input id="lens-address" class="focusable" type="text" readonly hidden aria-label="저장된 안경 연결 주소"><button id="copy-lens" class="focusable" type="button" hidden>주소 복사</button>
+<a id="add-lens" class="focusable" hidden>Meta AI에 전사 화면 등록</a>
+<a id="display-url" class="focusable" href="meta/index.html" target="_blank" rel="noopener noreferrer">안경 기본 화면 확인</a>
+<p id="lens-link-note" class="hint">처음에는 안경 연결 주소를 만들어 Meta AI에 등록하세요.</p>
+<p class="hint">수음 시작을 누르고 말하세요. 힌트를 켜면 짧은 답변도 안경에 표시됩니다.</p>
+<div class="actions"><button id="nova-open" class="focusable" type="button" disabled>노바 대화 열기</button><button id="nova-history-open" class="focusable" type="button" disabled>노바 대화 기록</button></div>
+<section id="nova-fold" hidden aria-label="노바 집중 대화">
+<div class="card-heading"><h2 id="nova-fold-status" role="status">노바</h2><button id="nova-close" class="focusable" type="button">집중창 닫기</button></div>
+<p id="nova-fold-draft"></p><div id="nova-fold-answer" aria-live="off"></div>
+<div class="actions"><button id="nova-pause" class="focusable" type="button">표시 잠시 멈춤</button><button id="nova-replay" class="focusable" type="button">답변 다시 보기</button></div>
+<form id="nova-question-form"><label for="nova-question">노바에게 질문</label><input id="nova-question" class="focusable" maxlength="2000" autocomplete="off"><button class="focusable" type="submit">질문 보내기</button></form>
+</section>
+<section id="nova-history" hidden aria-label="노바 대화 기록"><h2>노바 대화 기록</h2><div id="nova-history-list"></div><button id="nova-history-older" class="focusable" type="button">이전 대화</button><button id="nova-history-close" class="focusable" type="button">기록 닫기</button></section>
+<details id="advanced-settings"><summary class="focusable" tabindex="0">연결·입력 설정</summary>
+<details id="nova-settings"><summary class="focusable" tabindex="0">노바 대화 설정</summary>
+<form id="nova-settings-form"><div class="lens-grid">
+<label for="nf-enabled">노바 음성 호출</label><input id="nf-enabled" class="focusable" type="checkbox">
+<label for="nf-wake">호출어</label><input id="nf-wake" class="focusable" type="text" value="노바" maxlength="16">
+<label for="nf-target">답변을 읽을 화면</label><select id="nf-target" class="focusable"><option value="auto">연결된 안경 · 없으면 휴대폰</option><option value="lens">안경</option><option value="fold">이 휴대폰</option></select>
+<label for="nf-quiet">발화 확정 후 조용시간(ms)</label><input id="nf-quiet" class="focusable" type="number" min="500" max="5000" step="100" value="1200">
+<label for="nf-idle">답변 표시 후 후속 질문 대기(ms)</label><input id="nf-idle" class="focusable" type="number" min="5000" max="120000" step="1000" value="20000">
+<label for="nf-listen">호출 후 질문 대기(ms)</label><input id="nf-listen" class="focusable" type="number" min="3000" max="30000" step="1000" value="8000">
+<label for="nf-sequential">글자 순차 출력</label><input id="nf-sequential" class="focusable" type="checkbox" checked>
+<label for="nf-speed">글자 출력 간격(ms)</label><input id="nf-speed" class="focusable" type="number" min="50" max="160" step="10" value="80">
+<label for="nf-lines">화면에 남길 줄 수</label><input id="nf-lines" class="focusable" type="number" min="4" max="8" step="1" value="6">
+<label for="nf-fade-on">마지막 내용 자동 숨김</label><input id="nf-fade-on" class="focusable" type="checkbox" checked>
+<label for="nf-hold">마지막 내용 유지(ms)</label><input id="nf-hold" class="focusable" type="number" min="2000" max="15000" step="1000" value="5000">
+<label for="nf-fade">천천히 사라지는 시간(ms)</label><input id="nf-fade" class="focusable" type="number" min="200" max="1000" step="100" value="400">
+</div><button id="nf-save" class="focusable" type="submit" disabled>노바 설정 저장</button><button id="nf-reload" class="focusable" type="button">서버 설정 다시 불러오기</button></form>
+<p id="nf-status" class="hint" role="status">음성 호출은 기본으로 꺼져 있습니다. 직접 대화를 열 수도 있습니다.</p>
+</details>
+<details><summary class="focusable" tabindex="0">입력 장치</summary><label for="input-device">휴대폰 입력 장치</label><select id="input-device" class="focusable"><option value="">시스템 기본 입력</option></select><button id="refresh-devices" class="focusable" type="button">장치 새로고침</button><p id="input-label" class="hint">장치명만으로 내장 마이크가 확인되지는 않습니다. 폴드6 가까이와 안경 가까이에서 번갈아 말해 비교하세요.</p></details>
+
+<p id="link-status" class="hint" role="status">첫 연결은 아래 휴대폰 연결에서 시작하세요.</p>
+<section id="pair-panel" hidden aria-label="기기 연결"><p id="pair-message"></p>
+<form id="pair-form" hidden><label for="pair-code">안경에 표시된 연결 번호</label><input id="pair-code" class="focusable" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off"><button class="focusable" type="submit">연결 요청</button></form>
+<div class="actions"><button id="approve" class="focusable" type="button" hidden>확인 번호 일치 · 승인</button><button id="pair-close" class="focusable" type="button">닫기</button></div></section>
+
+<section id="display-control" aria-label="Display 송출 설정">
+<p id="owner-status" role="status">이벤트 권한 확인 중</p><p id="display-status" role="status">Display 접속 확인 중</p>
+<button id="broadcast" class="focusable" type="button" aria-pressed="true">Display 송출 켜짐</button>
+<label for="segment-preset">전사 구간</label><select id="segment-preset" class="focusable"><option value="0" selected>연속 · 발화가 끝날 때까지</option><option value="5">5초마다 수음 재시작</option><option value="10">10초마다 수음 재시작</option><option value="15">15초마다 수음 재시작</option><option value="custom">사용자 지정</option></select>
+<input id="segment-custom" class="focusable" type="number" min="5" max="60" value="10" aria-label="사용자 지정 전사 구간 초" hidden>
+<button id="segment-apply" class="focusable" type="button">구간 적용</button><p id="segment-status" class="hint">연속 수음 · 발화가 끝나면 힌트 처리</p>
+
+<details id="lens-display"><summary class="focusable" tabindex="0">안경 표시 설정</summary>
+<div class="lens-grid">
+<label for="ld-cap-font">전사 글자(px)</label><input id="ld-cap-font" class="focusable" type="number" min="20" max="36" step="1" value="26">
+<label for="ld-hint-font">힌트 글자(px)</label><input id="ld-hint-font" class="focusable" type="number" min="20" max="36" step="1" value="26">
+<label for="ld-cap-lines">전사 최대 줄</label><input id="ld-cap-lines" class="focusable" type="number" min="1" max="8" step="1" value="4">
+<label for="ld-cap-ttl">전사 유지(초 · 최신 내용부터 · 1~100)</label><input id="ld-cap-ttl" class="focusable" type="number" min="1" max="100" step="1" value="20">
+<label for="ld-hint-lines">힌트 페이지 줄</label><input id="ld-hint-lines" class="focusable" type="number" min="4" max="13" step="1" value="11">
+<label for="ld-hint-ttl">힌트 유지(초 · 최초 표시부터 · 1~100)</label><input id="ld-hint-ttl" class="focusable" type="number" min="1" max="100" step="1" value="20">
+<label for="ld-auto-page">자동 넘김(초 · 0=끔 · 1~100)</label><input id="ld-auto-page" class="focusable" type="number" min="0" max="100" step="1" value="5">
+<label for="ld-quiet">힌트 생성 조용시간(초 · 1~30)</label><input id="ld-quiet" class="focusable" type="number" min="1" max="30" step="0.5" value="2.5">
+<label for="ld-cooldown">힌트 생성 쿨다운(초 · 1~120)</label><input id="ld-cooldown" class="focusable" type="number" min="1" max="120" step="1" value="10">
+<label for="ld-force">강제 힌트 주기(초 · 1~600)</label><input id="ld-force" class="focusable" type="number" min="1" max="600" step="1" value="180">
+<label for="ld-hint-chars">힌트 목표 길이(자)</label><input id="ld-hint-chars" class="focusable" type="number" min="240" max="1100" step="10" value="1000">
+</div>
+<div class="actions"><button id="ld-apply" class="focusable" type="button">안경 표시 적용</button><button id="ld-reset" class="focusable" type="button">기본값 복원</button></div>
+<p id="ld-status" class="hint" role="status">전사는 항상 작은 회색 · 표시 유지·넘김과 생성 주기(조용시간/쿨다운/강제힌트)는 저장 후·재접속 후 실제로 바뀝니다. 강제 힌트 기본 180초를 줄이지 않습니다.</p>
+</details>
+<details id="hint-context"><summary class="focusable" tabindex="0">힌트 맥락 설정</summary>
+<div class="lens-grid">
+<label for="hc-history">이전 대화 참고</label><input id="hc-history" class="focusable" type="checkbox" checked>
+<label for="hc-window">최근 참조 범위(초 · 0=기본)</label><input id="hc-window" class="focusable" type="number" min="0" max="300" step="1" value="0">
+<label for="hc-chars">과거 맥락 최대(자 · 0=기본)</label><input id="hc-chars" class="focusable" type="number" min="0" max="8192" step="50" value="0">
+<label for="hc-tokens">과거 맥락 최대(토큰 추정 · 0=기본)</label><input id="hc-tokens" class="focusable" type="number" min="0" max="4096" step="10" value="0">
+<label for="hc-topic">주제 전환 시 과거 맥락 축소</label><input id="hc-topic" class="focusable" type="checkbox" checked>
+</div>
+<div class="actions"><button id="hc-apply" class="focusable" type="button">맥락 설정 적용</button><button id="hc-reset" class="focusable" type="button">지금부터 새 주제로 시작</button></div>
+<p id="hc-status" class="hint" role="status">끄면 힌트가 이전 대화를 보지 않습니다. 전사 원문과 저장은 그대로 유지됩니다. 새 주제 시작은 수음과 세션을 멈추지 않습니다.</p>
+</details>
+</section>
+<section aria-label="배경 TXT"><label for="context-file">배경 TXT 읽기 (선택 · UTF-8, 최대 8,000자)</label><input id="context-file" class="focusable" type="file" accept=".txt,text/plain"><p id="context-status" class="hint" role="status">파일은 현재 세션의 힌트 배경으로만 사용합니다.</p><button id="clear-context" class="focusable" type="button">배경 지우기</button></section>
+<details id="device-debug"><summary class="focusable" tabindex="0">개발자 상태</summary><pre id="debug-state" aria-live="off"></pre></details>
+<nav class="actions" aria-label="전사 제어"><button id="pair" class="focusable" type="button">휴대폰 연결</button><button id="phone-mode" class="focusable" type="button">휴대폰에서 수음</button></nav>
+<nav class="actions" aria-label="연결 제어"><button id="reconnect" class="focusable" type="button" hidden>다시 연결</button><button id="stop" class="focusable" type="button">수음 중지</button><button id="unlink" class="focusable" type="button" hidden>연결 해제</button></nav>
+
+<p class="hint">기본 전사는 중지할 때까지 이어집니다. 구간 시간을 선택하면 해당 간격으로 연결을 갱신합니다. 힌트를 켜면 확정 발화에 필요한 경우에만 짧은 힌트를 요청합니다.</p></details><noscript>실시간 전사에는 JavaScript가 필요합니다.</noscript></main></body></html>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Session Watchdog"
+  short_description: "Scan Devin/Grok/Codex/Cline session stores for verified failure patterns"
+  default_prompt: "Use $agent-session-watchdog: run scripts/agent_session_watch.py (stores|scan|watch|diagnose). watch on auto findings runs diagnostics plus agent_work_guard advise (records stop-retry). In-session brake is scripts/agent_work_guard.py / agent_work_guard.ps1 (missing-file reads, doubled src/main, same-file retry>=3). Detection is not mutation authority."

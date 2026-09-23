@@ -1,0 +1,328 @@
+# demo-1 vibe skill router — intent index (SSOT)
+#
+# Default entry for user asks: `python -B scripts/demo1_vibe_skill_router.py resolve "<user text>"`
+# resolves ONE primary skill (+ at most one optional). Edit intents/families
+# here only; the router script and demo1-vibe-skill-router SKILL.md read this file.
+#
+# match: substring patterns (case-insensitive). Prefix a pattern with `re:` for regex.
+# score = count of matched patterns; highest score wins; ties keep file order.
+# forbid_families: suppressed unless the user text matches a family `unlock` pattern.
+# explicit: true on an intent = it only wins when the user names that gated flow,
+# and any scored explicit intent outranks generic intents (score 무관).
+
+schemaVersion: 1
+
+# Suppressed by default on every intent (Grok audit: entry sprawl + ceremony).
+families:
+  counter-evidence:
+    note: falsifiable→retrieve→triangulate→verify→minority chain; only on explicit ask
+    unlock:
+      - counter-evidence
+      - counter evidence
+      - 반증
+      - falsifiable
+      - triangulat
+      - minority signal
+    skills:
+      - demo1-generating-falsifiable-hypotheses
+      - demo1-retrieving-counter-evidence
+      - demo1-triangulating-counter-evidence
+      - demo1-verifying-evidence-coherence
+      - demo1-forecasting-minority-signals
+  macsrc-patchdrop:
+    note: MacSrc/PatchDrop/SMB intake→guard→postprocess maze; only when user names it
+    unlock:
+      - patchdrop
+      - patch drop
+      - patch_drop
+      - __patch_drop__
+      - macsrc
+      - mac src
+      - smb
+    skills:
+      - demo1-macsrc-defect-intake
+      - demo1-macsrc-guarded-patch-session
+      - demo1-macsrc-patch-postprocessor
+      - demo1-macsrc-smb-direct-patch
+      - demo1-patchdrop-manual-default
+      - macmini-safe-patch-assistant
+      - patchdrop-safe-patch-orchestrator
+      - desktop-smb-ack
+      - notebook-smb-handoff
+  triad:
+    note: positive/negative/neutral deliberation; only on explicit 심의/cross-check ask
+    unlock:
+      - triad
+      - deliberat
+      - positive negative
+      - 긍정 부정 중립
+      - 심의
+      - cross-check
+      - 교차 검증
+    skills:
+      - demo1-triad-deliberation
+      - positive-negative-neutral-judge
+
+default_forbid_families:
+  - counter-evidence
+  - macsrc-patchdrop
+  - triad
+
+intents:
+  # --- explicit-ask intents first: `explicit: true` makes a scored one win over
+  #     generic intents like source-write even at lower raw score ---
+  - intent: patchdrop-apply
+    explicit: true
+    match:
+      - patchdrop
+      - patch drop
+      - patch_drop
+      - __patch_drop__
+      - smb handoff
+      - macsrc
+      - mac src
+    primary_skill: patchdrop-safe-patch-orchestrator
+    optional_skill: null
+    forbid_families: []
+    notes: 사용자가 PatchDrop/SMB/MacSrc를 명시한 경우에만 도달(가족 unlock과 같은 키워드)
+
+  - intent: triad-review
+    explicit: true
+    match:
+      - triad
+      - 심의
+      - 긍정 부정 중립
+      - positive negative neutral
+      - cross-check
+      - 교차 검증
+    primary_skill: demo1-triad-deliberation
+    optional_skill: positive-negative-neutral-judge
+    forbid_families: []
+    notes: 명시적 심의 요청 전용; 일반 ambiguous 결정에 자동 진입 금지
+
+  - intent: counter-evidence
+    explicit: true
+    match:
+      - counter-evidence
+      - counter evidence
+      - 반증
+      - falsifiable
+      - triangulat
+      - minority signal
+    primary_skill: demo1-triangulating-counter-evidence
+    optional_skill: demo1-generating-falsifiable-hypotheses
+    forbid_families: []
+    notes: 명시적 반증 요청 전용; 바이브 지시의 기본 검증 경로가 아님
+
+  - intent: meta-display
+    match:
+      - meta display
+      - meta-display
+      - ray-ban
+      - rayban
+      - 렌즈
+      - lens
+      - cuehint
+      - 안경
+      - fold6
+      - 캡션
+      - caption
+    primary_skill: demo1-meta-display-simple-caption
+    optional_skill: demo1-meta-display-webapp
+    forbid_families: []
+    notes: lens text/caption/표시 설정; webapp·sync·verification 역할은 demo1-core-request-router phase 분류 경유
+
+  - intent: chat-exact-model
+    match:
+      - /chat 모델
+      - /chat model
+      - exact model
+      - exact-model
+      - 모델 고정
+      - 모델 선택
+      - model selection
+      - gpt pro
+      - gpt-pro
+    primary_skill: demo1-core-request-router
+    optional_skill: demo1-api-routing-inventory
+    forbid_families: []
+    notes: /chat exact-model 핸드오프/팩토리 작업; core-request-router가 phase skill로 위임
+
+  - intent: db-export
+    match:
+      - db export
+      - db-export
+      - meta-display-db
+      - meta display db
+      - h2 export
+      - 대화 db
+      - conversation db
+      - lmsdb
+    primary_skill: demo1-meta-display-db-export
+    optional_skill: null
+    forbid_families: []
+    notes: 라이브 H2 직접 JDBC 금지; snapshot/live SELECT-only export 경로
+
+  - intent: nova-focus
+    match:
+      - 노바
+      - nova focus
+      - nova-focus
+      - wake word
+      - wake-word
+      - 집중 대화
+    primary_skill: demo1-nova-focus
+    optional_skill: null
+    forbid_families: []
+    notes: 노바 웨이크워드 집중 대화; spec은 agent-prompts/nova-focus/ (Text-Flow addendum 우선)
+
+  - intent: start-rag
+    match:
+      - start-rag
+      - start rag
+      - devwatch
+      - dev-reload
+      - forcerestart
+      - force restart
+      - 리로드
+      - 재기동
+      - 재시작
+      - reload
+    primary_skill: demo1-dev-reload
+    optional_skill: null
+    forbid_families: []
+    notes: Java/Spring/Display 소스 변경 시 compile+ForceRestart live 반영 절차
+
+  - intent: safe-cleanup
+    match:
+      - safe cleanup
+      - safe-cleanup
+      - 디스크 정리
+      - disk pressure
+      - 잔여물
+      - residue
+      - pycache
+      - __pycache__
+      - 정리해줘
+      - cleanup
+    primary_skill: demo1-safe-cleanup
+    optional_skill: null
+    forbid_families: []
+    notes: allowlist+WhatIf 기본 클리너; lease 강제 해제·handoff 대량 삭제는 범위 밖
+
+  - intent: handoff-reply
+    match:
+      - devin report
+      - 보고서 답변
+      - 어떻게 답
+      - reply directive
+      - 지시서 작성
+      - 지시서
+      - directive to hand
+      - handoff reply
+      - 핸드오프 답장
+      - delta-only
+    primary_skill: demo1-devin-directive-loop
+    optional_skill: null
+    forbid_families: []
+    notes: 외부 에이전트 보고서 답변/지시서 초안; DRAFT·REVIEW·CLOSE 한 번 분류
+
+  - intent: multi-seam-brief
+    match:
+      - multi-seam
+      - 멀티 seam
+      - pasted brief
+      - devin brief
+      - orchestrat
+      - 브리프
+    primary_skill: demo1-devin-source-orchestrator
+    optional_skill: null
+    forbid_families: []
+    notes: 독립 seam이 섞인 붙여넣기 브리프 → devin_task_orchestrate.py plan이 phase 시퀀싱
+
+  - intent: change-plane
+    match:
+      - change plane
+      - change-plane
+      - changeintent
+      - change intent
+      - agent_change_plane
+      - 병렬 세션
+      - parallel session
+      - release request
+    primary_skill: demo1-agent-change-plane
+    optional_skill: demo1-lease-conflict-autoflow
+    forbid_families: []
+    notes: 병렬 세션 intent 선언/보드/fingerprint당 release 1회; lease 자체는 source_edit_session이 권위
+
+  - intent: source-write
+    match:
+      - patch
+      - 패치
+      - 소스 수정
+      - 코드 수정
+      - edit source
+      - modify
+      - re:\bfix\b
+      - 고쳐
+      - implement
+      - 구현
+      - 바꿔
+    primary_skill: demo1-work-ledger
+    optional_skill: null
+    forbid_families: []
+    notes: 파일 변경 작업의 journal+checkpoint 절차만; triad/카운터증거는 명시 요청 시에만
+
+  - intent: rag-search
+    match:
+      - rag
+      - retrieval
+      - 검색 품질
+      - rerank
+      - promptbuilder
+      - graphrag
+      - search pipeline
+    primary_skill: demo1-rag-platform
+    optional_skill: demo1-rag-strategy-orchestration
+    forbid_families: []
+    notes: RAG 백엔드 변경; 전략 seam은 rag-strategy-orchestration, resilience는 resilience-observability
+
+  - intent: llm-provider
+    match:
+      - llm
+      - ollama
+      - provider
+      - embedding
+      - api routing
+      - 모델 라우팅
+      - api key
+      - asr
+    primary_skill: demo1-api-routing-inventory
+    optional_skill: demo1-local-llm-gpu-gateway
+    forbid_families: []
+    notes: 프로바이더/모델 배선 변경; live inventory(ollama ls)가 stale 문서보다 우선
+
+  - intent: debug-symptom
+    match:
+      - debug
+      - 디버그
+      - 버그
+      - bug
+      - broken
+      - 안 돼
+      - 안됨
+      - fails
+      - 실패
+      - 에러
+      - error
+      - not working
+    primary_skill: demo1-evidence-debugging
+    optional_skill: null
+    forbid_families: []
+    notes: 단일 디버그 진입; invisible-eye/observed-debugging은 기본 경로 밖 보존
+
+# Fallback when no intent scores: proceed without a skill. Do not force one.
+# Display/RAG/LLM scope가 불명확하게 섞인 요청만 사람이 demo1-core-request-router로 분류.
+fallback:
+  primary_skill: null
+  notes: no intent matched — work directly; skill 선택을 억지로 하지 않는다

@@ -1,0 +1,137 @@
+version: "2026-07-01"
+catalogTrust: "attachment_unverified"
+catalogSource: "user_pasted_directive"
+
+models:
+  - id: "gpt-5.5"
+    provider: "openai"
+    enabled: false
+    endpoint:
+      type: "responses"
+      base_url: "https://api.openai.com/v1"
+      key_env: "OPENAI_API_KEY"
+    credentialEnv: "OPENAI_API_KEY"
+    apiSurface: "responses"
+    ctx: 1048576
+    maxOutputTokens: 128000
+    capabilities: [chat, reasoning, code, tools, agentic]
+    costTier: "premium"
+    latencyTier: "variable"
+    routingDecision: "disabled_by_default_premium_route"
+    sourceDocUrl: "https://developers.openai.com/api/docs/models/gpt-5.5"
+    catalogCapturedAt: "2026-07-01"
+    catalogTrust: "attachment_unverified"
+
+  - id: "gpt-5.4-mini"
+    provider: "openai"
+    enabled: false
+    endpoint:
+      type: "responses"
+      base_url: "https://api.openai.com/v1"
+      key_env: "OPENAI_API_KEY"
+    credentialEnv: "OPENAI_API_KEY"
+    apiSurface: "responses"
+    ctx: 400000
+    maxOutputTokens: 128000
+    capabilities: [chat, reasoning, code, tools]
+    costTier: "balanced_paid"
+    latencyTier: "medium"
+    routingDecision: "disabled_by_default_paid_fallback"
+    sourceDocUrl: "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+    catalogCapturedAt: "2026-07-01"
+    catalogTrust: "attachment_unverified"
+
+  - id: "openai/gpt-oss-120b"
+    provider: "groq"
+    enabled: false
+    endpoint:
+      type: "openai_compat"
+      base_url: "https://api.groq.com/openai/v1"
+      key_env: "GROQ_API_KEY"
+    credentialEnv: "GROQ_API_KEY"
+    apiSurface: "openai_compatible_chat"
+    ctx: 131072
+    maxOutputTokens: 65536
+    capabilities: [chat, reasoning, code, tools, agentic]
+    costTier: "fast_low_cost"
+    latencyTier: "low"
+    routingDecision: "metadata_for_existing_api3_fallback"
+    sourceDocUrl: "https://console.groq.com/docs/model/openai/gpt-oss-120b"
+    catalogCapturedAt: "2026-07-21"
+    catalogTrust: "attachment_unverified"
+
+  - id: "gemini-2.5-pro"
+    provider: "gemini"
+    enabled: false
+    endpoint:
+      type: "openai_compat"
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+      key_env: "GEMINI_API_KEY"
+    credentialEnv: "GEMINI_API_KEY"
+    apiSurface: "gemini_api_openai_compatible"
+    ctx: 1048576
+    maxOutputTokens: 65536
+    capabilities: [chat, reasoning, code, tools, vision, multimodal]
+    costTier: "paid"
+    latencyTier: "medium"
+    routingDecision: "disabled_by_default_long_context_route"
+    sourceDocUrl: "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro"
+    catalogCapturedAt: "2026-07-01"
+    catalogTrust: "attachment_unverified"
+
+  - id: "mistral-medium-3-5"
+    provider: "mistral"
+    enabled: false
+    endpoint:
+      type: "openai_like_chat"
+      base_url: "https://api.mistral.ai/v1"
+      key_env: "MISTRAL_API_KEY"
+    credentialEnv: "MISTRAL_API_KEY"
+    apiSurface: "mistral_chat"
+    ctx: 262144
+    maxOutputTokens: null
+    capabilities: [chat, reasoning, code, tools]
+    costTier: "paid"
+    latencyTier: "medium"
+    routingDecision: "disabled_by_default_vendor_diversity_route"
+    sourceDocUrl: "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04"
+    catalogCapturedAt: "2026-07-01"
+    catalogTrust: "attachment_unverified"
+
+  - id: "claude-current-family"
+    provider: "anthropic"
+    enabled: false
+    endpoint:
+      type: "anthropic_messages"
+      base_url: "https://api.anthropic.com/v1"
+      key_env: "ANTHROPIC_API_KEY"
+    credentialEnv: "ANTHROPIC_API_KEY"
+    apiSurface: "anthropic_messages"
+    ctx: 1000000
+    maxOutputTokens: null
+    capabilities: [chat, reasoning, code, tools]
+    costTier: "paid"
+    latencyTier: "medium"
+    routingDecision: "hold_until_native_adapter_or_proxy_exists"
+    sourceDocUrl: "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+    catalogCapturedAt: "2026-07-01"
+    catalogTrust: "attachment_unverified"
+
+  - id: "openrouter-discovery"
+    provider: "openrouter"
+    enabled: false
+    endpoint:
+      type: "openai_compat_models"
+      base_url: "https://openrouter.ai/api/v1"
+      key_env: "OPENROUTER_API_KEY"
+    credentialEnv: "OPENROUTER_API_KEY"
+    apiSurface: "openai_compatible_models"
+    ctx: null
+    maxOutputTokens: null
+    capabilities: [model_discovery]
+    costTier: "per_model"
+    latencyTier: "per_model"
+    routingDecision: "optional_probe_only_disabled_by_default"
+    sourceDocUrl: "https://openrouter.ai/docs/api/api-reference/models/get-models"
+    catalogCapturedAt: "2026-07-01"
+    catalogTrust: "attachment_unverified"

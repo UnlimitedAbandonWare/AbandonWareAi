@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="RAG 질문부터 Ray-Ban Display 카드 전송까지 한곳에서 시연합니다.">
+  <meta name="referrer" content="no-referrer"><meta name="theme-color" content="#12201e">
+  <title>곁 · RAG & Display Studio</title>
+  <link rel="icon" href="/assets/display/favicon.png"><link rel="stylesheet" href="/assets/interview/styles.css">
+  <script src="/assets/display/display-core.js" defer></script><script src="/assets/interview/interview-core.js" defer></script><script src="/assets/interview/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead"><a class="brand" href="/" aria-label="곁 홈페이지">곁<span>RAG & DISPLAY STUDIO</span></a><a class="environment" href="/assets/interview/studio.html"><i></i>RAG Studio · 근거와 라우팅 탐색 ↗</a></header>
+    <main>
+      <section class="intro"><div><p class="eyebrow">하나의 질문, 두 가지 경험</p><h1>답을 찾고,<br class="mobile-break"> 눈앞으로 전하세요.</h1><p class="lead">RAG의 답변과 근거를 확인하고, 필요한 문구를 Ray-Ban Display로 전달합니다.</p></div><span class="intro-note">INTERVIEW DEMO <b>01 / 02</b></span></section>
+      <ol class="journey" aria-label="시연 진행 상태"><li id="step-input" data-state="active"><span>01</span><div>입력 접수<small id="input-state">질문을 준비하세요</small></div></li><li id="step-rag"><span>02</span><div>RAG 검색<small id="rag-state">대기 중</small></div></li><li id="step-answer"><span>03</span><div>답변 생성<small id="answer-state">응답 대기</small></div></li><li id="step-summary"><span>04</span><div>120자 가공<small id="summary-state">가공 대기</small></div></li><li id="step-display"><span>05</span><div>디스플레이 전송<small id="flow-display-state">연결 대기</small></div></li><li id="step-ack"><span>06</span><div>ACK 수신<small id="ack-state">수신 대기</small></div></li></ol>
+      <div class="workspace">
+        <section class="panel chat-panel" aria-labelledby="chat-heading">
+          <header class="panel-heading"><div><span class="section-number">01 / RAG</span><h2 id="chat-heading">질문하고, 근거를 확인하세요.</h2></div><button id="new-conversation" class="text-button" type="button">새 대화 ↗</button></header>
+          <div class="presets" aria-label="원클릭 시연 질문"><span>원클릭 시연</span><button type="button" data-preset="이 프로젝트의 핵심 아키텍처를 확인 가능한 근거 중심으로 세 문장으로 요약해 줘. 확인하지 못한 내용은 추측하지 말고, 각 문장은 120자 이내로 작성해 줘.">프로젝트 핵심 아키텍처 요약</button><button type="button" data-preset="RAG 시스템의 장애 복구 메커니즘을 세 문장으로 설명해 줘. 검색 실패와 모델 생성 실패를 구분하고, 각 문장은 120자 이내로 작성해 줘.">RAG 장애 복구 메커니즘</button><button type="button" data-preset="이 프로젝트의 최근 변경점을 확인 가능한 근거만으로 요약해 줘. 변경 이력을 확인할 수 없다면 그 한계를 명시하고 추측하지 말아 줘.">최근 변경점</button></div>
+          <form id="question-form"><label for="question">질문</label><textarea id="question" rows="3" maxlength="2000" placeholder="궁금한 것을 입력하세요. 기존 RAG가 답변을 찾습니다."></textarea><div class="composer-bottom"><span id="question-count">0 / 2,000</span><div><button id="cancel" type="button" class="secondary" hidden>대기 중단</button><button id="ask" type="submit" class="primary" disabled>RAG에 질문하기 <span aria-hidden="true">↗</span></button></div></div></form>
+          <div class="answer-heading"><h3>답변</h3><span id="answer-meta">질문을 보내면 이곳에 표시됩니다</span></div>
+          <div id="rag-notice" class="notice" role="status" hidden></div>
+          <article id="answer" class="answer" aria-live="polite"><div class="empty-answer"><span aria-hidden="true">✳</span><p>좋은 질문에서 시작합니다.</p><small>답변과 출처를 이 화면에서 확인하세요.</small></div></article>
+          <div id="sources" class="sources" hidden><h3>답변에 첨부된 출처</h3><ul id="source-list"></ul></div>
+          <div class="answer-actions"><span>전달할 내용은 직접 확인한 뒤 선택하세요.</span><button id="use-question" type="button" class="secondary">질문 가져오기</button><button id="use-answer" type="button" class="secondary" disabled>답변 가져오기</button><button id="use-summary" type="button" class="secondary" disabled>120자 힌트 추출</button></div>
+        </section>
+        <section class="panel display-panel" aria-labelledby="display-heading">
+          <header class="panel-heading"><div><span class="section-number">02 / RAY-BAN DISPLAY</span><h2 id="display-heading">필요한 한 문장을 눈앞에.</h2></div><span class="tiny-badge">최대 120자</span></header>
+          <div class="glass-preview" aria-label="디스플레이 카드 미리보기"><div class="lens-top"><span>곁 <b>DISPLAY</b></span><span id="preview-kind">힌트</span></div><p id="preview-text">질문, 힌트, 짧은 답변.<br>전달할 문구를 적어 보세요.</p><div class="lens-bottom"><span>화면 미리보기</span><span id="preview-count">0자</span></div></div>
+          <form id="display-form"><fieldset class="kind-picker"><legend>전달 유형</legend><label><input type="radio" name="kind" value="question">질문</label><label><input type="radio" name="kind" value="hint" checked>힌트</label><label><input type="radio" name="kind" value="answer">짧은 답변</label></fieldset><label for="display-text">디스플레이 전송용 힌트/요약</label><textarea id="display-text" rows="3" placeholder="120자 힌트 추출로 답변의 문장을 가져오거나 직접 입력하세요. 내용을 확인한 뒤 전송합니다."></textarea><div class="composer-bottom"><span id="display-count">0 / 120</span><button id="send-display" class="primary" type="submit" disabled>디스플레이로 전송 ↗</button></div></form>
+          <div class="delivery"><div class="delivery-title"><span class="status-dot" id="display-dot"></span><strong id="delivery-status" role="status">출력 연결을 준비하세요</strong><button id="connect-display" type="button" class="text-button">연결 준비</button></div><p id="delivery-detail">전송 접수와 수신 확인을 구분해 표시합니다.</p><div class="delivery-checks"><span id="check-server">○ 서버 접수</span><span id="check-receiver">○ 수신 ACK</span></div></div>
+          <details class="connection-settings"><summary>출력 클라이언트 연결</summary><p>다른 브라우저나 디스플레이에서 아래 출력 화면을 열면 전송 문구를 받습니다.</p><a id="receiver-link" href="#" target="_blank" rel="noopener noreferrer" hidden>출력 클라이언트 열기 ↗</a><input id="receiver-url" readonly aria-label="출력 클라이언트 주소" hidden><button id="disconnect-display" type="button" class="secondary" disabled>연결 종료·문구 지우기</button><p class="connection-note">로컬 브라우저는 HTTP로 테스트합니다. Meta 실물 웹앱은 HTTPS 연결 조건을 별도로 충족해야 합니다. 수신 ACK는 렌즈 표시나 사람이 읽었다는 증명이 아닙니다.</p></details>
+        </section>
+      </div>
+      <section class="public-address" aria-label="Ray-Ban 연동용 공인 주소"><b>Ray-Ban 연동용 공인 주소</b><span id="public-url-status">터널 실행 대기</span><a id="public-url" href="#" target="_blank" rel="noopener noreferrer" hidden></a></section>
+      <details class="debug"><summary><span><b>테스트 디버깅</b> <small>입력 · RAG 응답 · 디스플레이 전송</small></span><span id="event-count">0 events</span></summary><div class="debug-body"><div class="debug-info"><p>원문 질문·답변·쿠키를 로그에 저장하지 않습니다. 시간은 브라우저 왕복 시간이며, 검색 상세는 서버가 제공한 근거만 표시합니다.</p><button id="clear-debug" class="secondary" type="button">로그 비우기</button></div><ol id="debug-log" aria-label="테스트 이벤트"></ol></div></details>
+    </main>
+    <footer><span>곁 · 필요한 답을, 필요한 순간에.</span><span>RAG CHATBOT / DISPLAY DELIVERY</span></footer>
+  </div>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+  <noscript>시연하려면 브라우저의 JavaScript를 켜 주세요.</noscript>
+</body></html>

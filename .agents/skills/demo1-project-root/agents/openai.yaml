@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 쨌 Project Root"
+  short_description: "Lock work to C:\\AbandonWare\\demo-1\\demo-1\\src"
+  default_prompt: "Use $demo1-project-root: treat C:\\AbandonWare\\demo-1\\demo-1\\src as Project Root for all source/build/Start-RAG work unless the user names another path."

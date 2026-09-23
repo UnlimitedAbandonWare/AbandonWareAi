@@ -1,0 +1,431 @@
+{
+  "schemaVersion": "1.0",
+  "userRequest": "Write a Desktop SourceDirective selecting useful efficient existing-source integration for personal ChatGPT subscription Codex as bounded MCP review worker; do not implement now.",
+  "evidenceSnapshot": {
+    "summary": "Scope=goal_directive: write a Desktop-owned SourceDirective for personal Codex subscription-backed MCP review. No application edits, installation, model call, account changes or Desktop dispatch authorized/executed. canonicalWorkspace=Y:\\; SMB_ACCESS; sourceWriteRoot=null. Backing identity matches. Trusted Git blocked by dubious ownership; filesystem HEAD says codex/owned-runtime-browser-restart; .git/index.lock exists. Notebook CLI 0.154.0-alpha.6.2 has ChatGPT auth, exec --json --output-schema --ephemeral --ignore-user-config --sandbox; Pro plan/model entitlement and Desktop executable/auth not proven. Native mcp-server absent from help. Existing Python awx-control-tower registry has 24 tools/11 resources/3 prompts, healthy catalog but MCP_STYLE 2024-11-05 modernSupported=false. No Codex review tool. Active call path: stdio HANDLERS -> toolbox handler -> finalize/redact; manifest must match handler and aliases. Root main/java/main/resources; app java_clean/resources; isolated glmAgentMcp Java sourceSet uses GLM core and four tools; preserve these. Proposed: extend existing private MCP with one bounded codex_review_change adapter using pinned official CLI, fixed supplied-evidence task, host-local empty workdir, read-only sandbox, auth reuse, strict final JSON, no source writes. No public RAG provider integration; no claimed cost savings or free quota. New subprocess must exclude recursive MCP/config/hooks through a proven supported invocation and fail closed if unavailable. Single call, concurrency1, zero retry, timeout<=90s under existing120s host budget, bounded input/output, no raw logs. Catalog baseline 18 tests:17 pass/1 fail; same failing traversal test passes with local ROOT fixture; share-root parent normalization explains observed difference only. Protocol full22 tests reports3 failures+9 errors in64.646s;8 ProtocolTest pass; pipe readiness failures remain Desktop evidence-needed. Recommendation artifact can APPLY while implementation/runtime rollout remains HOLD pending Desktop local baseline and owned-source gates. Source fingerprints and official evidence listed below. E16 sha256=77e42149a420ea95972fa3965d13a6e4d8f4aaf616a2f64833321745beafe197. E17 sha256=b921356dac3291f5c38781d502e4cfd35e36a547102ab8e9cc1a319e5cbf50dd. E18 sha256=2ae4fcd4be9d32f366b4080eede0139df1a12af9d48a1e659acb1dd470c20f01.",
+    "evidenceRows": [
+      {
+        "evidenceId": "E01",
+        "owner": "user",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "directive-only-personal-review"
+        },
+        "verificationCommand": "Current user request: write Desktop source directive; no execution request"
+      },
+      {
+        "evidenceId": "E02",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "backing-identity-match"
+        },
+        "verificationCommand": "Y:\\scripts\\verify_ydrive_backing_identity.ps1 -ExpectedSha256 <repository baseline>"
+      },
+      {
+        "evidenceId": "E03",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "git-dubious-ownership-index-lock"
+        },
+        "verificationCommand": "git --no-optional-locks rev-parse --show-toplevel (output suppressed); Test-Path .git\\index.lock; read .git\\HEAD"
+      },
+      {
+        "evidenceId": "E04",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "chatgpt-auth-exec-flags-supported"
+        },
+        "verificationCommand": "codex --version; codex login status (classification only); codex exec --help; codex --help"
+      },
+      {
+        "evidenceId": "E05",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "count": 24
+        },
+        "verificationCommand": "python -B: awx_mcp_stdio_server.registry()['health']; codexReviewRegistered=false"
+      },
+      {
+        "evidenceId": "E06",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "python-handler-manifest-redaction-boundary"
+        },
+        "verificationCommand": "Read scripts/awx_mcp_stdio_server.py HANDLERS/registry/call_tool and scripts/awx_mcp_toolbox.py main/finalize"
+      },
+      {
+        "evidenceId": "E07",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "active-java-and-glm-boundaries-proven"
+        },
+        "verificationCommand": "Read settings.gradle; build.gradle.kts sourceSets/glmAgentMcp; app/build.gradle.kts; GlmAgentMcpTools.java"
+      },
+      {
+        "evidenceId": "E08",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "catalog-17-pass-one-share-root-failure"
+        },
+        "verificationCommand": "python -B -m unittest discover -s scripts -p test_awx_mcp_stdio_catalog.py; local ROOT fixture single test passes"
+      },
+      {
+        "evidenceId": "E09",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "protocol-22-tests-three-fail-nine-error"
+        },
+        "verificationCommand": "python -B -m unittest discover -s scripts -p test_awx_mcp_stdio_protocol.py"
+      },
+      {
+        "evidenceId": "E10",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "count": 8
+        },
+        "verificationCommand": "python -B -m unittest discover -s scripts -p test_awx_mcp_stdio_protocol.py -k ProtocolTest"
+      },
+      {
+        "evidenceId": "E11",
+        "owner": "official-openai",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "chatgpt-subscription-vs-api-auth"
+        },
+        "verificationCommand": "Open https://learn.chatgpt.com/docs/auth"
+      },
+      {
+        "evidenceId": "E12",
+        "owner": "official-openai",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "exec-reuses-auth-jsonl-schema"
+        },
+        "verificationCommand": "Open https://learn.chatgpt.com/docs/non-interactive-mode"
+      },
+      {
+        "evidenceId": "E13",
+        "owner": "official-openai",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "native-mcp-server-removed"
+        },
+        "verificationCommand": "Open https://learn.chatgpt.com/docs/mcp-server"
+      },
+      {
+        "evidenceId": "E14",
+        "owner": "official-openai",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "app-server-jsonrpc-experimental"
+        },
+        "verificationCommand": "Open https://learn.chatgpt.com/docs/app-server"
+      },
+      {
+        "evidenceId": "E15",
+        "owner": "official-openai",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "subscription-shared-usage-not-new-quota"
+        },
+        "verificationCommand": "Open https://learn.chatgpt.com/docs/pricing"
+      },
+      {
+        "evidenceId": "E16",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "source-sha256-recorded-in-summary"
+        },
+        "verificationCommand": "Get-FileHash Y:\\scripts\\awx_mcp_stdio_server.py -Algorithm SHA256"
+      },
+      {
+        "evidenceId": "E17",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "source-sha256-recorded-in-summary"
+        },
+        "verificationCommand": "Get-FileHash Y:\\scripts\\awx_mcp_toolbox.py -Algorithm SHA256"
+      },
+      {
+        "evidenceId": "E18",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "source-sha256-recorded-in-summary"
+        },
+        "verificationCommand": "Get-FileHash Y:\\main\\resources\\mcp\\awx-control-tower-tools.json -Algorithm SHA256"
+      },
+      {
+        "evidenceId": "E19",
+        "owner": "notebook",
+        "observedAt": "2026-09-12",
+        "observation": {
+          "reason": "desktop-auth-runtime-java-evidence-needed"
+        },
+        "verificationCommand": "Desktop: pinned codex --version/login status/exec --help; java -version; owned source preflight"
+      }
+    ]
+  },
+  "evidenceSnapshotHash": "02b3cccd8518ddb46ea21abf8b1d66360b4d0c286622523609f19106a5e36464",
+  "requiresLiteralSubagents": true,
+  "processMode": "three-subagents",
+  "actualAgentCount": 3,
+  "packets": {
+    "POSITIVE_QUERY": {
+      "packetType": "POSITIVE_QUERY",
+      "evidenceSnapshotHash": "02b3cccd8518ddb46ea21abf8b1d66360b4d0c286622523609f19106a5e36464",
+      "candidateGoal": "Write a Desktop directive for one bounded codex_review_change adapter. APPLY is document-only; implementation/runtime HOLD.",
+      "scenarioWorlds": [
+        {
+          "scenarioId": "P1_auth_reuse",
+          "premise": "Notebook supports ChatGPT auth and structured exec; Desktop remains unproven.",
+          "causalMechanism": "Pinned official CLI reuses authentication to review supplied evidence.",
+          "expectedObservation": "Read-only, schema-valid output within 90s from an empty host-local cwd.",
+          "evidenceNeeded": [
+            "E04",
+            "E11",
+            "E12",
+            "E19"
+          ],
+          "falsifier": "Desktop auth/flags fail, isolation fails, or billing takes an unintended path."
+        },
+        {
+          "scenarioId": "P2_narrow_extension",
+          "premise": "The 24-tool server has reusable boundaries but failing protocol tests.",
+          "causalMechanism": "One adapter follows HANDLERS, toolbox and finalization with manifest parity.",
+          "expectedObservation": "One registration; live stdio, timeout and cancellation pass after pipe repair.",
+          "evidenceNeeded": [
+            "E05",
+            "E06",
+            "E07",
+            "E08",
+            "E09",
+            "E10"
+          ],
+          "falsifier": "Pipes still fail, duplicate infrastructure is required, or cancellation leaks children."
+        }
+      ],
+      "validatedAssumptions": [
+        "Directive-only scope; matching Y-drive identity grants no mutation.",
+        "Official exec reuses auth; subscription calls create no extra quota.",
+        "Pure protocol: 8 pass. Full protocol: 22 tests, 3 failures, 9 errors."
+      ],
+      "reusableAssets": [
+        "Python stdio server/HANDLERS",
+        "Toolbox/finalize/redact",
+        "Manifest and tests",
+        "Official CLI auth"
+      ],
+      "expectedUserValue": "Personal review with minimal new code; preserve Java/GLM/RAG; no usage-savings claim.",
+      "minimalVerification": "Desktop proves CLI/auth, Java and owner gates; resolves protocol baseline; checks schema, redaction, config/hooks/recursion isolation, concurrency=1, retry=0, timeout<=90s.",
+      "evidenceIds": [
+        "E01",
+        "E02",
+        "E04",
+        "E05",
+        "E06",
+        "E07",
+        "E08",
+        "E09",
+        "E10",
+        "E11",
+        "E12",
+        "E15",
+        "E19"
+      ],
+      "unknowns": [
+        "Desktop executable/auth and Pro entitlement",
+        "Pipe failure cause",
+        "Isolation and live runtime proof"
+      ]
+    },
+    "NEGATIVE_QUERY": {
+      "packetType": "NEGATIVE_QUERY",
+      "evidenceSnapshotHash": "02b3cccd8518ddb46ea21abf8b1d66360b4d0c286622523609f19106a5e36464",
+      "challengedGoal": "Write a Desktop directive for one bounded codex_review_change adapter. APPLY is document-only; implementation/runtime HOLD.",
+      "scenarioAttacks": [
+        {
+          "scenarioId": "P1_auth_reuse",
+          "counterExample": "Notebook ChatGPT authentication does not establish Desktop authentication, flags or billing.",
+          "alternativeCause": "As an unmeasured hypothesis, native Codex or existing GLM tools may satisfy the review need with less overhead.",
+          "boundaryOrAuthorityRisk": "Read-only and an empty cwd alone do not prove config, hook or recursive-tool isolation.",
+          "costAndBlastRadius": "Same-account calls consume shared usage; extra review may add latency without value.",
+          "smallestDisconfirmingProbe": "On Desktop, inspect the pinned binary's version, login status and supported flags without reading credentials.",
+          "evidenceIds": [
+            "E04",
+            "E07",
+            "E11",
+            "E12",
+            "E15",
+            "E19"
+          ]
+        },
+        {
+          "scenarioId": "P2_narrow_extension",
+          "counterExample": "Catalog health coexists with full-protocol failures; eight pure tests cannot establish end-to-end readiness.",
+          "alternativeCause": "Existing protocol or shared-root behavior may explain failures before an adapter exists.",
+          "boundaryOrAuthorityRisk": "Unknown Desktop source gates and current ownership/index observations forbid treating this document as permission to patch.",
+          "costAndBlastRadius": "A hung child or duplicate registration could affect the existing 24 tools.",
+          "smallestDisconfirmingProbe": "Reproduce one failing full-protocol test on Desktop unchanged and classify its first failing boundary.",
+          "evidenceIds": [
+            "E03",
+            "E05",
+            "E06",
+            "E08",
+            "E09",
+            "E10",
+            "E19"
+          ]
+        }
+      ],
+      "falsifiers": [
+        "Desktop auth or isolation proof fails",
+        "Bounded cancellation or protocol acceptance fails"
+      ],
+      "counterExamples": [
+        "Registry health is insufficient runtime proof"
+      ],
+      "authorityRisks": [
+        "Implementation remains HOLD"
+      ],
+      "safetyRisks": [
+        "Credential exposure and recursive delegation require explicit rejection tests"
+      ],
+      "missingEvidence": [
+        "Desktop gates, auth, isolation and measured review value"
+      ],
+      "smallestDisconfirmingProbe": "Inspect pinned Desktop CLI version, login status and flags first.",
+      "evidenceIds": [
+        "E01",
+        "E03",
+        "E04",
+        "E09",
+        "E19"
+      ]
+    },
+    "NEUTRAL_QUERY": {
+      "packetType": "NEUTRAL_QUERY",
+      "evidenceSnapshotHash": "02b3cccd8518ddb46ea21abf8b1d66360b4d0c286622523609f19106a5e36464",
+      "forwardOrder": [
+        "POSITIVE_QUERY",
+        "NEGATIVE_QUERY"
+      ],
+      "reverseOrder": [
+        "NEGATIVE_QUERY",
+        "POSITIVE_QUERY"
+      ],
+      "forwardVerdict": "APPLY",
+      "reverseVerdict": "APPLY",
+      "forwardDecisiveEvidenceIds": [
+        "E01",
+        "E06",
+        "E09",
+        "E19"
+      ],
+      "reverseDecisiveEvidenceIds": [
+        "E01",
+        "E06",
+        "E09",
+        "E19"
+      ],
+      "orderStable": true,
+      "verdict": "APPLY",
+      "selectedOrRewrittenGoal": "Write one Desktop-owned directive for a bounded personal Codex review adapter on the existing MCP seam. Integration/runtime remain HOLD.",
+      "scoreInputs": {
+        "evidenceStrength": {
+          "value": 0.8,
+          "evidenceIds": [
+            "E06",
+            "E19"
+          ]
+        },
+        "causalStrength": {
+          "value": 0.8,
+          "evidenceIds": [
+            "E06",
+            "E12"
+          ]
+        },
+        "verificationFeasibility": {
+          "value": 0.9,
+          "evidenceIds": [
+            "E08",
+            "E09"
+          ]
+        },
+        "userValue": {
+          "value": 0.8,
+          "evidenceIds": [
+            "E01"
+          ]
+        },
+        "reversibility": {
+          "value": 1,
+          "evidenceIds": [
+            "E01"
+          ]
+        },
+        "costEfficiency": {
+          "value": 0.7,
+          "evidenceIds": [
+            "E06",
+            "E15"
+          ]
+        },
+        "timeFit": {
+          "value": 1,
+          "evidenceIds": [
+            "E01",
+            "E06"
+          ]
+        },
+        "blastRadius": {
+          "value": 0.05,
+          "evidenceIds": [
+            "E01"
+          ]
+        },
+        "ambiguity": {
+          "value": 0.1,
+          "evidenceIds": [
+            "E01",
+            "E19"
+          ]
+        },
+        "authorityOrSafetyExpansion": {
+          "value": 0,
+          "evidenceIds": [
+            "E01"
+          ]
+        }
+      },
+      "goalScore": 81,
+      "decisiveEvidence": [
+        "E01",
+        "E06",
+        "E09",
+        "E19"
+      ],
+      "rejectedClaims": [
+        "Extra quota",
+        "Guaranteed Pro model",
+        "Measured efficiency gain",
+        "Notebook auth proves Desktop readiness",
+        "Healthy catalog proves isolation"
+      ],
+      "nextSingleProof": "Inspect the pinned Desktop CLI version, login status and exec help; record redacted auth/capability evidence.",
+      "confidence": "H"
+    }
+  }
+}

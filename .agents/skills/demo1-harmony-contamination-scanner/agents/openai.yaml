@@ -1,0 +1,4 @@
+interface:
+  display_name: "demo1 harmony contamination scanner"
+  short_description: "Score demo-1 harmony breaks before and after Safe Patch work"
+  default_prompt: "Use $demo1-harmony-contamination-scanner to scan the demo-1 Desktop root and emit a redacted harmony-score.json."

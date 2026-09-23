@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Agentic Chat Postprocess"
+  short_description: "Three-way chatbot evidence review"
+  default_prompt: "Use $demo1-agentic-chat-postprocess to run a bounded three-way chatbot evidence review."

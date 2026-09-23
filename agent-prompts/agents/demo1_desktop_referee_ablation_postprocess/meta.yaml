@@ -1,0 +1,6 @@
+id: demo1_desktop_referee_ablation_postprocess
+version: "1.0"
+description: >
+  Desktop post-processing source-patch directive for Mac mini referee/ablation
+  handoff packets, PatchDrop queue reconciliation, and conflict-free final apply.
+created: "2026-06-11"

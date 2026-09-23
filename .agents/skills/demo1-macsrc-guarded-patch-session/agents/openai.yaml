@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 MacSrc Guarded Patch Session"
+  short_description: "Run one evidence-bound MacSrc patch session"
+  default_prompt: "Use $demo1-macsrc-guarded-patch-session to validate one PatchIntent and run its guarded Prepare, Verify, RED/GREEN, and Complete or Abort phases."

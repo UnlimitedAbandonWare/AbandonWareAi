@@ -1,0 +1,34 @@
+id: safe.v1
+
+description: "최소 위험 + 공식/준공식 위주. strike/safe 상황에서도 web=0 굶김을 피하기 위해 allowlist profile과 마이크로 리콜을 사용."
+
+llm:
+  provider: openai
+  model: gpt-4.1-mini
+
+retrieval:
+  k: { web: 8, vector: 4, kg: 2 }
+  officialSourcesOnly: true
+
+# When officialSourcesOnly=true, a missing/empty allowlist_profile can starve web evidence.
+# jul14 is a relaxed but curated profile that includes major wikis/blogs/forums.
+guards:
+  whitelist_profile: jul14
+
+# Ultra-safe micro recall booster: only kicks in when base docs are too few.
+# Plan-scoped so we don't globally raise web traffic.
+params:
+  extremeZ.enabled: true
+  extremeZ.minBaseDocs: 2
+  extremeZ.maxSubQueries: 2
+  extremeZ.budgetMs: 900
+  extremeZ.maxMergedDocs: 14
+  extremeZ.skipWhenStrikeMode: false
+  extremeZ.skipWhenWebRateLimited: false
+  extremeZ.skipWhenAuxDown: false
+
+rerank:
+  onnx: { enabled: false, maxConcurrency: 1 }
+
+gates:
+  citationMin: 2

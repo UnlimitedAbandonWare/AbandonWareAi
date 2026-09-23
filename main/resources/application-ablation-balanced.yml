@@ -1,0 +1,17 @@
+spring:
+  config:
+    activate:
+      on-profile: ablation-balanced
+
+# Stage penalty presets (balanced)
+uaw:
+  ablation:
+    penalty:
+      default: 0.12
+      websearch:
+        base: 0.35
+        starvation: 0.28
+        domain-misroute: 0.22
+      query-transformer: 0.18
+      retrieval: 0.20
+      rerank: 0.15

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Persistent Brain State</title>
+  <link rel="stylesheet" href="/css/brain-state.css" th:href="@{/css/brain-state.css}">
+  <style>
+    :root {
+      --page-bg: #f5f7fb;
+      --page-ink: #172033;
+      --page-muted: #657084;
+      --page-line: #d7deea;
+      --page-nav: #101624;
+      --page-nav2: #1d2738;
+      --page-blue: #2463eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background: var(--page-bg);
+      color: var(--page-ink);
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+    }
+    a { color: inherit; text-decoration: none; }
+    .shell {
+      display: grid;
+      grid-template-columns: 256px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .sidebar {
+      background: var(--page-nav);
+      color: #e7edf7;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      padding: 22px 16px;
+    }
+    .brand {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .nav {
+      display: grid;
+      gap: 7px;
+    }
+    .nav a {
+      border-radius: 8px;
+      color: #c7d2e4;
+      font-size: 14px;
+      padding: 10px 12px;
+    }
+    .nav a:hover,
+    .nav a.active {
+      background: var(--page-nav2);
+      color: #fff;
+    }
+    .sidebar-note {
+      color: #94a3b8;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: auto;
+    }
+    .main {
+      display: grid;
+      gap: 18px;
+      min-width: 0;
+      padding: 28px;
+    }
+    .topbar {
+      align-items: flex-start;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+    }
+    h1,
+    p {
+      margin-top: 0;
+    }
+    h1 {
+      font-size: 28px;
+      letter-spacing: 0;
+      margin-bottom: 8px;
+    }
+    .sub {
+      color: var(--page-muted);
+      line-height: 1.55;
+      margin-bottom: 0;
+      max-width: 880px;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .button {
+      background: #fff;
+      border: 1px solid var(--page-line);
+      border-radius: 8px;
+      color: var(--page-ink);
+      cursor: pointer;
+      font-size: 13px;
+      min-height: 38px;
+      padding: 9px 12px;
+    }
+    .button.primary {
+      background: var(--page-blue);
+      border-color: var(--page-blue);
+      color: #fff;
+    }
+    .button:hover { filter: brightness(.97); }
+    @media (max-width: 860px) {
+      .shell { grid-template-columns: 1fr; }
+      .topbar { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .main { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">RAG Ops Cockpit</div>
+    <nav class="nav" aria-label="Operations navigation">
+      <a th:href="@{/admin/dashboard}" href="/admin/dashboard">Dashboard</a>
+      <a class="active" th:href="@{/admin/brain-state}" href="/admin/brain-state">Brain State</a>
+      <a th:href="@{/admin/pipeline-status}" href="/admin/pipeline-status">Pipeline Status</a>
+      <a th:href="@{/admin/vector-diagnostics}" href="/admin/vector-diagnostics">Vector Diagnostics</a>
+      <a th:href="@{/admin/learning-data}" href="/admin/learning-data">Learning Data</a>
+      <a th:href="@{/admin/debug-events}" href="/admin/debug-events">Debug Events</a>
+      <a th:href="@{/admin/trace-snapshots}" href="/admin/trace-snapshots">Trace Snapshots</a>
+      <a th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
+    </nav>
+    <div class="sidebar-note">
+      Read-only Brain State view. The page consumes redacted diagnostics endpoints and does not expose manual ingest controls.
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>Persistent Brain State</h1>
+        <p class="sub">
+          Optional long-term context memory: domains, entities, sparse nodes, and relation paths.
+          Query-time retrieval can run without a pre-built corpus graph; values are redacted diagnostics only.
+        </p>
+      </div>
+      <div class="actions">
+        <a class="button" th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
+        <a class="button" href="/api/diagnostics/rag/brain-state/domains" target="_blank" rel="noopener">Domains JSON</a>
+        <a class="button primary" href="#brainCockpit">Brain Map</a>
+      </div>
+    </div>
+
+    <section id="brainCockpit"
+             class="brain-state-panel"
+             data-brain-state-root
+             data-brain-state-mode="admin"
+             data-brain-state-session="ALL"
+             aria-label="Persistent Brain State cockpit">
+      <div class="brain-state-head">
+        <div>
+          <span class="brain-state-kicker">Persistent Memory</span>
+          <h2 class="brain-state-title">Optional KG Context</h2>
+          <p class="brain-state-subtitle">Aggregate or session-scoped stored context; query-time reasoning stays independent of this graph.</p>
+        </div>
+        <div class="brain-state-toolbar" id="brainControls">
+          <input class="brain-state-input" data-brain-input="session" value="ALL" aria-label="Session id">
+          <select class="brain-state-input" data-brain-input="domain" aria-label="Domain filter"></select>
+          <span class="brain-state-status" data-brain-field="status">loading</span>
+          <button class="brain-state-button" type="button" data-brain-action="refresh">Refresh</button>
+        </div>
+      </div>
+
+      <div class="brain-state-metrics" aria-label="Brain state metrics">
+        <div class="brain-state-metric"><span>Chunks</span><strong data-brain-field="chunks">0</strong></div>
+        <div class="brain-state-metric"><span>Entities</span><strong data-brain-field="entities">0</strong></div>
+        <div class="brain-state-metric"><span>Domains</span><strong data-brain-field="domains">0</strong></div>
+        <div class="brain-state-metric"><span>Relations</span><strong data-brain-field="relations">0</strong></div>
+      </div>
+
+      <div class="brain-state-main">
+        <div class="brain-state-graph-wrap">
+          <div class="brain-state-graph" data-brain-graph role="img" aria-label="Brain State graph"></div>
+          <div class="brain-state-fallback" data-brain-fallback></div>
+        </div>
+        <div class="brain-state-side">
+          <div>
+            <div class="brain-state-section-head"><strong>Runtime Status</strong></div>
+            <div class="brain-state-list" data-brain-list="status"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Sources / Lanes</strong></div>
+            <div class="brain-state-list" data-brain-list="sources"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Recent Activity</strong></div>
+            <div class="brain-state-list" data-brain-list="recent"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Anchor Map</strong></div>
+            <div class="brain-state-list" data-brain-list="anchor-map"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Query-Time KG Evidence</strong></div>
+            <div class="brain-state-list" data-brain-list="query-time"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Domains</strong></div>
+            <div class="brain-state-pill-list" data-brain-list="domains"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Entities</strong></div>
+            <div class="brain-state-list" data-brain-list="entities"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Relation Paths</strong></div>
+            <div class="brain-state-list" data-brain-list="relations"></div>
+          </div>
+          <div>
+            <div class="brain-state-section-head"><strong>Sparse Nodes</strong></div>
+            <div class="brain-state-list" data-brain-list="sparse"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script defer src="https://cdn.jsdelivr.net/npm/cytoscape@3.33.4/dist/cytoscape.min.js"></script>
+<script defer src="/js/brain-state-ui.js" th:src="@{/js/brain-state-ui.js(v=${#dates.createNow().time})}"></script>
+</body>
+</html>

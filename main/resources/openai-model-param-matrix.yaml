@@ -1,0 +1,58 @@
+# OpenAI 모델별 요청 파라미터 매트릭스
+#
+# 목적:
+# - 일부 최신 OpenAI 모델(gpt-5.*, o1/o3/o4)은 chat/completions에서 'max_tokens'를 거부하고
+#   'max_completion_tokens'를 요구할 수 있습니다.
+# - 반대로 OpenAI-compatible 로컬/프록시 게이트웨이(vLLM/Ollama 등)는 'max_tokens' 중심일 수 있습니다.
+#
+# 운영 팁:
+# - 이 파일은 application.yml의 spring.config.import로 로드됩니다.
+# - 운영에서는 외부 파일로 분리해 덮어쓰기(재빌드 없이 재시작)하는 것을 권장합니다.
+#   예) 환경변수:
+#     SPRING_CONFIG_IMPORT=optional:file:./config/openai-model-param-matrix.yaml
+#
+# 매칭 규칙(코드: OpenAiModelParamMatrix)
+# - baseUrl은 "부분 문자열"로 매칭합니다(대소문자 무시, /v1/trailing slash 정규화)
+# - modelName은 exact(by-model) -> prefix(by-prefix, 가장 긴 prefix 우선)
+# - token-param-default는 해당 범위에서 기본값
+# - Safety fallback: baseUrl이 api.openai.com이고 model이 gpt-5/o-series면, 설정이 없어도 max_completion_tokens로 강제합니다.
+
+llm:
+  openai:
+    param-matrix:
+      # 전역 기본값(대부분의 OpenAI-compatible 게이트웨이 환경에서 안전)
+      token-param-default: max_tokens
+
+      # 전역 규칙이 필요한 경우에만 사용(가능하면 by-base-url로 분리 권장)
+      by-prefix: {}
+      by-model: {}
+
+      # baseUrl별 규칙 (부분 문자열 매칭)
+      by-base-url:
+        # 1) 공식 OpenAI
+        api.openai.com:
+          token-param-default: max_tokens
+          by-prefix:
+            gpt-5: max_completion_tokens
+            o1: max_completion_tokens
+            o3: max_completion_tokens
+            o4: max_completion_tokens
+          by-model: {}
+
+        # 2) 프록시/게이트웨이 예시 (필요 시 활성화)
+        #    - 아래 키를 실제 baseUrl 도메인/호스트 일부로 바꾸고,
+        #      해당 게이트웨이가 요구하는 토큰 키로 설정하세요.
+        # your-proxy-or-gateway.example.com:
+        #   token-param-default: max_tokens
+        #   by-prefix:
+        #     gpt-5: max_completion_tokens
+        #     o1: max_completion_tokens
+        #     o3: max_completion_tokens
+        #     o4: max_completion_tokens
+
+        # 3) 로컬 OpenAI-compatible 서버 예시 (대개 max_tokens)
+        http://localhost:11434:
+          token-param-default: max_tokens
+
+        http://localhost:8000:
+          token-param-default: max_tokens

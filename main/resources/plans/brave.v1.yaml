@@ -1,0 +1,42 @@
+# MERGE_HOOK:PROJ_AGENT::FIM15
+llm:
+  provider: local
+  model: ${llm.high.model:${llm.chat-model}}
+
+plan:
+  id: brave.v1
+  description: "Brave — 탐색 폭발(SelfAsk→QueryBurst→Extreme‑Z) + 핵심 응축(Overdrive)"
+  when:
+    any:
+      - request.header.X-Brave-Mode == "on"
+      - metrics.initial_recall < 0.35
+  overrides:
+    properties:
+      llm.provider: local
+      llm.route.mode: tp
+      naver.search.web-top-k: 18
+      retrieval.vector.enabled: true
+      onnx.enabled: true
+      zsys.llm.max-concurrency: 4
+      zsys.onnx.max-concurrency: 2
+      gate.citation.min: 3
+      gate.finalSigmoid.k: 12.0
+      gate.finalSigmoid.x0: 0.0
+    knobs:
+      expand.selfAsk.count: 3
+      expand.queryBurst.count: 12
+      extremeZ.enabled: true
+      overdrive.enabled: true
+  pipeline:
+    - analyze.selfAsk
+    - expand.queryBurst
+    - retrieve.dynamicChain
+    - fuse.rrf.weighted
+    - narrow.overdrive.anchor
+    - rerank.biEncoder
+    - rerank.crossEncoder.onnx
+    - prompt.build
+    - answer.generate
+
+guard:
+  profile: PROFILE_MEMORY
