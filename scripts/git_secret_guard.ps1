@@ -9,6 +9,14 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
+# Pre-commit inspects the index itself. Manual working-tree scans cannot prove it.
+if ($Mode -eq 'pre-commit' -and -not $SelfTest) {
+    if ($ScanAll -or $Path.Count -gt 0) { throw 'pre-commit-scope-override-forbidden' }
+    & python -B (Join-Path $PSScriptRoot 'git_staged_guard.py') --root (Get-Location).Path
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    exit 0
+}
+
 $HighConfidencePatterns = @(
     [pscustomobject]@{ Id = "openai"; Regex = [regex]"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])" },
     [pscustomobject]@{ Id = "google-ai"; Regex = [regex]"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{20,}(?![A-Za-z0-9_-])" },
@@ -102,6 +110,9 @@ function Get-PathBlockReason {
     $leaf = Split-Path -Leaf $p
     $isTemplate = Test-TemplatePath $p
 
+    if ($p -match "(?i)(^|/)shared\.env($|\.)") {
+        return "shared-env-file"
+    }
     if ($p -match "(?i)(^|/)\.env($|\.)" -and -not $isTemplate) {
         return "env-file"
     }
@@ -234,6 +245,12 @@ function Find-SecretGuardFindings {
     $findings = New-Object System.Collections.Generic.List[object]
     foreach ($relative in @($RelativePaths | Sort-Object -Unique)) {
         $rel = $relative.Replace('\', '/')
+        # Block the entire private area before skipped directories/template rules,
+        # and never open its values or recovery files during a generic scan.
+        if ($rel -match '(?i)(^|/)(\.secrets|config/secrets)(/|$)') {
+            $findings.Add([pscustomobject]@{ Path = '<project-secrets>'; Line = 0; Rule = 'project-secrets-area'; Detail = 'blocked private area' }) | Out-Null
+            continue
+        }
         if ([string]::IsNullOrWhiteSpace($rel) -or (Test-SkippedPath $rel)) {
             continue
         }
@@ -305,6 +322,18 @@ function Invoke-SelfTest {
             throw "secret path fixture was not detected"
         }
 
+        Set-Content -LiteralPath (Join-Path $tempRoot "shared.env") -Value "OPAQUE_KEY=short-fixture" -Encoding UTF8
+        $sharedEnv = @(Find-SecretGuardFindings -Root $tempRoot -RelativePaths @("shared.env"))
+        if (-not (@($sharedEnv | Where-Object { $_.Rule -eq "shared-env-file" }).Count -gt 0)) {
+            throw "shared environment path was not blocked"
+        }
+
+        foreach ($privatePath in @('.secrets/providers.json','.secrets/build/example.json','config/secrets/sample.json','.secrets/recovery/0.bin')) {
+            $blocked = @(Find-SecretGuardFindings -Root $tempRoot -RelativePaths @($privatePath))
+            if ($blocked.Count -ne 1 -or $blocked[0].Rule -ne 'project-secrets-area') {
+                throw 'shared secrets area bypass'
+            }
+        }
         Write-Host "[AWX][git-guard][self-test] PASS"
     } finally {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

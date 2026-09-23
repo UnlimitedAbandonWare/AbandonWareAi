@@ -25,6 +25,30 @@ import java.util.concurrent.ConcurrentMap;
 @Service
 public class BrainStateService {
 
+    /** Per-request private projection. No global entity maps, public Neo4j nodes or recursive RAG calls. */
+    public record PrivateFact(String namespace,String sourceId,Set<String> entities){}
+    public record PrivateExpansion(List<String> sources,int hops,int nodes,int edges){}
+    public static PrivateExpansion expandPrivate(String namespace,List<PrivateFact> authorized,List<String> seeds,
+                                                 java.util.function.BooleanSupplier current){
+        if(namespace==null||!namespace.matches("[a-f0-9]{64}")||authorized.size()>256
+            ||authorized.stream().anyMatch(f->!namespace.equals(f.namespace())))throw new IllegalArgumentException("private_graph_scope");
+        var selected=new LinkedHashSet<String>(seeds);var frontier=new LinkedHashSet<String>();
+        for(var f:authorized)if(selected.contains(f.sourceId()))for(var name:f.entities())if(frontier.size()<20)frontier.add(name);
+        int edges=0,hops=0;
+        for(int hop=0;hop<2&&edges<40;hop++){
+            if(!current.getAsBoolean())throw new CancellationException("private_graph_cancelled");
+            var next=new LinkedHashSet<String>();boolean changed=false;
+            for(var f:authorized){
+                if(selected.contains(f.sourceId())||java.util.Collections.disjoint(frontier,f.entities()))continue;
+                if(selected.size()>=20||edges>=40)break;
+                selected.add(f.sourceId());edges++;changed=true;
+                for(var name:f.entities())if(frontier.size()+next.size()<20)next.add(name);
+            }
+            if(!changed)break;frontier.addAll(next);hops++;
+        }
+        return new PrivateExpansion(List.copyOf(selected),hops,frontier.size(),edges);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(BrainStateService.class);
 
     private final BrainStateProperties properties;

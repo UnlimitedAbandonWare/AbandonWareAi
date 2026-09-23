@@ -53,6 +53,65 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequiredArgsConstructor
 public class OllamaEmbeddingModel implements EmbeddingModel, MatryoshkaAware {
 
+    private record PrivateSpace(String model, String url) {}
+    private volatile PrivateSpace privateSpace;
+
+    /** Private Focus uses the existing routing inventory, independently of global OpenAI embeddings. */
+    private PrivateSpace privateSpace() {
+        var selected = privateSpace;
+        if (selected != null) return selected;
+        synchronized (this) {
+            if (privateSpace != null) return privateSpace;
+            var file = new org.springframework.core.io.FileSystemResource("configs/api-routing.yaml");
+            org.springframework.core.io.Resource resource = file.exists() ? file
+                    : new org.springframework.core.io.ClassPathResource("configs/api-routing.yaml");
+            var yaml = new org.springframework.beans.factory.config.YamlPropertiesFactoryBean();
+            yaml.setResources(resource);
+            var properties = yaml.getObject();
+            if (properties == null) throw new IllegalStateException("private_embedding_route_missing");
+            String selectedModel = properties.getProperty("ollama.installed_models.embed[0]", "");
+            String host = properties.getProperty("ollama.default_hosts[0]", "");
+            String path = properties.getProperty("ollama.native_embed_path", "");
+            if (selectedModel.isBlank() || !"/api/embed".equals(path))
+                throw new IllegalStateException("private_embedding_route_invalid");
+            String url = "http://" + host + path;
+            requirePrivateLoopback(url);
+            return privateSpace = new PrivateSpace(selectedModel, url);
+        }
+    }
+
+    private static void requirePrivateLoopback(String url) {
+        var uri = java.net.URI.create(url);
+        if (!"http".equals(uri.getScheme()) || !java.util.Set.of("localhost", "127.0.0.1", "[::1]", "::1").contains(java.util.Objects.toString(uri.getHost(), ""))
+                || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
+                || !"/api/embed".equals(uri.getPath()))
+            throw new IllegalStateException("private_embedding_loopback_required");
+    }
+
+    public String privateFingerprint() {
+        return "ollama|" + privateSpace().model() + "|" + privateDimensions() + "|" + effectiveNormalizationMode();
+    }
+    public int privateDimensions() { return configuredIndexDimensions(); }
+
+    /** One loopback request only: never global provider, backup model, remote fallback, or health warmup. */
+    public Embedding embedPrivate(String text) {
+        if (text == null || text.isBlank()) throw new IllegalArgumentException("private_embedding_disabled");
+        var space = privateSpace();
+        String url = localLlmProcessManager == null ? space.url() : localLlmProcessManager.resolveServiceUrl(space.url());
+        requirePrivateLoopback(url);
+        long wait = com.example.lms.service.chat.ChatRunExecutionContext.capRequestWait(800);
+        try (var cancellation = com.example.lms.service.chat.ChatRunExecutionContext.interruptibleCall("focus_embedding")) {
+            String json = applyGatewayHeaders(webClient.post().uri(url), url)
+                    .bodyValue(java.util.Map.of("model", space.model(), "input", text, "keep_alive", "10m"))
+                    .retrieve().bodyToMono(String.class).timeout(java.time.Duration.ofMillis(wait)).block();
+            float[] raw = parseFloatArray(mapper.readTree(json).path("embeddings").path(0));
+            if (raw.length < privateDimensions()) throw new IllegalStateException("private_embedding_dimension_underflow");
+            return Embedding.from(normalizeEmbedding(raw, "private"));
+        } catch (java.io.IOException invalid) {
+            throw new IllegalStateException("private_embedding_response_invalid");
+        }
+    }
+
     private static final Logger log = LoggerFactory.getLogger(OllamaEmbeddingModel.class);
 
     /**
@@ -72,11 +131,16 @@ public class OllamaEmbeddingModel implements EmbeddingModel, MatryoshkaAware {
     @Autowired(required = false)
     private ModelSpecRegistry modelSpecRegistry;
 
+    @Autowired(required = false)
+    private com.example.lms.config.LocalLlmProcessManager localLlmProcessManager;
+
     private final WebClient webClient;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    @Value("${embedding.provider:ollama}")
+    @Value("${embedding.provider:${embeddings.provider:ollama}}")
     private String provider;
+    @Value("${embeddings.provider:}")
+    private String legacyProvider;
 
     @Value("${embedding.base-url:http://localhost:11434/api/embed}")
     private String apiUrl;
@@ -311,6 +375,7 @@ public class OllamaEmbeddingModel implements EmbeddingModel, MatryoshkaAware {
         out.put("crossGpuFallbackEnabled", crossGpuFallbackEnabled);
 
         out.put("backupAvailable", backupModel != null);
+        out.put("backupCompatible", backupEmbeddingSpaceCompatible());
 
         // fast-fail
         out.put("fastFailEnabled", fastFailEnabled);
@@ -568,7 +633,28 @@ public class OllamaEmbeddingModel implements EmbeddingModel, MatryoshkaAware {
         return Math.round(value * 10000.0d) / 10000.0d;
     }
 
+    private boolean backupEmbeddingSpaceCompatible() {
+        // Only a known local configuration can attest model and preprocessing identity.
+        // A generic/OpenAI backup with the same vector length is not the same embedding space.
+        if (!(backupModel instanceof OllamaEmbeddingModel localBackup)
+                || localBackup == this || localBackup.backupModel != null) return false;
+        return isOllamaProvider() && localBackup.isOllamaProvider()
+                && model != null && !model.isBlank()
+                && Objects.equals(model.trim(), localBackup.model == null ? null : localBackup.model.trim())
+                && configuredIndexDimensions() == localBackup.configuredIndexDimensions()
+                && Objects.equals(effectiveNormalizationMode(), localBackup.effectiveNormalizationMode())
+                && allowZeroPad == localBackup.allowZeroPad;
+    }
+
+    private void requireCompatibleBackupEmbeddingSpace() {
+        if (!backupEmbeddingSpaceCompatible()) {
+            com.example.lms.search.TraceStore.put("embed.failover.blockedReason", "embedding_space_unverified");
+            throw new IllegalStateException("Embedding fallback blocked: embedding_space_unverified");
+        }
+    }
+
     private float[] callBackupVector(String text, String stage) {
+        if (backupModel != null) requireCompatibleBackupEmbeddingSpace();
         if (backupModel == null) {
 	        log.warn("[OllamaEmbeddingModel] backupEmbeddingModel not available; failing embedding (stage={})", stage);
 	        if (debugEventStore != null) {
@@ -661,6 +747,7 @@ public class OllamaEmbeddingModel implements EmbeddingModel, MatryoshkaAware {
     }
 
     private List<Embedding> callBackupBatch(List<TextSegment> segments, String stage) {
+        if (backupModel != null) requireCompatibleBackupEmbeddingSpace();
         if (backupModel == null) {
 	        log.warn("[OllamaEmbeddingModel] backupEmbeddingModel not available; failing batch embedding (stage={})", stage);
 	        if (debugEventStore != null) {
@@ -764,7 +851,7 @@ try {
     // ─────────────────────────────────────────────────────────────────────
 
     private boolean isOllamaProvider() {
-        return provider == null || provider.isBlank() || "ollama".equalsIgnoreCase(provider);
+        return "ollama".equals(com.example.lms.vector.EmbeddingFingerprint.resolveProvider(provider, legacyProvider));
     }
 
     private boolean backupAvailable() {
@@ -908,13 +995,16 @@ try {
             try {
                 com.example.lms.search.TraceStore.inc("embed.fastfail.health.concurrent_skip");
             } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("health.concurrentSkipTrace", ignore); log.debug("[OllamaEmbeddingModel] fail-soft stage={}", "health.concurrentSkipTrace"); }
+            if (allowLocalProbeWhenNoBackupAfterConcurrentHealth()) {
+                return true;
+            }
             return false;
         }
 
         boolean locked = healthInFlight.compareAndSet(false, true);
         if (!locked) {
             // Should be rare; conservatively skip.
-            return false;
+            return allowLocalProbeWhenNoBackupAfterConcurrentHealth();
         }
 
         try {
@@ -943,6 +1033,16 @@ try {
         } finally {
             healthInFlight.set(false);
         }
+    }
+
+    private boolean allowLocalProbeWhenNoBackupAfterConcurrentHealth() {
+        if (backupAvailable()) {
+            return false;
+        }
+        try {
+            com.example.lms.search.TraceStore.inc("embed.fastfail.health.concurrent_local_probe");
+        } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("health.concurrentLocalProbeTrace", ignore); log.debug("[OllamaEmbeddingModel] fail-soft stage={}", "health.concurrentLocalProbeTrace"); }
+        return true;
     }
 
     private void runHealthCheckOrThrow() {
@@ -1097,6 +1197,16 @@ try {
         return postJsonWithFallback(body, timeoutSecondsOrMs);
     }
 
+    /** Cache identity follows the endpoint selected at dispatch; it contains no raw URL or credentials. */
+    public String cacheIdentity() {
+        String endpoint = localLlmProcessManager == null ? apiUrl : localLlmProcessManager.resolveServiceUrl(apiUrl);
+        Object execution = localLlmProcessManager != null && localLlmProcessManager.managesEndpoint(apiUrl)
+                ? List.of(localLlmProcessManager.diagnostics().get("pid"),
+                        localLlmProcessManager.diagnostics().get("serverStartedAtEpochMs")) : "unmanaged";
+        return hashOrEmpty(endpoint + "|" + model + "|" + dimensions + "|" + effectiveNormalizationMode()
+                + "|" + providerRawDimensions + "|" + dimensionGuardMode + "|" + allowZeroPad + "|" + execution);
+    }
+
     private Map<String, Object> buildEmbedBody(Object input, Integer targetDim, String keepAliveOverride) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
@@ -1125,7 +1235,7 @@ try {
 
         for (int i = 0; i < candidates.size(); i++) {
             String url = candidates.get(i);
-            try {
+            try (var cancellation = com.example.lms.service.chat.ChatRunExecutionContext.interruptibleCall("ollama_embedding")) {
                 try {
                     com.example.lms.search.TraceStore.inc("embed.ollama.post.attempt");
                 } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("ollama.postAttemptTrace", ignore); log.debug("[OllamaEmbeddingModel] fail-soft stage={}", "ollama.postAttemptTrace"); }
@@ -1146,13 +1256,14 @@ try {
 
                 return mapper.readTree(json);
             } catch (Exception e) {
+                com.example.lms.service.chat.ChatRunExecutionContext.capRequestWait(Long.MAX_VALUE);
                 last = e;
 
                 // [AUTO-HEAL] Some local embedding servers reject "dimensions"
                 // with messages like: "invalid option provided option=dimensions".
                 // If detected, suppress the option and retry once without it.
                 if (hasDimensionsOption(body) && looksLikeDimensionsOptionUnsupported(e)) {
-                    try {
+                    try (var cancellation = com.example.lms.service.chat.ChatRunExecutionContext.interruptibleCall("ollama_embedding")) {
                         Integer dim = extractDimensionsOption(body);
 
                         if (dimensionsOptionSuppressed.compareAndSet(false, true)) {
@@ -1212,6 +1323,7 @@ try {
 
                         return mapper.readTree(retryJson);
                     } catch (Exception retryEx) {
+                        com.example.lms.service.chat.ChatRunExecutionContext.capRequestWait(Long.MAX_VALUE);
                         log.debug("[OllamaEmbeddingModel] fail-soft stage={}", "ollama.retryNoDimensions");
                         // Retry also failed; fall through to normal failure handling.
                         last = retryEx;
@@ -1469,6 +1581,10 @@ try {
     }
 
     List<String> buildCandidateUrls(String primary, String secondary) {
+        if (localLlmProcessManager != null) {
+            primary = localLlmProcessManager.resolveServiceUrl(primary);
+            secondary = localLlmProcessManager.resolveServiceUrl(secondary);
+        }
         List<String> out = new ArrayList<>();
         addUrl(out, primary);
 
@@ -1518,10 +1634,8 @@ try {
 
     private long normalizeTimeoutMs(long timeoutSecondsOrMs) {
         // Heuristic: if value is > 1000, assume ms. else seconds.
-        if (timeoutSecondsOrMs > 1000L) {
-            return timeoutSecondsOrMs;
-        }
-        return Math.max(1L, timeoutSecondsOrMs) * 1000L;
+        long configured = timeoutSecondsOrMs > 1000L ? timeoutSecondsOrMs : Math.max(1L, timeoutSecondsOrMs) * 1000L;
+        return com.example.lms.service.chat.ChatRunExecutionContext.capRequestWait(configured);
     }
 
     private String resolveHealthUrl(String path) {
