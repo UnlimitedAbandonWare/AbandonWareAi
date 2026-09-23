@@ -2,6 +2,19 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const {createClient}=require('../../../main/resources/static/assets/display/display-conversate.js');
 const {mount}=require('../../../main/resources/static/assets/display/display-focus-controls.js');
 const flush=()=>new Promise(setImmediate);
+test('only selected memory API work requests its bounded transport budget',async()=>{
+  const calls=[],timers=new Map();let n=0;
+  const snapshot={assistId:'12345678-1234-4234-8234-123456789abc',epoch:1,ready:true,version:1,caption:null,card:null,captionTtlMs:0,cardTtlMs:0,audioAvailable:false,audioState:'READY',hintsEnabled:false,role:'STANDALONE'};
+  const client=createClient({transcription:true,standalone:true,uuid:()=>snapshot.assistId,setTimer(fn,ms){timers.set(++n,{fn,ms});return n;},clearTimer:id=>timers.delete(id),
+    fetchImpl:async(url,options)=>{calls.push({url,headers:options.headers});return {ok:true,json:async()=>url.includes('/focus/')?{}:snapshot};}});
+  try{
+    client.start();await flush();
+    await client.focusRequest('memory/save',{edit:{}});assert.equal(calls.at(-1).headers['X-Budget-Ms'],'5000');
+    await client.focusRequest('memory/search',{text:'synthetic query'});assert.equal(calls.at(-1).headers['X-Budget-Ms'],'5000');
+    await client.focusRequest('settings/read');assert.equal(calls.at(-1).headers['X-Budget-Ms'],undefined);
+    await client.focusRequest('memory/read');assert.equal(calls.at(-1).headers['X-Budget-Ms'],undefined);
+  }finally{client.dispose();}
+});
 test('owner cache restores unacknowledged input without auto submission and reconciles durable acceptance',async()=>{
   const rows=new Map(),scopeA='a'.repeat(64),scopeB='b'.repeat(64);let scope=scopeA,accepted=false,online=true,inputCalls=0,failInput=true;
   const cache={async read(key){return key?structuredClone(rows.get(key)||{pages:{},outbox:[]}):null;},async change(key,fn){if(!key)return null;const row=structuredClone(rows.get(key)||{pages:{},outbox:[]});fn(row);rows.set(key,row);return row;}};

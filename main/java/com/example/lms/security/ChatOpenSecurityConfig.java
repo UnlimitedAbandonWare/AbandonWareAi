@@ -32,7 +32,7 @@ public class ChatOpenSecurityConfig {
     private static final List<String> DISPLAY_TEXT = List.of("/api/assist/display/lens/link", "/api/assist/display/lens/text", "/api/assist/display/bootstrap", "/api/assist/display/input", "/api/assist/display/poll",
             "/api/assist/display/transcription", "/api/assist/display/phone-test", "/api/assist/display/context", "/api/assist/display/link/code", "/api/assist/display/link/join",
             "/api/assist/display/focus/settings/read", "/api/assist/display/focus/settings", "/api/assist/display/focus/history",
-            "/api/assist/display/focus/memory/read", "/api/assist/display/focus/memory/save", "/api/assist/display/focus/memory/delete",
+            "/api/assist/display/focus/memory/read", "/api/assist/display/focus/memory/save", "/api/assist/display/focus/memory/delete", "/api/assist/display/focus/memory/search",
             "/api/assist/display/focus/open", "/api/assist/display/focus/input", "/api/assist/display/focus/input/status",
             "/api/assist/display/focus/close", "/api/assist/display/focus/rendered",
             "/api/assist/display/link/approve", "/api/assist/display/link/unlink", "/api/assist/display/hints", "/api/assist/display/ack", "/api/assist/display/lens", "/api/assist/display/lens/ack", "/api/assist/display/relay/poll", "/api/assist/display/relay/ack", "/api/assist/display/relay/settings", "/api/assist/display/relay/lens-settings", "/api/assist/display/relay/test", "/api/assist/display/relay/diagnostics");

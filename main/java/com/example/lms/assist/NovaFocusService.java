@@ -105,6 +105,16 @@ public class NovaFocusService implements AutoCloseable {
         var s=owned(owner,assistId,epoch);if(memories==null)throw new IllegalStateException("focus_memory_unavailable");
         return memories.list(owner,s.channel);
     }
+    /** Owner-bound retrieval proof without raw evidence or a chat-generation call. */
+    public record MemorySearch(String status,String retrievalMode,int vectorHits,int graphHits,int evidenceCount,String degradationReason){}
+    public MemorySearch memorySearch(String owner,String assistId,long epoch,String question){
+        var s=owned(owner,assistId,epoch);if(memories==null)throw new IllegalStateException("focus_memory_unavailable");
+        if(question==null||question.isBlank()||question.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>1200)
+            throw new IllegalArgumentException("invalid_memory_query");
+        var scope=memories.scope(owner,s.channel);
+        var r=memories.retrieve(scope,question,()->{synchronized(s){return sessions.get(assistId)==s&&s.epoch==epoch;}});
+        return new MemorySearch(r.status().name(),r.retrievalMode(),r.vectorHits(),r.graphHits(),r.evidence().size(),r.degradationReason());
+    }
     public FocusMemoryService.Fact memorySave(String owner,String assistId,long epoch,FocusMemoryService.Edit edit){
         var s=owned(owner,assistId,epoch);if(memories==null)throw new IllegalStateException("focus_memory_unavailable");
         synchronized(s){var result=memories.save(owner,s.channel,edit);cancel(s,"memory_changed");return result;}

@@ -41,6 +41,13 @@ public class FocusMemoryService {
     private final TransactionTemplate tx;
     private final ObjectMapper mapper=new ObjectMapper().findAndRegisterModules();
     private final OllamaEmbeddingModel embeddings;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.example.lms.config.FocusMemoryEmbeddingConfig.FocusCloudEmbedding cloud;
+    // Focus-only API preference; never changes the general RAG embedding provider.
+    @org.springframework.beans.factory.annotation.Value("${focus.memory.embedding.local-enabled:${FOCUS_MEMORY_LOCAL_ENABLED:false}}")
+    private boolean localEnabled;
+    private volatile long localRetryAfterNanos;
+    private record Projection(float[] vector,String fingerprint) {}
     public FocusMemoryService(PlatformTransactionManager manager,OllamaEmbeddingModel embeddings){
         tx=new TransactionTemplate(manager);tx.setPropagationBehavior(3);this.embeddings=embeddings;
     }
@@ -100,9 +107,9 @@ public class FocusMemoryService {
         }
         transaction(()->{writable(id,edit.consentRevision(),true);return null;});
         byte[] vector=null;String fp=null;
-        var previous=TimeBudgetContext.get();long allowed=ChatRunExecutionContext.capRequestWait(800);
+        var previous=TimeBudgetContext.get();long allowed=ChatRunExecutionContext.capRequestWait(5000);
         TimeBudgetContext.set(new TimeBudget(allowed));
-        try{vector=encode(embed(edit.text()));fp=embeddings.privateFingerprint();}
+        try{var embedded=embed(edit.text(),null);vector=encode(embedded.vector());fp=embedded.fingerprint();}
         catch(CancellationException cancelled){throw cancelled;}
         catch(RuntimeException unavailable){/* Fact remains authoritative; lexical/local-graph fallback is explicit. */}
         finally{if(previous==null)TimeBudgetContext.clear();else TimeBudgetContext.set(previous);}
@@ -142,11 +149,34 @@ public class FocusMemoryService {
             Instant now=Instant.now();for(var f:versions){f.setDeletedAt(now);f.setValidTo(now);f.setText(null);f.setEntitiesJson("[]");f.setEmbedding(null);f.setEmbeddingFingerprint(null);}
             p.setMemoryRevision(p.getMemoryRevision()+1);return null;});
     }
-    private float[] embed(String text){
-        float[] vector=embeddings.embedPrivate(text).vector();
-        if(vector.length!=embeddings.privateDimensions())throw new IllegalStateException("private_embedding_dimension_mismatch");
+    private Projection embed(String text,Set<String> compatible){
+        ChatRunExecutionContext.throwIfCancelled();
+        if(localEnabled&&(localRetryAfterNanos==0||System.nanoTime()-localRetryAfterNanos>=0)
+            &&(compatible==null||compatible.contains(embeddings.privateFingerprint()))){
+            try{return checked(embeddings.embedPrivate(text),embeddings.privateDimensions(),embeddings.privateFingerprint());}
+            catch(CancellationException cancelled){throw cancelled;}
+            catch(RuntimeException unavailable){
+                ChatRunExecutionContext.throwIfCancelled();
+                localRetryAfterNanos=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+            }
+        }
+        ChatRunExecutionContext.throwIfCancelled();
+        if(cloud!=null&&(compatible==null||compatible.contains(cloud.fingerprint())))
+            return checked(cloud.embed(text),cloud.dimensions(),cloud.fingerprint());
+        throw new IllegalStateException("focus_embedding_route_unavailable");
+    }
+    private boolean compatible(FocusMemoryFact f){
+        return f.getEmbedding()!=null&&(
+            localEnabled&&embeddings.privateFingerprint().equals(f.getEmbeddingFingerprint())
+                &&f.getEmbedding().length==embeddings.privateDimensions()*4
+            ||cloud!=null&&cloud.fingerprint().equals(f.getEmbeddingFingerprint())
+                &&f.getEmbedding().length==cloud.dimensions()*4);
+    }
+    private static Projection checked(Embedding embedding,int dimensions,String fingerprint){
+        float[] vector=embedding.vector();
+        if(vector.length!=dimensions)throw new IllegalStateException("private_embedding_dimension_mismatch");
         double norm=0;for(float v:vector){if(!Float.isFinite(v))throw new IllegalStateException("private_embedding_invalid");norm+=v*v;}
-        if(norm==0)throw new IllegalStateException("private_embedding_empty");return vector;
+        if(norm==0)throw new IllegalStateException("private_embedding_empty");return new Projection(vector,fingerprint);
     }
     private static byte[] encode(float[] values){var b=ByteBuffer.allocate(values.length*4);for(float f:values)b.putFloat(f);return b.array();}
     private static float[] decode(byte[] bytes){var b=ByteBuffer.wrap(bytes);float[] f=new float[bytes.length/4];for(int i=0;i<f.length;i++)f[i]=b.getFloat();return f;}
@@ -154,7 +184,7 @@ public class FocusMemoryService {
     public Result retrieve(FocusMemoryScope scope,String question,BooleanSupplier current){
         if(scope==null||!scope.recallEnabled())return Result.empty(Status.OFF,"recall_off");
         check(current);long started=System.nanoTime();var prior=TimeBudgetContext.get();
-        TimeBudgetContext.set(new TimeBudget(ChatRunExecutionContext.capRequestWait(800)));
+        TimeBudgetContext.set(new TimeBudget(ChatRunExecutionContext.capRequestWait(5000)));
         try{
             var candidates=transaction(()->{
                 if(!matches(scope,em.find(NovaFocusProfile.class,scope.namespace())))return null;
@@ -166,11 +196,13 @@ public class FocusMemoryService {
             check(current);var selected=new LinkedHashSet<String>();int vectorHits=0;String reason="";
             try{
                 // Candidate selection is isolated BEFORE ANN search. No federated/public store is touched.
-                var store=new InMemoryEmbeddingStore<String>();int indexed=0;
-                for(var f:candidates)if(f.getEmbedding()!=null&&embeddings.privateFingerprint().equals(f.getEmbeddingFingerprint())
-                    &&f.getEmbedding().length==embeddings.privateDimensions()*4){store.add(Embedding.from(decode(f.getEmbedding())),f.getSourceId());indexed++;}
-                if(indexed>0){
-                    var q=Embedding.from(embed(question));
+                var available=candidates.stream().filter(this::compatible).toList();
+                if(!available.isEmpty()){
+                    var spaces=new HashSet<String>();available.forEach(f->spaces.add(f.getEmbeddingFingerprint()));
+                    var query=embed(question,spaces);var store=new InMemoryEmbeddingStore<String>();
+                    for(var f:available)if(query.fingerprint().equals(f.getEmbeddingFingerprint()))
+                        store.add(Embedding.from(decode(f.getEmbedding())),f.getSourceId());
+                    var q=Embedding.from(query.vector());
                     var hits=store.search(EmbeddingSearchRequest.builder().queryEmbedding(q).maxResults(6).minScore(0.65).build()).matches();
                     for(var hit:hits)selected.add(hit.embedded());vectorHits=selected.size();
                 }else reason="no_compatible_embeddings";

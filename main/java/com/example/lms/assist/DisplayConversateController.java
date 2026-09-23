@@ -76,6 +76,11 @@ public class DisplayConversateController {
         String caller=owner(http);limited(caller,1);Binding b=focusBinding(caller,r.assistId(),r.epoch(),r.clientId());
         return focusCall(()->novaFocus.memorySave(b.owner,b.id,r.epoch(),r.edit()));
     }
+    @PostMapping("/api/assist/display/focus/memory/search")
+    public synchronized ResponseEntity<?> focusMemorySearch(@RequestBody FocusCommand r,HttpServletRequest http){
+        String caller=owner(http);limited(caller,1);Binding b=focusBinding(caller,r.assistId(),r.epoch(),r.clientId());
+        return focusCall(()->novaFocus.memorySearch(b.owner,b.id,r.epoch(),r.text()));
+    }
     @PostMapping("/api/assist/display/focus/memory/delete")
     public synchronized ResponseEntity<?> focusMemoryDelete(@RequestBody FocusMemoryCommand r,HttpServletRequest http){
         String caller=owner(http);limited(caller,1);Binding b=focusBinding(caller,r.assistId(),r.epoch(),r.clientId());

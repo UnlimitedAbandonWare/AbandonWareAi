@@ -10,6 +10,26 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusServiceTest {
+    @Test void memorySearchRequiresOwnerEpochAndNeverCallsChat(){
+        var history=mock(NovaFocusHistoryService.class);var memory=mock(FocusMemoryService.class);
+        @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
+        when(history.settings(anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Settings(0,NovaFocusSettings.defaults()));
+        var scope=new FocusMemoryScope("c".repeat(64),1,1,1,true);
+        when(memory.scope("a".repeat(64),"channel")).thenReturn(scope);
+        when(memory.retrieve(eq(scope),eq("query"),any())).thenAnswer(a->{
+            assertTrue(((java.util.function.BooleanSupplier)a.getArgument(2)).getAsBoolean());
+            return new FocusMemoryService.Result(List.of(),FocusMemoryService.Status.OK,"SCOPED_VECTOR_LOCAL_GRAPH",1,0,0,2,1,false,"");
+        });
+        try(var service=new NovaFocusService(history,provider,new PublicChatAdmissionGuard(),new Time())){
+            org.springframework.test.util.ReflectionTestUtils.setField(service,"memories",memory);
+            service.attach("a".repeat(64),"channel","assist",1);clearInvocations(provider);
+            assertThrows(IllegalArgumentException.class,()->service.memorySearch("b".repeat(64),"assist",1,"query"));
+            assertThrows(IllegalArgumentException.class,()->service.memorySearch("a".repeat(64),"assist",2,"query"));
+            assertThrows(IllegalArgumentException.class,()->service.memorySearch("a".repeat(64),"assist",1," "));
+            assertEquals(1,service.memorySearch("a".repeat(64),"assist",1,"query").vectorHits());
+            verifyNoInteractions(provider);verify(memory,times(1)).retrieve(eq(scope),eq("query"),any());
+        }
+    }
     static class Time extends Clock {
         volatile long now;public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId z){return this;}public Instant instant(){return Instant.ofEpochMilli(now);}
     }

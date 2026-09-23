@@ -21,7 +21,8 @@ class FocusMemoryContractTest {
     }
     static AnnotationConfigApplicationContext context;
     static FocusMemoryService memory;static NovaFocusHistoryService history;
-    @BeforeAll static void start(){context=new AnnotationConfigApplicationContext(Database.class);memory=context.getBean(FocusMemoryService.class);history=context.getBean(NovaFocusHistoryService.class);}
+    @BeforeAll static void start(){context=new AnnotationConfigApplicationContext(Database.class);memory=context.getBean(FocusMemoryService.class);history=context.getBean(NovaFocusHistoryService.class);ReflectionTestUtils.setField(memory,"localEnabled",true);}
+    @BeforeEach void resetLocalCooldown(){ReflectionTestUtils.setField(memory,"localRetryAfterNanos",0L);}
     @AfterAll static void stop(){context.close();}
     static NovaFocusSettings settings(boolean read,boolean write){return new NovaFocusSettings(true,"노바",1200,20000,8000,NovaFocusSettings.Presentation.defaults(),read,write);}
     String enabled(){String o=UUID.randomUUID().toString();history.settings(o,"c",0,settings(true,true));return o;}

@@ -49,7 +49,9 @@
         const began=now();
         const work = (async () => {
           const response = await fetchImpl('/api/assist/display/' + route, { method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', 'X-Display-Client': '1', ...(options.testChannel?{'X-Display-Test-Channel':options.testChannel}:{}) }, body: JSON.stringify(body), signal: controller.signal, keepalive: route === 'audio/stop' });
+            headers: { 'Content-Type': 'application/json', 'X-Display-Client': '1',
+              ...(['focus/memory/save','focus/memory/search'].includes(route)?{'X-Budget-Ms':'5000'}:{}),
+              ...(options.testChannel?{'X-Display-Test-Channel':options.testChannel}:{}) }, body: JSON.stringify(body), signal: controller.signal, keepalive: route === 'audio/stop' });
           if (!response.ok) {
             const seconds = Number(response.headers.get('Retry-After'));
             if (response.status === 429 && Number.isFinite(seconds) && seconds > 0) reconnectAt = now() + Math.min(seconds, 3600) * 1000;
@@ -255,7 +257,7 @@
     }
     async function focusRequest(route,body={}){
       if(!session)throw Error('focus_session_stale');
-      if(!['settings/read','settings','history','open','input','input/status','close','memory/read','memory/save','memory/delete'].includes(route))throw Error('invalid_focus_action');
+      if(!['settings/read','settings','history','open','input','input/status','close','memory/read','memory/save','memory/delete','memory/search'].includes(route))throw Error('invalid_focus_action');
       const view=await post('focus/'+route,{...connection(),...body});
       if(['open','input','close'].includes(route)){applyFocus(view);notify();}
       return view;
