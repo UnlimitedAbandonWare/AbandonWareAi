@@ -1,0 +1,21 @@
+// === Wiring snippet (example, pseudo-Spring style) ===
+// Optional call-site after final synthesis (pre-answer):
+// (Assumes you have runSummaryMap and requestId available)
+/*
+MatrixTelemetryExtractor mtx = new MatrixTelemetryExtractor();
+VirtualPointService vps = new VirtualPointService();
+Map<String,Object> snapshot = mtx.extract(runSummaryMap);
+vps.appendNdjson(requestId, snapshot, new java.io.File("/var/log/app/virt/virt_points.ndjson"));
+*/
+
+// === Alias overlay (before ConceptResolver) ===
+/*
+TileAliasCorrector alias = new TileAliasCorrector();
+String preprocessed = alias.correct(inputText);
+*/
+
+// === MPC (blob normalization) ===
+/*
+MpcPreprocessor mpc = new NoopMpcPreprocessor();
+Object normalized = mpc.normalizeVoxel(blobPayload);
+*/
