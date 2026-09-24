@@ -49,6 +49,11 @@ maps to `commit --preserve-foreign-staged` (`--strict-staging` = exact-match).
   patch seams — separate change-sets, separate checkpoints.
 - No push/pull/fetch/merge/rebase/reset/clean/stash/remote or history rewrite;
   a publish/remote ask needs its own explicit user authorization.
+- No `git tag`/annotated tags, no VERSION/CHANGELOG/RELEASE root files, no
+  semver bumps, no `gh release`, no versioned artifact uploads — agents ship
+  local selective commits only; a version/release structure is never part of
+  this flow (a real external consumer needing a milestone tag is a human
+  decision, not an agent branch).
 - Never delete `.git`/`index.lock` by hand, never kill `git.exe`; a stale
   0-byte `index.lock` is only *moved aside* by the `lock` gate or the
   orchestrator — any unmet condition preserves it and reports BLOCKED.

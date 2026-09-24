@@ -56,10 +56,12 @@ grants no new authority over them.
 - Never auto-approve the hard list: secrets/`apikey.txt`/openssl material in
   logs or commits; `.git` deletion, history rewrite, `reset --hard`,
   `clean -fdx`, restoring the worktree from an old HEAD; push/pull/fetch/
-  merge/rebase without an explicit user request; touching another session's
-  lease, journal, or staged paths; `add -A`/`add .`/`commit -a`/
-  `--no-verify`; bulk deletes outside GraphRAG/Focus/Display scope; sandbox
-  bypass. These stay BLOCKED until the user says otherwise.
+  merge/rebase/`git tag`/version bump or release files (VERSION/CHANGELOG/
+  RELEASE root files, semver, `gh release`, artifact uploads) without an
+  explicit user request; touching another session's lease, journal, or staged
+  paths; `add -A`/`add .`/`commit -a`/`--no-verify`; bulk deletes outside
+  GraphRAG/Focus/Display scope; sandbox bypass. These stay BLOCKED until the
+  user says otherwise.
 - Do not surface a 1/2 choice card for any soft branch above — act under the
   stated conditions, journal `AUTO:<reason>`, report.
 - Do not weaken `conditional_local_git.py` verdicts, skip the staged scan,

@@ -73,7 +73,10 @@ python -B scripts/conditional_local_git.py lock --repo . [--days 1.0] [--backup-
 
 - No `push`/`pull`/`fetch`/`merge`/`rebase`/`reset`/`clean`/`stash`/`init`/
   `remote`/history rewrite/`--amend`/`--no-verify`, no `add -A`/`add .`/
-  `commit -a`, no `git config`/`credential`.
+  `commit -a`, no `git config`/`credential`, no `git tag`/annotated tags, no
+  VERSION/CHANGELOG/RELEASE root files, no semver bumps, `gh release`, or
+  versioned artifact uploads — agents make local selective commits only,
+  never a version/release structure.
 - Never print or commit secret values; never commit raw conversation,
   databases, models, indexes, or large logs.
 - Never delete/rename/empty `.git` or `index.lock`, never kill `git.exe`.

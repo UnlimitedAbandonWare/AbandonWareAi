@@ -19,7 +19,9 @@ description: Use when a demo-1 Codex goal, objective, or acceptance check is don
    conditional-Git scope, attempt the commit path **once**:
    `python -B scripts/agent_git_vibe_commit.py --repo . --path <owned>... --message-file <file> --task-id <id>`
    — report `committed=<sha>` or `deferred=<reason>` in one line. A deferred
-   result never blocks the stop and is never forced.
+   result never blocks the stop and is never forced. Local selective commit
+   only — agents never `git tag`, push, bump versions, or write
+   VERSION/CHANGELOG/RELEASE files.
 4. Give a short final: what changed, how verified, what remains (if any).
 5. **Stop.** Do not invent the next feature, do not keep "vibe continuing", do not open TLS/DAT/relay rabbit holes.
 
