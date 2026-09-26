@@ -23,7 +23,7 @@ public class FocusMemoryEmbeddingConfig {
 
     @Bean
     @ConditionalOnMissingBean(FocusCloudEmbedding.class)
-    @ConditionalOnProperty(name = "focus.memory.embedding.cloud-enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(name = "focus.memory.embedding.cloud-enabled", havingValue = "true", matchIfMissing = false)
     @Conditional(EmbeddingFallbackKeyPresentCondition.class)
     public FocusCloudEmbedding focusCloudEmbedding(
             @Value("${embedding.fallback.api-key:${openai.api.key:${OPENAI_API_KEY:}}}") String apiKey,

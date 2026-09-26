@@ -37,7 +37,8 @@ class FocusMemoryApiFallbackTest {
         context=new AnnotationConfigApplicationContext();
         context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("fixture",Map.of(
             "embedding.fallback.api-key","synthetic-fixture-credential", "embedding.fallback.base-url","http://127.0.0.1:"+server.getAddress().getPort(),
-            "embedding.fallback.dimensions","3","embedding.fallback.enabled","false","focus.memory.embedding.local-enabled","false")));
+            "embedding.fallback.dimensions","3","embedding.fallback.enabled","false","focus.memory.embedding.local-enabled","false",
+            "focus.memory.embedding.cloud-enabled","true")));
         context.register(Database.class);context.refresh();memory=context.getBean(FocusMemoryService.class);history=context.getBean(NovaFocusHistoryService.class);
     }
     @AfterEach void stop(){if(context!=null)context.close();if(server!=null)server.stop(0);}
@@ -71,7 +72,17 @@ class FocusMemoryApiFallbackTest {
     @Test void missingOrPlaceholderCredentialsDisableTheCloudBean(){
         try(var disabled=new AnnotationConfigApplicationContext()){
             disabled.getEnvironment().getPropertySources().addFirst(new MapPropertySource("missing",Map.of(
-                "embedding.fallback.api-key","test","openai.api.key","test","OPENAI_API_KEY","test")));
+                "embedding.fallback.api-key","test","openai.api.key","test","OPENAI_API_KEY","test",
+                "focus.memory.embedding.cloud-enabled","true")));
+            disabled.register(FocusMemoryEmbeddingConfig.class);disabled.refresh();
+            assertTrue(disabled.getBeansOfType(FocusMemoryEmbeddingConfig.FocusCloudEmbedding.class).isEmpty());
+        }
+        assertEquals(0,requests.get());
+    }
+    @Test void absentCloudFlagLeavesBeanDisabledEvenWithCredentials(){
+        try(var disabled=new AnnotationConfigApplicationContext()){
+            disabled.getEnvironment().getPropertySources().addFirst(new MapPropertySource("absent",Map.of(
+                "embedding.fallback.api-key","synthetic-fixture-credential","embedding.fallback.enabled","true")));
             disabled.register(FocusMemoryEmbeddingConfig.class);disabled.refresh();
             assertTrue(disabled.getBeansOfType(FocusMemoryEmbeddingConfig.FocusCloudEmbedding.class).isEmpty());
         }
