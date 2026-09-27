@@ -4,8 +4,12 @@ package service.rag.cache;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class SingleFlightKeys {
+    private static final Logger log = Logger.getLogger(SingleFlightKeys.class.getName());
+
     private SingleFlightKeys(){}
 
     public static String web(String q, int k) { return sha("web|" + q + "|" + k); }
@@ -17,6 +21,16 @@ public final class SingleFlightKeys {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] dig = md.digest(s.getBytes(StandardCharsets.UTF_8));
             return Base64.getUrlEncoder().withoutPadding().encodeToString(dig);
-        } catch (Exception e) { return Integer.toHexString(s.hashCode()); }
+        } catch (Exception e) {
+            logFailSoft("sha", e);
+            return Integer.toHexString(s.hashCode());
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isLoggable(Level.FINE)) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.fine("[AWX][rag][singleflight-key] failSoft stage=" + stage + " errorType=" + errorType);
+        }
     }
 }

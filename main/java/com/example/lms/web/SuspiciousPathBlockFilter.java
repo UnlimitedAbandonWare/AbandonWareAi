@@ -12,6 +12,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 흔한 자동 스캐너/취약점 탐지 요청을 초기에 404로 short-circuit.
@@ -62,12 +63,12 @@ public class SuspiciousPathBlockFilter extends OncePerRequestFilter {
 
     private static boolean isBlocked(String uri, String qs) {
         if (uri == null) return false;
-        String u = uri.toLowerCase();
+        String u = uri.toLowerCase(Locale.ROOT);
         for (String p : PREFIX_BLOCKLIST) {
             if (u.startsWith(p)) return true;
         }
         if (qs != null) {
-            String q = qs.toLowerCase();
+            String q = qs.toLowerCase(Locale.ROOT);
             for (String token : QUERY_BLOCKLIST) {
                 if (q.contains(token)) return true;
             }

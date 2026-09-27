@@ -10,6 +10,7 @@ import static com.example.moe.TensorOps.*;
  * Simple CLI to demonstrate gates and ablations without external deps.
  */
 public class AblationRunner {
+    private static final System.Logger LOG = System.getLogger(AblationRunner.class.getName());
 
     public static void main(String[] args) {
         // Synthetic demo dims
@@ -51,21 +52,22 @@ public class AblationRunner {
 
         MultiSourceMoE.Output out = moe.forward(Q, H_in, sources);
 
-        System.out.println("Gates g: " + java.util.Arrays.toString(out.gates));
+        LOG.log(System.Logger.Level.INFO, "moe.ablation.gates={0}", java.util.Arrays.toString(out.gates));
         for (int j = 0; j < out.gates.length; j++) {
-            System.out.printf(Locale.ROOT, "  g[%d]=%.4f  Features=%s%n", j, out.gates[j], sources.get(j).feat.toString());
+            LOG.log(System.Logger.Level.INFO, "moe.ablation.gate index={0} value={1}",
+                    j, String.format(Locale.ROOT, "%.4f", out.gates[j]));
         }
 
         // Ablation examples:
-        System.out.println("\n-- Ablation: remove match (w_m=0) --");
+        LOG.log(System.Logger.Level.INFO, "moe.ablation.removeMatch");
         moe.wm = 0.0;
         MultiSourceMoE.Output out2 = moe.forward(Q, H_in, sources);
-        System.out.println("Gates g: " + java.util.Arrays.toString(out2.gates));
+        LOG.log(System.Logger.Level.INFO, "moe.ablation.removeMatch.gates={0}", java.util.Arrays.toString(out2.gates));
 
-        System.out.println("\n-- Ablation: remove novelty (w_u=0) --");
+        LOG.log(System.Logger.Level.INFO, "moe.ablation.removeNovelty");
         moe.wu = 0.0; moe.wm = 1.2;
         MultiSourceMoE.Output out3 = moe.forward(Q, H_in, sources);
-        System.out.println("Gates g: " + java.util.Arrays.toString(out3.gates));
+        LOG.log(System.Logger.Level.INFO, "moe.ablation.removeNovelty.gates={0}", java.util.Arrays.toString(out3.gates));
     }
 
     private static double[][] eye(int n, int m) {

@@ -234,12 +234,18 @@ public class TraceFilter implements Filter {
                         }
 
                         boolean hasMl = false;
+                        boolean hasTraceMemory = false;
                         try {
                             java.util.Map<String, Object> ctx = com.example.lms.search.TraceStore.context();
                             if (ctx != null) {
                                 for (String k : ctx.keySet()) {
                                     if (k != null && (k.startsWith("ml.") || k.startsWith("orch."))) {
                                         hasMl = true;
+                                    }
+                                    if (k != null && k.startsWith("traceMemory.")) {
+                                        hasTraceMemory = true;
+                                    }
+                                    if (hasMl && hasTraceMemory) {
                                         break;
                                     }
                                 }
@@ -248,7 +254,7 @@ public class TraceFilter implements Filter {
                             traceSuppressed("snapshot.hasMl", ignore);
                         }
 
-                        boolean capture = dbgSearch || hasMl || status >= 400 || failure != null;
+                        boolean capture = dbgSearch || hasMl || hasTraceMemory || status >= 400 || failure != null;
                         if (capture) {
                             String snapId = traceSnapshotStore.captureCurrent(
                                     "http_request",

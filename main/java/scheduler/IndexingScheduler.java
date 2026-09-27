@@ -1,5 +1,7 @@
 package scheduler;
 
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.function.Supplier;
 
 /**
@@ -8,12 +10,7 @@ import java.util.function.Supplier;
  * com.example.lms.scheduler.IndexingScheduler.
  */
 public class IndexingScheduler {
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private Object ocr;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private Object embeddingStoreManager;
-
+    private static final Logger log = Logger.getLogger(IndexingScheduler.class.getName());
 
     private final IndexJobLock lock = new IndexJobLock();
 
@@ -39,15 +36,13 @@ public class IndexingScheduler {
 
     @org.springframework.scheduling.annotation.Scheduled(cron="${indexing.ocr.cron:0 */10 * * * *}")
     public void runOcrIndexing() {
-        try {
-            if (ocr == null || embeddingStoreManager == null) return;
-            java.lang.reflect.Method mScan = ocr.getClass().getMethod("scanNewImages");
-            java.util.List spans = (java.util.List) mScan.invoke(ocr);
-            java.lang.reflect.Method mChunk = ocr.getClass().getMethod("chunk", java.util.List.class);
-            java.util.List chunks = (java.util.List) mChunk.invoke(ocr, spans);
-            java.lang.reflect.Method mUpsert = embeddingStoreManager.getClass().getMethod("embedAndUpsert", java.util.List.class);
-            mUpsert.invoke(embeddingStoreManager, chunks);
-        } catch (Throwable t) { }
+        logFailSoft("ocrIndexing.disabled", null);
     }
 
+    private static void logFailSoft(String stage, Throwable t) {
+        if (log.isLoggable(Level.FINE)) {
+            String errorType = t == null ? "unknown" : t.getClass().getSimpleName();
+            log.fine("[AWX][scheduler][indexing] failSoft stage=" + stage + " errorType=" + errorType);
+        }
+    }
 }

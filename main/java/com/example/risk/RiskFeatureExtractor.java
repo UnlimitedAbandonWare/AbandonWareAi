@@ -6,6 +6,8 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 
@@ -19,6 +21,8 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class RiskFeatureExtractor {
+    private static final Logger log = LoggerFactory.getLogger(RiskFeatureExtractor.class);
+
     private final EmbeddingModel embeddingModel;
 
     /**
@@ -34,8 +38,8 @@ public class RiskFeatureExtractor {
         StringBuilder sb = new StringBuilder();
         int count = 0;
         for (Content c : ctx.signals()) {
-            Object text = safeGetText(c);
-            if (text != null) {
+            String text = safeText(c);
+            if (!text.isBlank()) {
                 sb.append(text).append('\n');
                 count++;
             }
@@ -53,15 +57,23 @@ public class RiskFeatureExtractor {
         x[d + 1] = Math.log(1.0 + count);        // number of signals (log-scale)
         return x;
     }
-    private Object safeGetText(Content c) {
+
+    private String safeText(Content c) {
         try {
-            return c.getClass().getMethod("text").invoke(c);
-        } catch (Throwable ignore) {
-            try {
-                return c.getClass().getMethod("getText").invoke(c);
-            } catch (Throwable ignore2) {
-                return c.toString();
-            }
+            return c == null || c.textSegment() == null ? "" : c.textSegment().text();
+        } catch (Throwable error) {
+            logFailSoft("content.text", error);
+            return c == null ? "" : c.toString();
         }
+    }
+
+    private static void logFailSoft(String stage, Throwable error) {
+        if (log.isDebugEnabled()) {
+            log.debug("[RiskFeatureExtractor] fail-soft stage={} errorType={}", stage, errorType(error));
+        }
+    }
+
+    private static String errorType(Throwable error) {
+        return error == null ? "unknown" : error.getClass().getSimpleName();
     }
 }

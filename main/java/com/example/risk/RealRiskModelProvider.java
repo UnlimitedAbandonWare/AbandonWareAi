@@ -1,5 +1,6 @@
 package com.example.risk;
 
+import com.example.lms.search.TraceStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -68,6 +69,7 @@ public class RealRiskModelProvider implements RiskModelProvider {
             try {
                 arr[idx++] = Double.parseDouble(p.trim());
             } catch (NumberFormatException ignore) {
+                traceCoefficientParseSuppressed();
                 // skip invalid tokens
             }
         }
@@ -76,5 +78,12 @@ public class RealRiskModelProvider implements RiskModelProvider {
             return Arrays.copyOf(arr, idx);
         }
         return arr;
+    }
+
+    private static void traceCoefficientParseSuppressed() {
+        TraceStore.put("risk.model.suppressed.stage", "coefficientParse");
+        TraceStore.put("risk.model.suppressed.errorType", "invalid_number");
+        TraceStore.put("risk.model.suppressed.coefficientParse", true);
+        TraceStore.put("risk.model.suppressed.coefficientParse.errorType", "invalid_number");
     }
 }

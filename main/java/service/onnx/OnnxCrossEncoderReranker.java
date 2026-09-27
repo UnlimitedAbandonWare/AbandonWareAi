@@ -1,5 +1,7 @@
 package service.onnx;
 
+import com.example.lms.search.TraceStore;
+
 import java.util.concurrent.TimeUnit;
 import java.time.Duration;
 import telemetry.LoggingSseEventPublisher;
@@ -23,17 +25,33 @@ public class OnnxCrossEncoderReranker {
     /** Rerank by descending score; if no model available, return input unchanged. */
     public <T> List<T> rerank(String query, List<T> items, java.util.function.ToDoubleFunction<T> scorer, int topN) {
         if (items == null || items.isEmpty()) return items;
+        boolean acquired = false;
         try {
             limiter.acquire();
+            acquired = true;
             List<T> copy = new ArrayList<>(items);
             copy.sort((a,b) -> Double.compare(scorer.applyAsDouble(b), scorer.applyAsDouble(a)));
             if (topN > 0 && topN < copy.size()) return copy.subList(0, topN);
             return copy;
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
+            traceSuppressed("limiter.acquire", ie);
             return items;
         } finally {
-            limiter.release();
+            if (acquired) {
+                limiter.release();
+            }
         }
+    }
+
+    private static void traceSuppressed(String stage, Exception failure) {
+        String safeStage = stage == null || stage.isBlank() ? "unknown" : stage;
+        TraceStore.put("onnx.reranker.suppressed.stage", safeStage);
+        TraceStore.put("onnx.reranker.suppressed.errorType",
+                failure == null ? "unknown" : failure.getClass().getSimpleName());
+        TraceStore.put("onnx.reranker.suppressed." + safeStage, true);
+        TraceStore.put("onnx.reranker.suppressed." + safeStage + ".errorType",
+                failure == null ? "unknown" : failure.getClass().getSimpleName());
+        TraceStore.put("onnx.reranker.fallbackUsed", true);
     }
 }

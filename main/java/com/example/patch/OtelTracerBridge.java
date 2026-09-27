@@ -1,25 +1,34 @@
 package com.example.patch;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Reflective OpenTelemetry bridge; uses GlobalOpenTelemetry if available. */
 public class OtelTracerBridge {
+    private static final Logger log = LoggerFactory.getLogger(OtelTracerBridge.class);
+
     public static void inSpan(String name, Runnable r) {
-        Object span = null;
         try {
-            Class<?> go = Class.forName("io.opentelemetry.api.GlobalOpenTelemetry");
-            Object otel = go.getMethod("get").invoke(null);
-            Object tracer = otel.getClass().getMethod("getTracer", String.class).invoke(otel, "rag-agent");
-            Class<?> spanBuilderClass = Class.forName("io.opentelemetry.api.trace.SpanBuilder");
-            Object builder = tracer.getClass().getMethod("spanBuilder", String.class).invoke(tracer, name);
-            span = spanBuilderClass.getMethod("startSpan").invoke(builder);
-        } catch (Throwable ignored) {}
-        try { r.run(); } finally {
-            try {
-                if (span != null) {
-                    Class<?> spanClass = Class.forName("io.opentelemetry.api.trace.Span");
-                    spanClass.getMethod("end").invoke(span);
-                }
-            } catch (Throwable ignored) {}
+            r.run();
+        } catch (Throwable error) {
+            logFailSoft("run", error);
+            if (error instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (error instanceof Error fatal) {
+                throw fatal;
+            }
+            throw new IllegalStateException(error);
         }
+    }
+
+    private static void logFailSoft(String stage, Throwable error) {
+        if (log.isDebugEnabled()) {
+            log.debug("[OtelTracerBridge] fail-soft stage={} errorType={}", stage, errorType(error));
+        }
+    }
+
+    private static String errorType(Throwable error) {
+        return error == null ? "unknown" : error.getClass().getSimpleName();
     }
 }

@@ -64,7 +64,7 @@ public class SimpleRiskKAllocator implements RiskKAllocator {
         if (floor == null || floor.length == 0 || budget <= 0) {
             return out;
         }
-        int floorSum = 0;
+        long floorSum = 0L;
         for (int i = 0; i < n; i++) {
             int value = i < floor.length ? Math.max(0, floor[i]) : 0;
             out[i] = value;

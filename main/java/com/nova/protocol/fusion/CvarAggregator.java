@@ -31,7 +31,7 @@ public class CvarAggregator {
     }
 
     public static double upperTailMean(List<Double> scores, double tailFraction) {
-        List<Double> sorted = sortedFiniteClamped(scores);
+        List<Double> sorted = sortedFinite(scores);
         if (sorted.isEmpty()) {
             return 0.0d;
         }
@@ -44,7 +44,7 @@ public class CvarAggregator {
     }
 
     public static double upperTailMeanAtQuantile(List<Double> scores, double quantile) {
-        List<Double> sorted = sortedFiniteClamped(scores);
+        List<Double> sorted = sortedFinite(scores);
         if (sorted.isEmpty()) {
             return 0.0d;
         }
@@ -73,14 +73,14 @@ public class CvarAggregator {
         return sum / count;
     }
 
-    private static List<Double> sortedFiniteClamped(List<Double> scores) {
+    private static List<Double> sortedFinite(List<Double> scores) {
         if (scores == null || scores.isEmpty()) {
             return List.of();
         }
         List<Double> out = new ArrayList<>(scores.size());
         for (Double score : scores) {
             if (score != null && Double.isFinite(score)) {
-                out.add(clamp01(score));
+                out.add(score);
             }
         }
         out.sort(Double::compareTo);

@@ -16,6 +16,8 @@ import java.util.Map;
 
 public class NovaNextFusionService {
 
+    private static final double MAX_BOUNDED_TWPM_P = 8.0d;
+
     private final NovaNextProperties props;
     private final RiskKAllocator riskKAllocator;
     private final DppDiversityReranker dppReranker;
@@ -150,7 +152,8 @@ public class NovaNextFusionService {
 
     private List<ScoredResult> fuseInternal(List<ScoredResult> in) {
         List<Double> baseScores = new ArrayList<>();
-        double maxBase = 0.0d;
+        double minBase = Double.POSITIVE_INFINITY;
+        double maxBase = Double.NEGATIVE_INFINITY;
         for (ScoredResult sr : in) {
             if (sr == null) {
                 continue;
@@ -158,28 +161,38 @@ public class NovaNextFusionService {
             double base = finiteOr(sr.getBaseScore(), finiteOr(sr.score, 0.0d));
             sr.setBaseScore(base);
             sr.setAdjustedScore(base);
-            if (base >= 0.0d) {
-                baseScores.add(base);
-                maxBase = Math.max(maxBase, base);
-            }
+            baseScores.add(base);
+            minBase = Math.min(minBase, base);
+            maxBase = Math.max(maxBase, base);
         }
-        if (baseScores.isEmpty() || maxBase <= 0.0d) {
+        if (baseScores.isEmpty()) {
             return in;
         }
+        boolean signedBaseDomain = minBase < 0.0d;
+        if (!signedBaseDomain && maxBase <= 0.0d) {
+            return in;
+        }
+        double adjustmentScale = signedBaseDomain
+                ? Math.max(1.0e-9d, Math.max(Math.abs(minBase), Math.abs(maxBase)))
+                : maxBase;
 
         double alpha = clamp(props.getAlphaCvar(), 0.50d, 0.99d);
         double tailCut = percentile(baseScores, alpha);
+        double tailNorm = normalizeBaseScore(tailCut, minBase, maxBase, signedBaseDomain);
         double p0 = Math.max(1.05d, finiteOr(props.getP0(), 1.20d));
         double alphaTwpm = Math.max(0.0d, finiteOr(props.getAlphaTwpm(), 0.80d));
         double lambdaCvar = clamp01(finiteOr(props.getLambdaCvar(), 0.35d));
         NovaNextProperties.Grandas grandas = props.getGrandas() == null
                 ? new NovaNextProperties.Grandas()
                 : props.getGrandas();
-        double pMax = Math.max(1.05d, finiteOr(grandas.getPMax(), 3.0d));
+        double configuredPMax = grandas.getPMax();
+        double pMax = clamp(finiteOr(configuredPMax, 3.0d), 1.05d, MAX_BOUNDED_TWPM_P);
+        boolean pMaxBounded = !Double.isFinite(configuredPMax)
+                || Double.compare(configuredPMax, pMax) != 0;
         double maxAdjustment = clamp(finiteOr(grandas.getMaxAdjustment(), 0.18d), 0.0d, 0.50d);
         double bodeC = Math.max(0.0d, finiteOr(grandas.getBodeC(), 1.6d));
         double maxObservedP = 0.0d;
-        double maxObservedCvar = 0.0d;
+        double maxObservedFused = 0.0d;
         boolean clampApplied = false;
         int sourceScoreScaleMismatchCount = 0;
 
@@ -187,19 +200,19 @@ public class NovaNextFusionService {
             if (sr == null) {
                 continue;
             }
-            double base = Math.max(0.0d, finiteOr(sr.getBaseScore(), 0.0d));
-            double norm = clamp01(base / maxBase);
-            double tailDen = Math.max(1.0e-9d, maxBase - tailCut);
-            double tailExcess = clamp01((base - tailCut) / tailDen);
+            double base = finiteOr(sr.getBaseScore(), 0.0d);
+            double norm = normalizeBaseScore(base, minBase, maxBase, signedBaseDomain);
+            double tailDen = Math.max(1.0e-9d, 1.0d - tailNorm);
+            double tailExcess = clamp01((norm - tailNorm) / tailDen);
             double p = clamp(p0 + (alphaTwpm * tailExcess), 1.05d, pMax);
 
-            SourceScoreNormalization normalized = normalizeSourceScores(sr.getSourceScores(), maxBase, norm);
+            SourceScoreNormalization normalized = normalizeSourceScores(sr.getSourceScores(), norm);
             sourceScoreScaleMismatchCount += normalized.scaleMismatchCount();
             double twpm = twpmFuser.fuseUpperTail(normalized.scores(), p, null, 0.25d, 2.0d);
             double cvar = cvarAggregator.cvarAtQuantile(normalized.scores(), alpha);
             maxObservedP = Math.max(maxObservedP, p);
-            maxObservedCvar = Math.max(maxObservedCvar, cvar);
             double fusedNorm = ((1.0d - lambdaCvar) * twpm) + (lambdaCvar * cvar);
+            maxObservedFused = Math.max(maxObservedFused, fusedNorm);
             double smoothNorm = sigmoid((fusedNorm - 0.50d) * 4.0d);
             double tailSignal = Math.max(sr.getTailSignal(), tailSignal(sr, tailExcess));
             double delta = (0.30d * tailSignal)
@@ -212,14 +225,15 @@ public class NovaNextFusionService {
             double projected = clamp01((0.70d * norm) + (0.30d * smoothNorm));
             projected = projected * (1.0d + (0.25d * Math.tanh(delta)));
             double deltaNorm = projected - norm;
-            double clampedDeltaNorm = Math.signum(deltaNorm)
-                    * BodeClamp.applyTraced(Math.abs(deltaNorm), bodeC, "nova.next");
-            if (Math.abs(clampedDeltaNorm) > 1.0e-9d) {
+            double deltaMagnitude = Math.abs(deltaNorm);
+            double clampedMagnitude = BodeClamp.applyTraced(deltaMagnitude, bodeC, "nova.next");
+            double clampedDeltaNorm = Math.signum(deltaNorm) * clampedMagnitude;
+            if (Math.abs(clampedMagnitude - deltaMagnitude) > 1.0e-9d) {
                 clampApplied = true;
             }
-            double target = base + (clampedDeltaNorm * maxBase);
+            double target = base + (clampedDeltaNorm * adjustmentScale);
             double guardBand = Math.max(1.0e-12d, Math.abs(base) * maxAdjustment);
-            double adjusted = clamp(target, Math.max(0.0d, base - guardBand), base + guardBand);
+            double adjusted = clamp(target, base - guardBand, base + guardBand);
 
             sr.setTailSignal(tailSignal);
             sr.setGuardBand(guardBand);
@@ -227,7 +241,7 @@ public class NovaNextFusionService {
             sr.setReason(reason(base, adjusted, tailSignal, guardBand));
         }
         TraceStore.put("hypernova.twpmP", round6(maxObservedP));
-        TraceStore.put("hypernova.cvarFusedScore", round6(maxObservedCvar));
+        TraceStore.put("hypernova.cvarFusedScore", round6(maxObservedFused));
         TraceStore.put("hypernova.cvarAlpha", round6(alpha));
         TraceStore.put("hypernova.cvarPhi", round6(lambdaCvar));
         TraceStore.put("hypernova.clampApplied", clampApplied);
@@ -235,12 +249,17 @@ public class NovaNextFusionService {
         if (sourceScoreScaleMismatchCount > 0) {
             TraceStore.put("hypernova.sourceScoreScaleMismatchPolicy", "fallback_to_base_norm");
         }
-        allocateRiskK(in, maxBase);
+        List<ScoredResult> ordered = orderByAdjustedScore(in);
+        allocateRiskK(ordered, minBase, maxBase, signedBaseDomain);
         TraceStore.put("hypernova.twpmP.max", round6(pMax));
-        return applyDpp(in);
+        TraceStore.put("hypernova.twpmP.maxBounded", pMaxBounded);
+        return applyDpp(ordered);
     }
 
-    private void allocateRiskK(List<ScoredResult> in, double maxBase) {
+    private void allocateRiskK(List<ScoredResult> in,
+                               double minBase,
+                               double maxBase,
+                               boolean signedBaseDomain) {
         if (riskKAllocator == null || in == null || in.isEmpty()) {
             TraceStore.put("nova.hypernova.riskK.used", false);
             TraceStore.put("hypernova.riskKAlloc", Map.of("used", false));
@@ -261,10 +280,13 @@ public class NovaNextFusionService {
         double[] logits = new double[candidates.size()];
         double[] risk = new double[candidates.size()];
         int totalK = Math.max(1, props.getKTotal());
-        double denom = Math.max(1.0e-9d, maxBase);
         for (int i = 0; i < candidates.size(); i++) {
             ScoredResult sr = candidates.get(i);
-            logits[i] = clamp01(finiteOr(sr.getAdjustedScore(), sr.getBaseScore()) / denom);
+            logits[i] = normalizeBaseScore(
+                    finiteOr(sr.getAdjustedScore(), sr.getBaseScore()),
+                    minBase,
+                    maxBase,
+                    signedBaseDomain);
             risk[i] = clamp01(Math.max(sr.getContradictionRate(), sr.getDuplicateRate()));
         }
 
@@ -292,37 +314,67 @@ public class NovaNextFusionService {
         TraceStore.put("hypernova.riskKAlloc", riskKTrace);
     }
 
-    private static SourceScoreNormalization normalizeSourceScores(List<Double> scores, double maxBase, double fallback) {
+    private static SourceScoreNormalization normalizeSourceScores(List<Double> scores, double fallback) {
         if (scores == null || scores.isEmpty()) {
             return new SourceScoreNormalization(List.of(fallback), 0);
         }
         List<Double> out = new ArrayList<>();
         int scaleMismatchCount = 0;
-        boolean calibratedBaseScale = maxBase <= 1.0d + 1.0e-9d;
-        double denom = Math.max(maxBase, 1.0e-9d);
         for (Double score : scores) {
             double s = finiteOr(score == null ? 0.0d : score, Double.NaN);
             if (!Double.isFinite(s)) {
                 continue;
             }
-            if (calibratedBaseScale) {
-                if (s < 0.0d || s > 1.0d) {
-                    scaleMismatchCount++;
-                    continue;
-                }
-                out.add(clamp01(s));
-            } else {
-                if (s < 0.0d) {
-                    scaleMismatchCount++;
-                    continue;
-                }
-                out.add(clamp01(s / denom));
+            if (s < 0.0d || s > 1.0d) {
+                scaleMismatchCount++;
+                continue;
             }
+            out.add(s);
         }
-        return new SourceScoreNormalization(out.isEmpty() ? List.of(fallback) : out, scaleMismatchCount);
+        if (scaleMismatchCount > 0) {
+            return new SourceScoreNormalization(List.of(fallback), scaleMismatchCount);
+        }
+        return new SourceScoreNormalization(out.isEmpty() ? List.of(fallback) : out, 0);
     }
 
     private record SourceScoreNormalization(List<Double> scores, int scaleMismatchCount) {
+    }
+
+    private static double normalizeBaseScore(double value,
+                                             double minBase,
+                                             double maxBase,
+                                             boolean signedBaseDomain) {
+        if (!signedBaseDomain) {
+            return clamp01(value / Math.max(1.0e-9d, maxBase));
+        }
+        double range = maxBase - minBase;
+        if (!Double.isFinite(range) || range <= 1.0e-9d) {
+            return 0.50d;
+        }
+        return clamp01((value - minBase) / range);
+    }
+
+    private static List<ScoredResult> orderByAdjustedScore(List<ScoredResult> in) {
+        List<ScoredResult> ordered = new ArrayList<>(in);
+        ordered.sort((left, right) -> {
+            if (left == right) {
+                return 0;
+            }
+            if (left == null) {
+                return 1;
+            }
+            if (right == null) {
+                return -1;
+            }
+            int byScore = Double.compare(right.getAdjustedScore(), left.getAdjustedScore());
+            if (byScore != 0) {
+                return byScore;
+            }
+            String leftId = left.getId() == null ? "" : left.getId();
+            String rightId = right.getId() == null ? "" : right.getId();
+            return leftId.compareTo(rightId);
+        });
+        return ordered;
     }
 
     private List<ScoredResult> applyDpp(List<ScoredResult> in) {

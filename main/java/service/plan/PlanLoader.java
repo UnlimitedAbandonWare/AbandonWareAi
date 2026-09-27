@@ -4,11 +4,14 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Minimal plan loader that reads YAML-like key-value pairs.
  */
 public class PlanLoader {
+    private static final Logger log = LoggerFactory.getLogger(PlanLoader.class);
 
     public static class Plan {
         public String name = "default";
@@ -41,8 +44,8 @@ public class PlanLoader {
                 if (t.contains("minofficialsources")) p.citationMinSources = (int)parseDouble(line);
                 if (t.contains("minsnippetchars")) p.citationMinChars = (int)parseDouble(line);
             }
-        } catch (Exception e) {
-            // ignore
+        } catch (Exception error) {
+            logFailSoft("load", error);
         }
         return p;
     }
@@ -51,8 +54,19 @@ public class PlanLoader {
         try {
             String[] toks = line.split(":");
             return Double.parseDouble(toks[toks.length-1].trim().replaceAll("[^0-9.]", ""));
-        } catch (Exception e) {
+        } catch (Exception error) {
+            logFailSoft("parseDouble", error);
             return 0.0;
         }
+    }
+
+    private static void logFailSoft(String stage, Exception error) {
+        if (log.isDebugEnabled()) {
+            log.debug("[PlanLoader] fail-soft stage={} errorType={}", stage, errorType(error));
+        }
+    }
+
+    private static String errorType(Exception error) {
+        return error == null ? "unknown" : error.getClass().getSimpleName();
     }
 }

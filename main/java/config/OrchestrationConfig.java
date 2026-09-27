@@ -1,5 +1,7 @@
 package config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,11 +20,16 @@ import jakarta.servlet.Filter;
 
 @Configuration
 public class OrchestrationConfig {
+  private static final Logger log = LoggerFactory.getLogger(OrchestrationConfig.class);
+
   @Bean PlanLoader planLoader(){ return new PlanLoader(); }
 
   @Bean PlannerNexus plannerNexus(PlanLoader l, @Value("${planner.plan:safe_autorun}") String name){
     try { return new PlannerNexus(l.load(name)); }
-    catch (Exception e){ return new PlannerNexus(null); }
+    catch (Exception e){
+      logFailSoft("plannerNexus", e);
+      return new PlannerNexus(null);
+    }
   }
 
   @Bean KAllocationPolicy kAllocationPolicy(PlannerNexus p){ return new KAllocationPolicy(p); }
@@ -46,4 +53,11 @@ public class OrchestrationConfig {
   @Bean MCPPingTool mcpPingTool(McpClient c){ return new MCPPingTool(c); }
 
   @Bean PIISanitizer pii(){ return new PIISanitizer(); }
+
+  private static void logFailSoft(String stage, Exception e) {
+    if (log.isDebugEnabled()) {
+      String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+      log.debug("[AWX][orchestration][config] failSoft stage={} errorType={}", stage, errorType);
+    }
+  }
 }

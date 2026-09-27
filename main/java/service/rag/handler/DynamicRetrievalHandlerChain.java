@@ -3,6 +3,7 @@ package service.rag.handler;
 
 
 
+import com.example.lms.search.TraceStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.example.lms.config.alias.NineTileAliasCorrector;
@@ -43,7 +44,7 @@ public class DynamicRetrievalHandlerChain {
     public void bindPlan(PlanParams plan) {
         if (plan != null) this.plan = plan;
         // SSE placeholder: plan.selected
-        System.out.println("sse:event plan.selected value=" + (plan==null?"default":"bound"));
+        TraceStore.put("dynamicRetrieval.alias.planSelected", plan == null ? "default" : "bound");
     }
 
     public int getWebTopK() { return plan.webTopK; }
@@ -53,18 +54,23 @@ public class DynamicRetrievalHandlerChain {
     private void _sse(Object a1, Object a2) {
         if (sse == null) return;
         try {
-            sse.getClass().getMethod("emit", String.class, Object.class).invoke(sse, String.valueOf(a1), a2);
-        } catch (Throwable _t) { }
+            sse.emit(String.valueOf(a1), String.valueOf(a2));
+        } catch (Throwable _t) { traceSseFallback("emit2", _t); }
     }
     private void _sse(Object a1, Object a2, java.util.Map meta) {
         if (sse == null) return;
         try {
-            try {
-                sse.getClass().getMethod("emit", String.class, Object.class, java.util.Map.class).invoke(sse, String.valueOf(a1), a2, meta);
-            } catch (NoSuchMethodException _e) {
-                sse.getClass().getMethod("emit", String.class, Object.class).invoke(sse, String.valueOf(a1), a2);
-            }
-        } catch (Throwable _t) { }
+            sse.emit(String.valueOf(a1), String.valueOf(a2));
+        } catch (Throwable _t) { traceSseFallback("emit3", _t); }
+    }
+
+    private static void traceSseFallback(String stage, Throwable error) {
+        String safeStage = stage == null || stage.isBlank() ? "unknown" : stage;
+        String errorType = error == null ? "unknown" : error.getClass().getSimpleName();
+        TraceStore.put("dynamicRetrieval.alias.sse.suppressed.stage", safeStage);
+        TraceStore.put("dynamicRetrieval.alias.sse.suppressed.errorType", errorType);
+        TraceStore.put("dynamicRetrieval.alias.sse.suppressed." + safeStage, true);
+        TraceStore.put("dynamicRetrieval.alias.sse.suppressed." + safeStage + ".errorType", errorType);
     }
 
 }

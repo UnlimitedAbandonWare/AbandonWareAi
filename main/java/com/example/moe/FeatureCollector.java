@@ -2,6 +2,8 @@
 package com.example.moe;
 
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 
@@ -13,6 +15,8 @@ import java.util.*;
  * The collector normalizes them into a consistent Feature object.
  */
 public class FeatureCollector {
+
+    private static final Logger log = LoggerFactory.getLogger(FeatureCollector.class);
 
     public static class Features {
         public double authority = 1.0;   // a_j > 0
@@ -79,7 +83,18 @@ public class FeatureCollector {
     }
     private static double asDouble(Object o) {
         if (o instanceof Number) return ((Number)o).doubleValue();
-        try { return Double.parseDouble(String.valueOf(o)); } catch (Exception e) { return 0.0; }
+        try {
+            return Double.parseDouble(String.valueOf(o));
+        } catch (Exception e) {
+            logFailSoft("asDouble", e);
+            return 0.0;
+        }
+    }
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][moe][feature-collector] failSoft stage={} errorType={}", stage, errorType);
+        }
     }
     private static double clamp(double x, double lo, double hi) {
         return Math.max(lo, Math.min(hi, x));
