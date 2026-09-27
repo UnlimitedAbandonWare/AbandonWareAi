@@ -15,6 +15,7 @@ import org.springframework.mock.env.MockEnvironment;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -76,5 +78,35 @@ class UawIdleAutoTrainingPipelineAspectTest {
         assertFalse(trace.contains("searchQueries=["), trace);
         assertTrue(String.valueOf(TraceStore.get("uaw.pipeline.plan.steps")).contains("searchQueryCount="));
         assertTrue(String.valueOf(TraceStore.get("uaw.pipeline.plan.steps")).contains("domainProfileHash="));
+    }
+
+    @Test
+    void nonHardPipelineFailureDoesNotReplayChatWorkflow() throws Throwable {
+        String prefix = "uaw:";
+        UawIdleAutoTrainingPipelineAspect aspect = new UawIdleAutoTrainingPipelineAspect(
+                new MockEnvironment().withProperty("uaw.autolearn.strict.prefix", prefix),
+                new RuleBasedQueryAugmenter(new NovaWebFailSoftProperties()),
+                null);
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        ChatWorkflow workflow = mock(ChatWorkflow.class, org.mockito.Answers.CALLS_REAL_METHODS);
+        AtomicInteger workflowExecutions = new AtomicInteger();
+        when(pjp.getArgs()).thenReturn(new Object[]{prefix + "bounded training query"});
+        when(pjp.getThis()).thenReturn(workflow);
+        doAnswer(invocation -> {
+            if (workflowExecutions.incrementAndGet() == 1) {
+                throw new IllegalStateException("pipeline failed after workflow execution started");
+            }
+            return ChatResult.of("replayed", "replayed", false);
+        }).when(workflow).continueChat(any(ChatRequestDto.class));
+        when(pjp.proceed(any(Object[].class))).thenAnswer(invocation -> {
+            Object[] args = invocation.getArgument(0);
+            return workflow.ask((String) args[0]);
+        });
+
+        Object result = aspect.aroundAsk(pjp);
+
+        assertEquals(1, workflowExecutions.get(),
+                "a failed direct continueChat call must not replay ask and duplicate provider or persistence work");
+        assertEquals(ChatResult.of("", "fallback:evidence:uaw-pipeline-failed", false), result);
     }
 }

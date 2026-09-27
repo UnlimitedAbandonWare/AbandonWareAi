@@ -588,6 +588,69 @@ class EvidenceListTraceInjectionAspectTest {
     }
 
     @Test
+    void providerDiagnosticsExposeNaverObservedTrueZeroStages() throws Exception {
+        TraceStore.put("web.naver.failureClass", "TRUE_ZERO");
+        TraceStore.put("web.naver.providerAttemptObserved", true);
+        TraceStore.put("web.naver.providerResultCount", 0);
+        TraceStore.put("web.naver.preFilterCount", 0);
+        TraceStore.put("web.naver.postFilterCount", 0);
+        TraceStore.put("web.naver.mergeCount", "unknown");
+
+        EvidenceListTraceInjectionAspect aspect = new EvidenceListTraceInjectionAspect(new MockEnvironment());
+
+        String diag = diagnostics(aspect);
+
+        assertTrue(diag.contains("naver.status"), diag);
+        assertTrue(diag.contains("failureClass=`TRUE_ZERO`"), diag);
+        assertTrue(diag.contains("providerAttemptObserved=true"), diag);
+        assertTrue(diag.contains("providerResultCount=0"), diag);
+        assertTrue(diag.contains("preFilterCount=0"), diag);
+        assertTrue(diag.contains("postFilterCount=0"), diag);
+        assertTrue(diag.contains("mergeCount=unknown"), diag);
+    }
+
+    @Test
+    void providerDiagnosticsBoundMalformedNaverStageValuesToUnknown() throws Exception {
+        String rawFailureClass = "private failure class client_secret=secret should not remain";
+        String rawCount = "private count api_key=secret should not remain";
+        TraceStore.put("web.naver.failureClass", rawFailureClass);
+        TraceStore.put("web.naver.providerAttemptObserved", rawCount);
+        TraceStore.put("web.naver.providerResultCount", -1);
+        TraceStore.put("web.naver.preFilterCount", Double.NaN);
+        TraceStore.put("web.naver.postFilterCount", Map.of("raw", rawCount));
+        TraceStore.put("web.naver.mergeCount", rawCount);
+
+        EvidenceListTraceInjectionAspect aspect = new EvidenceListTraceInjectionAspect(new MockEnvironment());
+
+        String diag = diagnostics(aspect);
+
+        assertTrue(diag.contains("failureClass=`" + SafeRedactor.hashValue(rawFailureClass) + "`"), diag);
+        assertTrue(diag.contains("providerAttemptObserved=unknown"), diag);
+        assertTrue(diag.contains("providerResultCount=unknown"), diag);
+        assertTrue(diag.contains("preFilterCount=unknown"), diag);
+        assertTrue(diag.contains("postFilterCount=unknown"), diag);
+        assertTrue(diag.contains("mergeCount=unknown"), diag);
+        assertFalse(diag.contains(rawFailureClass), diag);
+        assertFalse(diag.contains(rawCount), diag);
+    }
+
+    @Test
+    void providerDiagnosticsDoNotCoerceMissingNaverStagesToZero() throws Exception {
+        TraceStore.put("web.naver.failureClass", "TRUE_ZERO");
+
+        EvidenceListTraceInjectionAspect aspect = new EvidenceListTraceInjectionAspect(new MockEnvironment());
+
+        String diag = diagnostics(aspect);
+
+        assertTrue(diag.contains("failureClass=`TRUE_ZERO`"), diag);
+        assertFalse(diag.contains("providerAttemptObserved="), diag);
+        assertFalse(diag.contains("providerResultCount="), diag);
+        assertFalse(diag.contains("preFilterCount="), diag);
+        assertFalse(diag.contains("postFilterCount="), diag);
+        assertFalse(diag.contains("mergeCount="), diag);
+    }
+
+    @Test
     void providerDiagnosticsExposeNaverFailureTimingStatus() throws Exception {
         TraceStore.put("web.naver.failureReason", "rate-limit");
         TraceStore.put("web.naver.httpStatus", 429);

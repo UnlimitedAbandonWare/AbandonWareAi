@@ -7,6 +7,12 @@ import com.abandonware.ai.agent.contract.ToolManifestCatalog;
 import com.example.lms.cfvm.CfvmFailureRecorder;
 import com.example.lms.cfvm.RawMatrixBuffer;
 import com.example.lms.debug.DebugEventStore;
+import com.example.lms.orchestration.control.RagControlCoordinator;
+import com.example.lms.orchestration.control.RagControlLearningGate;
+import com.example.lms.orchestration.control.RagControlProperties;
+import com.example.lms.orchestration.control.RagControlRolloutState;
+import com.example.lms.orchestration.control.RagControlRuntimeAdapter;
+import com.example.lms.orchestration.control.RagGuardProbeComposer;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.guard.GuardContext;
 import com.example.lms.service.guard.GuardContextHolder;
@@ -28,6 +34,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.nio.file.Files;
@@ -43,6 +50,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class ExtremeZBurstAspectTest {
 
@@ -422,7 +433,11 @@ class ExtremeZBurstAspectTest {
         CfvmFailureRecorder recorder = new CfvmFailureRecorder(
                 provider(new RawMatrixBuffer()),
                 provider(new FailurePatternMemoryService(
-                        new ObjectMapper(), new ToolManifestCatalog(), tempDir, memory)));
+                        new ObjectMapper(), new ToolManifestCatalog(), tempDir, memory)),
+                provider(null),
+                provider(null),
+                provider(null),
+                provider(shadowLearningGate()));
         ExtremeZBurstAspect aspect = new ExtremeZBurstAspect(provider(retriever), new AnchorNarrower(), props,
                 contradictionProvider(new FixedContradictionScorer(0.0d)), debugProvider(null),
                 null, null, provider(recorder));
@@ -441,6 +456,45 @@ class ExtremeZBurstAspectTest {
         assertEquals(Boolean.TRUE, TraceStore.get("cfvm.recorder.memory.recorded"));
         assertTrue(line.contains("cfvm_failure_pattern"));
         assertFalse(line.contains("provider disabled query"));
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void cfvmBridgeMarksOnlyItsCopiedTraceAsRagOrigin() throws Throwable {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getExtremeZ().setEnabled(false);
+        props.getExtremeZ().setMinBaseDocs(2);
+        props.getExtremeZ().setMaxSubQueries(1);
+        props.getExtremeZ().setMaxMergedDocs(4);
+        FixedAnalyzeRetriever retriever = new FixedAnalyzeRetriever(
+                List.of(Content.from("provider-disabled rescue evidence")));
+        CfvmFailureRecorder recorder = mock(CfvmFailureRecorder.class);
+        ExtremeZBurstAspect aspect = new ExtremeZBurstAspect(
+                provider(retriever), new AnchorNarrower(), props,
+                contradictionProvider(new FixedContradictionScorer(0.0d)), debugProvider(null),
+                null, null, provider(recorder));
+        GuardContext ctx = new GuardContext();
+        ctx.putPlanOverride("extremeZ.enabled", true);
+        GuardContextHolder.set(ctx);
+        TraceStore.put("web.naver.providerDisabled", true);
+
+        aspect.aroundHybridRetrieve(new FakePjp(
+                List.of(Content.from("stable a"), Content.from("stable b")),
+                query("provider disabled query")));
+
+        ArgumentCaptor<Map> trace = ArgumentCaptor.forClass(Map.class);
+        verify(recorder).record(
+                eq("extremez"), eq("provider_disabled"), eq("ExtremeZBurstAspect"), any(), trace.capture());
+        assertEquals(Boolean.TRUE, trace.getValue().get(CfvmFailureRecorder.RAG_ORIGIN_MARKER));
+        assertFalse(TraceStore.getAll().containsKey(CfvmFailureRecorder.RAG_ORIGIN_MARKER));
+    }
+
+    private static RagControlLearningGate shadowLearningGate() {
+        return new RagControlLearningGate(
+                new RagControlCoordinator(
+                        new RagGuardProbeComposer(),
+                        new RagControlRolloutState(new RagControlProperties(300, 0.01d, 20))),
+                new RagControlRuntimeAdapter());
     }
 
     @Test
@@ -603,6 +657,577 @@ class ExtremeZBurstAspectTest {
         assertEquals(0.0d, (Double) TraceStore.get("rag.metrics.textureHitRate"), 0.0001d);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "held_authored,900,true,2,true,2,false", "held_short,250,true,2,true,1,true",
+            "fast_authored,900,false,2,true,2,false", "fast_short,250,false,2,true,2,false",
+            "single_authored,900,true,1,true,1,false", "single_short,250,true,1,true,1,false",
+            "preapply_false_authored,900,false,2,true,2,false", "preapply_false_short,250,false,2,true,2,false",
+            "disabled_authored,900,false,2,false,0,false", "disabled_short,250,false,2,false,0,false"})
+    @org.junit.jupiter.api.Timeout(10)
+    @SuppressWarnings("unchecked")
+    void shippedVariantBudgetStopsTheNextCallAfterAHeldCurrentCallReturns(
+            String control, long rawBudgetMs, boolean holdFirst, int variantCap,
+            boolean enabled, int expectedCalls, boolean deadlineHit) throws Throwable {
+        var mapper = new ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans/safe.v1.yaml"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        String key = "extremeZ.budgetMs";
+        assertEquals(900L, original.path("params").path(key).asLong());
+        assertTrue(original.path("params").path("extremeZ.enabled").asBoolean());
+        assertEquals(2, original.path("params").path("extremeZ.maxSubQueries").asInt());
+        var modified = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) modified.path("params")).put(key, rawBudgetMs);
+        var restored = modified.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("params"))
+                .set(key, original.path("params").path(key));
+        assertEquals(original, restored, "only the raw budget changes within each fixed masking pair");
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if ("classpath:plans/safe.v1.yaml".equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return "safe.v1.yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier(original.equals(modified)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        GuardContext ctx = new GuardContext();
+        boolean preApplyFalse = !enabled || control.startsWith("preapply_false");
+        if (preApplyFalse) ctx.putPlanOverride("extremeZ.enabled", false);
+        if (variantCap == 1) ctx.putPlanOverride("extremeZ.maxSubQueries", 1);
+        applier.applyToGuardContext(applier.load("safe.v1"), ctx);
+        assertTrue(ctx.planBool("extremeZ.enabled", false), "the typed true plan flag overwrites preexisting false");
+        if (!enabled) ctx.putPlanOverride("extremeZ.enabled", false);
+        assertEquals(rawBudgetMs, ctx.planLong(key, -1L));
+        assertEquals(enabled, ctx.planBool("extremeZ.enabled", !enabled));
+        assertEquals(variantCap, ctx.planInt("extremeZ.maxSubQueries", -1));
+        assertEquals(2, ctx.planInt("extremeZ.minBaseDocs", -1));
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(holdFirst ? 1 : 0);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        var firstCallElapsedMs = new java.util.concurrent.atomic.AtomicLong();
+        var trace = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        AnalyzeWebSearchRetriever retriever = new AnalyzeWebSearchRetriever(null, null, null, null, null, null) {
+            @Override public List<Content> retrieve(Query query) {
+                int call = calls.incrementAndGet();
+                assertEquals(rawBudgetMs, TraceStore.get("extremez.budgetMs"));
+                assertEquals(variantCap, TraceStore.get("extremez.variants.count"));
+                assertEquals("sparse", TraceStore.get("extremez.activation.reason"));
+                if (call == 1) {
+                    long started = System.nanoTime();
+                    entered.countDown();
+                    try {
+                        assertTrue(release.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                    } catch (InterruptedException e) {
+                        interrupted.set(true);
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("owned fixture interrupted", e);
+                    } finally {
+                        firstCallElapsedMs.set(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
+                    }
+                }
+                return List.of(Content.from("local variant evidence " + call));
+            }
+        };
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getExtremeZ().setEnabled(false);
+        ExtremeZBurstAspect aspect = new ExtremeZBurstAspect(provider(retriever), new AnchorNarrower(), props,
+                contradictionProvider(new FixedContradictionScorer(0.0d)), debugProvider(null));
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(pjp.getArgs()).thenReturn(new Object[]{query("machine learning optimization benchmark")});
+        org.mockito.Mockito.when(pjp.proceed()).thenReturn(List.of());
+        var caller = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var running = caller.submit(() -> {
+                TraceStore.clear();
+                GuardContextHolder.set(ctx);
+                try {
+                    return (List<Content>) aspect.aroundHybridRetrieve(pjp);
+                } catch (Throwable t) {
+                    throw new IllegalStateException("owned advice fixture failed", t);
+                } finally {
+                    trace.set(new java.util.LinkedHashMap<>(TraceStore.getAll()));
+                    GuardContextHolder.clear();
+                    TraceStore.clear();
+                }
+            });
+            if (enabled) assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            if (holdFirst) {
+                org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.TimeoutException.class,
+                        () -> running.get(350, java.util.concurrent.TimeUnit.MILLISECONDS),
+                        "the synchronous current call remains held beyond the short budget");
+                assertEquals(1, calls.get());
+                assertFalse(running.isDone());
+                assertFalse(interrupted.get());
+                release.countDown();
+            }
+            List<Content> result = running.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(expectedCalls, calls.get());
+            assertEquals(expectedCalls, result.size(), "returned unique evidence reflects admitted variants");
+            assertEquals(deadlineHit, Boolean.TRUE.equals(trace.get().get("extremez.deadline.hit")));
+            assertFalse(interrupted.get());
+            if (enabled) {
+                assertEquals(rawBudgetMs, trace.get().get("extremez.budgetMs"));
+                assertEquals(variantCap, trace.get().get("extremez.variants.count"));
+                assertEquals(expectedCalls, trace.get().get("extremez.parallelBranchCount"));
+                assertEquals(Boolean.TRUE, trace.get().get("extremez.activated"));
+                if (holdFirst) assertTrue(firstCallElapsedMs.get() >= 350L);
+            } else {
+                assertEquals("disabled", trace.get().get("extremez.skipReason"));
+                assertFalse(trace.get().containsKey("extremez.budgetMs"));
+                assertFalse(trace.get().containsKey("extremez.variants.count"));
+            }
+            verify(pjp, org.mockito.Mockito.times(1)).proceed();
+            assertTrue(caller.submit(() -> GuardContextHolder.get() == null && TraceStore.getAll().isEmpty())
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS));
+            System.out.printf("TBL07_EXTREME_BUDGET control=%s rawBudgetMs=%d held=%s enabled=%s variants=%d calls=%d results=%d deadlineHit=%s firstCallMs=%d preApplyFalse=%s postApplyDisabled=%s interrupted=false workerContextCleared=true externalRequests=0%n",
+                    control, rawBudgetMs, holdFirst, enabled, enabled ? variantCap : 0,
+                    calls.get(), result.size(), deadlineHit, firstCallElapsedMs.get(), preApplyFalse, !enabled);
+        } finally {
+            release.countDown();
+            caller.shutdown();
+            if (!caller.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                caller.shutdownNow();
+                assertTrue(caller.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS));
+            }
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "minBaseDocs,2,2,3", "minBaseDocs,1,0,1",
+            "maxSubQueries,2,2,3", "maxSubQueries,1,1,2",
+            "maxMergedDocs,14,2,3", "maxMergedDocs,1,2,1"})
+    @org.junit.jupiter.api.Timeout(10)
+    @SuppressWarnings("unchecked")
+    void shippedNumericControlsChangeActivationCallsAndReturnedMembership(
+            String suffix, int rawValue, int expectedCalls, int expectedResults) throws Throwable {
+        var mapper = new ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans/safe.v1.yaml"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        Map<String, Integer> authored = Map.of("minBaseDocs", 2, "maxSubQueries", 2, "maxMergedDocs", 14);
+        for (var entry : authored.entrySet()) {
+            assertEquals(entry.getValue().intValue(), original.path("params").path("extremeZ." + entry.getKey()).asInt());
+        }
+        assertEquals(900L, original.path("params").path("extremeZ.budgetMs").asLong());
+        String key = "extremeZ." + suffix;
+        var modified = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) modified.path("params")).put(key, rawValue);
+        var restored = modified.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("params"))
+                .set(key, original.path("params").path(key));
+        assertEquals(original, restored, "only the selected raw numeric field changes within each pair");
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if ("classpath:plans/safe.v1.yaml".equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return "safe.v1.yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier(original.equals(modified)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        GuardContext ctx = new GuardContext();
+        applier.applyToGuardContext(applier.load("safe.v1"), ctx);
+        assertTrue(ctx.planBool("extremeZ.enabled", false));
+        assertEquals(900L, ctx.planLong("extremeZ.budgetMs", -1L));
+        for (var entry : authored.entrySet()) {
+            assertEquals(entry.getKey().equals(suffix) ? rawValue : entry.getValue().intValue(),
+                    ctx.planInt("extremeZ." + entry.getKey(), -1));
+        }
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        List<String> variantQueries = new ArrayList<>();
+        List<Content> auxiliary = new ArrayList<>();
+        AnalyzeWebSearchRetriever retriever = new AnalyzeWebSearchRetriever(null, null, null, null, null, null) {
+            @Override public List<Content> retrieve(Query variant) {
+                assertSame(ctx, GuardContextHolder.get());
+                int call = calls.incrementAndGet();
+                variantQueries.add(variant.text());
+                Content content = Content.from("local numeric variant evidence " + call);
+                auxiliary.add(content);
+                return List.of(content);
+            }
+        };
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getExtremeZ().setEnabled(false);
+        ExtremeZBurstAspect aspect = new ExtremeZBurstAspect(provider(retriever), new AnchorNarrower(), props,
+                contradictionProvider(new FixedContradictionScorer(0.0d)), debugProvider(null));
+        List<Content> base = List.of(Content.from("local numeric base evidence"));
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(pjp.getArgs()).thenReturn(new Object[]{query("machine learning optimization benchmark")});
+        org.mockito.Mockito.when(pjp.proceed()).thenReturn(base);
+        TraceStore.clear();
+        GuardContextHolder.set(ctx);
+        try {
+            List<Content> result = (List<Content>) aspect.aroundHybridRetrieve(pjp);
+            assertEquals(expectedCalls, calls.get(), "count actual local retriever invocations");
+            assertEquals(expectedCalls, variantQueries.stream().distinct().count());
+            assertEquals(expectedResults, result.size());
+            assertSame(base.get(0), result.get(0), "base evidence retains first membership");
+            List<Content> expected = new ArrayList<>(base);
+            expected.addAll(auxiliary);
+            assertEquals(expected.subList(0, expectedResults), result,
+                    "check actual returned membership separately from retrieval or trace counts");
+            assertEquals(Boolean.valueOf(expectedResults > base.size()), TraceStore.get("extremez.activated"));
+            assertFalse(Boolean.TRUE.equals(TraceStore.get("extremez.deadline.hit")));
+            assertEquals(ctx.planInt("extremeZ.minBaseDocs", -1), TraceStore.get("extremez.minBaseDocs"));
+            if (expectedCalls == 0) {
+                assertSame(base, result);
+                assertEquals("enough_base_docs", TraceStore.get("extremez.skipReason"));
+                assertFalse(TraceStore.getAll().containsKey("extremez.variants.count"));
+            } else {
+                assertEquals("sparse", TraceStore.get("extremez.activation.reason"));
+                assertEquals(expectedCalls, TraceStore.get("extremez.variants.count"));
+                assertEquals(expectedCalls, TraceStore.get("extremez.parallelBranchCount"));
+                assertEquals(ctx.planInt("extremeZ.maxMergedDocs", -1), TraceStore.get("extremez.maxMergedDocs"));
+            }
+            verify(pjp, org.mockito.Mockito.times(1)).proceed();
+            System.out.printf("TBL07_EXTREME_NUMERIC key=%s rawValue=%d calls=%d results=%d auxiliaryRetained=%d activated=%s externalRequests=0%n",
+                    suffix, rawValue, calls.get(), result.size(), result.size() - base.size(), TraceStore.get("extremez.activated"));
+        } finally {
+            GuardContextHolder.clear();
+            TraceStore.clear();
+        }
+        assertTrue(GuardContextHolder.get() == null && TraceStore.getAll().isEmpty());
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "skipWhenStrikeMode,false,strike,2", "skipWhenStrikeMode,true,strike,0",
+            "skipWhenStrikeMode,false,absent,2", "skipWhenStrikeMode,true,absent,2",
+            "skipWhenWebRateLimited,false,web_rate_limited,2", "skipWhenWebRateLimited,true,web_rate_limited,0",
+            "skipWhenWebRateLimited,false,absent,2", "skipWhenWebRateLimited,true,absent,2",
+            "skipWhenAuxDown,false,aux_soft,2", "skipWhenAuxDown,true,aux_soft,0",
+            "skipWhenAuxDown,false,aux_hard,2", "skipWhenAuxDown,true,aux_hard,0",
+            "skipWhenAuxDown,false,absent,2", "skipWhenAuxDown,true,absent,2"})
+    @org.junit.jupiter.api.Timeout(10)
+    @SuppressWarnings("unchecked")
+    void shippedSkipFlagsGateActualCallsOnlyWithTheirRequestCondition(
+            String suffix, boolean rawValue, String state, int expectedCalls) throws Throwable {
+        var mapper = new ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans/safe.v1.yaml"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        List<String> flags = List.of("skipWhenStrikeMode", "skipWhenWebRateLimited", "skipWhenAuxDown");
+        for (String flag : flags) assertFalse(original.path("params").path("extremeZ." + flag).asBoolean());
+        String key = "extremeZ." + suffix;
+        var modified = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) modified.path("params")).put(key, rawValue);
+        var restored = modified.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("params"))
+                .set(key, original.path("params").path(key));
+        assertEquals(original, restored, "only the selected raw flag changes within a fixed request-state pair");
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if ("classpath:plans/safe.v1.yaml".equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return "safe.v1.yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier(original.equals(modified)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        GuardContext ctx = new GuardContext();
+        applier.applyToGuardContext(applier.load("safe.v1"), ctx);
+        assertTrue(ctx.planBool("extremeZ.enabled", false));
+        assertEquals(900L, ctx.planLong("extremeZ.budgetMs", -1L));
+        assertEquals(2, ctx.planInt("extremeZ.minBaseDocs", -1));
+        assertEquals(2, ctx.planInt("extremeZ.maxSubQueries", -1));
+        assertEquals(14, ctx.planInt("extremeZ.maxMergedDocs", -1));
+        for (String flag : flags) assertEquals(flag.equals(suffix) && rawValue,
+                ctx.planBool("extremeZ." + flag, true));
+        ctx.setStrikeMode("strike".equals(state));
+        ctx.setWebRateLimited("web_rate_limited".equals(state));
+        ctx.setAuxDegraded("aux_soft".equals(state));
+        ctx.setAuxHardDown("aux_hard".equals(state));
+        assertEquals("strike".equals(state), ctx.isStrikeMode());
+        assertEquals("web_rate_limited".equals(state), ctx.isWebRateLimited());
+        assertEquals("aux_soft".equals(state), ctx.isAuxDegraded());
+        assertEquals("aux_hard".equals(state), ctx.isAuxHardDown());
+        assertEquals(state.startsWith("aux_"), ctx.isAuxDown());
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        List<String> variantQueries = new ArrayList<>();
+        List<Content> auxiliary = new ArrayList<>();
+        AnalyzeWebSearchRetriever retriever = new AnalyzeWebSearchRetriever(null, null, null, null, null, null) {
+            @Override public List<Content> retrieve(Query variant) {
+                assertSame(ctx, GuardContextHolder.get());
+                int call = calls.incrementAndGet();
+                variantQueries.add(variant.text());
+                Content content = Content.from("local skip-condition evidence " + call);
+                auxiliary.add(content);
+                return List.of(content);
+            }
+        };
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getExtremeZ().setEnabled(false);
+        ExtremeZBurstAspect aspect = new ExtremeZBurstAspect(provider(retriever), new AnchorNarrower(), props,
+                contradictionProvider(new FixedContradictionScorer(0.0d)), debugProvider(null));
+        List<Content> base = List.of(Content.from("local skip-condition base evidence"));
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(pjp.getArgs()).thenReturn(new Object[]{query("machine learning optimization benchmark")});
+        org.mockito.Mockito.when(pjp.proceed()).thenReturn(base);
+        TraceStore.clear();
+        GuardContextHolder.set(ctx);
+        try {
+            List<Content> result = (List<Content>) aspect.aroundHybridRetrieve(pjp);
+            assertEquals(expectedCalls, calls.get());
+            assertEquals(expectedCalls, variantQueries.stream().distinct().count());
+            List<Content> expected = new ArrayList<>(base);
+            expected.addAll(auxiliary);
+            assertEquals(expected, result, "assert returned membership, not only skip/activation traces");
+            assertEquals(1 + expectedCalls, result.size());
+            assertSame(base.get(0), result.get(0));
+            assertEquals(Boolean.valueOf(expectedCalls > 0), TraceStore.get("extremez.activated"));
+            assertFalse(Boolean.TRUE.equals(TraceStore.get("extremez.deadline.hit")));
+            String reason;
+            if (expectedCalls == 0) {
+                reason = switch (state) {
+                    case "strike" -> "strike_mode";
+                    case "web_rate_limited" -> "web_rate_limited";
+                    case "aux_soft", "aux_hard" -> "aux_down";
+                    default -> throw new AssertionError("no skip is expected without a matching request state");
+                };
+                assertSame(base, result);
+                assertEquals(reason, TraceStore.get("extremez.skipReason"));
+                assertFalse(TraceStore.getAll().containsKey("extremez.variants.count"));
+                assertFalse(TraceStore.getAll().containsKey("extremez.budgetMs"));
+            } else {
+                reason = "sparse";
+                assertEquals(reason, TraceStore.get("extremez.activation.reason"));
+                assertEquals(expectedCalls, TraceStore.get("extremez.variants.count"));
+            }
+            verify(pjp, org.mockito.Mockito.times(1)).proceed();
+            System.out.printf("TBL07_EXTREME_SKIP key=%s rawValue=%s state=%s calls=%d results=%d reason=%s externalRequests=0%n",
+                    suffix, rawValue, state, calls.get(), result.size(), reason);
+        } finally {
+            GuardContextHolder.clear();
+            TraceStore.clear();
+        }
+        assertTrue(GuardContextHolder.get() == null && TraceStore.getAll().isEmpty());
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "fresh,false,true,none,true,2", "fresh,false,false,none,false,0",
+            "global,true,true,none,true,2", "global,true,false,none,false,2",
+            "request_true,false,true,true,true,2", "request_true,false,false,true,true,2",
+            "request_false,false,true,false,true,2", "request_false,false,false,false,false,0"})
+    @org.junit.jupiter.api.Timeout(10)
+    @SuppressWarnings("unchecked")
+    void shippedEnabledFlagChangesCallsSubjectToGlobalAndRequestPrecedence(
+            String control, boolean globalEnabled, boolean rawEnabled, String priorOverride,
+            boolean expectedPlanEnabled, int expectedCalls) throws Throwable {
+        var mapper = new ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans/safe.v1.yaml"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        String key = "extremeZ.enabled";
+        assertTrue(original.path("params").path(key).asBoolean());
+        var modified = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) modified.path("params")).put(key, rawEnabled);
+        var restored = modified.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("params"))
+                .set(key, original.path("params").path(key));
+        assertEquals(original, restored, "only raw enable changes within each global/request control pair");
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if ("classpath:plans/safe.v1.yaml".equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return "safe.v1.yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier(original.equals(modified)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        var plan = applier.load("safe.v1");
+        assertEquals(Boolean.valueOf(rawEnabled), plan.extremeZEnabled());
+        GuardContext ctx = new GuardContext();
+        if (!"none".equals(priorOverride)) ctx.putPlanOverride(key, Boolean.valueOf(priorOverride));
+        applier.applyToGuardContext(plan, ctx);
+        assertEquals(Boolean.valueOf(expectedPlanEnabled), ctx.getPlanOverride(key));
+        assertEquals(expectedPlanEnabled, ctx.planBool(key, !expectedPlanEnabled));
+        assertEquals(900L, ctx.planLong("extremeZ.budgetMs", -1L));
+        assertEquals(2, ctx.planInt("extremeZ.minBaseDocs", -1));
+        assertEquals(2, ctx.planInt("extremeZ.maxSubQueries", -1));
+        assertEquals(14, ctx.planInt("extremeZ.maxMergedDocs", -1));
+        for (String flag : List.of("skipWhenStrikeMode", "skipWhenWebRateLimited", "skipWhenAuxDown")) {
+            assertFalse(ctx.planBool("extremeZ." + flag, true));
+        }
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        List<String> variantQueries = new ArrayList<>();
+        List<Content> auxiliary = new ArrayList<>();
+        AnalyzeWebSearchRetriever retriever = new AnalyzeWebSearchRetriever(null, null, null, null, null, null) {
+            @Override public List<Content> retrieve(Query variant) {
+                assertSame(ctx, GuardContextHolder.get());
+                int call = calls.incrementAndGet();
+                variantQueries.add(variant.text());
+                Content content = Content.from("local enabled-control evidence " + call);
+                auxiliary.add(content);
+                return List.of(content);
+            }
+        };
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getExtremeZ().setEnabled(globalEnabled);
+        ExtremeZBurstAspect aspect = new ExtremeZBurstAspect(provider(retriever), new AnchorNarrower(), props,
+                contradictionProvider(new FixedContradictionScorer(0.0d)), debugProvider(null));
+        List<Content> base = List.of(Content.from("local enabled-control base evidence"));
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(pjp.getArgs()).thenReturn(new Object[]{query("machine learning optimization benchmark")});
+        org.mockito.Mockito.when(pjp.proceed()).thenReturn(base);
+        TraceStore.clear();
+        GuardContextHolder.set(ctx);
+        try {
+            List<Content> result = (List<Content>) aspect.aroundHybridRetrieve(pjp);
+            assertEquals(expectedCalls, calls.get(), "observe the actual consumer under fixed global/request masks");
+            assertEquals(expectedCalls, variantQueries.stream().distinct().count());
+            List<Content> expected = new ArrayList<>(base);
+            expected.addAll(auxiliary);
+            assertEquals(expected, result);
+            assertEquals(1 + expectedCalls, result.size());
+            assertSame(base.get(0), result.get(0));
+            assertEquals(Boolean.valueOf(globalEnabled), TraceStore.get("extremez.enabled.global"));
+            assertEquals(Boolean.valueOf(expectedPlanEnabled), TraceStore.get("extremez.enabled.plan"));
+            assertEquals(Boolean.valueOf(expectedCalls > 0), TraceStore.get("extremez.enabled"));
+            assertEquals(Boolean.valueOf(expectedCalls > 0), TraceStore.get("extremez.activated"));
+            assertFalse(Boolean.TRUE.equals(TraceStore.get("extremez.deadline.hit")));
+            if (expectedCalls == 0) {
+                assertSame(base, result);
+                assertEquals("disabled", TraceStore.get("extremez.skipReason"));
+                assertFalse(TraceStore.getAll().containsKey("extremez.variants.count"));
+                assertFalse(TraceStore.getAll().containsKey("extremez.budgetMs"));
+            } else {
+                assertEquals("sparse", TraceStore.get("extremez.activation.reason"));
+                assertEquals(expectedCalls, TraceStore.get("extremez.variants.count"));
+            }
+            verify(pjp, org.mockito.Mockito.times(1)).proceed();
+            System.out.printf("TBL07_EXTREME_ENABLED control=%s rawEnabled=%s globalEnabled=%s priorOverride=%s effectivePlan=%s calls=%d results=%d externalRequests=0%n",
+                    control, rawEnabled, globalEnabled, priorOverride, expectedPlanEnabled, calls.get(), result.size());
+        } finally {
+            GuardContextHolder.clear();
+            TraceStore.clear();
+        }
+        assertTrue(GuardContextHolder.get() == null && TraceStore.getAll().isEmpty());
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "direct,true,true", "direct,false,false",
+            "primary_overdrive,true,false", "primary_overdrive,false,false"})
+    @org.junit.jupiter.api.Timeout(10)
+    @SuppressWarnings("unchecked")
+    void braveNestedEnableChangesReturnedEvidenceWithoutStrippingOtherKnobs(
+            String control, boolean rawEnabled, boolean auxiliaryExpected) throws Throwable {
+        var mapper = new ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans/brave.v1.yaml"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        String key = "extremeZ.enabled";
+        var originalKnobs = original.path("plan").path("overrides").path("knobs");
+        assertTrue(originalKnobs.path(key).asBoolean());
+        assertEquals(3, originalKnobs.path("expand.selfAsk.count").asInt());
+        assertEquals(12, originalKnobs.path("expand.queryBurst.count").asInt());
+        assertTrue(originalKnobs.path("overdrive.enabled").asBoolean());
+        assertFalse(original.path("plan").path("when").isMissingNode());
+        assertTrue(original.path("plan").path("pipeline").isArray());
+        var modified = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) modified.path("plan").path("overrides").path("knobs"))
+                .put(key, rawEnabled);
+        var restored = modified.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("plan").path("overrides").path("knobs"))
+                .set(key, originalKnobs.path(key));
+        assertEquals(original, restored, "only nested raw enable changes; all other brave fields remain intact");
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if ("classpath:plans/brave.v1.yaml".equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return "brave.v1.yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier(original.equals(modified)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        var plan = applier.load("brave.v1");
+        assertEquals(Boolean.valueOf(rawEnabled), plan.extremeZEnabled());
+        GuardContext ctx = new GuardContext();
+        applier.applyToGuardContext(plan, ctx);
+        assertEquals(Boolean.valueOf(rawEnabled), ctx.getPlanOverride(key));
+        assertEquals(3, ctx.planInt("expand.selfAsk.count", -1));
+        assertEquals(12, ctx.planInt("expand.queryBurst.count", -1));
+        assertTrue(ctx.planBool("overdrive.enabled", false));
+        org.junit.jupiter.api.Assertions.assertNull(ctx.getPlanOverride("executionPlan.primaryMode"));
+        org.junit.jupiter.api.Assertions.assertNull(ctx.getPlanOverride("routing.executionPlan.primaryMode"));
+        org.junit.jupiter.api.Assertions.assertNull(TraceStore.get("orch.pipeline.executed"));
+        org.junit.jupiter.api.Assertions.assertNull(TraceStore.get("extremez.execute.activated"));
+        assertFalse(ctx.isStrikeMode());
+        assertFalse(ctx.isWebRateLimited());
+        assertFalse(ctx.isAuxDown());
+        if ("primary_overdrive".equals(control)) ctx.putPlanOverride("executionPlan.primaryMode", "OVERDRIVE");
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        List<String> variantQueries = new ArrayList<>();
+        List<Content> auxiliary = new ArrayList<>();
+        AnalyzeWebSearchRetriever retriever = new AnalyzeWebSearchRetriever(null, null, null, null, null, null) {
+            @Override public List<Content> retrieve(Query variant) {
+                assertSame(ctx, GuardContextHolder.get());
+                int call = calls.incrementAndGet();
+                variantQueries.add(variant.text());
+                Content content = Content.from("local brave nested evidence " + call);
+                auxiliary.add(content);
+                return List.of(content);
+            }
+        };
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getExtremeZ().setEnabled(false);
+        ExtremeZBurstAspect aspect = new ExtremeZBurstAspect(provider(retriever), new AnchorNarrower(), props,
+                contradictionProvider(new FixedContradictionScorer(0.0d)), debugProvider(null));
+        List<Content> base = List.of(Content.from("local brave nested base evidence"));
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(pjp.getArgs()).thenReturn(new Object[]{query("machine learning optimization benchmark")});
+        org.mockito.Mockito.when(pjp.proceed()).thenReturn(base);
+        TraceStore.clear();
+        GuardContextHolder.set(ctx);
+        try {
+            List<Content> result = (List<Content>) aspect.aroundHybridRetrieve(pjp);
+            assertEquals(auxiliaryExpected, calls.get() > 0, "observe actual auxiliary execution for the nested raw pair");
+            assertEquals(calls.get(), variantQueries.stream().distinct().count());
+            List<Content> expected = new ArrayList<>(base);
+            expected.addAll(auxiliary);
+            assertEquals(expected, result, "preserve exact returned base/auxiliary membership");
+            assertEquals(1 + calls.get(), result.size());
+            assertSame(base.get(0), result.get(0));
+            assertFalse(Boolean.TRUE.equals(TraceStore.get("extremez.deadline.hit")));
+            assertEquals(Boolean.valueOf(auxiliaryExpected), TraceStore.get("extremez.activated"));
+            String reason;
+            if (auxiliaryExpected) {
+                reason = "sparse";
+                assertTrue(calls.get() <= 12, "query-burst count is an upper bound, not an assumed execution count");
+                assertEquals(12, TraceStore.get("extremez.maxSubQueries"));
+                assertEquals(calls.get(), TraceStore.get("extremez.variants.count"));
+            } else {
+                reason = rawEnabled ? "special_mode_overdrive" : "disabled";
+                assertSame(base, result);
+                assertEquals(0, calls.get());
+                assertFalse(TraceStore.getAll().containsKey("extremez.variants.count"));
+            }
+            assertEquals(reason, TraceStore.get("extremez.activation.reason"));
+            verify(pjp, org.mockito.Mockito.times(1)).proceed();
+            System.out.printf("TBL07_BRAVE_EXTREME control=%s rawEnabled=%s calls=%d results=%d reason=%s selfAskRetained=3 queryBurstRetained=12 overdriveRetained=true externalRequests=0%n",
+                    control, rawEnabled, calls.get(), result.size(), reason);
+        } finally {
+            GuardContextHolder.clear();
+            TraceStore.clear();
+        }
+        assertTrue(GuardContextHolder.get() == null && TraceStore.getAll().isEmpty());
+    }
     private static Query query(String text) {
         return QueryUtils.buildQuery(text, Collections.emptyMap());
     }

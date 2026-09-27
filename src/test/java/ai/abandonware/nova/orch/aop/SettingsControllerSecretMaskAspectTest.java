@@ -49,4 +49,51 @@ class SettingsControllerSecretMaskAspectTest {
         assertTrue(body.get("displayValue1").startsWith("***"), body.get("displayValue1"));
         assertTrue(body.get("displayValue2").startsWith("***"), body.get("displayValue2"));
     }
+
+    @Test
+    void getAllSettingsMasksJdbcCredentialsUnderAnInnocuousKey() throws Throwable {
+        assertMasked("displayJdbc", "jdbc:postgresql://demo_user:demo_password@db.invalid/demo");
+    }
+
+    @Test
+    void getAllSettingsMasksAwsAccessKeySettings() throws Throwable {
+        assertMasked("aws_access_key_id", "AKIA" + "0000000000000000");
+    }
+
+    @Test
+    void getAllSettingsMasksPemPrivateKeyMaterial() throws Throwable {
+        assertMasked("displayPem",
+                "-----BEGIN " + "PRIVATE KEY-----\nsynthetic-test-material\n-----END " + "PRIVATE KEY-----");
+    }
+
+    @Test
+    void getAllSettingsDoesNotTreatQueryTextAsUriUserInfo() throws Throwable {
+        String safeUrl = "https://example.invalid?contact=team:ops@example.invalid";
+        SettingsControllerSecretMaskAspect aspect = new SettingsControllerSecretMaskAspect(new MockEnvironment());
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.proceed()).thenReturn(ResponseEntity.ok(Map.of("safeUrl", safeUrl)));
+
+        @SuppressWarnings("unchecked")
+        ResponseEntity<Map<String, String>> response =
+                (ResponseEntity<Map<String, String>>) aspect.aroundGetAllSettings(pjp);
+
+        assertEquals(safeUrl, response.getBody().get("safeUrl"));
+    }
+
+    private static void assertMasked(String key, String secret) throws Throwable {
+        SettingsControllerSecretMaskAspect aspect = new SettingsControllerSecretMaskAspect(new MockEnvironment());
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.proceed()).thenReturn(ResponseEntity.ok(Map.of(
+                "safeSetting", "visible",
+                key, secret)));
+
+        @SuppressWarnings("unchecked")
+        ResponseEntity<Map<String, String>> response =
+                (ResponseEntity<Map<String, String>>) aspect.aroundGetAllSettings(pjp);
+        Map<String, String> body = response.getBody();
+
+        assertEquals("visible", body.get("safeSetting"));
+        assertFalse(body.get(key).contains(secret));
+        assertTrue(body.get(key).startsWith("***"));
+    }
 }

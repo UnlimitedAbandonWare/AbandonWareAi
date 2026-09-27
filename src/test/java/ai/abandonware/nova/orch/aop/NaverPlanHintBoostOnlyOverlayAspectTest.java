@@ -14,6 +14,7 @@ import org.slf4j.MDC;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -275,6 +276,84 @@ class NaverPlanHintBoostOnlyOverlayAspectTest {
         assertFalse(trace.contains(rawQuery), trace);
         assertEquals(List.of(SafeRedactor.hashValue(rawWeakKeyword)),
                 TraceStore.get("web.naver.planHintBoostOnly.location.hitWeakKeywords"));
+    }
+
+    @Test
+    void uppercaseLocationKeywordIsMatchedIndependentOfDefaultLocale() throws Throwable {
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            GuardContext context = new GuardContext();
+            context.setOfficialOnly(true);
+            GuardContextHolder.set(context);
+
+            NaverPlanHintBoostOnlyOverlayProperties props = new NaverPlanHintBoostOnlyOverlayProperties();
+            props.getLocation().setLocalIntentEnabled(false);
+            props.getLocation().setKeywords(List.of("location"));
+            props.getLocation().setWeakKeywords(List.of());
+            props.getLocation().setNegativeKeywords(List.of());
+
+            NaverPlanHintBoostOnlyOverlayAspect aspect = new NaverPlanHintBoostOnlyOverlayAspect(props);
+            ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+            Signature signature = mock(Signature.class);
+            when(signature.getName()).thenReturn("searchWithTraceSync");
+            when(pjp.getSignature()).thenReturn(signature);
+            when(pjp.getArgs()).thenReturn(new Object[]{"LOCATION nearby"});
+            when(pjp.proceed()).thenReturn("ok");
+
+            assertEquals("ok", aspect.aroundNaverSync(pjp));
+            assertEquals("skipped:location", TraceStore.get("web.naver.planHintBoostOnly.decision"));
+            assertEquals(Boolean.TRUE, TraceStore.get("web.naver.planHintBoostOnly.location.strongHit"));
+            assertEquals(Boolean.FALSE, TraceStore.get("web.naver.planHintBoostOnly.applied"));
+        } finally {
+            Locale.setDefault(previous);
+        }
+    }
+
+    @Test
+    void matchingAndNonmatchingDecisionsAgreeAcrossDefaultLocales() throws Throwable {
+        String usMatch = locationDecisionUnder(Locale.US, "LOCATION nearby");
+        String turkishMatch = locationDecisionUnder(Locale.forLanguageTag("tr-TR"), "LOCATION nearby");
+        String usNonmatch = locationDecisionUnder(Locale.US, "ordinary question");
+        String turkishNonmatch = locationDecisionUnder(Locale.forLanguageTag("tr-TR"), "ordinary question");
+
+        assertEquals("skipped:location", usMatch);
+        assertEquals(usMatch, turkishMatch);
+        assertEquals("applied", usNonmatch);
+        assertEquals(usNonmatch, turkishNonmatch);
+    }
+
+    private static String locationDecisionUnder(Locale locale, String query) throws Throwable {
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(locale);
+            TraceStore.clear();
+            GuardContextHolder.clear();
+
+            GuardContext context = new GuardContext();
+            context.setOfficialOnly(true);
+            GuardContextHolder.set(context);
+            NaverPlanHintBoostOnlyOverlayProperties props = new NaverPlanHintBoostOnlyOverlayProperties();
+            props.getLocation().setLocalIntentEnabled(false);
+            props.getLocation().setKeywords(List.of("location"));
+            props.getLocation().setWeakKeywords(List.of());
+            props.getLocation().setNegativeKeywords(List.of());
+
+            NaverPlanHintBoostOnlyOverlayAspect aspect = new NaverPlanHintBoostOnlyOverlayAspect(props);
+            ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+            Signature signature = mock(Signature.class);
+            when(signature.getName()).thenReturn("searchWithTraceSync");
+            when(pjp.getSignature()).thenReturn(signature);
+            when(pjp.getArgs()).thenReturn(new Object[]{query});
+            when(pjp.proceed()).thenReturn("ok");
+
+            aspect.aroundNaverSync(pjp);
+            return String.valueOf(TraceStore.get("web.naver.planHintBoostOnly.decision"));
+        } finally {
+            GuardContextHolder.clear();
+            TraceStore.clear();
+            Locale.setDefault(previous);
+        }
     }
 
     @Test

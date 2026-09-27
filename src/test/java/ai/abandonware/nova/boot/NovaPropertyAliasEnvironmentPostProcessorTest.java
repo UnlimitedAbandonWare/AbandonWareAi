@@ -19,13 +19,48 @@ class NovaPropertyAliasEnvironmentPostProcessorTest {
                 Path.of("main/java/ai/abandonware/nova/boot/NovaPropertyAliasEnvironmentPostProcessor.java"))
                 .replace("\r\n", "\n");
 
-        assertTrue(source.contains("traceSuppressed(\"brave.keyDiagnostics\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"propertySources.firstNonBlank\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"forceBlankIfPresent.getProperty\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"firstNonBlankFromEnv.getProperty\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"warnIfConflicting.getProperty\", ignore);"));
         assertFalse(source.contains("error.getMessage()"),
                 "Alias suppression breadcrumbs must not log raw exception messages");
+    }
+
+    @Test
+    void approvedBraveMainOverridesStaleAliases() {
+        MockEnvironment env = new MockEnvironment()
+                .withProperty("BRAVE_API_KEY", "approved-brave-main")
+                .withProperty("BRAVE_SUBSCRIPTION_TOKEN", "retired-brave-token")
+                .withProperty("gpt-search.brave.api-key", "stale-file-value");
+        new NovaPropertyAliasEnvironmentPostProcessor().postProcessEnvironment(env, null);
+        assertEquals("approved-brave-main", env.getProperty("gpt-search.brave.api-key"));
+        assertEquals("approved-brave-main", env.getProperty("BRAVE_API_KEY"));
+        assertEquals("retired-brave-token", env.getProperty("BRAVE_SUBSCRIPTION_TOKEN"));
+        assertEquals("false", env.getProperty("nova.provider.brave.key.multi"));
+        assertEquals("1", env.getProperty("nova.provider.brave.key.present.count"));
+    }
+
+    @Test
+    void retiredTokenCannotResurrectMissingOrBlankMain() {
+        for (boolean blankMain : new boolean[]{false, true}) {
+            MockEnvironment env = new MockEnvironment()
+                    .withProperty("BRAVE_SUBSCRIPTION_TOKEN", "retired-brave-token")
+                    .withProperty("gpt-search.brave.subscription-token", "stale-file-value");
+            if (blankMain) env.withProperty("BRAVE_API_KEY", "")
+                    .withProperty("gpt-search.brave.api-key", "stale-main-value");
+            new NovaPropertyAliasEnvironmentPostProcessor().postProcessEnvironment(env, null);
+            assertEquals("retired-brave-token", env.getProperty("BRAVE_SUBSCRIPTION_TOKEN"));
+            assertEquals("", env.getProperty("gpt-search.brave.api-key"));
+            assertEquals("0", env.getProperty("nova.provider.brave.key.present.count"));
+        }
+    }
+
+    @Test
+    void canonicalPropertySupportsIsolatedVerification() {
+        MockEnvironment env = new MockEnvironment().withProperty("gpt-search.brave.api-key", "fixture-main-key");
+        new NovaPropertyAliasEnvironmentPostProcessor().postProcessEnvironment(env, null);
+        assertEquals("fixture-main-key", env.getProperty("BRAVE_API_KEY"));
     }
 
     @Test

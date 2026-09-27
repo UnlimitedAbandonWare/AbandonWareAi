@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -55,6 +56,32 @@ class ProviderRateLimitBackoffAspectTest {
         assertFalse(String.valueOf(TraceStore.getAll()).contains("CancellationException"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("ownerToken"));
         assertNull(TraceStore.get("web.naver.skipped"));
+    }
+
+    @Test
+    void naverInterruptedCancellationClearsPoisonedThreadFlag() throws Throwable {
+        Thread.interrupted();
+        try {
+            RateLimitBackoffCoordinator backoff = new RateLimitBackoffCoordinator(new MockEnvironment());
+            ProviderRateLimitBackoffAspect aspect = new ProviderRateLimitBackoffAspect(backoff, null);
+            ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+            doAnswer(invocation -> {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(new InterruptedException("interrupted private-query"));
+            }).when(pjp).proceed();
+
+            Object out = aspect.aroundNaverSearchSnippetsSync(pjp);
+
+            List<?> snippets = assertInstanceOf(List.class, out);
+            assertTrue(snippets.isEmpty());
+            assertFalse(Thread.currentThread().isInterrupted(),
+                    "swallowed provider cancellation must not poison the request thread");
+            assertEquals(Boolean.TRUE, TraceStore.get("interrupt.cleaned"));
+            assertFalse(backoff.shouldSkip(RateLimitBackoffCoordinator.PROVIDER_NAVER).shouldSkip());
+            assertFalse(String.valueOf(TraceStore.getAll()).contains("private-query"));
+        } finally {
+            Thread.interrupted();
+        }
     }
 
     @Test

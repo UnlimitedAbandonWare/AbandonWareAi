@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class HybridWebSearchEmptyFallbackAspectTest {
@@ -44,6 +45,58 @@ class HybridWebSearchEmptyFallbackAspectTest {
     @AfterEach
     void tearDown() {
         TraceStore.clear();
+    }
+
+    @Test
+    void boundedSearchWithTraceSkipsEveryEmptyFallbackProviderCall() throws Throwable {
+        NaverSearchService naver = mock(NaverSearchService.class);
+        BraveSearchService brave = mock(BraveSearchService.class);
+        HybridWebSearchEmptyFallbackAspect aspect = new HybridWebSearchEmptyFallbackAspect(
+                new MockEnvironment(),
+                new FixedProvider<>(naver),
+                new FixedProvider<>(brave),
+                new FixedProvider<>(null),
+                new FixedProvider<>(null),
+                new FixedProvider<>(null),
+                newOrchestrator());
+        NaverSearchService.SearchResult empty = new NaverSearchService.SearchResult(List.of(), null);
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.proceed()).thenAnswer(invocation -> {
+            TraceStore.put("web.boundedRoute", true);
+            return empty;
+        });
+        when(pjp.getArgs()).thenReturn(new Object[] { "bounded trace query", 3 });
+        TraceStore.put("outCount", 0);
+
+        Object result = aspect.aroundHybridSearchWithTrace(pjp);
+
+        assertEquals(empty, result);
+        verifyNoInteractions(naver, brave);
+    }
+
+    @Test
+    void boundedSearchSkipsEveryEmptyFallbackProviderCall() throws Throwable {
+        NaverSearchService naver = mock(NaverSearchService.class);
+        BraveSearchService brave = mock(BraveSearchService.class);
+        HybridWebSearchEmptyFallbackAspect aspect = new HybridWebSearchEmptyFallbackAspect(
+                new MockEnvironment(),
+                new FixedProvider<>(naver),
+                new FixedProvider<>(brave),
+                new FixedProvider<>(null),
+                new FixedProvider<>(null),
+                new FixedProvider<>(null));
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.proceed()).thenAnswer(invocation -> {
+            TraceStore.put("web.boundedRoute", true);
+            return List.of();
+        });
+        when(pjp.getArgs()).thenReturn(new Object[] { "bounded query", 3 });
+        TraceStore.put("web.await.events.nonOk.count", 1);
+
+        Object result = aspect.aroundHybridSearch(pjp);
+
+        assertEquals(List.of(), result);
+        verifyNoInteractions(naver, brave);
     }
 
     @Test
@@ -125,6 +178,56 @@ class HybridWebSearchEmptyFallbackAspectTest {
         assertEquals(0L, TraceStore.getLong("web.failsoft.hybridEmptyFallback.cacheOnly.rescueMerge.tracePool.size"));
         assertEquals(Boolean.FALSE, TraceStore.get("rescueMerge.used"));
         assertEquals(Boolean.FALSE, TraceStore.get("web.failsoft.hybridEmptyFallback.cacheOnly.rescueMerge.used"));
+    }
+
+    @Test
+    void pathScopedOfficialCacheOnlyRescueRejectsUnscopedGenericCacheHits() throws Exception {
+        NaverSearchService naver = mock(NaverSearchService.class);
+        when(naver.searchSnippetsCacheOnly(anyString(), anyInt())).thenAnswer(invocation -> {
+            String probeQuery = invocation.getArgument(0, String.class);
+            if (probeQuery != null && probeQuery.startsWith("site:developers.openai.com/api/docs/changelog")) {
+                return List.of();
+            }
+            return List.of(
+                    "[WEB:DOCS|CRED:TRUSTED] Generic tools docs https://developers.openai.com/api/docs/guides/tools-web-search",
+                    "[WEB:NOFILTER_SAFE|CRED:UNVERIFIED] Community mirror https://community.example/openai");
+        });
+        HybridWebSearchEmptyFallbackAspect aspect = new HybridWebSearchEmptyFallbackAspect(
+                new MockEnvironment(),
+                new FixedProvider<>(naver),
+                new FixedProvider<>(null),
+                new FixedProvider<>(null),
+                new FixedProvider<>(null),
+                new FixedProvider<>(null));
+        Method method = HybridWebSearchEmptyFallbackAspect.class.getDeclaredMethod(
+                "cacheOnlyRescue",
+                String.class,
+                boolean.class,
+                boolean.class,
+                NaverSearchService.class,
+                BraveSearchService.class,
+                String.class,
+                int.class);
+        method.setAccessible(true);
+
+        Object result = method.invoke(
+                aspect,
+                "final",
+                false,
+                true,
+                naver,
+                null,
+                "site:developers.openai.com/api/docs/changelog OpenAI API changelog latest release notes official docs",
+                3);
+
+        assertNull(result, "path-scoped official queries must not reuse generic developer-doc cache hits");
+        assertEquals(0L, TraceStore.getLong("cacheOnly.merged.count"));
+        assertEquals(Boolean.TRUE,
+                TraceStore.get("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.enabled"));
+        assertEquals(0L,
+                TraceStore.getLong("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.kept.count"));
+        assertTrue(
+                TraceStore.getLong("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.removed.count") >= 2L);
     }
 
     @Test
@@ -674,6 +777,67 @@ class HybridWebSearchEmptyFallbackAspectTest {
                 "numeric fallback parser must not swallow Throwable: " + signature);
         assertTrue(helper.contains("catch (NumberFormatException"),
                 "numeric fallback parser should only catch NumberFormatException: " + signature);
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(10)
+    void logicalFallbackDeadlineDoesNotTerminateAnAlreadyStartedProviderOperation() throws Exception {
+        TraceStore.clear();
+        BraveSearchService brave = mock(BraveSearchService.class);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var exited = new java.util.concurrent.CountDownLatch(1);
+        var interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        var operationStart = new java.util.concurrent.atomic.AtomicLong();
+        var operationEnd = new java.util.concurrent.atomic.AtomicLong();
+        when(brave.isEnabled()).thenReturn(true);
+        when(brave.searchWithMeta(anyString(), anyInt())).thenAnswer(invocation -> {
+            operationStart.set(System.nanoTime());
+            started.countDown();
+            try {
+                if (!release.await(5, TimeUnit.SECONDS)) throw new AssertionError("provider release deadline exceeded");
+                return null;
+            } catch (InterruptedException failure) {
+                interrupted.set(true);
+                throw failure;
+            } finally {
+                operationEnd.set(System.nanoTime());
+                exited.countDown();
+                TraceStore.clear();
+            }
+        });
+        var environment = new MockEnvironment()
+                .withProperty("nova.orch.web.failsoft.hybrid-empty-fallback.min-live-budget-ms", "0");
+        var aspect = new HybridWebSearchEmptyFallbackAspect(environment, new FixedProvider<>(null),
+                new FixedProvider<>(brave), new FixedProvider<>(executor), new FixedProvider<>(null), new FixedProvider<>(null));
+        try {
+            executor.submit(() -> { }).get(1, TimeUnit.SECONDS);
+            long invocationStart = System.nanoTime();
+            long deadline = invocationStart + TimeUnit.MILLISECONDS.toNanos(500);
+            Object result = org.springframework.test.util.ReflectionTestUtils.invokeMethod(aspect, "attemptFallback",
+                    "synthetic-lifetime", null, brave, executor, null, "synthetic bounded query", 3, deadline,
+                    true, false, 0L, 0L, 0L, 0L, 0L, false, "synthetic", "synthetic", "synthetic");
+            long returnedAt = System.nanoTime();
+            assertTrue(started.await(1, TimeUnit.SECONDS), "observe the actual provider body, not a Future state");
+            long logicalMs = TimeUnit.NANOSECONDS.toMillis(returnedAt - invocationStart);
+            assertTrue(logicalMs < 2_000L, "completion polling must return without waiting for provider release");
+            assertTrue(((List<?>) resultValue(result, "merged")).isEmpty());
+            assertFalse(exited.await(100, TimeUnit.MILLISECONDS), "backing operation must still be blocked after fallback returns");
+            assertFalse(interrupted.get(), "cancel(false) must preserve the no-interrupt policy");
+            release.countDown();
+            assertTrue(exited.await(2, TimeUnit.SECONDS));
+            assertTrue(operationStart.get() < returnedAt && operationEnd.get() > returnedAt);
+            org.mockito.Mockito.verify(brave, org.mockito.Mockito.times(1)).searchWithMeta(anyString(), anyInt());
+            System.out.println("F28_LIFETIME_COUNTS providerStarted=1 runningAfterFallback=1 exitedAfterRelease=1"
+                    + " workerInterrupted=" + interrupted.get() + " logicalElapsedMs=" + logicalMs
+                    + " backingElapsedMs=" + TimeUnit.NANOSECONDS.toMillis(operationEnd.get() - operationStart.get()));
+        } finally {
+            release.countDown();
+            executor.shutdown();
+            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) executor.shutdownNow();
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS), "owned executor must terminate");
+        }
     }
 
     private static Object resultValue(Object result, String fieldName) throws Exception {

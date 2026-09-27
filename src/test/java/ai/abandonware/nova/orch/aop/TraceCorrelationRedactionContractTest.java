@@ -92,10 +92,10 @@ class TraceCorrelationRedactionContractTest {
         assertTrue(source.contains("data.put(\"chatSessionHash\", SafeRedactor.hashValue(String.valueOf(chatSessionId)));"));
         assertTrue(source.contains("row.put(\"requestId\", SafeRedactor.hashValue(firstNonBlank(MDC.get(\"x-request-id\"), TraceStore.getString(\"requestId\"))));"));
         assertTrue(source.contains("row.put(\"sessionId\", SafeRedactor.hashValue(convSid));"));
-        assertTrue(source.contains("TraceStore.put(\"cihRag.breadcrumb.queryRedacted\", true);"));
-        assertTrue(source.contains("TraceStore.put(\"cihRag.breadcrumb.stage\", \"conversation_sid\");"));
-        assertTrue(source.contains("TraceStore.put(\"cihRag.breadcrumb.relevance\", 0.0d);"));
-        assertTrue(source.contains("TraceStore.put(\"cihRag.breadcrumb.routeDecision\", \"conversation_sid_applied\");"));
+        assertTrue(source.contains("TraceStore.putIfAbsent(\"cihRag.breadcrumb.queryRedacted\", true);"));
+        assertTrue(source.contains("TraceStore.putIfAbsent(\"cihRag.breadcrumb.stage\", \"conversation_sid\");"));
+        assertTrue(source.contains("TraceStore.putIfAbsent(\"cihRag.breadcrumb.relevance\", 0.0d);"));
+        assertTrue(source.contains("TraceStore.putIfAbsent(\"cihRag.breadcrumb.routeDecision\", \"conversation_sid_applied\");"));
     }
 
     @Test

@@ -3,6 +3,8 @@ package ai.abandonware.nova.autoconfig;
 import ai.abandonware.nova.orch.ecosystem.EcosystemBufferPool;
 import ai.abandonware.nova.orch.web.WebSnippet;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.context.annotation.ImportCandidates;
 import org.springframework.mock.env.MockEnvironment;
 
 import java.nio.file.Files;
@@ -14,6 +16,18 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NovaAutoConfigurationSourceContractTest {
+
+    @Test
+    void autoConfigurationImportsExposeFailurePatternAndZero100Candidates() {
+        List<String> candidates = ImportCandidates
+                .load(AutoConfiguration.class, getClass().getClassLoader())
+                .getCandidates();
+
+        assertTrue(candidates.contains(NovaFailurePatternAutoConfiguration.class.getName()),
+                "failure-pattern auto-configuration must be discoverable by Spring Boot");
+        assertTrue(candidates.contains(NovaZero100AutoConfiguration.class.getName()),
+                "Zero100 auto-configuration must be discoverable by Spring Boot");
+    }
 
     @Test
     void failurePatternCooldownDiagnosticsDoesNotRequireTraceStoreBean() throws Exception {

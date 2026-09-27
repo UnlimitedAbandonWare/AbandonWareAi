@@ -5,6 +5,8 @@ import com.example.lms.trace.SafeRedactor;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,6 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 
 class AnchorTailTraceRedactionTest {
 
@@ -53,13 +57,37 @@ class AnchorTailTraceRedactionTest {
 
     @Test
     void queryTransformerAnchorTailTraceUsesHashOnlyAnchor() throws Throwable {
-        ProceedingJoinPoint pjp = joinPointWithArgs(new Object[]{largeInput()});
+        // Keep this positive compression control free of an opaque exclusion clause.
+        ProceedingJoinPoint pjp = joinPointWithArgs(new Object[]{largeInput()
+                .replace("without leaking the private anchor", "with an actionable checklist")});
         QueryTransformerAnchorTailAspect aspect = new QueryTransformerAnchorTailAspect(true, 512, 10, null);
 
         Object result = aspect.aroundTransformEnhanced(pjp);
 
         assertEquals("ok", result);
         assertHashOnlyAnchor("nova.queryTransformer.anchorTail");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "site:dept.ac.kr after:2025-01-01 before:2025-12-31",
+            "Java 17 LangChain4j 1.0.1",
+            "Use internal documents only; exclude public documents",
+            "A가 아니라 B 배포 방법",
+            "A가 아니라 B, 한국어 자료만"
+    })
+    void queryTransformerDoesNotEraseLeadingSearchConstraints(String constraints) throws Throwable {
+        String input = constraints + "\n" + "operational background filler ".repeat(180)
+                + "\nPlease summarize the release changes?";
+        ProceedingJoinPoint pjp = joinPointWithArgs(new Object[]{input});
+        QueryTransformerAnchorTailAspect aspect = new QueryTransformerAnchorTailAspect(true, 256, 10, null);
+
+        assertEquals("ok", aspect.aroundTransformEnhanced(pjp));
+
+        verify(pjp).proceed();
+        verify(pjp, never()).proceed(any(Object[].class));
+        assertEquals("search_constraints_lost", TraceStore.get("nova.queryTransformer.anchorTail.skipped"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(constraints));
     }
 
     @Test

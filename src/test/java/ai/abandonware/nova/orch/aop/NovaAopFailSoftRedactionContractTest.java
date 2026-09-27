@@ -16,6 +16,7 @@ import com.example.lms.search.TraceStore;
 import com.example.lms.infra.resilience.NightmareBreaker;
 import com.example.lms.infra.resilience.NightmareBreakerProperties;
 import com.example.lms.infra.resilience.NightmareKeys;
+import com.example.lms.trace.SafeRedactor;
 import org.junit.jupiter.api.Test;
 
 class NovaAopFailSoftRedactionContractTest {
@@ -86,7 +87,6 @@ class NovaAopFailSoftRedactionContractTest {
         assertTrue(source.contains("traceSuppressed(\"snapshot.before\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"snapshot.after\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"config.get\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"orchestration.compute\", e);"));
         assertTrue(source.contains("traceSuppressed(\"snapshot.asMap\", t);"));
         assertTrue(source.contains("[nova][guard-debug-trace] suppressed stage={} errorHash={} errorLength={}"));
         assertTrue(source.contains("SafeRedactor.traceLabelOrFallback(stage, \"unknown\")"));
@@ -132,67 +132,64 @@ class NovaAopFailSoftRedactionContractTest {
     }
 
     @Test
-    void nightmareBreakerWebReasonDoesNotStoreRawText() throws Exception {
+    void nightmareBreakerWebStateSignalUsesOnlyFixedReasonLabels() {
         TraceStore.clear();
-        String rawReason = "429 for private query api_key=token=private-query-value";
+        NightmareBreaker breaker = openHybridBreaker();
+        TraceStore.clear();
+        NightmareBreaker.StateSignal signal = new NightmareBreaker.StateSignal(
+                breaker,
+                SafeRedactor.hashValue("websearch:hybrid"),
+                true,
+                NightmareBreaker.SignalType.ADMISSION_BLOCKED,
+                NightmareBreaker.BreakerMode.OPEN,
+                NightmareBreaker.FailureKind.RATE_LIMIT,
+                1L,
+                2L);
 
-        Method method = NightmareBreakerWebRateLimitPropagatorAspect.class.getDeclaredMethod(
-                "propagate",
-                NightmareBreaker.class,
-                String.class,
-                String.class,
-                String.class,
-                boolean.class);
-        method.setAccessible(true);
-        method.invoke(null, null, "websearch:hybrid", rawReason, "test", true);
+        new NightmareBreakerWebRateLimitPropagatorAspect().onStateSignal(signal);
 
         String trace = String.valueOf(TraceStore.getAll());
-        assertFalse(trace.contains(rawReason), trace);
-        assertFalse(trace.contains("private query"), trace);
-        assertFalse(trace.contains("token=private-query-value"), trace);
-        assertTrue(trace.contains("hash:"), trace);
+        assertTrue(trace.contains("ADMISSION_BLOCKED"), trace);
+        assertTrue(trace.contains("STATE_SIGNAL"), trace);
     }
 
     @Test
-    void nightmareBreakerWebReasonDoesNotNormalizePrivateFreeFormText() throws Exception {
+    void nightmareBreakerWebStateSignalIgnoresNonTransitionSignals() {
         TraceStore.clear();
-        String rawReason = "429 for private query about hidden acquisition";
+        NightmareBreaker.StateSignal signal = new NightmareBreaker.StateSignal(
+                new NightmareBreaker(new NightmareBreakerProperties()),
+                SafeRedactor.hashValue("websearch:hybrid"),
+                true,
+                NightmareBreaker.SignalType.CLOSED,
+                NightmareBreaker.BreakerMode.CLOSED,
+                null,
+                0L,
+                0L);
 
-        Method method = NightmareBreakerWebRateLimitPropagatorAspect.class.getDeclaredMethod(
-                "propagate",
-                NightmareBreaker.class,
-                String.class,
-                String.class,
-                String.class,
-                boolean.class);
-        method.setAccessible(true);
-        method.invoke(null, null, "websearch:hybrid", rawReason, "test", true);
+        new NightmareBreakerWebRateLimitPropagatorAspect().onStateSignal(signal);
 
         String trace = String.valueOf(TraceStore.getAll());
-        assertFalse(trace.contains(rawReason), trace);
-        assertFalse(trace.contains("private_query"), trace);
-        assertFalse(trace.contains("hidden_acquisition"), trace);
-        assertTrue(trace.contains("hash:"), trace);
+        assertFalse(trace.contains("orch.webRateLimited"), trace);
+        assertFalse(trace.contains("orch.webPartialDown"), trace);
     }
 
     @Test
-    void nightmareBreakerWebKeyDoesNotStoreRawText() throws Exception {
+    void nightmareBreakerWebStateSignalDoesNotStoreRawKey() {
         TraceStore.clear();
-        NightmareBreakerProperties props = new NightmareBreakerProperties();
-        props.setRateLimitThreshold(1);
-        NightmareBreaker breaker = new NightmareBreaker(props);
-        breaker.recordRateLimit(NightmareKeys.WEBSEARCH_BRAVE, "probe query", "HTTP 429", 1_000L);
+        NightmareBreaker breaker = openHybridBreaker();
+        TraceStore.clear();
         String rawKey = "websearch:custom ownerToken=private-web-key";
+        NightmareBreaker.StateSignal signal = new NightmareBreaker.StateSignal(
+                breaker,
+                SafeRedactor.hashValue(rawKey),
+                true,
+                NightmareBreaker.SignalType.OPENED,
+                NightmareBreaker.BreakerMode.OPEN,
+                NightmareBreaker.FailureKind.RATE_LIMIT,
+                1L,
+                2L);
 
-        Method method = NightmareBreakerWebRateLimitPropagatorAspect.class.getDeclaredMethod(
-                "propagate",
-                NightmareBreaker.class,
-                String.class,
-                String.class,
-                String.class,
-                boolean.class);
-        method.setAccessible(true);
-        method.invoke(null, breaker, rawKey, "breaker_open", "test", true);
+        new NightmareBreakerWebRateLimitPropagatorAspect().onStateSignal(signal);
 
         String trace = String.valueOf(TraceStore.getAll());
         assertFalse(trace.contains(rawKey), trace);
@@ -201,13 +198,14 @@ class NovaAopFailSoftRedactionContractTest {
     }
 
     @Test
-    void nightmareBreakerSafeTrimUsesAsciiEllipsis() throws Exception {
+    void nightmareBreakerPropagatorAcceptsOnlyHashDiagnosticKeys() throws Exception {
         String source = Files.readString(Path.of(
                 "main/java/ai/abandonware/nova/orch/aop/NightmareBreakerWebRateLimitPropagatorAspect.java"),
                 StandardCharsets.UTF_8);
 
-        assertFalse(source.contains("…"));
-        assertTrue(source.contains("return t.substring(0, Math.max(0, max - 3)) + \"...\";"));
+        assertTrue(source.contains("value.matches(\"hash:[0-9a-f]{12}\")"));
+        assertFalse(source.contains("TraceStore.putIfAbsent(\"orch.webRateLimited.key\", key)"));
+        assertFalse(source.contains("TraceStore.putIfAbsent(\"orch.webPartialDown.key\", key)"));
     }
 
     @Test
@@ -218,9 +216,9 @@ class NovaAopFailSoftRedactionContractTest {
 
         assertFalse(source.contains("SafeRedactor.safeMessage(String.valueOf(e), 180)"));
         assertFalse(source.contains("String.valueOf(e)"));
-        assertTrue(source.contains("propagate failed (ignored): errorHash={} errorLength={}"));
+        assertTrue(source.contains("propagate(stateSignal) failed (ignored): errorHash={} errorLength={}"));
         assertTrue(source.contains("propagate(isOpen) failed (ignored): errorHash={} errorLength={}"));
-        assertTrue(source.contains("propagate(isOpenOrHalfOpen) failed (ignored): errorHash={} errorLength={}"));
+        assertFalse(source.contains("propagate(isOpenOrHalfOpen) failed"));
         assertTrue(source.contains("SafeRedactor.hashValue(messageOf(e))"));
         assertTrue(source.contains("messageLength(e)"));
     }
@@ -233,10 +231,22 @@ class NovaAopFailSoftRedactionContractTest {
 
         assertEquals(0, Pattern.compile("catch\\s*\\([^)]+\\)\\s*\\{\\s*\\}").matcher(source).results().count(),
                 "breaker propagation fail-soft blocks need trace breadcrumbs instead of exact empty catch bodies");
-        assertTrue(source.contains("traceSuppressed(\"openNowProbe\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"guardContext\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"providerDownProbe\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"isDownProbe\", ignore);"));
+        assertFalse(source.contains("aroundRecordRateLimit"));
+        assertFalse(source.contains("aroundIsOpenOrHalfOpen"));
+        assertTrue(source.contains("@EventListener"));
+        assertTrue(source.contains("reason.name()"));
+    }
+
+    private static NightmareBreaker openHybridBreaker() {
+        NightmareBreakerProperties props = new NightmareBreakerProperties();
+        props.setRateLimitThreshold(1);
+        NightmareBreaker breaker = new NightmareBreaker(props);
+        breaker.signalRateLimit(NightmareKeys.WEBSEARCH_HYBRID, "contract", "RATE_LIMIT", 1_000L);
+        assertTrue(breaker.isOpen(NightmareKeys.WEBSEARCH_HYBRID));
+        return breaker;
     }
 
     @Test
