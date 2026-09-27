@@ -16,7 +16,7 @@ class CustomSecurityConfigContractTest {
 
         assertFalse(source.contains("@Order(3)"));
         assertTrue(source.contains("@Order(Ordered.HIGHEST_PRECEDENCE + 20)"));
-        assertTrue(source.contains("http.securityMatcher(\"/admin/**\", \"/api/admin/**\", \"/dashboard/**\", \"/model-settings/**\")"));
+        assertTrue(source.contains("http.securityMatcher(\"/admin/**\", \"/api/admin/**\", \"/dashboard/**\", \"/model-settings/**\", \"/logout\")"));
         assertTrue(source.contains(".requiresChannel(channel -> channel.anyRequest().requiresSecure())"));
     }
 
@@ -28,6 +28,19 @@ class CustomSecurityConfigContractTest {
         assertMethodPreambleContains(source,
                 "SecurityFilterChain adminSecurity",
                 "@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)");
+    }
+
+    @Test
+    void forceHttpsAdminChainPreservesRememberMeAndLogoutBoundary() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/config/CustomSecurityConfig.java"));
+
+        assertFalse(source.contains(".formLogin(form -> form.disable())"));
+        assertFalse(source.contains(".logout(logout -> logout.disable())"));
+        assertFalse(source.contains(".rememberMe(rem -> rem.disable())"));
+        assertTrue(source.contains(".key(effectiveRememberMeKey())"));
+        assertTrue(source.contains("logoutRequestMatcher(new AntPathRequestMatcher(\"/logout\", \"POST\"))"));
+        assertTrue(source.contains("logoutSuccessUrl(\"/login?logout\")"));
+        assertTrue(source.contains("adminTokenGuardInterceptor.revokePresentedSession(request, response)"));
     }
 
     private static void assertMethodPreambleContains(String source, String methodSignature, String expected) {

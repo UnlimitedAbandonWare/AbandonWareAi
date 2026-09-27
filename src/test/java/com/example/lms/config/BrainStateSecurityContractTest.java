@@ -11,6 +11,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BrainStateSecurityContractTest {
 
     @Test
+    void vectorAdminChainHonorsForceHttpsProperty() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/config/VectorAdminSecurityConfig.java"));
+        int start = source.indexOf("public SecurityFilterChain vectorAdminChain");
+        String chain = source.substring(start);
+
+        assertTrue(source.contains("@Value(\"${security.force-https:false}\")"));
+        assertTrue(source.contains("@Value(\"${server.http-port:80}\")"));
+        assertTrue(source.contains("@Value(\"${server.https-port:443}\")"));
+        assertTrue(chain.contains("if (forceHttps)"));
+        assertTrue(chain.contains("http.portMapper(mapper -> mapper.http(httpPort).mapsTo(httpsPort))"));
+        assertTrue(chain.contains("http.requiresChannel(channel -> channel.anyRequest().requiresSecure())"));
+        assertTrue(chain.contains(".anyRequest().hasRole(\"VECTOR_ADMIN\")"));
+    }
+
+    @Test
     void brainStateWritesStayUnderVectorAdminBoundaryAndDiagnosticsAreReadOnly() throws Exception {
         String admin = Files.readString(Path.of("main/java/com/example/lms/api/BrainStateAdminController.java"));
         String diagnostics = Files.readString(Path.of("main/java/com/example/lms/api/BrainStateDiagnosticsController.java"));
@@ -42,10 +57,11 @@ class BrainStateSecurityContractTest {
                 "@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)");
         assertTrue(appSecurity.contains("\"/api/admin/graph\", \"/api/admin/graph/**\""));
         assertTrue(appSecurity.contains(".requestMatchers(\"/api/admin/graph\", \"/api/admin/graph/**\").hasRole(\"ADMIN\")"));
-        assertTrue(appSecurity.contains("\"/api/admin/graph/**\","));
+        assertTrue(appSecurity.contains(
+                ".ignoringRequestMatchers(adminTokenGuardInterceptor::isHeaderAuthorizedGraphRequest)"));
         assertTrue(adminGuard.contains("\"/api/admin/graph/**\""));
         assertTrue(adminFilter.contains("path.startsWith(\"/api/admin/graph/\")"));
-        assertTrue(appSecurity.contains("requestMatchers(HttpMethod.GET, \"/api/diagnostics/**\").permitAll()"));
+        assertTrue(appSecurity.contains("requestMatchers(HttpMethod.GET, \"/api/diagnostics/**\").hasRole(\"ADMIN\")"));
         assertFalse(appSecurity.contains("\"/api/brain/**\""));
         assertFalse(appSecurity.contains("\"/api/graph-rag/**\""));
     }

@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 class ConversationArchiveParserClassifierTest {
 
@@ -30,6 +31,42 @@ class ConversationArchiveParserClassifierTest {
         assertThat(records.get(0).sender()).isEqualTo("Alice");
         assertThat(records.get(0).message()).contains("First message", "continuation line");
         assertThat(records.get(1).sender()).isEqualTo("Bob");
+    }
+
+    @Test
+    void parserLimitDoesNotSplitSupplementaryCharacters() {
+        String emoji = "\uD83D\uDE00";
+        String splitBoundary = parser.parse(
+                "synthetic.txt", "Alice: " + "A".repeat(11_999) + emoji + "Z")
+                .get(0).message();
+        String completePairBoundary = parser.parse(
+                "synthetic.txt", "Alice: " + "A".repeat(11_998) + emoji + "Z")
+                .get(0).message();
+        String bmpBoundary = parser.parse(
+                "synthetic.txt", "Alice: " + "A".repeat(12_000) + "Z")
+                .get(0).message();
+        String exactBoundary = parser.parse(
+                "synthetic.txt", "Alice: " + "A".repeat(12_000))
+                .get(0).message();
+        String shortSupplementary = parser.parse(
+                "synthetic.txt", "Alice: start" + emoji + "end")
+                .get(0).message();
+
+        assertAll(
+                () -> assertThat(splitBoundary).hasSize(11_999),
+                () -> assertThat(Character.isHighSurrogate(
+                        splitBoundary.charAt(splitBoundary.length() - 1))).isFalse(),
+                () -> assertThat(new String(
+                        splitBoundary.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8))
+                        .isEqualTo(splitBoundary),
+                () -> assertThat(completePairBoundary).hasSize(12_000),
+                () -> assertThat(completePairBoundary.substring(11_998, 12_000)).isEqualTo(emoji),
+                () -> assertThat(new String(
+                        completePairBoundary.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8))
+                        .isEqualTo(completePairBoundary),
+                () -> assertThat(bmpBoundary).isEqualTo("A".repeat(12_000)),
+                () -> assertThat(exactBoundary).isEqualTo("A".repeat(12_000)),
+                () -> assertThat(shortSupplementary).isEqualTo("start" + emoji + "end"));
     }
 
     @Test

@@ -18,6 +18,7 @@ class CachedWebSearchWiringLogContractTest {
                 StandardCharsets.UTF_8);
 
         assertFalse(source.contains("log.warn(\"[Wiring] CachedWebSearch providers=0"));
-        assertTrue(source.contains("log.info(\"[AWX][search][cached] providers=0 disabledReason=no_web_search_providers"));
+        assertTrue(source.contains("log.info(\"[AWX][search][cached] supplementalProviders=0 disabledReason=supplemental_multi_search_providers_disabled"));
+        assertFalse(source.contains("disabledReason=no_web_search_providers"));
     }
 }
