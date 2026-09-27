@@ -1,17 +1,103 @@
 package com.example.lms.service.rag.query;
 
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class QueryAnalysisResourceAllocationTest {
+
+    @Test
+    void queryAnalysisTimeoutInterruptsOwnedTaskAndNextTaskRuns() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        CountDownLatch exited = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        QueryAnalysisService service = serviceWith(
+                new InterruptibleAnalysisModel(entered, release, interrupted, exited),
+                executor,
+                60L);
+
+        try {
+            QueryAnalysisResult result = service.analyze("safe query analysis");
+
+            assertTrue(result.isExploration());
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            assertTrue(interrupted.await(1, TimeUnit.SECONDS),
+                    "timeout must interrupt the exact caller-owned analysis task");
+            assertTrue(exited.await(1, TimeUnit.SECONDS));
+            Future<Boolean> sentinel = executor.submit(() -> true);
+            assertTrue(sentinel.get(1, TimeUnit.SECONDS),
+                    "the bounded query executor must accept cooperative work after cancellation");
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(1, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void interruptedQueryAnalysisRestoresCallerInterruptAndStopsFallbackExpansion() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch workerInterrupted = new CountDownLatch(1);
+        CountDownLatch workerExited = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        QueryAnalysisService service = serviceWith(
+                new InterruptibleAnalysisModel(entered, release, workerInterrupted, workerExited),
+                executor,
+                5_000L);
+        AtomicBoolean callerInterruptPreserved = new AtomicBoolean();
+        AtomicReference<QueryAnalysisResult> result = new AtomicReference<>();
+        Thread caller = new Thread(() -> {
+            try {
+                result.set(service.analyze("cancelled query analysis"));
+            } finally {
+                callerInterruptPreserved.set(Thread.currentThread().isInterrupted());
+            }
+        }, "query-analysis-caller-interrupt-test");
+
+        try {
+            caller.start();
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            caller.interrupt();
+            caller.join(1_000L);
+
+            assertFalse(caller.isAlive());
+            assertTrue(callerInterruptPreserved.get(),
+                    "the caller interrupt flag must remain observable upstream");
+            assertTrue(workerInterrupted.await(1, TimeUnit.SECONDS));
+            assertTrue(workerExited.await(1, TimeUnit.SECONDS));
+            assertTrue(result.get() != null);
+            assertFalse(result.get().isExploration(),
+                    "caller cancellation must not trigger exploration fallback expansion");
+        } finally {
+            release.countDown();
+            caller.interrupt();
+            caller.join(1_000L);
+            executor.shutdownNow();
+            executor.awaitTermination(1, TimeUnit.SECONDS);
+        }
+    }
 
     @Test
     void queryAnalysisLogsDoNotUseRawThrowableMessages() throws Exception {
@@ -123,5 +209,38 @@ class QueryAnalysisResourceAllocationTest {
         assertTrue(result.rewriteTemperature() >= 0.45d);
         assertTrue(result.searchRangeMultiplier() < 1.0d);
         assertTrue(result.getDynamicThreshold() <= 0.28d);
+    }
+
+    private static QueryAnalysisService serviceWith(
+            ChatModel model,
+            ExecutorService executor,
+            long timeoutMs) {
+        QueryAnalysisService service = new QueryAnalysisService();
+        ReflectionTestUtils.setField(service, "chatModel", model);
+        ReflectionTestUtils.setField(service, "llmFastExecutor", executor);
+        ReflectionTestUtils.setField(service, "enabled", true);
+        ReflectionTestUtils.setField(service, "timeoutMs", timeoutMs);
+        ReflectionTestUtils.setField(service, "fallbackToExploration", true);
+        return service;
+    }
+
+    private record InterruptibleAnalysisModel(
+            CountDownLatch entered,
+            CountDownLatch release,
+            CountDownLatch interrupted,
+            CountDownLatch exited) implements ChatModel {
+        @Override
+        public ChatResponse chat(List<ChatMessage> messages) {
+            entered.countDown();
+            try {
+                release.await();
+                return ChatResponse.builder().aiMessage(AiMessage.from("{}" )).build();
+            } catch (InterruptedException expected) {
+                interrupted.countDown();
+                throw new java.util.concurrent.CancellationException("analysis_cancelled");
+            } finally {
+                exited.countDown();
+            }
+        }
     }
 }

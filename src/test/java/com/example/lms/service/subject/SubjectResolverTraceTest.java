@@ -37,4 +37,16 @@ class SubjectResolverTraceTest {
         assertFalse(String.valueOf(TraceStore.getAll()).contains("raw entity scan failure"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("private entity query"));
     }
+
+    @Test
+    void compoundSubjectsDropOnlyBoundedTopicParticles() {
+        SubjectResolver resolver = new SubjectResolver((KnowledgeBaseService) null);
+
+        assertEquals("메가학원", resolver.resolve("메가학원은 어때?", null).orElseThrow());
+        assertEquals("Academy", resolver.resolve("Academy는 어때?", null).orElseThrow());
+        assertEquals("메가학원부", resolver.resolve("메가학원부 소식", null).orElseThrow());
+        assertEquals("메가학원", resolver.resolve("메가학원 어때?", null).orElseThrow());
+        assertEquals("메가학원은하", resolver.resolve("메가학원은하 소식", null).orElseThrow());
+        assertEquals("Academy는빛", resolver.resolve("Academy는빛", null).orElseThrow());
+    }
 }

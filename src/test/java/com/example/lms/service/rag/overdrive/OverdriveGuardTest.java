@@ -372,6 +372,125 @@ class OverdriveGuardTest {
         assertTrue(source.contains("err=trace-failure"));
     }
 
+    static Stream<org.junit.jupiter.params.provider.Arguments> shippedOverdriveControls() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var applier = new com.example.lms.plan.PlanHintApplier(new org.springframework.core.io.DefaultResourceLoader());
+        var seen = new java.util.HashSet<String>();
+        var selected = new java.util.TreeSet<String>();
+        var aliases = new java.util.HashSet<String>();
+        var cases = new java.util.ArrayList<org.junit.jupiter.params.provider.Arguments>();
+        try (var paths = Files.list(Path.of("main/resources/plans"))) {
+            for (Path path : paths.filter(p -> p.getFileName().toString().endsWith(".yaml")).sorted().toList()) {
+                String file = path.getFileName().toString();
+                var hints = applier.load(file.substring(0, file.length() - 5));
+                if (!seen.add(hints.planId()) || hints.overdriveEnabled() == null) continue;
+                var tree = mapper.readTree(Files.readString(Path.of("main/resources/plans", hints.planId() + ".yaml")));
+                String alias = tree.path("overdrive").isBoolean() ? "root"
+                        : tree.path("plan").path("overrides").path("knobs").has("overdrive.enabled") ? "knobs" : "properties";
+                var raw = "root".equals(alias) ? tree.path("overdrive") : tree.path("plan").path("overrides").path(alias).path("overdrive.enabled");
+                assertTrue(raw.isBoolean()); assertEquals(hints.overdriveEnabled(), raw.booleanValue());
+                selected.add(hints.planId()); aliases.add(alias);
+                for (String control : List.of("authored", "flip", "removed", "precedence")) {
+                    for (boolean caller : List.of(false, true)) cases.add(org.junit.jupiter.params.provider.Arguments.of(
+                            hints.planId(), alias, raw.booleanValue(), control, caller));
+                }
+                for (String control : List.of("guard_aux", "guard_strike", "guard_compression", "guard_global", "guard_score"))
+                    cases.add(org.junit.jupiter.params.provider.Arguments.of(hints.planId(), alias, raw.booleanValue(), control, false));
+            }
+        }
+        assertEquals(java.util.Set.of("brave.v1", "document_evidence.v1", "recency_first.v1", "zero_break.v1"), selected);
+        assertEquals(3, aliases.size()); assertEquals(52, cases.size());
+        return cases.stream();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} alias={1} control={3} caller={4}")
+    @org.junit.jupiter.params.provider.MethodSource("shippedOverdriveControls")
+    void shippedOverdriveControlsActualDecisionWithoutBypassingOtherGuards(String planId, String alias,
+            boolean authored, String control, boolean callerEnabled) throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans", planId + ".yaml")));
+        var modified = original.deepCopy();
+        boolean rootAlias = "root".equals(alias);
+        String leaf = rootAlias ? "overdrive" : "overdrive.enabled";
+        var parent = (com.fasterxml.jackson.databind.node.ObjectNode) (rootAlias ? modified : modified.path("plan").path("overrides").path(alias));
+        assertEquals(authored, parent.path(leaf).booleanValue());
+        if ("flip".equals(control)) parent.put(leaf, !authored);
+        if ("removed".equals(control)) parent.remove(leaf);
+        if (control.startsWith("guard_")) parent.put(leaf, true);
+        if ("precedence".equals(control)) {
+            if ("knobs".equals(alias)) {
+                assertFalse(original.has("overdrive"));
+                ((com.fasterxml.jackson.databind.node.ObjectNode) modified).put("overdrive", !authored);
+            } else {
+                var node = (com.fasterxml.jackson.databind.node.ObjectNode) modified;
+                for (String segment : List.of("plan", "overrides", "knobs")) {
+                    node = node.has(segment) ? (com.fasterxml.jackson.databind.node.ObjectNode) node.get(segment) : node.putObject(segment);
+                }
+                assertFalse(node.has("overdrive.enabled"));
+                node.put("overdrive.enabled", !authored);
+            }
+        }
+        var restored = modified.deepCopy();
+        var restoredParent = (com.fasterxml.jackson.databind.node.ObjectNode) (rootAlias ? restored : restored.path("plan").path("overrides").path(alias));
+        restoredParent.put(leaf, authored);
+        if ("precedence".equals(control)) {
+            if ("knobs".equals(alias)) ((com.fasterxml.jackson.databind.node.ObjectNode) restored).remove("overdrive");
+            else if (rootAlias) {
+                assertFalse(original.has("plan"));
+                ((com.fasterxml.jackson.databind.node.ObjectNode) restored).remove("plan");
+            } else ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("plan").path("overrides"))
+                    .set("knobs", original.path("plan").path("overrides").path("knobs").deepCopy());
+        }
+        assertEquals(original, restored, "all other authored plan fields remain unchanged");
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if (("classpath:plans/" + planId + ".yaml").equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return planId + ".yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier("authored".equals(control)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        var hints = applier.load(planId);
+        Boolean projected = "removed".equals(control) ? null : control.startsWith("guard_") ? true
+                : "flip".equals(control) || "precedence".equals(control) && !rootAlias ? !authored : authored;
+        assertEquals(planId, hints.planId()); assertEquals(projected, hints.overdriveEnabled());
+        GuardContext context = new GuardContext();
+        context.putPlanOverride("overdrive.enabled", callerEnabled);
+        applier.applyToGuardContext(hints, context);
+        boolean enabled = projected == null ? callerEnabled : projected;
+        assertEquals(enabled, context.planBool("overdrive.enabled", !enabled));
+        if ("guard_aux".equals(control)) context.setAuxDown(true);
+        if ("guard_strike".equals(control)) context.setStrikeMode(true);
+        if ("guard_compression".equals(control)) context.setCompressionMode(true);
+        GuardContextHolder.set(context);
+        var contradictionCalls = new java.util.concurrent.atomic.AtomicInteger();
+        ContradictionScorer scorer = new ContradictionScorer() {
+            @Override public double score(String a, String b) {
+                contradictionCalls.incrementAndGet(); return "guard_score".equals(control) ? 0.0d : 1.0d;
+            }
+        };
+        OverdriveProperties properties = new OverdriveProperties();
+        if ("guard_global".equals(control)) properties.setEnabled(false);
+        OverdriveGuard actual = new OverdriveGuard(authority(), scorer, properties, null);
+        boolean activated = actual.shouldActivate("synthetic comparison", List.of(Content.from("synthetic member a"), Content.from("synthetic member b")));
+        boolean contextSkip = !enabled || List.of("guard_aux", "guard_strike", "guard_compression").contains(control);
+        boolean globalSkip = "guard_global".equals(control);
+        boolean scoreSkip = "guard_score".equals(control);
+        boolean expected = !contextSkip && !globalSkip && !scoreSkip;
+        assertEquals(expected, activated); assertEquals(expected, TraceStore.get("overdrive.activated"));
+        assertEquals(contextSkip || globalSkip ? 0 : 1, contradictionCalls.get(), "plan and context skips precede pairwise contradiction work");
+        String reason = globalSkip ? "disabled" : contextSkip ? "guard_context_skip" : scoreSkip ? "below_threshold" : "threshold";
+        assertEquals(reason, TraceStore.get("overdrive.reason"));
+        assertEquals(2, TraceStore.get("overdrive.candidates.count"));
+        System.out.printf("TBL07_OVERDRIVE plan=%s alias=%s control=%s caller=%s projected=%s enabled=%s activated=%s contradictionCalls=%d reason=%s%n",
+                planId, alias, control, callerEnabled, projected, enabled, activated, contradictionCalls.get(), reason);
+    }
+
     private static RagFailureBlackboxService blackboxService(boolean enabled) {
         RagFailureBlackboxService service = new RagFailureBlackboxService(null, null, null);
         ReflectionTestUtils.setField(service, "enabled", enabled);

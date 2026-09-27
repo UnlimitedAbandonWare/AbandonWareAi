@@ -1,5 +1,8 @@
 package com.example.lms.service.rag.pre;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.lms.location.LocationService;
 import com.example.lms.config.rag.RagCognitiveProperties;
 import com.example.lms.search.TraceStore;
@@ -7,6 +10,7 @@ import com.example.lms.service.guard.GuardContext;
 import com.example.lms.service.guard.GuardContextHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
@@ -157,6 +161,39 @@ class QueryPreprocessorTraceContractTest {
     }
 
     @Test
+    void locationRewriteTraceStoreFailureLogsRedactedLastResortBreadcrumb() {
+        LocationService locationService = mock(LocationService.class);
+        LocationContextQueryPreprocessor preprocessor = new LocationContextQueryPreprocessor(locationService);
+        GuardContext guardContext = new GuardContext();
+        guardContext.setSensitiveTopic(true);
+        GuardContextHolder.set(guardContext);
+        String rawQuery = "near me ownerToken=private-token";
+        Logger logger = (Logger) LoggerFactory.getLogger(LocationContextQueryPreprocessor.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TraceStore.installContext(new ThrowingTraceMap());
+
+            String out = preprocessor.enrich(rawQuery, Map.of("purpose", "web_search"));
+
+            assertEquals(rawQuery, out);
+            verifyNoInteractions(locationService);
+            String rendered = appender.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .reduce("", (left, right) -> left + "\n" + right);
+            assertTrue(rendered.contains("[AWX][query-location] traceRewriteSkippedSuppressed"), rendered);
+            assertTrue(rendered.contains("errorType=UnsupportedOperationException"), rendered);
+            assertFalse(rendered.contains("ownerToken"), rendered);
+            assertFalse(rendered.contains("private-token"), rendered);
+            assertFalse(rendered.contains(rawQuery), rendered);
+        } finally {
+            logger.detachAppender(appender);
+            TraceStore.clear();
+        }
+    }
+
+    @Test
     void compositeNullDelegateOutputPreservesPreviousQueryAndTracesHashOnly() {
         QueryContextPreprocessor nulling = original -> null;
         QueryContextPreprocessor suffix = original -> original + " safe";
@@ -270,5 +307,12 @@ class QueryPreprocessorTraceContractTest {
         String publicTrace = TraceStore.getAll().toString();
         assertFalse(publicTrace.contains("raw sensitive query"));
         assertFalse(publicTrace.contains("raw sensitive query safe"));
+    }
+
+    private static final class ThrowingTraceMap extends HashMap<String, Object> {
+        @Override
+        public Object put(String key, Object value) {
+            throw new UnsupportedOperationException("trace-store-readonly ownerToken=private-token");
+        }
     }
 }

@@ -209,8 +209,47 @@ class SelfAskRewriteRiskScorerTest {
         assertTrue(emergent.emergentAdjustment().riskDelta() <= 0.08d);
         assertTrue(emergent.rewriteRiskScore() >= baseline.rewriteRiskScore());
         assertTrue(emergent.emergentAdjustment().searchRangeDelta() > 0.0d);
-        assertTrue(emergent.emergentAdjustment().searchRangeDelta() <= 0.20d);
+        assertTrue(emergent.emergentAdjustment().searchRangeDelta() <= 0.08d);
         assertTrue(emergent.laneWeights().get("RC") > baseline.laneWeights().get("RC"));
+    }
+
+    @Test
+    void highRiskEmergenceCoolsRewriteTemperatureAndKeepsRangeConservative() {
+        Map<String, Object> metadata = Map.of(
+                "resource.valueScore", 0.90d,
+                "resource.optimismScore", 0.80d,
+                "resource.riskAdjustedConfidence", 0.20d,
+                "wantsFresh", true);
+        Map<String, Object> trace = Map.of(
+                "web.naver.providerDisabled", true,
+                "web.brave.providerDisabled", true,
+                "web.naver.filter.rawCount", 4,
+                "web.naver.afterFilterCount", 0,
+                "overdrive.contradiction.mean", 0.90d,
+                "web.await.events.count", 4,
+                "web.await.events.timeout.count", 3,
+                "learning.validation.decision", "rejected",
+                "learning.validation.rejectReasons", List.of("final_gate_failed", "provider_disabled"));
+
+        SelfAskRewriteRiskScorer.Score emergent = SelfAskRewriteRiskScorer.score(
+                "latest DGX Spark price risk comparison",
+                metadata,
+                trace,
+                0,
+                8,
+                0.30d,
+                0.12d,
+                0.35d,
+                true,
+                SelfAskRewriteRiskScorer.EmergentConfig.defaults());
+
+        assertTrue(emergent.rewriteTemperatureWeighted() <= 0.30d);
+        assertTrue(emergent.emergentAdjustment().temperatureDelta() <= 0.0d);
+        assertTrue(emergent.emergentAdjustment().searchRangeDelta() <= 0.08d);
+        assertTrue(emergent.components().get("providerFailure") > 0.0d);
+        assertTrue(emergent.components().get("afterFilterStarvation") > 0.0d);
+        assertTrue(emergent.components().get("contradiction") > 0.0d);
+        assertTrue(emergent.components().get("latencyPressure") > 0.0d);
     }
 
     @Test
@@ -255,6 +294,40 @@ class SelfAskRewriteRiskScorerTest {
         assertTrue(emergent.rewriteRiskScore() <= baseline.rewriteRiskScore());
         assertEquals(0.0d, emergent.emergentAdjustment().searchRangeDelta());
         assertEquals("validated_soften", emergent.emergentAdjustment().reason());
+    }
+
+    @Test
+    void acceptedEvidenceSeparatesCoolValidationAndWarmerExplorationTemperature() {
+        Map<String, Object> trace = Map.of(
+                "learning.validation.decision", "accepted",
+                "learning.validation.sampleScore", 0.92d,
+                "learning.validation.contextDiversity", 0.70d,
+                "learning.validation.selfAskLaneCoverage", 1.0d,
+                "learning.validation.requeryRequired", true,
+                "learning.validation.requeryConfirmed", true,
+                "cfvm.reward.adjusted", 0.70d);
+
+        SelfAskRewriteRiskScorer.Score score = SelfAskRewriteRiskScorer.score(
+                "evidence backed creative answer synthesis",
+                Map.of(
+                        "resource.valueScore", 0.55d,
+                        "resource.optimismScore", 0.30d,
+                        "resource.riskAdjustedConfidence", 0.82d),
+                trace,
+                7,
+                7,
+                0.24d,
+                0.12d,
+                0.55d,
+                true,
+                SelfAskRewriteRiskScorer.EmergentConfig.defaults());
+
+        assertEquals("validated_soften", score.emergentAdjustment().reason());
+        assertTrue(score.validationTemperature() <= score.rewriteTemperatureWeighted());
+        assertTrue(score.explorationTemperature() >= score.rewriteTemperatureWeighted());
+        assertTrue(score.explorationTemperature() > score.validationTemperature());
+        assertTrue(score.components().containsKey("validationTemperature"));
+        assertTrue(score.components().containsKey("explorationTemperature"));
     }
 
     @Test

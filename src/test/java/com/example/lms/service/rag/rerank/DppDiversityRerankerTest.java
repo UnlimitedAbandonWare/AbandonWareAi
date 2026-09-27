@@ -12,9 +12,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DppDiversityRerankerTest {
+
+    private final DppDiversityReranker stableReranker = new DppDiversityReranker();
+    private final DppDiversityReranker.Config stableConfig =
+            new DppDiversityReranker.Config(0.7d, 3);
 
     @AfterEach
     void clearTrace() {
@@ -95,6 +100,60 @@ class DppDiversityRerankerTest {
                 p -> p.score);
 
         assertEquals(List.of(first, diverse), out);
+    }
+
+    @Test
+    void rerankReturnsTheOriginalCandidateObjectsWhenOrderChanges() {
+        DppDiversityReranker reranker = new DppDiversityReranker(
+                new DppDiversityReranker.Config(0.65d, 3));
+        Probe stale = new Probe("stale", "old peripheral note", 0.10d);
+        Probe best = new Probe("alpha", "alpha beta core evidence", 0.96d);
+        Probe diverse = new Probe("gamma", "gamma delta separate evidence", 0.75d);
+
+        List<Probe> out = reranker.rerank(
+                List.of(stale, best, diverse),
+                "alpha beta",
+                3,
+                p -> p.title + " " + p.snippet,
+                p -> p.score);
+
+        assertSame(best, out.get(0));
+        assertTrue(out.stream().allMatch(candidate ->
+                candidate == stale || candidate == best || candidate == diverse));
+    }
+
+    @Test
+    void determinantTiesUseStableKeysNotArrivalOrder() {
+        Item c = new Item("c", "same", 0.8d);
+        Item a = new Item("a", "same", 0.8d);
+        Item b = new Item("b", "same", 0.8d);
+        List<Item> forward = List.of(c, a, b);
+        List<Item> reverse = List.of(b, a, c);
+
+        List<Item> first = stableReranker.rerank(
+                stableConfig, forward, "q", 3,
+                Item::text, Item::relevance, Item::id);
+        List<Item> second = stableReranker.rerank(
+                stableConfig, reverse, "q", 3,
+                Item::text, Item::relevance, Item::id);
+
+        assertEquals(List.of("a", "b", "c"), first.stream().map(Item::id).toList());
+        assertEquals(List.of("a", "b", "c"), second.stream().map(Item::id).toList());
+        assertSame(a, first.get(0));
+        assertSame(a, second.get(0));
+    }
+
+    @Test
+    void candidatesWithoutAnyRecoverableStableKeyAreExcluded() {
+        Item dropped = new Item("", "", 0.9d);
+        Item kept = new Item("kept", "body", 0.8d);
+
+        List<Item> result = stableReranker.rerank(
+                stableConfig, List.of(dropped, kept), "q", 2,
+                Item::text, Item::relevance, Item::id);
+
+        assertEquals(List.of("kept"), result.stream().map(Item::id).toList());
+        assertSame(kept, result.get(0));
     }
 
     @Test
@@ -248,6 +307,9 @@ class DppDiversityRerankerTest {
         public String toString() {
             return text;
         }
+    }
+
+    private record Item(String id, String text, double relevance) {
     }
 
     private static final class Probe {

@@ -13,6 +13,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DebugCopilotServiceTest {
@@ -58,6 +59,38 @@ class DebugCopilotServiceTest {
         assertTrue(dump.contains("web.tavily.providerDisabled=true"));
         assertTrue(dump.contains("web.tavily.afterFilterCount=0"));
         assertFalse(dump.contains(rawQuery));
+    }
+
+    @Test
+    void addsRewriteContradictionAndLatencyPressureCausesWithoutRawQuery() {
+        String rawQuery = "private contradiction query should stay hidden";
+        TraceStore.put("dbg.search.enabled", true);
+        TraceStore.put("ml.risk.rewrite.band", "MEDIUM");
+        TraceStore.put("ml.risk.rewrite.score", "0.66");
+        TraceStore.put("ml.risk.rewrite.currentScore", "0.62");
+        TraceStore.put("ml.risk.rewrite.primaryFactor", "contradiction");
+        TraceStore.put("ml.risk.rewrite.components", Map.of(
+                "contradiction", 0.135d,
+                "latencyPressure", 0.090d));
+        TraceStore.put("overdrive.contradiction.mean", 0.90d);
+        TraceStore.put("web.await.events.count", 4);
+        TraceStore.put("web.await.events.timeout.count", 3);
+        TraceStore.put("selfask.3way.requery.confirmed", true);
+        TraceStore.put("raw.query.fixture", rawQuery);
+
+        new DebugCopilotService().maybeEnrichTrace();
+
+        Object causes = TraceStore.get("dbg.copilot.causes");
+        String dump = String.valueOf(causes)
+                + String.valueOf(TraceStore.get("dbg.copilot.actions"))
+                + String.valueOf(TraceStore.get("dbg.copilot.summary"));
+        assertTrue(causes instanceof List<?>);
+        assertTrue(dump.contains("rewrite_contradiction_pressure"), dump);
+        assertTrue(dump.contains("rewrite_latency_pressure"), dump);
+        assertTrue(dump.contains("ml.risk.rewrite.components.contradiction=0.135"), dump);
+        assertTrue(dump.contains("ml.risk.rewrite.components.latencyPressure=0.09"), dump);
+        assertTrue(dump.contains("web.await.events.timeout.count=3"), dump);
+        assertFalse(dump.contains(rawQuery), dump);
     }
 
     @Test
@@ -222,6 +255,32 @@ class DebugCopilotServiceTest {
         assertEquals(1L, TraceStore.get("llm.gateway.route.healthFailureCount"));
         assertEquals("llm_route_degrade", TraceStore.get("llm.gateway.route.healthRoutingHint"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("dbg.copilot.causes"));
+    }
+
+    @Test
+    void staleLocalLlmSmokeHistoryDoesNotPublishCurrentOperatorAction() {
+        Map<String, Object> snapshot = Map.of(
+                "reportStale", true,
+                "evidenceMode", "supporting_stale",
+                "latest", Map.of(
+                        "operatorAction", Map.of(
+                                "triggered", true,
+                                "triggerReason", "threshold_exceeded",
+                                "failureClass", "model_blank",
+                                "nextAction", "inspect_ollama_runtime_capacity",
+                                "actionScore", 100,
+                                "scoreDelta", 85,
+                                "negativeSignalCount", 2
+                        )
+                ));
+
+        new DebugCopilotService(() -> snapshot).maybeEnrichTrace();
+
+        assertNull(TraceStore.get("llm.localSmoke.operatorAction.failureClass"));
+        assertNull(TraceStore.get("llm.localSmoke.operatorAction.triggered"));
+        assertEquals(Boolean.TRUE, TraceStore.get("llm.localSmoke.operatorAction.stale"));
+        assertEquals("supporting_stale", TraceStore.get("llm.localSmoke.operatorAction.evidenceMode"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("llm_route_degrade"));
     }
 
     private static void assertParserCatchNarrowed(String source, String parserCall) {

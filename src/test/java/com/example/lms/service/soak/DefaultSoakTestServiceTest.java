@@ -22,6 +22,21 @@ class DefaultSoakTestServiceTest {
     }
 
     @Test
+    void runTreatsNullSearchResultsAsEmpty() {
+        DefaultSoakTestService service = new DefaultSoakTestService(
+                topic -> List.of("soak query"),
+                (query, k) -> null,
+                null,
+                null);
+
+        SoakReport report = service.run(3, "provider");
+
+        assertEquals(1, report.getRuns());
+        assertEquals(0.0, report.getMetrics().nDCG10);
+        assertEquals(List.of(), report.getErrors());
+    }
+
+    @Test
     void runQuickCancellationUsesOperationalNoteWithoutRawExceptionClass() {
         DefaultSoakTestService service = new DefaultSoakTestService(
                 topic -> List.of("soak query"),

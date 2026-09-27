@@ -12,6 +12,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -19,6 +20,23 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class VectorQuarantineDlqServiceTest {
+
+    @Test
+    void enabledDlqReportsWhenAutomaticRedriveIsDisabled() {
+        VectorQuarantineDlqService service = new VectorQuarantineDlqService(
+                mock(VectorQuarantineDlqRepository.class),
+                new ObjectMapper(),
+                mock(EmbeddingModel.class),
+                mockEmbeddingStore(),
+                mock(PlatformTransactionManager.class));
+        ReflectionTestUtils.setField(service, "enabled", true);
+
+        Map<String, Object> stats = service.stats();
+
+        assertEquals(true, stats.get("enabled"));
+        assertEquals(false, stats.get("redriveEnabled"));
+        assertEquals("redrive_disabled", stats.get("disabledReason"));
+    }
 
     @Test
     void statsErrorDoesNotExposeRawSecrets() {

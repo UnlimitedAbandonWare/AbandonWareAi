@@ -77,7 +77,9 @@ class NaverSearchServiceSecretLabelSourceGuardTest {
                 "raw Naver client secret must not be assigned to a field");
         assertFalse(source.contains("new NaverCredentialBridge.Credential(naverClientId"),
                 "fallback credentials should come from the resolved secret-safe bridge only");
-        assertTrue(source.contains("KeyResolver.resolveNaverKeysCsvSafe(keyResolverProvider)"),
+        assertTrue(source.contains("keyResolverProvider.getIfAvailable()"),
+                "NaverSearchService should resolve the optional central KeyResolver provider");
+        assertTrue(source.contains("injectedKeyResolver.resolveNaverKeysCsvSafe()"),
                 "NaverSearchService should use the central KeyResolver Naver ladder when available");
         assertTrue(source.contains("NaverCredentialBridge.resolveKeysCsv(naverKeysCsv, naverClientId, naverClientSecret)"),
                 "direct bridge resolution should remain only as the fallback when KeyResolver is unavailable");

@@ -93,8 +93,12 @@ class TraceHtmlContentListRendererTest {
 
         assertNull(hostOf.invoke(null, rawUrl));
 
+        assertEquals("host", TraceStore.get("traceHtml.contentList.suppressed.stage"));
+        assertEquals("invalid_uri", TraceStore.get("traceHtml.contentList.suppressed.errorType"));
+        assertEquals(1L, TraceStore.get("traceHtml.contentList.suppressed.count"));
         assertEquals(Boolean.TRUE, TraceStore.get("traceHtml.contentList.suppressed.host"));
         assertEquals("invalid_uri", TraceStore.get("traceHtml.contentList.suppressed.host.errorType"));
+        assertEquals(1L, TraceStore.get("traceHtml.contentList.suppressed.host.count"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains(rawUrl));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("token=hidden"));
     }

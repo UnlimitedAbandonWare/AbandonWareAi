@@ -8,15 +8,18 @@ import com.example.lms.search.TraceStore;
 import com.example.lms.service.soak.SoakQuickReport;
 import com.example.lms.service.soak.SoakReport;
 import com.example.lms.service.soak.SoakTestService;
+import com.example.lms.service.soak.metrics.SoakMetricRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.stream.Collectors;
 
@@ -50,7 +53,9 @@ class SoakQuickRunnerTest {
                 throw new CancellationException("cancelled ownerToken=secret");
             }
         };
-        SoakQuickRunner runner = new SoakQuickRunner(service, new ObjectMapper().findAndRegisterModules(), props, null);
+        SoakMetricRegistry metricRegistry = new SoakMetricRegistry();
+        SoakQuickRunner runner = new SoakQuickRunner(
+                service, new ObjectMapper().findAndRegisterModules(), props, metricRegistry);
 
         SoakQuickBundleReport bundle = runner.runOnce("unit");
 
@@ -63,6 +68,40 @@ class SoakQuickRunnerTest {
         assertEquals("cancelled", TraceStore.get("soak.quickRunner.suppressed.providerRun.errorType"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("CancellationException"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("ownerToken"));
+        assertEquals(0, retainedSidCount(metricRegistry));
+    }
+
+    @Test
+    void runOnceReleasesProviderMetricsAfterCopyingTheirSnapshot() throws Exception {
+        SoakQuickRunnerProperties props = new SoakQuickRunnerProperties();
+        props.setProviders(List.of("NAVER"));
+        props.setOutputPath(tempDir.resolve("quick_report_metrics.json").toString());
+        SoakMetricRegistry metricRegistry = new SoakMetricRegistry();
+        SoakTestService service = new SoakTestService() {
+            @Override
+            public SoakReport run(int k, String topic) {
+                throw new UnsupportedOperationException("unused");
+            }
+
+            @Override
+            public SoakQuickReport runQuick(int k, String topic) {
+                metricRegistry.recordWebCall(true);
+                SoakQuickReport report = new SoakQuickReport();
+                SoakQuickReport.Item item = new SoakQuickReport.Item();
+                item.success = true;
+                item.evidence = true;
+                report.items.add(item);
+                return report;
+            }
+        };
+        SoakQuickRunner runner = new SoakQuickRunner(
+                service, new ObjectMapper().findAndRegisterModules(), props, metricRegistry);
+
+        SoakQuickBundleReport bundle = runner.runOnce("unit");
+
+        assertEquals(1L, bundle.providers.get(0).metrics.webCalls);
+        assertEquals(1L, bundle.providers.get(0).metrics.webCallsWithNaver);
+        assertEquals(0, retainedSidCount(metricRegistry));
     }
 
     @Test
@@ -143,5 +182,11 @@ class SoakQuickRunnerTest {
             logger.detachAppender(appender);
             logger.setLevel(previousLevel);
         }
+    }
+
+    private static int retainedSidCount(SoakMetricRegistry registry) {
+        @SuppressWarnings("unchecked")
+        Map<String, ?> bySid = (Map<String, ?>) ReflectionTestUtils.getField(registry, "bySid");
+        return bySid == null ? 0 : bySid.size();
     }
 }
