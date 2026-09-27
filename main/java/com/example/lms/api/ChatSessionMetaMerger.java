@@ -73,6 +73,17 @@ final class ChatSessionMetaMerger {
             }
         }
 
+        if (uiReq.getUseWebSearch() != null) {
+            meta.put("useWebSearch", uiReq.getUseWebSearch());
+        } else if (meta.containsKey("useWebSearch")) {
+            Object v = meta.get("useWebSearch");
+            if (v instanceof Boolean b) {
+                uiReq.setUseWebSearch(b);
+            } else if (v != null) {
+                uiReq.setUseWebSearch(Boolean.parseBoolean(String.valueOf(v)));
+            }
+        }
+
         if (uiReq.getPrecisionSearch() != null) {
             meta.put("precisionSearch", uiReq.getPrecisionSearch());
         } else if (meta.containsKey("precisionSearch")) {
@@ -112,6 +123,8 @@ final class ChatSessionMetaMerger {
             }
         }
 
+        // Session settings document version; unknown legacy keys are preserved above.
+        meta.put("schemaVersion", 1);
         return meta;
     }
 

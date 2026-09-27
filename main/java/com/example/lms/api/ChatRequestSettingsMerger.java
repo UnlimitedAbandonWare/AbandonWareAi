@@ -23,7 +23,7 @@ final class ChatRequestSettingsMerger {
         Map<String, String> cfg = settings == null ? Map.of() : settings;
         Map<String, String> dirty = new HashMap<>();
 
-        double temperature = firstNonNull(ui.getTemperature(), cfg.get(SettingsService.KEY_TEMPERATURE), 0.7);
+        double temperature = firstNonNull(ui.getTemperature(), cfg.get(SettingsService.KEY_TEMPERATURE), 0.3);
         double topP = firstNonNull(ui.getTopP(), cfg.get(SettingsService.KEY_TOP_P), 1.0);
         double frequencyPenalty = firstNonNull(
                 ui.getFrequencyPenalty(),
@@ -81,6 +81,9 @@ final class ChatRequestSettingsMerger {
         trackChange(cfg, SettingsService.KEY_FREQUENCY_PENALTY, frequencyPenalty, dirty);
         trackChange(cfg, SettingsService.KEY_PRESENCE_PENALTY, presencePenalty, dirty);
 
+        ChatRequestDto.RetrievalRequestIntent retrievalIntent = ui.getRetrievalRequestIntent() != null
+                ? ui.getRetrievalRequestIntent()
+                : new ChatRequestDto.RetrievalRequestIntent(ui.getUseWebSearch(), ui.getUseRag());
         Boolean normUseRag = ui.getUseRag() != null ? ui.getUseRag() : defaultUseRag;
         Boolean normUseWeb;
         if (ui.getUseWebSearch() != null) {
@@ -89,7 +92,7 @@ final class ChatRequestSettingsMerger {
             String cfgVal = cfg.getOrDefault("chat.defaults.useWebSearch", "false");
             normUseWeb = Boolean.valueOf(cfgVal);
         }
-        return ChatRequestDto.builder()
+        return ui.toBuilder()
                 .sessionId(ui.getSessionId())
                 .message(ui.getMessage())
                 .history(ui.getHistory())
@@ -100,6 +103,8 @@ final class ChatRequestSettingsMerger {
                 .topP(topP)
                 .frequencyPenalty(frequencyPenalty)
                 .presencePenalty(presencePenalty)
+                .maxTokens(ui.getMaxTokens())
+                .useVerification(ui.getUseVerification())
                 .useRag(normUseRag)
                 .useWebSearch(normUseWeb)
                 .understandingEnabled(ui.isUnderstandingEnabled())
@@ -114,7 +119,11 @@ final class ChatRequestSettingsMerger {
                 .domainProfile(ui.getDomainProfile())
                 .attachmentIds(ui.getAttachmentIds())
                 .polish(ui.getPolish())
+                .ragAnswerPolicy(ui.getRagAnswerPolicy() != null
+                        ? ui.getRagAnswerPolicy()
+                        : cfg.getOrDefault("chat.ragAnswerPolicy", "adaptive"))
                 .webSearchExplicit(ui.getWebSearchExplicit())
+                .retrievalRequestIntent(retrievalIntent)
                 .build();
     }
 

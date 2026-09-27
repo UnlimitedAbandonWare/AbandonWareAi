@@ -4,10 +4,14 @@ import com.example.lms.api.dto.ChatSessionDto;
 import com.example.lms.api.dto.CreateSessionRequest;
 import com.example.lms.domain.ChatSession;
 import com.example.lms.repository.ChatSessionRepository;
+import com.example.lms.service.ChatHistoryService;
+import com.example.lms.service.ChatHistoryServiceImpl;
 import com.example.lms.web.ClientOwnerKeyResolver;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 
@@ -19,11 +23,14 @@ public class ChatApiControllerExtra {
 
     private final ChatSessionRepository sessionRepository;
     private final ClientOwnerKeyResolver ownerKeyResolver;
+    private final ChatHistoryServiceImpl chatHistoryService;
 
     public ChatApiControllerExtra(ChatSessionRepository sessionRepository,
-                                  ClientOwnerKeyResolver ownerKeyResolver) {
+                                  ClientOwnerKeyResolver ownerKeyResolver,
+                                  ChatHistoryServiceImpl chatHistoryService) {
         this.sessionRepository = sessionRepository;
         this.ownerKeyResolver = ownerKeyResolver;
+        this.chatHistoryService = chatHistoryService;
     }
 
     @GetMapping("/sessions")
@@ -49,9 +56,16 @@ public class ChatApiControllerExtra {
         }
         String title = (req != null && req.getTitle() != null && !req.getTitle().isBlank())
                 ? req.getTitle() : "New Session";
-        ChatSession session = new ChatSession(title, ownerKey, "ANON");
-        session = sessionRepository.save(session);
+        ChatSession session = chatHistoryService.createEmptyAnonymousSession(title, ownerKey);
         return ResponseEntity.ok(ChatSessionDto.from(session));
+    }
+
+    @ExceptionHandler(ChatHistoryService.SessionQuotaExceededException.class)
+    public ResponseEntity<Map<String, Object>> sessionQuotaExceeded(
+            ChatHistoryService.SessionQuotaExceededException ignored) {
+        return ResponseEntity.badRequest()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("status", 400, "reasonCode", "session_quota_exceeded"));
     }
 
     @GetMapping("/sessions/{id}")

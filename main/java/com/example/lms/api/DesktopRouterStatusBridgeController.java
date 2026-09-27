@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.net.URI;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -86,11 +87,14 @@ public class DesktopRouterStatusBridgeController {
         out.put("macminiRole", "optional-router-helper");
         out.put("desktopRole", "primary-rag-chat-control-plane");
         out.put("primary3090", endpoint("awx.gpu-gateway.primary-chat-base-url",
-                prop("awx.gpu-gateway.primary-chat-base-url", ""), "rtx3090", "heavy-chat-judge-coder"));
+                firstNonBlank(prop("llm.base-url", ""), prop("awx.gpu-gateway.primary-chat-base-url", "")),
+                "rtx3090", "heavy-chat-judge-coder"));
         out.put("fast3060", endpoint("awx.gpu-gateway.fast-base-url",
-                prop("awx.gpu-gateway.fast-base-url", ""), "rtx3060", "fast-vision-helper"));
+                firstNonBlank(prop("llm.fast.base-url", ""), prop("awx.gpu-gateway.fast-base-url", "")),
+                "rtx3060", "fast-vision-helper"));
         out.put("embedding3060", endpoint("awx.gpu-gateway.embedding-base-url",
-                prop("awx.gpu-gateway.embedding-base-url", ""), "rtx3060", "embedding"));
+                firstNonBlank(prop("embedding.base-url", ""), prop("awx.gpu-gateway.embedding-base-url", "")),
+                "rtx3060", "embedding"));
         out.put("macminiRouter", macminiRoute());
         return out;
     }
@@ -262,7 +266,7 @@ public class DesktopRouterStatusBridgeController {
         if (uri == null || uri.getHost() == null) {
             return "";
         }
-        String host = uri.getHost().toLowerCase();
+        String host = uri.getHost().toLowerCase(Locale.ROOT);
         int port = uri.getPort();
         return port > 0 ? host + ":" + port : host;
     }
@@ -274,7 +278,7 @@ public class DesktopRouterStatusBridgeController {
         }
         StringBuilder out = new StringBuilder(uri.getScheme() == null ? "http" : uri.getScheme())
                 .append("://")
-                .append(uri.getHost().toLowerCase());
+                .append(uri.getHost().toLowerCase(Locale.ROOT));
         if (uri.getPort() > 0) {
             out.append(':').append(uri.getPort());
         }

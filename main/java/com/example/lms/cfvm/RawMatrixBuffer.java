@@ -100,6 +100,7 @@ public class RawMatrixBuffer {
 
     public synchronized void setBoltzmannTemp(double temp) {
         boltzmannTemp = normalizeBoltzmannTemp(temp);
+        rebalanceBoltzmann();
         TraceStore.put("cfvm.rawBuffer.boltzmannTemp", boltzmannTemp);
         TraceStore.put("cfvm.boltzmannTemp", boltzmannTemp);
         TraceStore.put("cfvm.tempSource", MANUAL_TEMP_SOURCE);
@@ -160,13 +161,25 @@ public class RawMatrixBuffer {
             TraceStore.put("cfvm.rawBuffer.restoreSkipped", "weight_count_mismatch");
             return;
         }
-        System.arraycopy(savedWeights, 0, weights, 0, capacity);
-        System.arraycopy(savedWeights, 0, rawScores, 0, capacity);
-        boltzmannTemp = normalizeBoltzmannTemp(savedTemp);
+        double[] candidateWeights = Arrays.copyOf(savedWeights, capacity);
+        if (!Double.isFinite(savedTemp) || savedTemp <= 0.0d) {
+            TraceStore.put("cfvm.rawBuffer.restoreSkipped", "invalid_temperature");
+            throw new IllegalArgumentException("snapshot temperature must be finite and positive");
+        }
+        for (double savedWeight : candidateWeights) {
+            if (!Double.isFinite(savedWeight) || savedWeight < 0.0d) {
+                TraceStore.put("cfvm.rawBuffer.restoreSkipped", "invalid_weight");
+                throw new IllegalArgumentException("snapshot weights must be finite and nonnegative");
+            }
+        }
+        System.arraycopy(candidateWeights, 0, weights, 0, capacity);
+        System.arraycopy(candidateWeights, 0, rawScores, 0, capacity);
+        boltzmannTemp = savedTemp;
         TraceStore.put("cfvm.rawBuffer.restoredFromSnapshot", true);
         TraceStore.put("cfvm.rawBuffer.boltzmannTemp", boltzmannTemp);
         TraceStore.put("cfvm.boltzmannTemp", boltzmannTemp);
         TraceStore.put("cfvm.tempSource", "snapshot_restore");
+        TraceStore.put("cfvm.tempAnnealApplied", false);
     }
 
     public record Entry(long patternId, long traceSize, long signatureLength) {

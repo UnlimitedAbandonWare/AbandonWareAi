@@ -1,5 +1,6 @@
 package com.example.lms.api;
 
+import com.example.lms.domain.ChatMessage;
 import com.example.lms.domain.ChatSession;
 import com.example.lms.llm.ModelCapabilities;
 import com.example.lms.service.SettingsService;
@@ -11,15 +12,20 @@ import org.springframework.http.ResponseEntity;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 final class ChatSessionDetailResponseBuilder {
 
     private static final String TRACE_META_PREFIX = "?TRACE?";
     private static final String TRACE_META_PREFIX_B64 = "?TRACE64?";
+    private static final Pattern SAFE_MODEL_META = Pattern.compile("[A-Za-z0-9_.:/+@-]{1,80}");
     private static final String EXPOSE_HEADERS =
             "X-Model-Used,X-RAG-Used,X-User,X-Session-Owner,X-Session-Id,X-Request-Id,X-Trace-Snapshot-Id";
 
@@ -37,18 +43,58 @@ final class ChatSessionDetailResponseBuilder {
         var raw = Optional.ofNullable(session.getMessages())
                 .orElse(Collections.emptyList())
                 .stream()
-                .sorted(Comparator.comparing(m -> m.getCreatedAt()))
+                .sorted(Comparator.comparing(ChatMessage::getCreatedAt,
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(ChatMessage::getId,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
                 .toList();
 
         List<ChatApiController.MessageDto> messages = new ArrayList<>();
+        Map<Long, ChatApiController.TurnTraceDto> tracesByAssistant = new LinkedHashMap<>();
+        Set<Long> ambiguousTraceOwners = new HashSet<>();
+        Set<Long> assistantMessageIds = new HashSet<>();
+        for (var message : raw) {
+            if ("assistant".equals(message.getRole()) && message.getId() != null && message.getId() > 0L) {
+                assistantMessageIds.add(message.getId());
+            }
+        }
+        String lastModelMeta = null;
+        Long legacyAssistantCandidate = null;
+        boolean legacyAssistantAmbiguous = false;
         for (var m : raw) {
             String role = m.getRole();
             String content = m.getContent();
 
             if ("system".equals(role)) {
                 if (content != null) {
-                    if (ChatModelMetaSupport.extractModelUsed(content) != null) {
+                    String modelMeta = ChatModelMetaSupport.extractModelUsed(content);
+                    if (modelMeta != null) {
+                        lastModelMeta = modelMeta;
                         continue;
+                    }
+                    if (exposeTrace) {
+                        var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(content, m.getId());
+                        if (pointer.isPresent()) {
+                            Long assistantId = pointer.get().assistantMessageId();
+                            if (assistantId == null && pointer.get().legacyFallbackAllowed()
+                                    && !legacyAssistantAmbiguous) {
+                                assistantId = legacyAssistantCandidate;
+                            }
+                            if (assistantId != null && assistantMessageIds.contains(assistantId)
+                                    && !ambiguousTraceOwners.contains(assistantId)) {
+                                ChatApiController.TurnTraceDto existing = tracesByAssistant.get(assistantId);
+                                if (existing != null && !existing.snapshotId().equals(pointer.get().snapshotId())) {
+                                    tracesByAssistant.remove(assistantId);
+                                    ambiguousTraceOwners.add(assistantId);
+                                } else if (existing == null) {
+                                    tracesByAssistant.put(assistantId, new ChatApiController.TurnTraceDto(
+                                            assistantId,
+                                            pointer.get().snapshotId(),
+                                            mergeModelMetaField(pointer.get().projection(), lastModelMeta)));
+                                }
+                            }
+                            lastModelMeta = null;
+                        }
                     }
                     Optional<ChatApiController.MessageDto> traceMeta =
                             ChatTraceMetaMessageRestorer.restore(m.getId(), content, m.getCreatedAt(), exposeTrace);
@@ -63,6 +109,16 @@ final class ChatSessionDetailResponseBuilder {
                 continue;
             }
 
+            if ("assistant".equals(role)) {
+                if (m.getId() == null || m.getId() <= 0L || legacyAssistantCandidate != null) {
+                    legacyAssistantAmbiguous = true;
+                } else {
+                    legacyAssistantCandidate = m.getId();
+                }
+            } else {
+                legacyAssistantCandidate = null;
+                legacyAssistantAmbiguous = false;
+            }
             messages.add(new ChatApiController.MessageDto(m.getId(), role, content, m.getCreatedAt()));
         }
 
@@ -103,7 +159,8 @@ final class ChatSessionDetailResponseBuilder {
                 session.getCreatedAt(),
                 messages,
                 effectiveModel,
-                savedSettings);
+                savedSettings,
+                List.copyOf(tracesByAssistant.values()));
 
         ResponseEntity.BodyBuilder ok = ResponseEntity.ok();
         ok.header("X-Model-Used", effectiveModel);
@@ -114,5 +171,14 @@ final class ChatSessionDetailResponseBuilder {
         ok.header("X-User", owner);
         ok.header("Access-Control-Expose-Headers", EXPOSE_HEADERS);
         return ok.body(detail);
+    }
+
+    private static Map<String, String> mergeModelMetaField(Map<String, String> projection, String modelMeta) {
+        if (modelMeta == null || modelMeta.isBlank() || !SAFE_MODEL_META.matcher(modelMeta).matches()) {
+            return projection;
+        }
+        Map<String, String> merged = new LinkedHashMap<>(projection);
+        merged.put("modelUsed", modelMeta);
+        return Map.copyOf(merged);
     }
 }
