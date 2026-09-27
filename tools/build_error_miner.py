@@ -48,7 +48,18 @@ PATTERNS.append(("JavacMethodArgMismatch", r"method .* in class .* cannot be app
 
 LOG_EXTS = ('.log', '.txt', '.out', '.err', '.stderr', '.stdout')
 
+SECRET_FRAGMENT_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?:"
+    r"sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|"
+    r"gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|"
+    r"sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}|"
+    r"(?:authorization|cookie)\s*[:=]\s*[^\r\n]+|"
+    r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)\s*[:=]\s*\S+|"
+    r"bearer\s+[A-Za-z0-9._~+/=-]{12,})"
+)
+
 def normalize_line(line: str) -> str:
+    line = SECRET_FRAGMENT_RE.sub('<secret>', line)
     line = re.sub(r'([A-Za-z]:)?[\\/][^\s:]*(?:[\\/][^\s:]+)+', '<path>', line)
     line = re.sub(r'(:|\s)line\s*\d+', r' \1line <n>', line, flags=re.IGNORECASE)
     line = re.sub(r'(?<=:|\()\d+(?=\)|:)', '<n>', line)
@@ -65,17 +76,14 @@ def scan_text(text: str):
     for i, line in enumerate(lines):
         for code, rx in PATTERNS:
             if re.search(rx, line):
-                start = max(0, i-2); end = min(len(lines), i+3)
+                start = max(0, i-2)
+                # Javac may put the symbol after a source line and caret line.
+                end = min(len(lines), i + (4 if code == "JavacCannotFindSymbol" else 3))
                 snippet = "\n".join(lines[start:end])
                 entry = hits.setdefault(code, {"count":0, "examples": []})
                 entry["count"] += 1
                 if len(entry["examples"]) < 5:
                     entry["examples"].append(normalize_line(snippet))
-    if "JavacCannotFindSymbol" in hits:
-        for i, line in enumerate(lines):
-            if "cannot find symbol" in line:
-                seg = "\n".join(lines[i:min(len(lines), i+4)])
-                hits["JavacCannotFindSymbol"]["examples"].append(normalize_line(seg))
     return hits
 
 def scan_file(path: str):
@@ -125,6 +133,16 @@ def main(argv):
     args = ap.parse_args(argv)
 
     paths = [s.strip() for s in args.inputs.split(',') if s.strip()]
+    if not paths:
+        print("build-error-miner: invalid-input reason=no-input-paths", file=sys.stderr)
+        return 2
+    missing_count = sum(1 for path in paths if not os.path.exists(path))
+    if missing_count:
+        print(
+            f"build-error-miner: invalid-input reason=input-not-found count={missing_count}",
+            file=sys.stderr,
+        )
+        return 2
     outputs = {"summary": {}, "files": {}, "zips": {}}
     inputs = collect_inputs(paths)
     for p in inputs:
