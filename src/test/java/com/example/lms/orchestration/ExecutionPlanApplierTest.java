@@ -144,7 +144,6 @@ class ExecutionPlanApplierTest {
                 "",
                 highRisk,
                 0.0d,
-                0.0d,
                 List.of());
     }
 }

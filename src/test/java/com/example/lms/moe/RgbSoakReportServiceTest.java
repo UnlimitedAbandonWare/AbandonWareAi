@@ -3,15 +3,23 @@ package com.example.lms.moe;
 import com.example.lms.search.TraceStore;
 import com.example.lms.metrics.FaithfulnessMetricSnapshotStore;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.module.SimpleModule;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.lang.reflect.Method;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -107,7 +115,7 @@ class RgbSoakReportServiceTest {
         Map<String, Object> payload = map(report.debug().get("openclawEvaluator.promptPayload"));
         assertEquals(NormalizedRagMetrics.SCHEMA_VERSION, payload.get("schema"));
         assertEquals(Boolean.TRUE, payload.get("advisoryOnly"));
-        assertEquals("ollama/qwen3:8b", payload.get("modelHint"));
+        assertEquals("ollama/qwen3.5:9b", payload.get("modelHint"));
         assertNotNull(payload.get("strategySummaries"));
         assertNotNull(payload.get("nextInspectionCandidates"));
 
@@ -208,10 +216,11 @@ class RgbSoakReportServiceTest {
     }
 
     @Test
-    void reportDebugStoresHashOnlyReportFileDiagnosticsWhenWritingFile() {
+    void reportDebugStoresHashOnlyReportFileDiagnosticsWhenWritingFile() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         RgbMoeProperties props = new RgbMoeProperties();
-        props.setSoakReportDir(tempDir.resolve("private-soak-output").toString());
+        Path reportDir = tempDir.resolve("private-soak-output");
+        props.setSoakReportDir(reportDir.toString());
         RgbSoakReportService service = new RgbSoakReportService(
                 new FakeOrchestrator(),
                 objectMapper,
@@ -235,6 +244,48 @@ class RgbSoakReportServiceTest {
         assertTrue(report.debug().get("reportFileLength") instanceof Number);
         assertTrue(report.debug().get("reportPathHash") instanceof String);
         assertTrue(report.debug().get("reportPathLength") instanceof Number);
+        try (var paths = Files.list(reportDir)) {
+            List<Path> files = paths.toList();
+            assertEquals(1, files.size());
+            assertFalse(files.get(0).getFileName().toString().endsWith(".tmp"));
+            assertTrue(objectMapper.readTree(files.get(0).toFile()).isObject());
+        }
+    }
+
+    @Test
+    void failedSerializationPreservesPreviousCompleteDailyReport() throws Exception {
+        RgbMoeProperties props = new RgbMoeProperties();
+        props.setSoakReportDir(tempDir.toString());
+        Path reportPath = tempDir.resolve(
+                DateTimeFormatter.BASIC_ISO_DATE.format(LocalDate.now(ZoneId.systemDefault())) + "_rgb.json");
+        String previousReport = "{\"complete\":true}";
+        Files.writeString(reportPath, previousReport, StandardCharsets.UTF_8);
+
+        ObjectMapper failingMapper = new ObjectMapper();
+        SimpleModule module = new SimpleModule();
+        module.addSerializer(RgbSoakReport.class, new JsonSerializer<>() {
+            @Override
+            public void serialize(RgbSoakReport value,
+                                  JsonGenerator generator,
+                                  SerializerProvider serializers) throws IOException {
+                generator.writeStartObject();
+                generator.writeStringField("partial", "report");
+                generator.flush();
+                throw new IOException("forced serialization failure");
+            }
+        });
+        failingMapper.registerModule(module);
+        RgbSoakReportService service = new RgbSoakReportService(
+                new FakeOrchestrator(),
+                failingMapper,
+                props);
+
+        service.run("session-file-failure", List.of(), null, 0, true);
+
+        assertEquals(previousReport, Files.readString(reportPath, StandardCharsets.UTF_8));
+        try (var files = Files.list(tempDir)) {
+            assertEquals(List.of(reportPath), files.toList());
+        }
     }
 
     @Test

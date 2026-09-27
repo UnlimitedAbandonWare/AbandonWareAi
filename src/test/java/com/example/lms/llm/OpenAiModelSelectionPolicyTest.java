@@ -37,6 +37,13 @@ class OpenAiModelSelectionPolicyTest {
     }
 
     @Test
+    void configuredLunaJoinsDefaultOpenAiChatCatalog() {
+        assertTrue(OpenAiModelSelectionPolicy.openAiChatModels("").contains("gpt-5.6-luna"));
+        assertTrue(OpenAiModelSelectionPolicy.isConfiguredOpenAiChatModel("gpt-5.6-luna", null));
+        assertTrue(OpenAiModelSelectionPolicy.isConfiguredOpenAiChatModel("gpt-5.6-luna", ""));
+    }
+
+    @Test
     void customCatalogIsTrimmedDeduplicatedAndChatOnly() {
         assertIterableEquals(
                 List.of("gpt-5.5", "gpt-4.1-mini"),

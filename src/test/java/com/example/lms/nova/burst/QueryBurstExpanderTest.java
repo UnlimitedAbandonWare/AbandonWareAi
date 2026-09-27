@@ -6,6 +6,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -48,6 +49,41 @@ class QueryBurstExpanderTest {
         assertTrue(variants.stream().anyMatch(v -> v.equals(base + " \uACF5\uC2DD")), variants::toString);
         assertTrue(variants.stream().anyMatch(v -> v.equals(base + " \uCD9C\uC2DC")), variants::toString);
         assertTrue(variants.stream().anyMatch(v -> v.equals("Galaxy trifold rumor")), variants::toString);
+    }
+
+    @Test
+    void fallbackExpansionAddsConservativeEvidenceAndContradictionLanes() {
+        QueryBurstExpander expander = new QueryBurstExpander();
+
+        List<String> variants = expander.expand("RAG orchestration", 3, 8);
+
+        assertTrue(variants.contains("RAG orchestration conservative official source"), variants::toString);
+        assertTrue(variants.contains("RAG orchestration evidence first source verification"), variants::toString);
+        assertTrue(variants.contains("RAG orchestration contradiction check counterexample"), variants::toString);
+        assertEquals(List.of("conservative", "evidence-first", "contradiction-check"),
+                TraceStore.get("extremeZ.burstExpand.laneProfiles"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void fallbackExpansionTracesRedactedVariantProfiles() {
+        QueryBurstExpander expander = new QueryBurstExpander();
+        String rawSeed = "ownerToken=debug-secret RAG orchestration";
+
+        expander.expand(rawSeed, 3, 8);
+
+        Object profilesObj = TraceStore.get("extremeZ.burstExpand.laneVariantProfiles");
+        assertTrue(profilesObj instanceof List<?>);
+        List<Map<String, Object>> profiles = (List<Map<String, Object>>) profilesObj;
+        assertEquals(3, profiles.size());
+        assertEquals("conservative", profiles.get(0).get("profile"));
+        assertEquals("evidence-first", profiles.get(1).get("profile"));
+        assertEquals("contradiction-check", profiles.get(2).get("profile"));
+        assertTrue(profiles.stream().allMatch(row -> row.containsKey("queryHash12")));
+        String trace = String.valueOf(TraceStore.getAll());
+        assertTrue(trace.contains("queryHash12"), trace);
+        assertTrue(!trace.contains("ownerToken"), trace);
+        assertTrue(!trace.contains("debug-secret"), trace);
     }
 
     @Test

@@ -88,14 +88,13 @@ class LocalModelConfigYamlTest {
 
     @Test
     void modelManifestsKeepRoleAwareLocalBindingsAndAliases() throws IOException {
-        assertLocalManifestIfReadable(Path.of("configs/models.manifest.yaml"));
         assertLocalManifest(Path.of("main/resources/configs/models.manifest.yaml"));
         assertLocalManifest(Path.of("app/src/main/resources/configs/models.manifest.yaml"));
 
         Map<?, ?> appManifest = loadMap(Path.of("app/src/main/resources/configs/models.manifest.yaml"));
         Map<?, ?> routing = map(appManifest, "routing");
         List<?> rules = (List<?>) routing.get("rules");
-        assertEquals("qwen3-coder:30b", ((Map<?, ?>) rules.get(0)).get("use"));
+        assertEquals("smtek/Qwen3.8-27B:Q3_K_XL", ((Map<?, ?>) rules.get(0)).get("use"));
         assertEquals("gemma4:26b", ((Map<?, ?>) rules.get(1)).get("use"));
         assertEquals("gemma4:26b", ((Map<?, ?>) rules.get(2)).get("use"));
     }
@@ -107,7 +106,7 @@ class LocalModelConfigYamlTest {
     }
 
     @Test
-    void llmOverlayUsesRoleAwareLocalDefaults() throws IOException {
+    void llmOverlayKeepsFastChatOnPrimaryUnlessFastEndpointIsExplicit() throws IOException {
         Map<?, ?> root = loadMap(Path.of("main/resources/application-llm.yaml"));
         Map<?, ?> llm = map(root, "llm");
         Map<?, ?> embedding = map(root, "embedding");
@@ -128,12 +127,12 @@ class LocalModelConfigYamlTest {
         Map<?, ?> judge = map(llm, "judge");
         Map<?, ?> coder = map(llm, "coder");
         Map<?, ?> vision = map(llm, "vision");
-        assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}", fast.get("base-url"));
-        assertEquals("${LLM_FAST_MODEL:qwen3:8b}", fast.get("model"));
+        assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}", fast.get("base-url"));
+        assertEquals("${LLM_FAST_MODEL:qwen3.5:9b}", fast.get("model"));
         assertEquals("${LLM_HIGH_BASE_URL:${LLM_3090_BASE_URL:${llm.base-url}}}", high.get("base-url"));
         assertEquals("${LLM_HIGH_MODEL:${llm.chat-model:gemma4:26b}}", high.get("model"));
-        assertEquals("${LLM_JUDGE_MODEL:qwen3:30b}", judge.get("model"));
-        assertEquals("${LLM_CODER_MODEL:qwen3-coder:30b}", coder.get("model"));
+        assertEquals("${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", judge.get("model"));
+        assertEquals("${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", coder.get("model"));
         assertEquals("${LLM_VISION_MODEL:qwen3-vl:8b}", vision.get("model"));
 
         Map<?, ?> ollama = map(llm, "ollama");
@@ -142,8 +141,8 @@ class LocalModelConfigYamlTest {
         assertEquals("${llm.base-url:http://127.0.0.1:11434/v1}", ollama.get("base-url"));
         assertEquals("${llm.chat-model:gemma4:26b}", ollama.get("chat-model"));
         assertEquals("${embedding.model:qwen3-embedding:4b}", ollama.get("embed-model"));
-        assertEquals("${LOCAL_LLM_ENABLED:false}", localLlm.get("enabled"));
-        assertEquals("${LOCAL_LLM_AUTOSTART:false}", localLlm.get("autostart"));
+        assertEquals("${LOCAL_LLM_ENABLED:true}", localLlm.get("enabled"));
+        assertEquals("${LOCAL_LLM_AUTOSTART:true}", localLlm.get("autostart"));
         assertEquals("${OLLAMA_HOST:127.0.0.1:11434}", localLlm.get("ollama-host"));
         assertEquals("${LOCAL_LLM_WARMUP_ENABLED:true}", warmup.get("enabled"));
         assertEquals("${LOCAL_LLM_WARMUP_DIMENSIONS:${embedding.dimensions:1536}}", warmup.get("dimensions"));
@@ -154,22 +153,53 @@ class LocalModelConfigYamlTest {
         Map<?, ?> router = map(root, "llmrouter");
         assertEquals(Boolean.TRUE, router.get("enabled"));
         Map<?, ?> routerAliases = map(router, "aliases");
-        assertEquals("${LLM_FAST_MODEL:qwen3:8b}", routerAliases.get("fast"));
-        assertEquals("${LLM_JUDGE_MODEL:qwen3:30b}", routerAliases.get("judge"));
-        assertEquals("${LLM_CODER_MODEL:qwen3-coder:30b}", routerAliases.get("coder"));
+        assertEquals("${LLM_FAST_MODEL:qwen3.5:9b}", routerAliases.get("fast"));
+        assertEquals("${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", routerAliases.get("judge"));
+        assertEquals("${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", routerAliases.get("coder"));
         assertEquals("${LLM_VISION_MODEL:qwen3-vl:8b}", routerAliases.get("vision"));
 
         Map<?, ?> routerModels = map(router, "models");
-        assertEquals("${LLMROUTER_LIGHT_NAME:${LLM_FAST_MODEL:qwen3:8b}}", map(routerModels, "light").get("name"));
+        assertEquals("${LLMROUTER_LIGHT_NAME:${LLM_FAST_MODEL:qwen3.5:9b}}", map(routerModels, "light").get("name"));
         assertEquals("${LLMROUTER_GEMMA_NAME:${llm.chat-model:gemma4:26b}}", map(routerModels, "gemma").get("name"));
-        assertEquals("${LLMROUTER_JUDGE_NAME:${LLM_JUDGE_MODEL:qwen3:30b}}", map(routerModels, "judge").get("name"));
-        assertEquals("${LLMROUTER_CODER_NAME:${LLM_CODER_MODEL:qwen3-coder:30b}}", map(routerModels, "coder").get("name"));
+        assertEquals("${LLMROUTER_JUDGE_NAME:${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}}", map(routerModels, "judge").get("name"));
+        assertEquals("${LLMROUTER_CODER_NAME:${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}}", map(routerModels, "coder").get("name"));
         assertEquals("${LLMROUTER_VISION_NAME:${LLM_VISION_MODEL:qwen3-vl:8b}}", map(routerModels, "vision").get("name"));
         assertEquals("${LLMROUTER_MACMINI_NAME:${MACMINI_API_ROUTER_MODEL:llmrouter.auto}}", map(routerModels, "macmini").get("name"));
         assertEquals("${LLMROUTER_MACMINI_BASE_URL:${MACMINI_API_ROUTER_BASE_URL:}}", map(routerModels, "macmini").get("base-url"));
         assertEquals("macmini-router-only-node", map(routerModels, "macmini").get("node-role"));
         assertEquals("m4-16gb", map(routerModels, "macmini").get("device"));
         assertEquals("optional-subserver-route", map(routerModels, "macmini").get("workload"));
+    }
+
+    @Test
+    void baseApplicationKeepsFastQwenOnPrimaryUnless3060RouteIsExplicit() throws IOException {
+        Map<?, ?> root = loadMap(Path.of("main/resources/application.yml"));
+        Map<?, ?> fast = map(map(root, "llm"), "fast");
+
+        assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}",
+                fast.get("base-url"));
+        assertEquals("${LLM_FAST_MODEL:qwen3.5:9b}", fast.get("model"));
+    }
+
+    @Test
+    void localLlmProfileKeepsFastChatRoutesOnPrimaryUnless3060RouteIsExplicit() throws IOException {
+        Map<?, ?> root = loadMap(Path.of("main/resources/application-local-llm.yml"));
+        Map<?, ?> llm = map(root, "llm");
+        Map<?, ?> models = map(llm, "models");
+        Map<?, ?> routes = map(map(llm, "routing"), "model-to-endpoint");
+
+        String fastFallback = "${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}";
+        String visionFallback =
+                "${LLM_VISION_BASE_URL:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}}";
+
+        assertEquals(fastFallback, map(models, "gemma3_4b").get("endpoint"));
+        assertEquals(fastFallback, map(models, "qwen25_7b").get("endpoint"));
+        assertEquals(fastFallback, map(models, "qwen3_8b").get("endpoint"));
+        assertEquals(visionFallback, map(models, "qwen3_vl_8b").get("endpoint"));
+        assertEquals(fastFallback, routes.get("gemma3_4b"));
+        assertEquals(fastFallback, routes.get("qwen25_7b"));
+        assertEquals(fastFallback, routes.get("qwen3_8b"));
+        assertEquals(visionFallback, routes.get("qwen3_vl_8b"));
     }
 
     @Test
@@ -181,6 +211,19 @@ class LocalModelConfigYamlTest {
         assertEquals("${LLMROUTER_EXTERNAL_NAME:deepseek-v4-flash-free}", external.get("name"));
         assertEquals("${LLMROUTER_EXTERNAL_BASE_URL:https://opencode.ai/zen/v1}", external.get("base-url"));
         assertEquals("${LLMROUTER_EXTERNAL_WEIGHT:0.0}", external.get("weight"));
+    }
+
+    @Test
+    void llmRouterCloudRoutesDefaultToDisabledFallbackOnlyAndCredentialScoped() throws IOException {
+        Map<?, ?> root = loadMap(Path.of("main/resources/application-llm.yaml"));
+        Map<?, ?> models = map(map(root, "llmrouter"), "models");
+
+        assertDisabledCloudRoute(models, "openai-premium", "openai", "OPENAI_API_KEY");
+        assertDisabledCloudRoute(models, "openai-balanced", "openai", "OPENAI_API_KEY");
+        assertDisabledCloudRoute(models, "gemini-pro", "gemini", "GEMINI_API_KEY");
+        assertDisabledCloudRoute(models, "mistral-medium", "mistral", "MISTRAL_API_KEY");
+        assertEquals("${LLMROUTER_MISTRAL_MEDIUM_NAME:mistral-medium-3-5}",
+                map(models, "mistral-medium").get("name"));
     }
 
     @Test
@@ -220,31 +263,31 @@ class LocalModelConfigYamlTest {
         assertEquals("${EMBED_DIMENSIONS:1536}", embedding.get("dimensions"));
         Map<?, ?> localLlm = map(root, "local-llm");
         Map<?, ?> warmup = map(localLlm, "warmup");
-        assertEquals("${LOCAL_LLM_AUTOSTART:false}", localLlm.get("autostart"));
+        assertEquals("${LOCAL_LLM_AUTOSTART:true}", localLlm.get("autostart"));
         assertEquals("${OLLAMA_HOST:127.0.0.1:11434}", localLlm.get("ollama-host"));
-        assertEquals("${LOCAL_LLM_WARMUP_ENABLED:false}", warmup.get("enabled"));
+        assertEquals("${LOCAL_LLM_WARMUP_ENABLED:true}", warmup.get("enabled"));
         assertEquals("${LOCAL_LLM_WARMUP_DIMENSIONS:${embedding.dimensions:1536}}", warmup.get("dimensions"));
 
         Map<?, ?> models = map(llm, "models");
         assertEquals("${LLM_CHAT_MODEL:gemma4:26b}", map(models, "gemma4_26b").get("name"));
-        assertEquals("${LLM_JUDGE_MODEL:qwen3:30b}", map(models, "qwen3_30b").get("name"));
-        assertEquals("${LLM_CODER_MODEL:qwen3-coder:30b}", map(models, "qwen3_coder_30b").get("name"));
+        assertEquals("${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", map(models, "qwen3_30b").get("name"));
+        assertEquals("${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", map(models, "qwen3_coder_30b").get("name"));
         assertEquals("${LLM_VISION_MODEL:qwen3-vl:8b}", map(models, "qwen3_vl_8b").get("name"));
-        assertEquals("${LLM_FAST_MODEL:qwen3:8b}", map(models, "qwen3_8b").get("name"));
+        assertEquals("${LLM_FAST_MODEL:qwen3.5:9b}", map(models, "qwen3_8b").get("name"));
         assertLocalGpuPlacement(models);
         assertEquals("rtx3060", map(models, "qwen25_7b").get("gpu"));
         assertEquals("${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11434/v1}}",
                 map(models, "gemma4_26b").get("endpoint"));
-        assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}",
+        assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}",
                 map(models, "gemma3_4b").get("endpoint"));
         assertEquals("${LLM_JUDGE_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11434/v1}}",
                 map(models, "qwen3_30b").get("endpoint"));
         assertEquals("${LLM_CODER_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11434/v1}}",
                 map(models, "qwen3_coder_30b").get("endpoint"));
-        assertEquals("${LLM_VISION_BASE_URL:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}}",
+        assertEquals("${LLM_VISION_BASE_URL:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}}",
                 map(models, "qwen3_vl_8b").get("endpoint"));
         Map<?, ?> modelToEndpoint = map(map(llm, "routing"), "model-to-endpoint");
-        assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}",
+        assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}",
                 modelToEndpoint.get("qwen3_8b"));
     }
 
@@ -264,13 +307,13 @@ class LocalModelConfigYamlTest {
         assertEquals(Boolean.TRUE, desktopAwxNode.get("heavy-workloads-allowed"));
         assertEquals(Boolean.TRUE, desktopGpuGateway.get("enabled"));
         assertEquals("desktop-rtx3090-rtx3060", desktopGpuGateway.get("target-execution-node"));
-        assertEquals("${LLM_3090_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}", desktopGpuGateway.get("primary-chat-base-url"));
-        assertEquals("${LLM_3060_BASE_URL:${LLM_FAST_BASE_URL:http://127.0.0.1:11435/v1}}", desktopGpuGateway.get("fast-base-url"));
-        assertEquals("${EMBED_3060_BASE_URL:${EMBED_BASE_URL:http://127.0.0.1:11435/api/embed}}", desktopGpuGateway.get("embedding-base-url"));
+        assertEquals("${llm.base-url:${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11434/v1}}}", desktopGpuGateway.get("primary-chat-base-url"));
+        assertEquals("${llm.fast.base-url:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}}", desktopGpuGateway.get("fast-base-url"));
+        assertEquals("${embedding.base-url:${EMBED_BASE_URL:${EMBED_3060_BASE_URL:http://127.0.0.1:11435/api/embed}}}", desktopGpuGateway.get("embedding-base-url"));
         assertEquals("${LLM_OWNER_TOKEN:}", desktopGpuGateway.get("owner-token"));
         assertEquals("${LLM_OWNER_TOKEN_HEADER:X-Owner-Token}", desktopGpuGateway.get("owner-token-header"));
-        assertEquals("${LOCAL_LLM_AUTOSTART:false}", desktopLocalLlm.get("autostart"));
-        assertEquals("${LOCAL_LLM_WARMUP_ENABLED:false}", map(desktopLocalLlm, "warmup").get("enabled"));
+        assertEquals("${LOCAL_LLM_AUTOSTART:true}", desktopLocalLlm.get("autostart"));
+        assertEquals("${LOCAL_LLM_WARMUP_ENABLED:true}", map(desktopLocalLlm, "warmup").get("enabled"));
         assertEquals("${DESKTOP_LEARNING_OPS_COLLECTOR_ENABLED:false}", desktopCollector.get("enabled"));
         Map<?, ?> desktopAutolearn = map(map(desktop, "uaw"), "autolearn");
         assertEquals("${DESKTOP_AUTOLEARN_ENABLED:false}", desktopAutolearn.get("enabled"));
@@ -323,7 +366,7 @@ class LocalModelConfigYamlTest {
             props.load(in);
         }
 
-        assertEquals("${llm.chat-model:gemma4:26b}", props.getProperty("app.ai.ui-default-model"));
+        assertEquals("${llm.fast.model:qwen3.5:9b}", props.getProperty("app.ai.ui-default-model"));
         assertEquals("false", props.getProperty("app.ai.allow-remote-model-selection"));
         assertEquals("2", props.getProperty("agent.knowledge-curation.min-entity-codepoints"));
         assertEquals("e,unknown,n/a,na,none,null", props.getProperty("agent.knowledge-curation.blocked-entities"));
@@ -343,10 +386,10 @@ class LocalModelConfigYamlTest {
 
         assertEquals("${LLM_CHAT_MODEL:gemma4:26b}", llm.get("chat-model"));
         assertEquals("${LLM_CHAT_MODEL:gemma4:26b}", map(models, "gemma4_26b").get("name"));
-        assertEquals("${LLM_GEMMA3_4B_MODEL:gemma3:4b}", map(models, "gemma3_4b").get("name"));
-        assertEquals("${LLM_JUDGE_MODEL:qwen3:30b}", map(models, "qwen3_30b").get("name"));
-        assertEquals("${LLM_CODER_MODEL:qwen3-coder:30b}", map(models, "qwen3_coder_30b").get("name"));
-        assertEquals("${LLM_FAST_MODEL:qwen3:8b}", map(models, "qwen3_8b").get("name"));
+        assertEquals("${LLM_GEMMA3_4B_MODEL:gemma4:12b}", map(models, "gemma3_4b").get("name"));
+        assertEquals("${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", map(models, "qwen3_30b").get("name"));
+        assertEquals("${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}", map(models, "qwen3_coder_30b").get("name"));
+        assertEquals("${LLM_FAST_MODEL:qwen3.5:9b}", map(models, "qwen3_8b").get("name"));
         assertEquals("${LLM_VISION_MODEL:qwen3-vl:8b}", map(models, "qwen3_vl_8b").get("name"));
         assertLocalGpuPlacement(models);
         Map<?, ?> routeTp = map(map(llm, "route"), "tp");
@@ -372,12 +415,12 @@ class LocalModelConfigYamlTest {
         assertNotNull(manifest);
         assertEquals("gemma4:26b", manifest.getBindings().getDefault());
         assertEquals("gemma4:26b", manifest.getBindings().getMoe());
-        assertEquals("qwen3:8b", manifest.getAliases().get("cheap"));
-        assertEquals("qwen3:8b", manifest.getAliases().get("fast"));
+        assertEquals("qwen3.5:9b", manifest.getAliases().get("cheap"));
+        assertEquals("qwen3.5:9b", manifest.getAliases().get("fast"));
         assertEquals("qwen3-vl:8b", manifest.getAliases().get("vision"));
-        assertEquals("qwen3:30b", manifest.getAliases().get("judge"));
-        assertEquals("qwen3:30b", manifest.getAliases().get("critic"));
-        assertEquals("qwen3-coder:30b", manifest.getAliases().get("coder"));
+        assertEquals("smtek/Qwen3.8-27B:Q3_K_XL", manifest.getAliases().get("judge"));
+        assertEquals("smtek/Qwen3.8-27B:Q3_K_XL", manifest.getAliases().get("critic"));
+        assertEquals("smtek/Qwen3.8-27B:Q3_K_XL", manifest.getAliases().get("coder"));
         assertEquals("gemma4:26b", manifest.getAliases().get("gemma4-26b"));
         assertFalse(manifest.getAliases().containsKey("gemma4:26b"));
         assertFalse(manifest.getAliases().containsKey("gemma3:27b"));
@@ -389,7 +432,7 @@ class LocalModelConfigYamlTest {
         assertEquals("${EMBED_BASE_URL:${EMBED_3060_BASE_URL:http://127.0.0.1:11435/api/embed}}",
                 embedding.getEndpoint().base_url);
 
-        ModelsManifest.Model fast = modelById(manifest, "qwen3:8b");
+        ModelsManifest.Model fast = modelById(manifest, "qwen3.5:9b");
         assertEquals("${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11435/v1}}}",
                 fast.getEndpoint().base_url);
 
@@ -405,31 +448,13 @@ class LocalModelConfigYamlTest {
         assertEquals("${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11434/v1}}",
                 chat.getEndpoint().base_url);
 
-        ModelsManifest.Model judge = modelById(manifest, "qwen3:30b");
+        ModelsManifest.Model judge = modelByCapability(manifest, "judge");
         assertEquals("${LLM_JUDGE_BASE_URL:${LLM_3090_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}}",
                 judge.getEndpoint().base_url);
 
-        ModelsManifest.Model coder = modelById(manifest, "qwen3-coder:30b");
+        ModelsManifest.Model coder = modelByCapability(manifest, "code");
         assertEquals("${LLM_CODER_BASE_URL:${LLM_3090_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}}",
                 coder.getEndpoint().base_url);
-    }
-
-    private static void assertLocalManifestIfReadable(Path path) throws IOException {
-        if (!isReadable(path)) {
-            System.out.println("[AWX][test][quarantine] unreadable=" + path);
-            return;
-        }
-        assertLocalManifest(path);
-    }
-
-    private static boolean isReadable(Path path) throws IOException {
-        try {
-            return Files.isReadable(path);
-        } catch (SecurityException e) {
-            LOG.log(System.Logger.Level.DEBUG, "Manifest readability probe rejected pathLength={0} errorType={1}",
-                    path == null ? 0 : path.toString().length(), e.getClass().getSimpleName());
-            return false;
-        }
     }
 
     private static ModelsManifest.Model modelById(ModelsManifest manifest, String id) {
@@ -437,6 +462,22 @@ class LocalModelConfigYamlTest {
                 .filter(model -> id.equals(model.getId()))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("missing model " + id));
+    }
+
+    private static ModelsManifest.Model modelByCapability(ModelsManifest manifest, String capability) {
+        return manifest.getModels().stream()
+                .filter(model -> model.getCapabilities() != null && model.getCapabilities().contains(capability))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing model capability " + capability));
+    }
+
+    private static void assertDisabledCloudRoute(Map<?, ?> models, String routeKey, String provider, String credentialEnv) {
+        Map<?, ?> route = map(models, routeKey);
+        assertEquals("${LLMROUTER_" + routeKey.toUpperCase().replace('-', '_') + "_ENABLED:false}", route.get("enabled"));
+        assertEquals(provider, route.get("provider"));
+        assertEquals(Boolean.TRUE, route.get("fallback-only"));
+        assertEquals("${LLMROUTER_" + routeKey.toUpperCase().replace('-', '_') + "_WEIGHT:0.0}", route.get("weight"));
+        assertEquals(credentialEnv, route.get("credential-env"));
     }
 
     private static Map<?, ?> loadMap(Path path) throws IOException {
