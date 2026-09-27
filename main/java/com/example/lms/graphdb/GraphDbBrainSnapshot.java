@@ -160,7 +160,7 @@ public record GraphDbBrainSnapshot(
             return List.of();
         }
         return list.stream()
-                .map(item -> safe(item, ""))
+                .map(item -> normalizedText(item, ""))
                 .filter(StringUtils::hasText)
                 .toList();
     }
@@ -199,9 +199,13 @@ public record GraphDbBrainSnapshot(
     }
 
     private static String safe(Object value, String fallback) {
+        String normalized = normalizedText(value, fallback);
+        return normalized.length() <= 160 ? normalized : normalized.substring(0, 160);
+    }
+
+    private static String normalizedText(Object value, String fallback) {
         String raw = value == null ? fallback : String.valueOf(value);
-        String safe = raw == null ? "" : raw.trim().replaceAll("[\\r\\n\\t]+", " ");
-        return safe.length() <= 160 ? safe : safe.substring(0, 160);
+        return raw == null ? "" : raw.trim().replaceAll("[\\r\\n\\t]+", " ");
     }
 
     private static String boundary(Object value, String fallback) {
@@ -210,7 +214,7 @@ public record GraphDbBrainSnapshot(
     }
 
     private static String communityId(Object value) {
-        String raw = safe(value, "");
+        String raw = normalizedText(value, "");
         if (!StringUtils.hasText(raw)) {
             return "";
         }
@@ -240,7 +244,7 @@ public record GraphDbBrainSnapshot(
     }
 
     private static String hashToken(Object value) {
-        String raw = safe(value, "");
+        String raw = normalizedText(value, "");
         if (!StringUtils.hasText(raw)) {
             return "";
         }
