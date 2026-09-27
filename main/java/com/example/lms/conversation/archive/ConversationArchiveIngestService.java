@@ -33,6 +33,7 @@ public class ConversationArchiveIngestService {
     private static final int MAX_ENTRIES = 500;
     private static final int MAX_TREE = 200;
     private static final int MAX_ENTRY_BYTES = 2 * 1024 * 1024;
+    private static final long MAX_TOTAL_DECOMPRESSED_BYTES = 64L * 1024 * 1024;
     private static final int MAX_RECORDS = 5000;
     private static final int CHUNK_CHARS = 3200;
     private static final int CHUNK_MESSAGES = 10;
@@ -56,13 +57,16 @@ public class ConversationArchiveIngestService {
         String sid = (sessionId == null || sessionId.isBlank()) ? "__TRANSIENT__" : sessionId.trim();
         Stats stats = new Stats();
         stats.zipCount = safeFiles.size();
+        List<StagedChunk> stagedChunks = new ArrayList<>();
 
         for (MultipartFile file : safeFiles) {
-            readZip(file, sid, stats);
-            if (stats.recordCount >= MAX_RECORDS) {
-                stats.truncated = true;
-                break;
-            }
+            readZip(file, sid, stats, stagedChunks);
+        }
+
+        for (StagedChunk chunk : stagedChunks) {
+            vectorStoreService.enqueue(
+                    chunk.id(), chunk.sessionId(), chunk.text(), chunk.metadata());
+            stats.ingestedCount++;
         }
 
         Map<String, Integer> counts = counts(stats.counts);
@@ -85,31 +89,48 @@ public class ConversationArchiveIngestService {
                 trace);
     }
 
-    private void readZip(MultipartFile file, String sessionId, Stats stats) {
+    private void readZip(
+            MultipartFile file,
+            String sessionId,
+            Stats stats,
+            List<StagedChunk> stagedChunks) {
         try (ZipInputStream zin = new ZipInputStream(file.getInputStream(), StandardCharsets.UTF_8)) {
             ZipEntry entry;
             while ((entry = zin.getNextEntry()) != null) {
                 if (stats.entryCount >= MAX_ENTRIES) {
                     stats.truncated = true;
-                    return;
+                    readBounded(zin, 0, stats);
+                    continue;
                 }
                 stats.entryCount++;
                 String entryName = safeEntryName(entry.getName());
                 if (stats.tree.size() < MAX_TREE) {
                     stats.tree.add(entry.isDirectory() ? entryName + "/" : entryName);
                 }
-                if (entry.isDirectory() || !entryName.toLowerCase(Locale.ROOT).endsWith(".txt")) {
+                boolean directoryEntry = entry.isDirectory();
+                boolean textEntry = !directoryEntry
+                        && entryName.toLowerCase(Locale.ROOT).endsWith(".txt");
+                boolean parseTextEntry = textEntry && stats.recordCount < MAX_RECORDS;
+                EntryRead read = readBounded(zin, parseTextEntry ? MAX_ENTRY_BYTES : 0, stats);
+                if (directoryEntry || !textEntry) {
+                    continue;
+                }
+                if (!parseTextEntry) {
+                    stats.truncated = true;
                     continue;
                 }
                 stats.txtEntryCount++;
-                byte[] bytes = readBounded(zin, MAX_ENTRY_BYTES);
-                if (bytes.length >= MAX_ENTRY_BYTES) {
+                if (read.truncated() || read.bytes().length >= MAX_ENTRY_BYTES) {
                     stats.truncated = true;
                 }
-                processTextEntry(entryName, new String(bytes, StandardCharsets.UTF_8), sessionId, stats);
+                processTextEntry(
+                        entryName,
+                        new String(read.bytes(), StandardCharsets.UTF_8),
+                        sessionId,
+                        stats,
+                        stagedChunks);
                 if (stats.recordCount >= MAX_RECORDS) {
                     stats.truncated = true;
-                    return;
                 }
             }
         } catch (IOException ex) {
@@ -117,7 +138,12 @@ public class ConversationArchiveIngestService {
         }
     }
 
-    private void processTextEntry(String entryName, String body, String sessionId, Stats stats) {
+    private void processTextEntry(
+            String entryName,
+            String body,
+            String sessionId,
+            Stats stats,
+            List<StagedChunk> stagedChunks) {
         List<ConversationTopicTimelineBuilder.ClassifiedRecord> accepted = new ArrayList<>();
         for (ConversationMessageRecord record : parser.parse(entryName, body)) {
             if (stats.recordCount >= MAX_RECORDS) {
@@ -137,8 +163,10 @@ public class ConversationArchiveIngestService {
             if (chunk == null || chunk.text() == null || chunk.text().isBlank()) {
                 continue;
             }
-            vectorStoreService.enqueue(chunk.id(), sessionId, chunk.text(), chunk.metadata());
-            stats.ingestedCount++;
+            Map<String, Object> metadata = java.util.Collections.unmodifiableMap(
+                    new LinkedHashMap<>(chunk.metadata()));
+            stagedChunks.add(new StagedChunk(
+                    chunk.id(), sessionId, chunk.text(), metadata));
         }
     }
 
@@ -151,23 +179,31 @@ public class ConversationArchiveIngestService {
                 || type.equals("multipart/x-zip");
     }
 
-    private static byte[] readBounded(ZipInputStream zin, int maxBytes) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(maxBytes, 8192));
+    private static EntryRead readBounded(ZipInputStream zin, int maxBytes, Stats stats) throws IOException {
+        int captureLimit = Math.max(0, maxBytes);
+        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(captureLimit, 8192));
         byte[] buf = new byte[8192];
-        int total = 0;
+        int captured = 0;
+        boolean truncated = false;
         int n;
         while ((n = zin.read(buf)) >= 0) {
-            if (total + n > maxBytes) {
-                int allowed = Math.max(0, maxBytes - total);
-                if (allowed > 0) {
-                    out.write(buf, 0, allowed);
-                }
-                break;
+            if (n == 0) {
+                continue;
             }
-            out.write(buf, 0, n);
-            total += n;
+            if ((long) n > MAX_TOTAL_DECOMPRESSED_BYTES - stats.decompressedBytes) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "archive_total_too_large");
+            }
+            stats.decompressedBytes += n;
+            int allowed = Math.min(n, Math.max(0, captureLimit - captured));
+            if (allowed > 0) {
+                out.write(buf, 0, allowed);
+                captured += allowed;
+            }
+            if (allowed < n) {
+                truncated = true;
+            }
         }
-        return out.toByteArray();
+        return new EntryRead(out.toByteArray(), truncated);
     }
 
     private static String safeEntryName(String value) {
@@ -266,7 +302,18 @@ public class ConversationArchiveIngestService {
         int txtEntryCount;
         int recordCount;
         int ingestedCount;
+        long decompressedBytes;
         boolean truncated;
+    }
+
+    private record EntryRead(byte[] bytes, boolean truncated) {
+    }
+
+    private record StagedChunk(
+            String id,
+            String sessionId,
+            String text,
+            Map<String, Object> metadata) {
     }
 
     private static String hashIfPresent(Object value) {

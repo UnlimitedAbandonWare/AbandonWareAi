@@ -10,6 +10,22 @@ public class ConversationNoiseClassifier {
     private static final Pattern HTML_TAG = Pattern.compile("(?is)<[a-z!/][^>]{0,240}>");
     private static final Pattern BASE64 = Pattern.compile("(?is)(data:image/[^;]+;base64,|[A-Za-z0-9+/]{180,}={0,2})");
 
+    // Count source-shaped declarations, not programming words in a conversation.
+    private static final String CODE_START = "(?m)(?:^|[;{}])\\h*";
+    private static final String CODE_NAME = "[\\p{L}_$][\\p{L}\\p{N}_$]*+";
+    private static final Pattern[] CODE_SIGNALS = {
+            Pattern.compile(CODE_START + "import\\h+(?:(?:static\\h+)?" + CODE_NAME
+                    + "(?:\\." + CODE_NAME + ")*+(?:\\.\\*)?\\h*(?:;|$)"
+                    + "|[\\p{L}\\p{N}_$*{},\\s]+?\\bfrom\\h+['\"][^'\"\\r\\n]+['\"]\\h*;?)"),
+            Pattern.compile(CODE_START + "package\\h+" + CODE_NAME + "(?:\\." + CODE_NAME + ")*+\\h*(?:;|$)"),
+            Pattern.compile(CODE_START + "public\\h+(?:(?:abstract|final)\\h+)?class\\h+" + CODE_NAME
+                    + "(?:<[^<>;{}\\r\\n]+>)?(?:\\h+(?:extends|implements)\\h+[^;{}\\r\\n]+)?\\h*\\{"),
+            Pattern.compile("(?m)(?:^|[;{}=])\\h*(?:export\\h+(?:default\\h+)?)?(?:async\\h+)?function\\h*"
+                    + "(?:\\*\\h*)?(?:" + CODE_NAME + "\\h*)?\\([^;{}\\r\\n]*\\)\\h*\\{"),
+            Pattern.compile(CODE_START + "(?:export\\h+)?(?:var|const)\\h+(?:" + CODE_NAME
+                    + "|\\{[^;{}\\r\\n]+\\}|\\[[^;\\[\\]\\r\\n]+\\])\\h*(?:=|;)")
+    };
+
     public record Decision(ConversationMessageKind kind, String reason, boolean ingestible, double confidence) {
     }
 
@@ -78,11 +94,9 @@ public class ConversationNoiseClassifier {
             return false;
         }
         int hits = 0;
-        if (lower.contains("import ")) hits++;
-        if (lower.contains("package ")) hits++;
-        if (lower.contains("public class ")) hits++;
-        if (lower.contains("function(") || lower.contains("function ")) hits++;
-        if (lower.contains("var ") || lower.contains("const ")) hits++;
+        for (Pattern signal : CODE_SIGNALS) {
+            if (signal.matcher(lower).find()) hits++;
+        }
         return hits >= 3;
     }
 
@@ -106,7 +120,7 @@ public class ConversationNoiseClassifier {
                     same++;
                 }
             }
-            return same >= 4;
+            return same == parts.length;
         }
         return false;
     }

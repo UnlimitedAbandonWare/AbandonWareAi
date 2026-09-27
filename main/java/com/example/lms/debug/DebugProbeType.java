@@ -96,5 +96,8 @@ public enum DebugProbeType {
     AGENT_REPORT_GATES,
 
     /** Agent report tooling: TraceStore KPI request. */
-    AGENT_REPORT_TRACE
+    AGENT_REPORT_TRACE,
+
+    /** Trace-memory fingerprint, virtual checkpoint, and recovery routing probes. */
+    TRACE_MEMORY
 }

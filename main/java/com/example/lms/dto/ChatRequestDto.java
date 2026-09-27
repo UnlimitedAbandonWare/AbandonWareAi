@@ -1,6 +1,7 @@
 package com.example.lms.dto;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.AttachmentOwnerIdentity;
 import com.example.lms.trace.SafeRedactor;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -9,6 +10,7 @@ import lombok.*;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * ChatService v7 호환 ChatRequestDto
@@ -19,8 +21,8 @@ import java.util.Arrays;
 @AllArgsConstructor
 @Builder(toBuilder = true, builderClassName = "Builder")
 public class ChatRequestDto {
-        @Builder.Default // 빌더 사용 시 기본값
-        private boolean useVerification = false;
+        @Builder.Default // null means the caller did not override the server default
+        private Boolean useVerification = null;
         /* ────────── ① 필수 프롬프트 ────────── */
         private String message;
 
@@ -60,9 +62,10 @@ public class ChatRequestDto {
          * Prefer logical ids like "llmrouter.auto" if enabled.
          */
         private String model;
+        /** Exact manual selection: fail visibly instead of changing provider/model. */
+        private boolean strictModelSelection;
 
-        @Builder.Default
-        private Double temperature = 0.7;
+        private Double temperature;
         @Builder.Default
         @JsonProperty("top_p")
         private Double topP = 1.0;
@@ -163,6 +166,16 @@ public class ChatRequestDto {
          */
         @Builder.Default
         private java.lang.Boolean polish = null;
+
+        /**
+         * Optional RAG answer policy: {@code "adaptive"} (default) permits a safe
+         * general answer when retrieval produced no usable evidence;
+         * {@code "evidence_only"} keeps a scoped shortfall/failure notice instead
+         * of substituting a fact answer. A {@code null} value means the client did
+         * not specify a preference and the server default applies.
+         */
+        @Builder.Default
+        private String ragAnswerPolicy = null;
 
         /**
          * When true the chat pipeline will generate a structured summary of the
@@ -297,7 +310,7 @@ public class ChatRequestDto {
          * a single context for summarization. Defaults to false.
          */
         @Builder.Default
-        private Boolean precisionSearch = false;
+        private Boolean precisionSearch = null;
 
         /**
          * 정밀 검색 시 스캔할 URL 개수. If null, the system will fall back to
@@ -315,8 +328,66 @@ public class ChatRequestDto {
          */
         private String imageBase64;
 
+        /**
+         * Optional MIME type for {@link #imageBase64}. The public request guard
+         * accepts only the bounded image allowlist.
+         */
+        @JsonProperty("imageMediaType")
+        @JsonAlias("image_media_type")
+        private String imageMediaType;
+
+        /**
+         * Optional source identifier for a single-image snapshot request.
+         * When non-null (e.g. "fold_camera", "file_pick"), the server treats this
+         * as an explicit vision request and preserves the image through the
+         * pipeline regardless of the global conversation.harmony.mode setting.
+         */
+        @JsonProperty("snapshotSource")
+        @JsonAlias("snapshot_source")
+        private String snapshotSource;
+
+        @JsonIgnore
+        public String resolvedImageMediaType() {
+                return imageMediaType == null || imageMediaType.isBlank()
+                                ? "image/png"
+                                : imageMediaType.trim().toLowerCase(java.util.Locale.ROOT);
+        }
+
         /** Optional list of attachment IDs associated with this message */
         private java.util.List<String> attachmentIds;
+
+        /**
+         * Server-bound identity used only to authorize attachment document reads.
+         * It is never accepted from or returned to the wire.
+         */
+        @JsonIgnore
+        @Getter(AccessLevel.NONE)
+        @Setter(AccessLevel.NONE)
+        private transient AttachmentOwnerIdentity attachmentOwnerIdentity;
+
+        @JsonIgnore
+        public AttachmentOwnerIdentity getAttachmentOwnerIdentity() {
+                return attachmentOwnerIdentity;
+        }
+
+        public void bindAttachmentOwnerIdentity(AttachmentOwnerIdentity ownerIdentity) {
+                this.attachmentOwnerIdentity = Objects.requireNonNull(ownerIdentity, "ownerIdentity");
+        }
+
+        /** Server authorization only; public session IDs and metadata cannot grant graph access. */
+        @JsonIgnore
+        @Getter(AccessLevel.NONE)
+        @Setter(AccessLevel.NONE)
+        private transient com.example.lms.service.rag.graph.GeneralGraphScope generalGraphScope;
+
+        @JsonIgnore
+        public com.example.lms.service.rag.graph.GeneralGraphScope getGeneralGraphScope() {
+                return generalGraphScope;
+        }
+
+        public void bindGeneralGraphScope(com.example.lms.service.rag.graph.GeneralGraphScope scope) {
+                this.generalGraphScope = scope;
+        }
 
         /* ───── Jackson Setter : 부작용 제거 ───── */
         /**
@@ -354,6 +425,18 @@ public class ChatRequestDto {
         @Setter(AccessLevel.NONE)
         @Builder.Default
         private transient java.lang.Boolean webSearchExplicit = null;
+
+        /**
+         * Server-only snapshot of the nullable retrieval flags before defaults or
+         * policy caps are applied. It intentionally carries no query or evidence.
+         */
+        @JsonIgnore
+        @Setter(AccessLevel.NONE)
+        private transient RetrievalRequestIntent retrievalRequestIntent;
+
+        public record RetrievalRequestIntent(Boolean webSearch, Boolean rag) {
+        }
+
         /**
          * Guard/profile mode for this request (e.g. SAFE, BRAVE, ZERO_BREAK, WILD).
          * Optional; when null the server may derive a profile from plan or defaults.
@@ -373,13 +456,23 @@ public class ChatRequestDto {
 
         /*
          * ----------------------------------------------------------------------
-         * Custom getters to preserve boolean semantics when using nullable flags.
-         * When the underlying wrapper is {@code null}, the default is considered
-         * {@code false}. These methods allow existing code calling
-         * {@code isUseRag()}, {@code isUseWebSearch()}, {@code isPolish()} and
-         * {@code isWebSearchExplicit()} to continue to work correctly after
-         * migrating the corresponding fields to nullable types.
+         * Custom getters preserve existing call-site names for nullable flags.
+         * Verification intentionally keeps null so the server default can apply;
+         * the other boolean-style getters continue treating null as false.
          */
+
+        /**
+         * Return the raw verification preference. Null means the caller omitted it.
+         *
+         * @return explicit true/false, or null to use the server default
+         */
+        public Boolean getUseVerification() {
+                return this.useVerification;
+        }
+
+        public boolean isUseVerification() {
+                return Boolean.TRUE.equals(this.useVerification);
+        }
 
         /**
          * Return whether vector retrieval is enabled. This returns

@@ -75,6 +75,12 @@ public class ConversationExportParser {
         if (value == null || value.length() <= max) {
             return value;
         }
-        return value.substring(0, Math.max(0, max));
+        int end = Math.max(0, max);
+        if (end > 0 && end < value.length()
+                && Character.isHighSurrogate(value.charAt(end - 1))
+                && Character.isLowSurrogate(value.charAt(end))) {
+            end--;
+        }
+        return value.substring(0, end);
     }
 }

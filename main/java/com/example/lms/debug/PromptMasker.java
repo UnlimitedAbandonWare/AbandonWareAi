@@ -24,13 +24,18 @@ public final class PromptMasker {
     private static final Pattern SUPABASE_KEY = Pattern.compile("sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}");
     private static final Pattern KAKAO_AUTH =
             Pattern.compile("(?i)\\bKakaoAK\\s+[A-Za-z0-9._~+/\\-]+=*");
-    private static final Pattern VENDOR_KEY_VALUE = Pattern.compile(
-            "(?i)\\b((?:groq|pinecone|tavily|brave|kakao|upstash|naver|serpapi|serp_api)[A-Za-z0-9_.-]*"
+    private static final String SECRET_FIELD_NAME =
+            "(?:groq|pinecone|tavily|brave|kakao|upstash|naver|serpapi|serp_api)[A-Za-z0-9_.-]*"
                     + "(?:api[-_]?key|key|token|secret|client[-_]?id|client[-_]?secret)"
                     + "|(?:api[-_]?key|client[-_]?secret|client[-_]?id|subscription[-_]?token|owner[-_]?token"
                     + "|access[-_]?token|refresh[-_]?token|auth[-_]?token|session[-_]?token"
-                    + "|token|secret|password|x[-_]?naver[-_]?client[-_]?(?:id|secret)|x[-_]?subscription[-_]?token))"
-                    + "\\s*([:=])\\s*([\"']?)([^\\s,;\"']{4,})(\\3)");
+                    + "|token|secret|password|x[-_]?naver[-_]?client[-_]?(?:id|secret)|x[-_]?subscription[-_]?token)";
+    private static final Pattern VENDOR_KEY_VALUE = Pattern.compile(
+            "(?i)(?<![A-Za-z0-9_])(" + SECRET_FIELD_NAME + ")"
+                    + "\\s*([:=])\\s*([^\\s,;\"']{4,})");
+    private static final Pattern QUOTED_KEY_VALUE = Pattern.compile(
+            "(?i)(?<![A-Za-z0-9_])([\"']?)(" + SECRET_FIELD_NAME + ")\\1"
+                    + "(\\s*[:=]\\s*)([\"'])((?:\\\\.|(?!\\4)[^\\\\])*+)\\4");
     // Accepts "Bearer <token>", case-insensitive; allows JWT/base64url charset.
     // Put '-' at the end of the class or escape as \\- to avoid illegal escape.
     private static final Pattern BEARER =
@@ -57,8 +62,11 @@ public final class PromptMasker {
             String g = m.group();
             return g.substring(0, Math.min(8, g.length())) + stars(Math.max(0, g.length() - 8));
         });
+        masked = QUOTED_KEY_VALUE.matcher(masked).replaceAll(m ->
+                m.group(1) + m.group(2) + m.group(1) + m.group(3) + m.group(4)
+                        + stars(m.group(5).length()) + m.group(4));
         masked = VENDOR_KEY_VALUE.matcher(masked).replaceAll(m ->
-                m.group(1) + m.group(2) + m.group(3) + stars(m.group(4).length()) + m.group(5));
+                m.group(1) + m.group(2) + stars(m.group(3).length()));
         masked = BEARER.matcher(masked).replaceAll(m -> {
             String g = m.group();
             return g.substring(0, Math.min(6, g.length())) + stars(Math.max(0, g.length() - 6));

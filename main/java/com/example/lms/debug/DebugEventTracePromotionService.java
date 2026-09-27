@@ -36,6 +36,13 @@ public class DebugEventTracePromotionService {
             "reactor.onErrorDropped.count", "reactor_on_error_dropped",
             "ctx.debugPort.suppressed.count", "debug_port_suppressed",
             "ctx.propagation.missing.count", "context_propagation_missing");
+    private static final Set<String> STAGE_BOUNDARY_STAGES = Set.of(
+            "request", "orchestration", "search", "prompt", "llm", "sse", "verification");
+    private static final Set<String> STAGE_BOUNDARY_FAILURE_CLASSES = Set.of(
+            "context-missing", "fallback", "catch", "provider-disabled", "timeout", "rate-limit",
+            "zero-result", "after-filter-starvation", "silent-failure");
+    private static final Set<String> VERIFICATION_JUDGE_LANES = Set.of(
+            "fact_status_classifier", "claim_verifier", "both");
     private static final int MAX_SUPPRESSED_EVENTS = 8;
 
     private final DebugEventStore debugEventStore;
@@ -97,8 +104,17 @@ public class DebugEventTracePromotionService {
         promoteExternalEvidence(phase, traceMeta, where);
         promoteQueryRewriteSuperTokens(phase, traceMeta, where);
         promoteLocalLlmOperatorAction(phase, traceMeta, where);
+        promoteStageBoundaryBreadcrumbs(phase, traceMeta, where);
         promoteSuppressedStages(phase, traceMeta, where);
         promoteFaultMaskCounters(phase, traceMeta, where);
+    }
+
+    public void promoteStageBoundaryBreadcrumbsOnly(
+            String phase, Map<String, Object> traceMeta, String where) {
+        if (debugEventStore == null || traceMeta == null || traceMeta.isEmpty()) {
+            return;
+        }
+        promoteStageBoundaryBreadcrumbs(phase, traceMeta, where);
     }
 
     private void promoteExternalEvidence(String phase, Map<String, Object> traceMeta, String where) {
@@ -323,6 +339,161 @@ public class DebugEventTracePromotionService {
                 where,
                 data,
                 null);
+    }
+
+    private void promoteStageBoundaryBreadcrumbs(String phase, Map<String, Object> traceMeta, String where) {
+        int emitted = 0;
+        for (Map.Entry<String, Object> entry : traceMeta.entrySet()) {
+            if (emitted >= MAX_SUPPRESSED_EVENTS) {
+                return;
+            }
+            String key = entry.getKey();
+            if (key == null || !key.startsWith("mla.breadcrumb.step.") || !(entry.getValue() instanceof Map<?, ?> row)) {
+                continue;
+            }
+            String keyStage = safeLabel(key.substring("mla.breadcrumb.step.".length()));
+            String rowStage = safeLabel(row.get("stage"));
+            if (!STAGE_BOUNDARY_STAGES.contains(keyStage)
+                    || (rowStage != null && !keyStage.equals(rowStage))) {
+                continue;
+            }
+            String boundaryStage = keyStage;
+            String failureClass = safeLabel(row.get("failureClass"));
+            if (failureClass == null || !STAGE_BOUNDARY_FAILURE_CLASSES.contains(failureClass)) {
+                continue;
+            }
+            String reasonCode = firstNonBlank(safeLabel(row.get("reasonCode")), failureClass);
+            if ("verification".equals(boundaryStage)
+                    && !isCoherentVerificationFailSoft(row, failureClass, reasonCode)) {
+                continue;
+            }
+
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("phase", safePhase(phase));
+            data.put("phaseStage", safePhase(phase));
+            data.put("stage", "stage_boundary");
+            data.put("boundaryStage", boundaryStage);
+            data.put("failureClass", failureClass);
+            data.put("reasonCode", reasonCode);
+            putIfPresent(data, "provider", safeLabel(row.get("provider")));
+            putIfPresent(data, "queryHash12", safeHash12(row.get("queryHash12")));
+            putIfPositive(data, "queryLength", row.get("queryLength"));
+            putIfPositive(data, "returnedCount", row.get("returnedCount"));
+            putIfPositive(data, "afterFilterCount", row.get("afterFilterCount"));
+            putIfPositive(data, "contextCount", row.get("contextCount"));
+            if ("verification".equals(boundaryStage)) {
+                data.put("layer", "verification.judge");
+                putVerificationFields(data, row);
+            }
+            data.put("promotedFromTraceStore", true);
+            String promotionMarker = boundaryPromotionMarker(data);
+            if (boundaryAlreadyPromoted(traceMeta, promotionMarker)) {
+                continue;
+            }
+
+            debugEventStore.emit(
+                    probeForBoundaryStage(boundaryStage),
+                    DebugEventLevel.WARN,
+                    "chat.stageBoundary." + safePhase(phase) + "." + SafeRedactor.hash12(boundaryStage + ":" + failureClass),
+                    "[AWX][trace] Stage-boundary breadcrumb promoted from TraceStore",
+                    where,
+                    data,
+                    null);
+            markBoundaryPromoted(promotionMarker);
+            emitted++;
+        }
+    }
+
+    private static DebugProbeType probeForBoundaryStage(String boundaryStage) {
+        return switch (safePhase(boundaryStage)) {
+            case "request" -> DebugProbeType.CONTEXT_PROPAGATION;
+            case "orchestration" -> DebugProbeType.ORCHESTRATION;
+            case "search" -> DebugProbeType.WEB_SEARCH;
+            case "prompt" -> DebugProbeType.PROMPT;
+            case "llm" -> DebugProbeType.MODEL_GUARD;
+            default -> DebugProbeType.GENERIC;
+        };
+    }
+
+    private static String boundaryPromotionMarker(Map<String, Object> data) {
+        Map<String, Object> projection = new LinkedHashMap<>();
+        for (String key : List.of(
+                "boundaryStage", "failureClass", "reasonCode", "provider", "queryHash12",
+                "queryLength", "returnedCount", "afterFilterCount", "contextCount", "status",
+                "judgeLane", "judgeFailSoftLaneCount", "judgeCallAttempted", "verificationOutcomeKnown", "redacted")) {
+            if (data.containsKey(key)) {
+                projection.put(key, data.get(key));
+            }
+        }
+        String stage = safePhase(String.valueOf(projection.get("boundaryStage")));
+        return "stageBoundary.promoted." + stage + "." + SafeRedactor.hash12(projection.toString());
+    }
+
+    private static void putVerificationFields(Map<String, Object> data, Map<?, ?> row) {
+        if ("fail_soft".equals(safeLabel(row.get("status")))) {
+            data.put("status", "fail_soft");
+        }
+        String judgeLane = safeLabel(row.get("judgeLane"));
+        if (judgeLane != null && VERIFICATION_JUDGE_LANES.contains(judgeLane)) {
+            data.put("judgeLane", judgeLane);
+        }
+        int judgeFailSoftLaneCount = intValue(row.get("judgeFailSoftLaneCount"), -1);
+        if (judgeFailSoftLaneCount >= 1 && judgeFailSoftLaneCount <= 2) {
+            data.put("judgeFailSoftLaneCount", judgeFailSoftLaneCount);
+        }
+        if (row.get("judgeCallAttempted") instanceof Boolean attempted) {
+            data.put("judgeCallAttempted", attempted);
+        }
+        if (Boolean.FALSE.equals(row.get("verificationOutcomeKnown"))) {
+            data.put("verificationOutcomeKnown", false);
+        }
+        if (Boolean.TRUE.equals(row.get("redacted"))) {
+            data.put("redacted", true);
+        }
+    }
+
+    private static boolean isCoherentVerificationFailSoft(
+            Map<?, ?> row, String failureClass, String reasonCode) {
+        if (!"fail_soft".equals(safeLabel(row.get("status")))
+                || !Boolean.FALSE.equals(row.get("verificationOutcomeKnown"))
+                || !Boolean.TRUE.equals(row.get("redacted"))) {
+            return false;
+        }
+        String judgeLane = safeLabel(row.get("judgeLane"));
+        int laneCount = intValue(row.get("judgeFailSoftLaneCount"), -1);
+        if (judgeLane == null || !VERIFICATION_JUDGE_LANES.contains(judgeLane)
+                || ("both".equals(judgeLane) ? laneCount != 2 : laneCount != 1)) {
+            return false;
+        }
+        return switch (reasonCode) {
+            case "judge_call_failed" -> "catch".equals(failureClass)
+                    && Boolean.TRUE.equals(row.get("judgeCallAttempted"));
+            case "judge_model_unavailable" -> "provider-disabled".equals(failureClass)
+                    && Boolean.FALSE.equals(row.get("judgeCallAttempted"));
+            case "judge_fail_soft" -> "fallback".equals(failureClass)
+                    && !row.containsKey("judgeCallAttempted");
+            default -> false;
+        };
+    }
+
+    private static boolean boundaryAlreadyPromoted(Map<String, Object> traceMeta, String marker) {
+        if (truthy(traceMeta.get(marker))) {
+            return true;
+        }
+        try {
+            return truthy(TraceStore.get(marker));
+        } catch (RuntimeException ignored) {
+            log.debug("[AWX][trace] stage-boundary promotion marker read suppressed");
+            return false;
+        }
+    }
+
+    private static void markBoundaryPromoted(String marker) {
+        try {
+            TraceStore.put(marker, true);
+        } catch (RuntimeException ignored) {
+            log.debug("[AWX][trace] stage-boundary promotion marker write suppressed");
+        }
     }
 
     private void promoteSuppressedStages(String phase, Map<String, Object> traceMeta, String where) {
@@ -614,6 +785,24 @@ public class DebugEventTracePromotionService {
             rows.add(row);
         }
         return List.copyOf(rows);
+    }
+
+    private static void putIfPresent(Map<String, Object> data, String key, Object value) {
+        if (value != null) {
+            data.put(key, value);
+        }
+    }
+
+    private static void putIfPositive(Map<String, Object> data, String key, Object value) {
+        int count = intValue(value, -1);
+        if (count >= 0) {
+            data.put(key, count);
+        }
+    }
+
+    private static String safeHash12(Object value) {
+        String hash = safeLabel(value);
+        return hash != null && hash.matches("[a-f0-9]{12}") ? hash : null;
     }
 
     private static boolean truthy(Object value) {

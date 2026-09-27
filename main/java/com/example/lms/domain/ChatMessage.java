@@ -6,6 +6,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import java.time.LocalDateTime;
+import java.util.Locale;
 
 
 
@@ -51,7 +52,7 @@ public class ChatMessage {
     /* 편의 생성자 (ChatHistoryService 등에서 사용) */
     public ChatMessage(ChatSession session, String role, String content) {
         this.session = session;
-        this.role    = role.toLowerCase();   // OpenAI 권장: 소문자
+        this.role    = role.toLowerCase(Locale.ROOT);   // OpenAI 권장: 소문자
         this.content = content;
     }
 }

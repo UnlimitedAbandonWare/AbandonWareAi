@@ -5,7 +5,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(prefix = "lms.debug.ai.history", name = "scheduled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "lms.debug.ai.history", name = "scheduled", havingValue = "true", matchIfMissing = false)
 public class DebugAiMetricsHistoryScheduler {
 
     private final DebugAiMetricsService service;

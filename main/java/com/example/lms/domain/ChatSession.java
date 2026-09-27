@@ -34,6 +34,11 @@ public class ChatSession {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /** Exact first message from this creation call only; never persisted or exposed. */
+    @Transient
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Long initialUserMessageId;
+
     /**
      * 대화의 제목 (보통 첫 번째 메시지로 생성)
      */

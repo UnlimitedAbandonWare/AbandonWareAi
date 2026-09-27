@@ -113,8 +113,8 @@ public class ConversationTopicTimelineBuilder {
             meta.put(VectorMetaKeys.META_VERIFICATION_NEEDED, "false");
         } else {
             meta.put(VectorMetaKeys.META_DOC_TYPE, "KB");
-            meta.put(VectorMetaKeys.META_VERIFIED, "true");
-            meta.put(VectorMetaKeys.META_VERIFICATION_NEEDED, "false");
+            meta.put(VectorMetaKeys.META_VERIFIED, "false");
+            meta.put(VectorMetaKeys.META_VERIFICATION_NEEDED, "true");
             meta.put(VectorMetaKeys.META_KB_DOMAIN, "conversation_archive");
             if (kind == ConversationMessageKind.LINK_ARTIFACT) {
                 meta.put(VectorMetaKeys.META_CITATION_URL_COUNT, 1);
@@ -202,7 +202,13 @@ public class ConversationTopicTimelineBuilder {
         if (value == null || value.length() <= max) {
             return value;
         }
-        return value.substring(0, Math.max(0, max));
+        int end = Math.max(0, max);
+        if (end > 0 && end < value.length()
+                && Character.isHighSurrogate(value.charAt(end - 1))
+                && Character.isLowSurrogate(value.charAt(end))) {
+            end--;
+        }
+        return value.substring(0, end);
     }
 
     public record ClassifiedRecord(ConversationMessageRecord record, ConversationNoiseClassifier.Decision decision) {

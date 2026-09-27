@@ -1,5 +1,7 @@
 package com.example.lms.domain.enums;
 
+import java.util.Locale;
+
 /**
  * 답변 모드: 시선1(FACT) vs 시선2(CREATIVE) vs 하이브리드(BALANCED)
  */
@@ -29,7 +31,7 @@ public enum AnswerMode {
         if (s == null || s.isBlank()) {
             return ALL_ROUNDER;
         }
-        String upper = s.trim().toUpperCase();
+        String upper = s.trim().toUpperCase(Locale.ROOT);
         return switch (upper) {
             case "ALL_ROUNDER", "ALLROUNDER", "AR" -> ALL_ROUNDER;
             case "FACT" -> FACT;

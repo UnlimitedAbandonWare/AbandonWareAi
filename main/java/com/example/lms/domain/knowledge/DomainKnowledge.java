@@ -31,7 +31,7 @@ public class DomainKnowledge {
     /**
      * 개체의 고유 이름 (예: "에스코피에", "푸리나")
      */
-    @Column(unique = true) // 도메인과 조합하여 유니크해야 함
+    @Column // 도메인과 조합하여 유니크해야 함
     private String entityName;
 
     /**

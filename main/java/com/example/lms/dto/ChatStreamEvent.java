@@ -31,8 +31,49 @@ public record ChatStreamEvent(
         ScoreDeltaSignal scoreDelta,
         PipelineSnapshot pipelineSnapshot,
         DebugFxSignal debugFxSignal,
-        List<TransformerBlockSignal> transformerBlocks
+        List<TransformerBlockSignal> transformerBlocks,
+        SelectionEntropySignal selectionEntropySignal,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        ChatResponseDto.GenerationTermination generationTermination
 ) {
+        public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
+                Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
+                List<RagEvidenceMetadata> evidence, StatusSignal statusSignal, TraceSignal traceSignal,
+                ScoreDeltaSignal scoreDelta, PipelineSnapshot pipelineSnapshot, DebugFxSignal debugFxSignal,
+                List<TransformerBlockSignal> transformerBlocks, SelectionEntropySignal selectionEntropySignal) {
+                this(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId, learningContext,
+                        evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot, debugFxSignal,
+                        transformerBlocks, selectionEntropySignal, null);
+        }
+
+        public static ChatStreamEvent terminal(ChatResponseDto response) {
+                return new ChatStreamEvent("final", response.getContent(), null, response.getModelUsed(),
+                        response.isRagUsed(), response.getSessionId(), null, null,
+                        response.getLearningContext(), response.getEvidence(), null, null, null, null,
+                        null, List.of(), null, response.getGenerationTermination());
+        }
+        public ChatStreamEvent(
+                String type,
+                String data,
+                String html,
+                String modelUsed,
+                Boolean ragUsed,
+                Long sessionId,
+                String answerMode,
+                Long traceTurnId,
+                LearningContextMetadata learningContext,
+                List<RagEvidenceMetadata> evidence,
+                StatusSignal statusSignal,
+                TraceSignal traceSignal,
+                ScoreDeltaSignal scoreDelta,
+                PipelineSnapshot pipelineSnapshot,
+                DebugFxSignal debugFxSignal,
+                List<TransformerBlockSignal> transformerBlocks) {
+                this(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId,
+                        learningContext, evidence, statusSignal, traceSignal, scoreDelta,
+                        pipelineSnapshot, debugFxSignal, transformerBlocks, null);
+        }
+
         public ChatStreamEvent {
                 learningContext = learningContext == null ? LearningContextMetadata.empty() : learningContext;
                 evidence = evidence == null ? List.of() : List.copyOf(evidence);
@@ -90,11 +131,25 @@ public record ChatStreamEvent(
                         blocks == null ? List.of() : List.copyOf(blocks));
         }
 
+        public static ChatStreamEvent selectionEntropy(SelectionEntropySignal signal) {
+                return new ChatStreamEvent("selection_entropy", null, null, null, null, null, null, null,
+                        LearningContextMetadata.empty(), List.of(), null, null, null, null, null,
+                        List.of(), signal);
+        }
+
         /**
          * Emit an early event carrying the resolved session id.
          */
         public static ChatStreamEvent sessionReady(Long sessionId) {
-                return new ChatStreamEvent("session", null, null, null, null, sessionId, null, null,
+                return sessionReady(sessionId, null);
+        }
+
+        /**
+         * Emit the resolved session together with an opaque exact-run capability.
+         * Existing clients safely ignore the additive data field.
+         */
+        public static ChatStreamEvent sessionReady(Long sessionId, String runToken) {
+                return new ChatStreamEvent("session", runToken, null, null, null, sessionId, null, null,
                         LearningContextMetadata.empty(), List.of(), null, null, null, null, null, List.of());
         }
 
@@ -150,6 +205,21 @@ public record ChatStreamEvent(
                         evidence == null ? List.of() : List.copyOf(evidence), null, null, null, pipelineSnapshot, null, List.of());
         }
 
+        public static ChatStreamEvent doneWithAnswer(
+                String answer,
+                String modelUsed,
+                boolean ragUsed,
+                Long sessionId,
+                String answerMode,
+                Long traceTurnId,
+                LearningContextMetadata learningContext,
+                List<RagEvidenceMetadata> evidence,
+                PipelineSnapshot pipelineSnapshot) {
+                return new ChatStreamEvent("final", answer, null, modelUsed, ragUsed, sessionId, answerMode,
+                        traceTurnId, learningContext == null ? LearningContextMetadata.empty() : learningContext,
+                        evidence == null ? List.of() : List.copyOf(evidence), null, null, null, pipelineSnapshot, null, List.of());
+        }
+
         public static ChatStreamEvent error(String msg) {
                 return new ChatStreamEvent("error", msg, null, null, null, null, null, null,
                         LearningContextMetadata.empty(), List.of(), null, null, null, null, null, List.of());
@@ -192,6 +262,30 @@ public record ChatStreamEvent(
                                               Long remainingMs, Long tookMs, Boolean cancelled) {
                         return new StatusSignal(phase, code, message, remainingMs, tookMs, cancelled);
                 }
+        }
+
+        /**
+         * Typed, allowlisted projection of request-scoped selection entropy.
+         * The replay reference is a validated 12-hex fingerprint, never the seed.
+         */
+        public record SelectionEntropySignal(
+                String schema,
+                String mode,
+                String algorithmVersion,
+                Boolean replayAccepted,
+                String coherenceStatus,
+                String replayReference,
+                String decisionDigest,
+                Integer decisionCount,
+                Integer drawCount,
+                Integer stableTieBreakCount,
+                Integer candidateDriftCount,
+                Integer routerDrawCount,
+                Integer strategyDrawCount,
+                Integer ensembleDrawCount,
+                Boolean completionOrderDeterministic,
+                String reasonCode
+        ) {
         }
 
         /**
@@ -320,8 +414,23 @@ public record ChatStreamEvent(
                 Double citationCoverage,
                 Double finalSigmoid,
                 String failureClass,
-                String disabledReason
+                String disabledReason,
+                String finalContextCountSource,
+                Boolean planWhenPresent,
+                String planWhen,
+                String planWhenPost,
+                Boolean planLateActivation,
+                List<PlanStageSnapshot> planStages
         ) {
+                public PipelineSnapshot(String planId, String route, String answerMode,
+                                        Long traceTurnId, Integer webCount, Integer vectorCount,
+                                        Integer finalContextCount, Double citationCoverage,
+                                        Double finalSigmoid, String failureClass, String disabledReason) {
+                        this(planId, route, answerMode, traceTurnId, webCount, vectorCount,
+                                finalContextCount, citationCoverage, finalSigmoid, failureClass,
+                                disabledReason, null, null, null, null, null, null);
+                }
+
                 public PipelineSnapshot {
                         planId = cleanSignal(planId);
                         route = cleanSignal(route);
@@ -334,7 +443,29 @@ public record ChatStreamEvent(
                         finalSigmoid = clamp01(finalSigmoid);
                         failureClass = cleanSignal(failureClass);
                         disabledReason = cleanReason(disabledReason);
+                        finalContextCountSource = "reported".equals(finalContextCountSource)
+                                || "web_vector_estimate".equals(finalContextCountSource)
+                                ? finalContextCountSource : null;
+                        planWhen = cleanPlanWhen(planWhen);
+                        planWhenPost = cleanPlanWhen(planWhenPost);
+                        planStages = planStages == null ? null : List.copyOf(planStages);
                 }
+        }
+
+        public record PlanStageSnapshot(String stage, String status, Integer count,
+                                        Long durationMs, String reason) {
+                public PlanStageSnapshot {
+                        stage = cleanSignal(stage);
+                        status = cleanSignal(status);
+                        count = nonNegative(count);
+                        durationMs = nonNegative(durationMs);
+                        reason = cleanReason(reason);
+                }
+        }
+
+        private static String cleanPlanWhen(String value) {
+                return "true".equals(value) || "false".equals(value) || "unknown".equals(value)
+                        ? value : null;
         }
 
         private static Integer nonNegative(Integer value) {
@@ -390,7 +521,7 @@ public record ChatStreamEvent(
                 java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();
                 value.forEach((k, v) -> {
                         String key = cleanSignal(k);
-                        if (key != null && out.size() < 20) {
+                        if (key != null && out.size() < 32) {
                                 String safeValue = cleanSignal(v);
                                 out.put(key, safeValue == null ? "" : safeValue);
                         }

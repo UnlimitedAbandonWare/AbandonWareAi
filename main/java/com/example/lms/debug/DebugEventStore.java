@@ -4,6 +4,8 @@ import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -23,9 +25,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * In-memory store for structured {@link DebugEvent}.
@@ -50,17 +60,33 @@ public class DebugEventStore {
 
     private static final Logger JSON_LOG = LoggerFactory.getLogger("DEBUG_EVENT_JSON");
     private static final Logger LOG = LoggerFactory.getLogger(DebugEventStore.class);
+    private static final int DEFAULT_NDJSON_QUEUE_CAPACITY = 256;
+    private static final int MAX_NDJSON_QUEUE_CAPACITY = 8_192;
+    private static final long NDJSON_KEEP_ALIVE_SECONDS = 5L;
+    private static final long NDJSON_SHUTDOWN_WAIT_SECONDS = 1L;
+    private static final AtomicInteger NDJSON_THREAD_SEQUENCE = new AtomicInteger();
 
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final Deque<DebugEvent> ring = new ConcurrentLinkedDeque<>();
     private final Map<String, AggState> byFingerprint = new ConcurrentHashMap<>();
+    private final Object aggregateStateMutex = new Object();
+    private final Object ndjsonExecutorMutex = new Object();
+    private final NdjsonLineWriter ndjsonLineWriter;
+    private final ThreadFactory ndjsonThreadFactory;
+    private final AtomicLong ndjsonDropped = new AtomicLong();
+    private long aggregateTouchOrder;
+    private volatile ThreadPoolExecutor ndjsonExecutor;
+    private volatile boolean ndjsonWriterClosed;
 
     @Value("${lms.debug.events.enabled:true}")
     private boolean enabled = true;
 
     @Value("${lms.debug.events.max-size:600}")
     private int maxSize = 600;
+
+    @Value("${lms.debug.events.rate.max-fingerprints:0}")
+    private int maxFingerprints;
 
     @Value("${lms.debug.events.rate.window-ms:60000}")
     private long windowMs = 60_000L;
@@ -77,7 +103,17 @@ public class DebugEventStore {
     @Value("${abandonware.debug.ndjson.enabled:true}")
     private boolean ndjsonEnabled = true;
 
+    @Value("${abandonware.debug.ndjson.queue-capacity:256}")
+    private int ndjsonQueueCapacity = DEFAULT_NDJSON_QUEUE_CAPACITY;
+
     public DebugEventStore() {
+        this(DEFAULT_NDJSON_QUEUE_CAPACITY, DebugEventStore::writeNdjsonLine, daemonNdjsonThreadFactory());
+    }
+
+    DebugEventStore(int configuredQueueCapacity, NdjsonLineWriter ndjsonLineWriter, ThreadFactory threadFactory) {
+        this.ndjsonQueueCapacity = normalizeNdjsonQueueCapacity(configuredQueueCapacity);
+        this.ndjsonLineWriter = Objects.requireNonNull(ndjsonLineWriter, "ndjsonLineWriter");
+        this.ndjsonThreadFactory = Objects.requireNonNull(threadFactory, "threadFactory");
         // Ensure Java time types (Instant) are serializable in JSON logs.
         // Without this, DebugEvent JSON emission can silently fail and remove observability.
         try {
@@ -114,9 +150,10 @@ public class DebugEventStore {
         if (!enabled)
             return;
         DebugProbeType p = (probe == null) ? DebugProbeType.GENERIC : probe;
-        String fp = (fingerprint == null || fingerprint.isBlank())
+        String selectedFingerprint = (fingerprint == null || fingerprint.isBlank())
                 ? defaultFingerprint(p, message, error)
                 : fingerprint;
+        String fp = SafeRedactor.hashValue(selectedFingerprint);
 
         long nowMs = System.currentTimeMillis();
         AggDecision decision = decide(fp, nowMs, message, level, error, data);
@@ -235,21 +272,23 @@ public class DebugEventStore {
         int lim = Math.max(1, Math.min(limit, 500));
         List<Map<String, Object>> out = new ArrayList<>();
         long now = System.currentTimeMillis();
-        for (Map.Entry<String, AggState> e : byFingerprint.entrySet()) {
-            AggState a = e.getValue();
-            if (a == null)
-                continue;
-            AggSnapshot s = a.snapshot(now, windowMs);
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("fingerprint", e.getKey());
-            m.put("windowCount", s.windowCount);
-            m.put("suppressedInWindow", s.suppressed);
-            m.put("windowAgeMs", s.windowAgeMs);
-            m.put("total", s.total);
-            m.put("totalSuppressed", s.totalSuppressed);
-            m.put("lastMessage", safeStr(s.lastMessage));
-            m.put("lastError", safeStr(s.lastError));
-            out.add(m);
+        synchronized (aggregateStateMutex) {
+            for (Map.Entry<String, AggState> e : byFingerprint.entrySet()) {
+                AggState a = e.getValue();
+                if (a == null)
+                    continue;
+                AggSnapshot s = a.snapshot(now, windowMs);
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("fingerprint", e.getKey());
+                m.put("windowCount", s.windowCount);
+                m.put("suppressedInWindow", s.suppressed);
+                m.put("windowAgeMs", s.windowAgeMs);
+                m.put("total", s.total);
+                m.put("totalSuppressed", s.totalSuppressed);
+                m.put("lastMessage", safeStr(s.lastMessage));
+                m.put("lastError", safeStr(s.lastError));
+                out.add(m);
+            }
         }
         out.sort(Comparator
                 .comparingLong((Map<String, Object> m) -> ((Number) m.getOrDefault("windowCount", 0)).longValue())
@@ -285,6 +324,7 @@ public class DebugEventStore {
         long lastEmitMs;
         long total;
         long totalSuppressed;
+        long lastTouchedOrder;
 
         String lastMessage;
         String lastError;
@@ -374,8 +414,74 @@ public class DebugEventStore {
             DebugEventLevel level,
             Throwable error,
             Map<String, Object> data) {
-        AggState st = byFingerprint.computeIfAbsent(fingerprint, fp -> new AggState());
-        return st.onEvent(nowMs, windowMs, maxPerWindow, flushIntervalMs, message, level, error, data);
+        synchronized (aggregateStateMutex) {
+            int capacity = effectiveMaxFingerprints();
+            AggState st = byFingerprint.get(fingerprint);
+            if (st == null) {
+                evictFingerprintStatesForAdmission(capacity);
+                st = new AggState();
+                byFingerprint.put(fingerprint, st);
+            }
+            st.lastTouchedOrder = nextAggregateTouchOrder();
+            trimFingerprintStatesToCapacity(capacity, fingerprint);
+            return st.onEvent(nowMs, windowMs, maxPerWindow, flushIntervalMs, message, level, error, data);
+        }
+    }
+
+    @PostConstruct
+    void validateConfiguration() {
+        if (maxSize <= 0) {
+            throw new IllegalStateException("debug_event_capacity_invalid");
+        }
+    }
+
+    private int effectiveMaxFingerprints() {
+        return maxFingerprints > 0 ? maxFingerprints : Math.max(1, maxSize);
+    }
+
+    private void evictFingerprintStatesForAdmission(int capacity) {
+        while (byFingerprint.size() >= capacity) {
+            Map.Entry<String, AggState> victim = leastRecentlyTouchedState(null);
+            byFingerprint.remove(victim.getKey(), victim.getValue());
+        }
+    }
+
+    private void trimFingerprintStatesToCapacity(int capacity, String protectedFingerprint) {
+        while (byFingerprint.size() > capacity) {
+            Map.Entry<String, AggState> victim = leastRecentlyTouchedState(protectedFingerprint);
+            byFingerprint.remove(victim.getKey(), victim.getValue());
+        }
+    }
+
+    private Map.Entry<String, AggState> leastRecentlyTouchedState(String protectedFingerprint) {
+        Map.Entry<String, AggState> victim = null;
+        for (Map.Entry<String, AggState> candidate : byFingerprint.entrySet()) {
+            if (Objects.equals(candidate.getKey(), protectedFingerprint)) {
+                continue;
+            }
+            if (victim == null
+                    || candidate.getValue().lastTouchedOrder < victim.getValue().lastTouchedOrder
+                    || (candidate.getValue().lastTouchedOrder == victim.getValue().lastTouchedOrder
+                            && candidate.getKey().compareTo(victim.getKey()) < 0)) {
+                victim = candidate;
+            }
+        }
+        return Objects.requireNonNull(victim, "fingerprint aggregate eviction candidate");
+    }
+
+    private long nextAggregateTouchOrder() {
+        if (aggregateTouchOrder == Long.MAX_VALUE) {
+            List<Map.Entry<String, AggState>> states = new ArrayList<>(byFingerprint.entrySet());
+            states.sort(Comparator
+                    .comparingLong((Map.Entry<String, AggState> e) -> e.getValue().lastTouchedOrder)
+                    .thenComparing(Map.Entry::getKey));
+            long next = 0L;
+            for (Map.Entry<String, AggState> state : states) {
+                state.getValue().lastTouchedOrder = ++next;
+            }
+            aggregateTouchOrder = next;
+        }
+        return ++aggregateTouchOrder;
     }
 
     // ---------------------------------------------------------------------
@@ -403,21 +509,133 @@ public class DebugEventStore {
         }
     }
 
-    private synchronized void mirrorNdjson(String jsonLine) {
+    private void mirrorNdjson(String jsonLine) {
         if (!ndjsonEnabled || jsonLine == null || jsonLine.isBlank()) {
             return;
         }
+
+        String directory = ndjsonDir == null || ndjsonDir.isBlank() ? "var/abnadon/debug" : ndjsonDir.trim();
+        String fileName = LocalDate.now().toString() + ".ndjson";
+        ThreadPoolExecutor executor = ndjsonExecutor();
+        if (executor == null) {
+            recordNdjsonDrop("writer_closed");
+            return;
+        }
+
         try {
-            String dir = ndjsonDir == null || ndjsonDir.isBlank() ? "var/abnadon/debug" : ndjsonDir.trim();
-            Path base = Path.of(dir);
-            Files.createDirectories(base);
-            Path file = base.resolve(LocalDate.now().toString() + ".ndjson");
-            Files.writeString(file, jsonLine + System.lineSeparator(),
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            executor.execute(() -> writeNdjson(directory, fileName, jsonLine));
+        } catch (RejectedExecutionException rejected) {
+            recordNdjsonDrop(executor.isShutdown() ? "writer_closed" : "queue_saturated");
+        }
+    }
+
+    private void writeNdjson(String directory, String fileName, String jsonLine) {
+        try {
+            ndjsonLineWriter.write(directory, fileName, jsonLine);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOG.debug("Failed to mirror DebugEvent NDJSON. errorHash={} errorLength={}",
+                    SafeRedactor.hashValue(messageOf(interrupted)), messageLength(interrupted));
         } catch (Exception e) {
             LOG.debug("Failed to mirror DebugEvent NDJSON. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
+    }
+
+    private ThreadPoolExecutor ndjsonExecutor() {
+        ThreadPoolExecutor current = ndjsonExecutor;
+        if (current != null) {
+            return current;
+        }
+        synchronized (ndjsonExecutorMutex) {
+            if (ndjsonWriterClosed) {
+                return null;
+            }
+            current = ndjsonExecutor;
+            if (current == null) {
+                current = new ThreadPoolExecutor(
+                        0,
+                        1,
+                        NDJSON_KEEP_ALIVE_SECONDS,
+                        TimeUnit.SECONDS,
+                        new ArrayBlockingQueue<>(normalizeNdjsonQueueCapacity(ndjsonQueueCapacity)),
+                        ndjsonThreadFactory,
+                        new ThreadPoolExecutor.AbortPolicy());
+                ndjsonExecutor = current;
+            }
+            return current;
+        }
+    }
+
+    private void recordNdjsonDrop(String reason) {
+        long dropped = ndjsonDropped.incrementAndGet();
+        if (dropped == 1L || (dropped & (dropped - 1L)) == 0L) {
+            LOG.warn("DebugEvent NDJSON line dropped reason={} droppedTotal={} queueCapacity={}",
+                    reason, dropped, normalizeNdjsonQueueCapacity(ndjsonQueueCapacity));
+        }
+    }
+
+    @PreDestroy
+    void shutdownNdjsonWriter() {
+        ThreadPoolExecutor current;
+        synchronized (ndjsonExecutorMutex) {
+            ndjsonWriterClosed = true;
+            current = ndjsonExecutor;
+        }
+        if (current == null) {
+            return;
+        }
+
+        current.shutdown();
+        try {
+            if (!current.awaitTermination(NDJSON_SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                current.shutdownNow();
+                current.awaitTermination(NDJSON_SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS);
+            }
+        } catch (InterruptedException interrupted) {
+            current.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    int ndjsonQueueSize() {
+        ThreadPoolExecutor current = ndjsonExecutor;
+        return current == null ? 0 : current.getQueue().size();
+    }
+
+    long ndjsonDroppedCount() {
+        return ndjsonDropped.get();
+    }
+
+    boolean awaitNdjsonWriterTermination(long timeout, TimeUnit unit) throws InterruptedException {
+        ThreadPoolExecutor current = ndjsonExecutor;
+        return current == null || current.awaitTermination(timeout, Objects.requireNonNull(unit, "unit"));
+    }
+
+    private static int normalizeNdjsonQueueCapacity(int configuredCapacity) {
+        int positive = configuredCapacity > 0 ? configuredCapacity : DEFAULT_NDJSON_QUEUE_CAPACITY;
+        return Math.min(positive, MAX_NDJSON_QUEUE_CAPACITY);
+    }
+
+    private static ThreadFactory daemonNdjsonThreadFactory() {
+        return task -> {
+            Thread thread = new Thread(task, "debug-event-ndjson-" + NDJSON_THREAD_SEQUENCE.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
+    private static void writeNdjsonLine(String directory, String fileName, String jsonLine) throws Exception {
+        Path base = Path.of(directory);
+        Files.createDirectories(base);
+        Path file = base.resolve(fileName);
+        Files.writeString(file, jsonLine + System.lineSeparator(),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    }
+
+    @FunctionalInterface
+    interface NdjsonLineWriter {
+        void write(String directory, String fileName, String jsonLine) throws Exception;
     }
 
     /**
@@ -567,6 +785,19 @@ public class DebugEventStore {
 
     private static void traceSuppressed(String stage, Throwable error) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
+        String errorType = SafeRedactor.traceLabelOrFallback(
+                error == null ? null : error.getClass().getSimpleName(),
+                "unknown");
+        try {
+            TraceStore.put("debugEvent.store.suppressed.stage", safeStage);
+            TraceStore.put("debugEvent.store.suppressed.errorType", errorType);
+            TraceStore.put("debugEvent.store.suppressed." + safeStage, true);
+            TraceStore.put("debugEvent.store.suppressed." + safeStage + ".errorType", errorType);
+            TraceStore.inc("debugEvent.store.suppressed.count");
+            TraceStore.inc("debugEvent.store.suppressed." + safeStage + ".count");
+        } catch (Throwable traceError) {
+            traceContextFallbackSkipped("debugEventStore.traceSuppressed", traceError);
+        }
         LOG.debug("DebugEvent suppressed stage={} errorHash={} errorLength={}",
                 safeStage,
                 SafeRedactor.hashValue(messageOf(error)),
@@ -632,6 +863,9 @@ public class DebugEventStore {
             case EXTERNAL_EVIDENCE -> {
                 out.putIfAbsent("kind", "external_evidence");
             }
+            case TRACE_MEMORY -> {
+                out.putIfAbsent("kind", "trace_memory");
+            }
             default -> {
             }
         }
@@ -670,7 +904,7 @@ public class DebugEventStore {
         private final String message;
         private final long startMs;
         private final Map<String, Object> base;
-        private volatile boolean done;
+        private final AtomicBoolean done = new AtomicBoolean();
 
         private ProbeScope(DebugEventStore store,
                 DebugProbeType probe,
@@ -690,9 +924,8 @@ public class DebugEventStore {
         }
 
         public void success(Map<String, Object> extra) {
-            if (done)
+            if (!done.compareAndSet(false, true))
                 return;
-            done = true;
             if (store == null)
                 return;
             Map<String, Object> d = new LinkedHashMap<>(base);
@@ -703,9 +936,8 @@ public class DebugEventStore {
         }
 
         public void failure(Throwable t, Map<String, Object> extra) {
-            if (done)
+            if (!done.compareAndSet(false, true))
                 return;
-            done = true;
             if (store == null)
                 return;
             Map<String, Object> d = new LinkedHashMap<>(base);
