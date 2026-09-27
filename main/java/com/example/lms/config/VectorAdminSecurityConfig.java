@@ -21,6 +21,15 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @Configuration
 public class VectorAdminSecurityConfig {
 
+    @Value("${security.force-https:false}")
+    private boolean forceHttps;
+
+    @Value("${server.http-port:80}")
+    private int httpPort;
+
+    @Value("${server.https-port:443}")
+    private int httpsPort;
+
     @Bean
     public VectorAdminTokenFilter vectorAdminTokenFilter(@Value("${vector.admin.token:}") String token) {
         return new VectorAdminTokenFilter(token);
@@ -60,6 +69,13 @@ public class VectorAdminSecurityConfig {
                 .requestCache(cache -> cache.disable())
                 .formLogin(fl -> fl.disable())
                 .logout(lo -> lo.disable());
+
+        if (forceHttps) {
+            if (httpPort > 0 && httpsPort > 0 && httpPort != httpsPort) {
+                http.portMapper(mapper -> mapper.http(httpPort).mapsTo(httpsPort));
+            }
+            http.requiresChannel(channel -> channel.anyRequest().requiresSecure());
+        }
 
         return http.build();
     }

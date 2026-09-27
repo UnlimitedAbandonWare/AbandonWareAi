@@ -17,6 +17,7 @@ import reactor.core.publisher.Mono;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
@@ -67,8 +68,6 @@ public class WebClientConfig {
     @Value("${naver.search.api-base-url:${NAVER_SEARCH_API_BASE_URL:https://openapi.naver.com}}")
     private String naverSearchApiBaseUrl;
 
-    @Value("${google.translate.base-url:https://translation.googleapis.com}")
-    private String googleTranslateBaseUrl;
 
     /**
      * 湲곕낯 WebClient (baseUrl ?놁쓬).
@@ -83,13 +82,6 @@ public class WebClientConfig {
         return builder.build();
     }
 
-    /** Google Translate API??WebClient */
-    @Bean(name = "googleTranslateWebClient")
-    public WebClient googleTranslateWebClient(WebClient.Builder builder) {
-        return builder
-                .baseUrl(googleTranslateBaseUrl)
-                .build();
-    }
 
     /* ---------- Channel 怨듯넻 而ㅻ꽖??---------- */
     private ReactorClientHttpConnector messageGatewayConnector() {
@@ -231,6 +223,10 @@ public class WebClientConfig {
                 .clientConnector(messageGatewayConnector())
                 .baseUrl(messageGatewayProps.getApiBaseUrl())
                 .build();
+    }
+
+    private static int safeTimeoutMs(int configuredMs) {
+        return configuredMs > 0 ? configuredMs : 3000;
     }
 
     /**

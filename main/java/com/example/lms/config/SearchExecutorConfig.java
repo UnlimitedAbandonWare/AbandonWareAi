@@ -29,6 +29,18 @@ public class SearchExecutorConfig {
     @Value("${search.executor.io.keep-alive-seconds:60}")
     private long searchIoKeepAliveSeconds;
 
+    @Value("${rag.graph.executor.workers:4}")
+    private int ragGraphWorkers = 4;
+
+    @Value("${rag.graph.executor.queue-capacity:32}")
+    private int ragGraphQueueCapacity = 32;
+
+    @Value("${rag.endpoint.executor.workers:8}")
+    private int ragEndpointWorkers = 8;
+
+    @Value("${rag.endpoint.executor.queue-capacity:64}")
+    private int ragEndpointQueueCapacity = 64;
+
     /**
      * Executor for "fast" LLM utilities (query transform, analysis, etc.).
      *
@@ -84,6 +96,65 @@ public class SearchExecutorConfig {
                     t.setDaemon(true);
                     return t;
                 });
+        return new ContextAwareExecutorService(delegate);
+    }
+
+    /**
+     * Dedicated bounded runtime for LangGraph work. Rejection is surfaced to
+     * RagGraphExecutor so it can fail soft without running graph work inline.
+     */
+    @Bean(name = "ragGraphWorkerExecutor", destroyMethod = "shutdown")
+    public ExecutorService ragGraphWorkerExecutor() {
+        int workers = Math.min(64, Math.max(1, ragGraphWorkers));
+        int queueCapacity = Math.min(4096, Math.max(0, ragGraphQueueCapacity));
+        java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger();
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable,
+                    "awx-rag-graph-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+        BlockingQueue<Runnable> queue = queueCapacity == 0
+                ? new SynchronousQueue<>()
+                : new ArrayBlockingQueue<>(queueCapacity);
+        ExecutorService delegate = new ThreadPoolExecutor(
+                workers,
+                workers,
+                0L,
+                TimeUnit.MILLISECONDS,
+                queue,
+                threadFactory,
+                new ThreadPoolExecutor.AbortPolicy());
+        return new ContextAwareExecutorService(delegate);
+    }
+
+    /**
+     * Dedicated bounded runtime for the complete public RAG endpoint call. This
+     * pool must stay separate from {@code ragGraphWorkerExecutor}: PRIMARY mode
+     * can submit graph work and wait for it from inside this endpoint task.
+     */
+    @Bean(name = "ragEndpointExecutor", destroyMethod = "shutdown")
+    public ExecutorService ragEndpointExecutor() {
+        int workers = Math.min(64, Math.max(1, ragEndpointWorkers));
+        int queueCapacity = Math.min(4096, Math.max(0, ragEndpointQueueCapacity));
+        java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger();
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable,
+                    "awx-rag-endpoint-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+        BlockingQueue<Runnable> queue = queueCapacity == 0
+                ? new SynchronousQueue<>()
+                : new ArrayBlockingQueue<>(queueCapacity);
+        ExecutorService delegate = new ThreadPoolExecutor(
+                workers,
+                workers,
+                0L,
+                TimeUnit.MILLISECONDS,
+                queue,
+                threadFactory,
+                new ThreadPoolExecutor.AbortPolicy());
         return new ContextAwareExecutorService(delegate);
     }
 

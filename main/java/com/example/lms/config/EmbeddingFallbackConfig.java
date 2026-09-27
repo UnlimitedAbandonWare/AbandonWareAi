@@ -32,12 +32,14 @@ import java.time.Duration;
  */
 @Configuration
 public class EmbeddingFallbackConfig {
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.llm.ModelRuntimeHealthTracker apiFailureHealthTracker;
 
     private static final Logger log = LoggerFactory.getLogger(EmbeddingFallbackConfig.class);
 
     @Bean("backupEmbeddingModel")
     @ConditionalOnMissingBean(name = "backupEmbeddingModel")
-    @ConditionalOnProperty(name = "embedding.fallback.enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(name = "embedding.fallback.enabled", havingValue = "true", matchIfMissing = false)
     @Conditional(EmbeddingFallbackKeyPresentCondition.class)
     public EmbeddingModel backupEmbeddingModel(
             ObjectProvider<DebugEventStore> debugEvents,
@@ -56,6 +58,9 @@ public class EmbeddingFallbackConfig {
         String bu = normalizeBaseUrl(baseUrl);
 
         var b = OpenAiEmbeddingModel.builder()
+                .httpClientBuilder(apiFailureHealthTracker == null
+                        ? dev.langchain4j.http.client.HttpClientBuilderLoader.loadHttpClientBuilder()
+                        : apiFailureHealthTracker.observedHttpClientBuilder("fallback"))
                 .apiKey(key)
                 .modelName(m);
 

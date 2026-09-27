@@ -5,13 +5,19 @@ import com.abandonware.ai.agent.consent.BasicConsentService;
 import com.abandonware.ai.agent.consent.ConsentService;
 import com.abandonware.ai.agent.contract.ContractValidator;
 import com.abandonware.ai.agent.contract.ToolManifestCatalog;
+import com.abandonware.ai.agent.integrations.HybridRetriever;
 import com.abandonware.ai.agent.policy.ToolPolicyEnforcer;
 import com.abandonware.ai.agent.tool.AgentTool;
 import com.abandonware.ai.agent.tool.AgentToolArtifactWriter;
 import com.abandonware.ai.agent.tool.AgentToolInvoker;
 import com.abandonware.ai.agent.tool.ToolRegistry;
+import com.abandonware.ai.agent.tool.impl.ops.CausalProbeEvaluateTool;
 import com.abandonware.ai.agent.tool.impl.ops.ConfigInspectTool;
 import com.abandonware.ai.agent.tool.impl.ops.DebugTraceLookupTool;
+import com.abandonware.ai.agent.tool.impl.ops.CounterEvidenceRetrieveTool;
+import com.abandonware.ai.agent.tool.impl.ops.CounterEvidencePacketStore;
+import com.abandonware.ai.agent.tool.impl.ops.OperatorProbeAuthorityStore;
+import com.abandonware.ai.agent.tool.impl.ops.EvidenceCoherenceVerifyTool;
 import com.abandonware.ai.agent.tool.impl.ops.FailurePatternRecallTool;
 import com.abandonware.ai.agent.tool.impl.ops.FailurePatternRecordTool;
 import com.abandonware.ai.agent.tool.impl.ops.FailurePatternScanTool;
@@ -28,6 +34,8 @@ import com.example.lms.artplate.NineArtPlateGate;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.ai.DebugAiMetricsService;
 import com.example.lms.moe.RgbStrategySelector;
+import com.example.lms.search.probe.CausalProbeTriggerService;
+import com.example.lms.service.rag.energy.ContradictionScorer;
 import com.example.lms.service.rag.handler.KnowledgeGraphHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.ObjectProvider;
@@ -179,5 +187,44 @@ public class AgentToolOpsConfig {
     @Bean
     public FailurePatternRecordTool failurePatternRecordTool(FailurePatternMemoryService service) {
         return new FailurePatternRecordTool(service);
+    }
+
+    @Bean
+    public OperatorProbeAuthorityStore operatorProbeAuthorityStore() {
+        return new OperatorProbeAuthorityStore();
+    }
+
+    @Bean
+    public CausalProbeEvaluateTool causalProbeEvaluateTool(CausalProbeTriggerService service,
+                                                           OperatorProbeAuthorityStore authorityStore) {
+        return new CausalProbeEvaluateTool(service, authorityStore);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(HybridRetriever.class)
+    public HybridRetriever agentToolHybridRetriever() {
+        return new HybridRetriever();
+    }
+
+    @Bean
+    public CounterEvidencePacketStore counterEvidencePacketStore() {
+        return new CounterEvidencePacketStore();
+    }
+
+    @Bean
+    public CounterEvidenceRetrieveTool counterEvidenceRetrieveTool(HybridRetriever retriever,
+                                                                   CounterEvidencePacketStore packetStore,
+                                                                   ObjectProvider<ContradictionScorer> scorerProvider,
+                                                                   OperatorProbeAuthorityStore authorityStore) {
+        return new CounterEvidenceRetrieveTool(
+                retriever,
+                packetStore,
+                scorerProvider.getIfAvailable(ContradictionScorer::new),
+                authorityStore);
+    }
+
+    @Bean
+    public EvidenceCoherenceVerifyTool evidenceCoherenceVerifyTool(CounterEvidencePacketStore packetStore) {
+        return new EvidenceCoherenceVerifyTool(packetStore);
     }
 }

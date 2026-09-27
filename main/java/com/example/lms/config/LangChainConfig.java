@@ -3,6 +3,7 @@ package com.example.lms.config;
 import ai.abandonware.nova.orch.llm.ExpectedFailureChatModel;
 import ai.abandonware.nova.orch.llm.ModelGuardSupport;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.llm.ModelRuntimeHealthTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -61,6 +62,13 @@ import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore; // fallb
 @Configuration
 @EnableConfigurationProperties(PineconeProps.class)
 public class LangChainConfig {
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ModelRuntimeHealthTracker apiFailureHealthTracker;
+
+    private dev.langchain4j.http.client.HttpClientBuilder apiObservedHttpClientBuilder() {
+        return apiFailureHealthTracker == null ? dev.langchain4j.http.client.HttpClientBuilderLoader.loadHttpClientBuilder()
+                : apiFailureHealthTracker.observedHttpClientBuilder("primary");
+    }
     private static final Logger log = LoggerFactory.getLogger(LangChainConfig.class);
 
     /**
@@ -106,8 +114,10 @@ public class LangChainConfig {
     @Value("${embedding.model:${pinecone.embedding-model:text-embedding-3-small}}")
     private String embeddingModelName;
 
-    @Value("${embedding.provider:ollama}")
+    @Value("${embedding.provider:${embeddings.provider:ollama}}")
     private String embeddingProvider;
+    @Value("${embeddings.provider:}")
+    private String legacyEmbeddingProvider;
 
     @Value("${embedding.base-url:http://localhost:11434/api/embed}")
     private String embeddingBaseUrl;
@@ -175,12 +185,18 @@ public class LangChainConfig {
     public ChatModel moeChatModel(
             // Default to gpt-4 for the MOE recommender model
             @Value("${openai.chat.model.moe:gpt-4}") String moeModel,
-            @Value("${openai.chat.temperature.recommender:0.2}") double recTemp) {
+            @Value("${openai.chat.temperature.recommender:0.2}") double recTemp,
+            ModelRuntimeHealthTracker modelRuntimeHealthTracker) {
         String key = usableOpenAiKey();
         if (key == null) {
-            return missingOpenAiKeyChatModel(moeModel, "MOE_CHAT(no_api_key)");
+            return missingOpenAiKeyChatModel(
+                    moeModel,
+                    "MOE_CHAT(no_api_key)",
+                    recTemp,
+                    modelRuntimeHealthTracker);
         }
         return OpenAiChatModel.builder()
+                .httpClientBuilder(apiObservedHttpClientBuilder())
                 .apiKey(key)
                 .modelName(moeModel)
                 .temperature(recTemp)
@@ -193,7 +209,8 @@ public class LangChainConfig {
     public EmbeddingModel embeddingModel(OllamaEmbeddingModel ollamaEmbeddingModel,
             com.example.lms.vector.EmbeddingFingerprint embeddingFingerprint) {
 
-        String provider = (embeddingProvider == null ? "" : embeddingProvider.trim().toLowerCase());
+        String provider = com.example.lms.vector.EmbeddingFingerprint.resolveProvider(
+                embeddingProvider, legacyEmbeddingProvider);
 
         EmbeddingModel delegate;
 
@@ -205,8 +222,10 @@ public class LangChainConfig {
                             "[AWX][embedding][openai] disabled reason=missing_openai_api_key");
                 }
                 delegate = OpenAiEmbeddingModel.builder()
+                        .httpClientBuilder(apiObservedHttpClientBuilder())
                         .apiKey(key)
                         .modelName(embeddingModelName)
+                        .dimensions(embeddingDimensions)
                         .timeout(Duration.ofSeconds(openAiTimeoutSec))
                         .build();
                 break;
@@ -217,10 +236,14 @@ public class LangChainConfig {
                 break;
 
             case "ollama":
-            default:
                 // ??れ삀???筌? ?棺??짆?쏆춾?Ollama /api/embed
                 delegate = ollamaEmbeddingModel;
                 break;
+            case "hf":
+                // The legacy HF component has no verified primary endpoint/vector-shape contract.
+                throw new IllegalArgumentException("embedding_provider_hf_unsupported");
+            default:
+                throw new IllegalArgumentException("embedding_provider_unknown");
         }
 
         // Shared embedding cache/decorator layer.
@@ -244,13 +267,11 @@ public class LangChainConfig {
     @Lazy
     public EmbeddingStore<TextSegment> pineconeEmbeddingStore(
             PineconeProps p,
-            com.example.lms.vector.EmbeddingFingerprint embeddingFingerprint) {
-        if (vectorStoreFailfast) {
-            throw new IllegalStateException(
-                    "Pinecone store requested but no LangChain4j 1.0.1 Pinecone adapter is available on the classpath");
-        }
-        log.warn("Pinecone store requested but no LangChain4j 1.0.1 Pinecone adapter is available; using InMemoryEmbeddingStore");
-        EmbeddingStore<TextSegment> base = new InMemoryEmbeddingStore<>();
+            com.example.lms.vector.EmbeddingFingerprint embeddingFingerprint,
+            @Qualifier("defaultWebClient") WebClient webClient,
+            @Value("${pinecone.timeout-ms:3000}") long timeoutMs) {
+        EmbeddingStore<TextSegment> base = new com.example.lms.service.vector.PineconeVectorStoreAdapter(
+                webClient, p, embeddingFingerprint, Duration.ofMillis(Math.max(100, Math.min(10000, timeoutMs))));
 
         // Prevent cross-embedding-model contamination by stamping and filtering using
         // the current embedding fingerprint.
@@ -300,6 +321,9 @@ public class LangChainConfig {
                     .getIfAvailable(() -> new InMemoryEmbeddingStore<>());
 
             private final EmbeddingStore<TextSegment> writer = chooseWriter(pineconeOrMemory);
+
+            private final EmbeddingStore<TextSegment> guardedWriter = new com.example.lms.vector.FingerprintAwareEmbeddingStore(
+                    writer, embeddingFingerprint);
 
             private final EmbeddingStore<TextSegment> reader = new com.example.lms.vector.FingerprintAwareEmbeddingStore(
                     (upstash != null && upstash.isConfigured()) ? upstash : writer,
@@ -399,6 +423,8 @@ public class LangChainConfig {
 
 
             private boolean strictWrite(java.util.List<TextSegment> segments) {
+                // A selected persistent backend must never report a failed write as persisted.
+                if ("pinecone".equalsIgnoreCase(vectorStoreChoice)) return true;
                 try {
                     if (segments == null || segments.isEmpty()) {
                         return false;
@@ -739,13 +765,13 @@ public class LangChainConfig {
                     // If Upstash is not configured or returns no matches, fall back to the writer
                     // store.
                     if (result == null || result.matches() == null || result.matches().isEmpty()) {
-                        return writer.search(request);
+                        return upstash != null && upstash.isConfigured() ? guardedWriter.search(request) : result;
                     }
 
                     // emb_fp 癲ル슢?????좊읈? ??? ??ш끽維곲?legacy)?????Writer ?濡ろ뜏??????Β?띾쭡
                     if (embeddingFingerprint != null
                             && looksLikeLegacyFingerprint(result)) {
-                        EmbeddingSearchResult<TextSegment> writerRes = writer.search(request);
+                        EmbeddingSearchResult<TextSegment> writerRes = guardedWriter.search(request);
                         if (writerRes != null && writerRes.matches() != null && !writerRes.matches().isEmpty()) {
                             log.info("[VectorFP] Upstash returned segments without emb_fp; preferring writer results.");
                             return writerRes;
@@ -757,7 +783,8 @@ public class LangChainConfig {
                     // Fail-soft: log the error and delegate to Pinecone
                     log.warn("vector query degraded. errorHash={} errorLength={}",
                             SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-                    return writer.search(request);
+                    if (upstash != null && upstash.isConfigured()) return guardedWriter.search(request);
+                    return new EmbeddingSearchResult<>(List.of());
                 }
             }
 
@@ -826,17 +853,32 @@ public class LangChainConfig {
     // (???ャ뀕?? ???ャ뀖??ChatModel - ??れ삀???chatModel????影?얠맽 ?釉뚰??? ????볥윞 Primary??????닳뵣 ??
     @Bean("utilityChatModel")
     @ConditionalOnMissingBean(ChatModel.class)
-    public ChatModel utilityChatModel(@Value("${lms.use-rag:true}") boolean useRagDefault) {
+    public ChatModel utilityChatModel(
+            @Value("${lms.use-rag:true}") boolean useRagDefault,
+            ModelRuntimeHealthTracker modelRuntimeHealthTracker) {
         String key = usableOpenAiKey();
         if (key == null) {
-            return missingOpenAiKeyChatModel(chatModelName, "UTILITY_CHAT(no_api_key)");
+            return missingOpenAiKeyChatModel(
+                    chatModelName,
+                    "UTILITY_CHAT(no_api_key)",
+                    useRagDefault ? chatTemperature : 0.0d,
+                    modelRuntimeHealthTracker);
         }
         return OpenAiChatModel.builder()
+                .httpClientBuilder(apiObservedHttpClientBuilder())
                 .apiKey(key)
                 .modelName(chatModelName)
                 .temperature(useRagDefault ? chatTemperature : 0.0)
                 .timeout(Duration.ofSeconds(openAiTimeoutSec))
                 .build();
+    }
+
+    public ChatModel moeChatModel(String moeModel, double recTemp) {
+        return moeChatModel(moeModel, recTemp, new ModelRuntimeHealthTracker());
+    }
+
+    public ChatModel utilityChatModel(boolean useRagDefault) {
+        return utilityChatModel(useRagDefault, new ModelRuntimeHealthTracker());
     }
 
     @Bean
@@ -848,7 +890,7 @@ public class LangChainConfig {
     @Bean
     public CachedWebSearch cachedWebSearch(java.util.List<WebSearchProvider> providers) {
         if (providers == null || providers.isEmpty()) {
-            log.info("[AWX][search][cached] providers=0 disabledReason=no_web_search_providers multiSearch=no-op");
+            log.info("[AWX][search][cached] supplementalProviders=0 disabledReason=supplemental_multi_search_providers_disabled primarySearch=hybrid multiSearch=no-op");
         } else {
             try {
                 log.info("[Wiring] CachedWebSearch providers: {}", providers.stream().map(WebSearchProvider::id).toList());
@@ -863,14 +905,38 @@ public class LangChainConfig {
         return ConfigValueGuards.isMissing(openAiKey) ? null : openAiKey.trim();
     }
 
-    private ChatModel missingOpenAiKeyChatModel(String modelName, String actionTaken) {
+    private ChatModel missingOpenAiKeyChatModel(
+            String modelName,
+            String actionTaken,
+            double temperature,
+            ModelRuntimeHealthTracker modelRuntimeHealthTracker) {
         String message = ModelGuardSupport.buildExpectedFailureMessage(
                 modelName,
                 "/v1/chat/completions",
                 actionTaken);
+        Map<String, Object> ownedOptions = new java.util.LinkedHashMap<>();
+        ownedOptions.put("temperature", temperature);
+        ownedOptions.put("timeoutMs", Math.max(1L, openAiTimeoutSec) * 1_000L);
+        ownedOptions.put("fallbackEnabled", false);
+        ModelRuntimeHealthTracker.ExpectedFailureAttemptEvidence attemptEvidence =
+                modelRuntimeHealthTracker == null
+                        ? null
+                        : modelRuntimeHealthTracker.expectedFailureAttemptEvidence(
+                                "primary",
+                                modelRuntimeHealthTracker.redactedRequestAttemptRoute(
+                                        "utility_chat_model",
+                                        modelName,
+                                        "https://api.openai.com/v1",
+                                        "openai_chat_completions"),
+                                ModelRuntimeHealthTracker.requestAttemptOptionEnvelope(
+                                        "openai",
+                                        modelName,
+                                        "openai_chat_completions",
+                                        ownedOptions));
         return new ExpectedFailureChatModel(
                 message,
-                SafeRedactor.hashValue(ModelGuardSupport.canonicalModelName(modelName)));
+                SafeRedactor.hashValue(ModelGuardSupport.canonicalModelName(modelName)),
+                attemptEvidence);
     }
 
     private static String messageOf(Throwable t) {

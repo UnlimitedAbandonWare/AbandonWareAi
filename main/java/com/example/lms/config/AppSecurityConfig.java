@@ -48,6 +48,15 @@ public class AppSecurityConfig {
     @Value("${security.remember-me-key:${SECURITY_REMEMBER_ME_KEY:}}")
     private String rememberMeKey;
 
+    @Value("${security.force-https:false}")
+    private boolean forceHttps;
+
+    @Value("${server.https-port:443}")
+    private int httpsPort;
+
+    @Value("${server.http-port:80}")
+    private int httpPort;
+
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
@@ -103,6 +112,13 @@ public class AppSecurityConfig {
                 .anonymous(Customizer.withDefaults())
                 .requestCache(cache -> cache.disable());
 
+        if (forceHttps) {
+            if (httpPort > 0 && httpsPort > 0 && httpPort != httpsPort) {
+                http.portMapper(mapper -> mapper.http(httpPort).mapsTo(httpsPort));
+            }
+            http.requiresChannel(channel -> channel.anyRequest().requiresSecure());
+        }
+
         log.debug("[AWX][security] probe chain configured controllerTokenGate=true");
         return http.build();
     }
@@ -113,9 +129,12 @@ public class AppSecurityConfig {
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http,
                                                           AdminDetailsServiceImpl adminDetailsService,
                                                           PasswordEncoder passwordEncoder,
-                                                          AdminTokenGuardFilter adminTokenGuardFilter) throws Exception {
+                                                          AdminTokenGuardFilter adminTokenGuardFilter,
+                                                          AdminTokenGuardInterceptor adminTokenGuardInterceptor) throws Exception {
         CsrfTokenRequestAttributeHandler handler = new CsrfTokenRequestAttributeHandler();
         handler.setCsrfRequestAttributeName("_csrf");
+        org.springframework.security.web.util.matcher.RequestMatcher displayDiagnostics = request ->
+                "GET".equals(request.getMethod()) && (request.getContextPath() + "/api/diagnostics/display").equals(request.getRequestURI());
 
         http
                 .authenticationProvider(adminAuthProvider(adminDetailsService::loadUserByUsername, passwordEncoder))
@@ -147,15 +166,16 @@ public class AppSecurityConfig {
                         .requestMatchers("/api/internal/**").hasRole("ADMIN")
                         .requestMatchers("/api/learning/gemini", "/api/learning/gemini/**").hasRole("ADMIN")
                         .requestMatchers("/api/integrations/check").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/v1/tasks/**").hasRole("ADMIN")
+                        .requestMatchers("/v1/tasks", "/v1/tasks/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/rag/probe").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/nova/outbox/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/train", "/api/train/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/translate/train", "/api/translate/train-now").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/webhooks/channel").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/messages/trigger").hasRole("ADMIN")
+                        .requestMatchers("/api/diagnostics/debug/triadic-adjudication").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/diagnostics/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.GET, "/api/diagnostics/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/diagnostics/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/internal/dataset/**").permitAll()
                         .requestMatchers(
                                 "/",
@@ -182,11 +202,21 @@ public class AppSecurityConfig {
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
+                .exceptionHandling(errors -> errors
+                        .defaultAuthenticationEntryPointFor((request, response, failure) -> {
+                            response.setHeader("Cache-Control", "no-store");
+                            response.setStatus(403);
+                        }, displayDiagnostics)
+                        .defaultAccessDeniedHandlerFor((request, response, failure) -> {
+                            response.setHeader("Cache-Control", "no-store");
+                            response.setStatus(403);
+                        }, displayDiagnostics))
                 .formLogin(form -> form
+                        .loginPage("/login")
                         .loginProcessingUrl("/login")
                         .defaultSuccessUrl("/index", true)
-                        .permitAll()
-                )
+                        .failureUrl("/login?error")
+                        .permitAll())
                 .rememberMe(rem -> rem
                         .key(effectiveRememberMeKey())
                         .userDetailsService(adminDetailsService::loadUserByUsername)
@@ -195,8 +225,9 @@ public class AppSecurityConfig {
                 .logout(logout -> logout
                         .logoutUrl("/logout")
                         .logoutSuccessUrl("/login?logout")
-                        .permitAll()
-                )
+                        .addLogoutHandler((request, response, authentication) ->
+                                adminTokenGuardInterceptor.revokePresentedSession(request, response))
+                        .permitAll())
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .csrfTokenRequestHandler(handler)
@@ -204,7 +235,6 @@ public class AppSecurityConfig {
                                 "/api/chat/**",
                                 "/api/chat-extra/**",
                                 "/api/rag/**",
-                                "/api/admin/graph/**",
                                 "/ws/**",
                                 "/api/settings/**",
                                 "/api/attachments/**",
@@ -212,10 +242,19 @@ public class AppSecurityConfig {
                                 "/api/agent/report/**",
                                 "/internal/dataset/**",
                                 "/hooks/n8n/**",
-                                "/v1/tasks/**")
+                                "/v1/tasks/**",
+                                "/api/internal/db/**")
+                        .ignoringRequestMatchers(adminTokenGuardInterceptor::isHeaderAuthorizedGraphRequest)
                 )
                 .addFilterBefore(adminTokenGuardFilter, UsernamePasswordAuthenticationFilter.class)
                 .requestCache(cache -> cache.disable());
+
+        if (forceHttps) {
+            if (httpPort > 0 && httpsPort > 0 && httpPort != httpsPort) {
+                http.portMapper(mapper -> mapper.http(httpPort).mapsTo(httpsPort));
+            }
+            http.requiresChannel(channel -> channel.anyRequest().requiresSecure());
+        }
 
         log.debug("[AWX][security] default chain configured settingsAdmin=true catchAllPermitAll=false");
         return http.build();

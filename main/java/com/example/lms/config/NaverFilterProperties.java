@@ -2,8 +2,6 @@ package com.example.lms.config;
 
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import lombok.Getter;
-import lombok.Setter;
 
 
 
@@ -16,8 +14,6 @@ import lombok.Setter;
  * injected wherever needed.  Defaults mirror the previous inline
  * definitions so upgrading existing configurations is non-breaking.</p>
  */
-@Getter
-@Setter
 @ConfigurationProperties("naver.filters")
 public class NaverFilterProperties {
     /**
@@ -54,4 +50,19 @@ public class NaverFilterProperties {
      * Defaults to {@code boost} to reduce accidental blocking in new environments.
      */
     private String domainPolicy = "boost";
+
+    public boolean isEnableDomainFilter() { return enableDomainFilter; }
+    public void setEnableDomainFilter(boolean enableDomainFilter) { this.enableDomainFilter = enableDomainFilter; }
+
+    public boolean isEnableKeywordFilter() { return enableKeywordFilter; }
+    public void setEnableKeywordFilter(boolean enableKeywordFilter) { this.enableKeywordFilter = enableKeywordFilter; }
+
+    public List<String> getDomainAllowlist() { return domainAllowlist; }
+    public void setDomainAllowlist(List<String> domainAllowlist) { this.domainAllowlist = domainAllowlist; }
+
+    public int getKeywordMinHits() { return keywordMinHits; }
+    public void setKeywordMinHits(int keywordMinHits) { this.keywordMinHits = keywordMinHits; }
+
+    public String getDomainPolicy() { return domainPolicy; }
+    public void setDomainPolicy(String domainPolicy) { this.domainPolicy = domainPolicy; }
 }

@@ -10,8 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -23,16 +21,12 @@ import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 
 /**
- * Decorates a {@link GeminiClient} with Resilience4j policies. The decorator
- * extends {@link GeminiClient} and therefore retains all original behaviour
- * while wrapping the {@link #keywordVariants(String, String, int)} method
- * with a time limiter, retry and circuit breaker. This bean is marked
- * as {@code @Primary} so that it will be selected over the base
- * {@code GeminiClient} when multiple candidates are present.
+ * Legacy compatibility decorator. Gemini resilience now belongs to
+ * {@link com.example.lms.learning.gemini.GeminiGateway}; this class is not a
+ * Spring bean and cannot become a competing wire owner.
  */
-@Component
-@Primary
-public class GeminiClientDecorator extends GeminiClient {
+@Deprecated
+public class GeminiClientDecorator {
     private static final Logger log = LoggerFactory.getLogger(GeminiClientDecorator.class);
 
     private final GeminiClient delegate;
@@ -49,7 +43,6 @@ public class GeminiClientDecorator extends GeminiClient {
             TimeLimiterRegistry timeLimiterRegistry,
             RetryRegistry retryRegistry,
             CircuitBreakerRegistry circuitBreakerRegistry) {
-        super(webClientBuilder, keyResolver);
         this.delegate = delegate;
         this.llmFastExecutor = llmFastExecutor;
         this.timeLimiter = timeLimiterRegistry.timeLimiter("geminiKeyword");
@@ -57,7 +50,6 @@ public class GeminiClientDecorator extends GeminiClient {
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("geminiKeyword");
     }
 
-    @Override
     public List<String> keywordVariants(String cleaned, String anchor, int cap) {
         // base supplier
         Supplier<List<String>> base = () -> delegate.keywordVariants(cleaned, anchor, cap);

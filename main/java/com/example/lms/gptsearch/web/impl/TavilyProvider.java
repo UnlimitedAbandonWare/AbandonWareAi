@@ -37,7 +37,11 @@ public class TavilyProvider extends AbstractWebSearchProvider {
     @Override
     protected WebSearchResult doSearch(WebSearchQuery query) {
         String rawQuery = query == null ? "" : query.getQuery();
-        int requested = query == null ? 0 : Math.max(1, query.getTopK());
+        int requested = query == null ? 0 : query.getTopK();
+        if (requested <= 0) {
+            traceNonPositiveTopK(rawQuery);
+            return new WebSearchResult(id().name(), List.of());
+        }
         if (retriever == null) {
             traceDisabled(rawQuery, requested);
             return new WebSearchResult(id().name(), List.of());
@@ -61,6 +65,53 @@ public class TavilyProvider extends AbstractWebSearchProvider {
             traceBridgeProviderEmpty(rawQuery, requested);
         }
         return new WebSearchResult(id().name(), docs);
+    }
+
+    private static void traceNonPositiveTopK(String query) {
+        String reason = "non_positive_top_k";
+        TraceStore.put("web.tavily.providerDisabled", false);
+        TraceStore.put("web.tavily.disabledReason", null);
+        TraceStore.put("web.tavily.disabledReasonCanonical", null);
+        TraceStore.put("web.tavily.skipped", true);
+        TraceStore.put("web.tavily.skipped.reason", reason);
+        TraceStore.put("web.tavily.failureReason", reason);
+        TraceStore.put("web.tavily.requestedCount", 0);
+        TraceStore.put("web.tavily.returnedCount", 0);
+        TraceStore.put("web.tavily.afterFilterCount", 0);
+        TraceStore.put("web.tavily.zeroResults", true);
+        TraceStore.put("web.tavily.providerEmpty", false);
+        TraceStore.put("web.tavily.afterFilterStarved", false);
+        TraceStore.put("web.tavily.providerBridge", null);
+        TraceStore.put("web.tavily.bridgeDocumentCount", 0);
+        TraceStore.put("web.tavily.httpStatus", null);
+        TraceStore.put("web.tavily.429", false);
+        TraceStore.put("web.tavily.rateLimited", false);
+        TraceStore.put("web.tavily.timeout", false);
+        TraceStore.put("web.tavily.cancelled", false);
+        TraceStore.put("web.tavily.queryHash", SafeRedactor.hashValue(query));
+        TraceStore.put("web.tavily.queryLength", query == null ? 0 : query.length());
+        TraceStore.put("web.tavily.exceptionType", null);
+        TraceStore.put("web.tavily.errorType", null);
+        TraceStore.put("web.tavily.tookMs", null);
+        TraceStore.put("web.tavily.errorBodyHash", null);
+        TraceStore.put("web.tavily.errorBodyLength", null);
+        TraceStore.put("web.tavily.queryTokenBucket", null);
+        TraceStore.put("web.tavily.timeoutMs", null);
+        TraceStore.put("web.tavily.endpointHost", null);
+        TraceStore.put("web.tavily.cooldown.reason", null);
+        TraceStore.put("web.tavily.cooldown.hintMs", null);
+        TraceStore.put("web.tavily.retryAfterMs", null);
+        TraceStore.put("web.provider.name", "tavily");
+        TraceStore.put("web.provider.enabled", true);
+        TraceStore.put("web.provider.resultCount", 0);
+        TraceStore.put("web.provider.disabledReason", null);
+        TraceStore.put("web.query.hash", query == null || query.isBlank()
+                ? null
+                : SafeRedactor.hashValue(query));
+        TraceStore.put("web.query.length", query == null ? 0 : query.length());
+        TraceStore.putIfAbsent("web.query.variantCount", 0);
+        TraceStore.put("web.failsoft.reason", reason);
+        TraceStore.put("web.filter.starvationReason", null);
     }
 
     private static WebDocument toDocument(Content content) {

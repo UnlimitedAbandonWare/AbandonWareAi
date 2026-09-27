@@ -1,12 +1,16 @@
 package com.example.lms.gptsearch.web.impl;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.guard.ProviderCredentialResolver;
 import com.example.lms.gptsearch.web.AbstractWebSearchProvider;
 import com.example.lms.gptsearch.web.ProviderId;
 import com.example.lms.gptsearch.web.dto.WebDocument;
 import com.example.lms.gptsearch.web.dto.WebSearchQuery;
 import com.example.lms.gptsearch.web.dto.WebSearchResult;
 import com.example.lms.search.TraceStore;
+import com.example.lms.search.WebProviderTraceReasons;
 import com.example.lms.trace.SafeRedactor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +18,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -50,8 +55,13 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
 
     private static final Logger log = LoggerFactory.getLogger(SerpApiProvider.class);
 
+    @Autowired(required = false)
+    private ProviderCredentialResolver credentialResolver;
+
     @Value("${gpt-search.serpapi.api-key:${search.serpapi.api-key:${GPT_SEARCH_SERPAPI_API_KEY:${SERPAPI_API_KEY:}}}}")
     private String apiKey;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.debug.ApiFailureRecorder apiFailureRecorder;
 
     @Value("${gpt-search.serpapi.base-url:${search.serpapi.base-url:https://serpapi.com/search.json}}")
     private String baseUrl;
@@ -61,6 +71,9 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
 
     @Value("${gpt-search.serpapi.enabled:${search.serpapi.enabled:true}}")
     private boolean configEnabled;
+
+    @Value("${gpt-search.serpapi.max-results:${search.serpapi.max-results:20}}")
+    private int maxResults = 20;
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -76,6 +89,25 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
             log.info("[AWX2AF2][search][serpapi] provider disabled enabled=false hasKey=false sourceName=gpt-search.serpapi.enabled disabledReason={}",
                     disabledReason);
             return;
+        }
+
+        ProviderCredentialResolver resolver = credentialResolver;
+        if (resolver != null) {
+            ProviderCredentialResolver.Resolution resolution = resolver.resolve(
+                    ProviderCredentialResolver.Provider.SERPAPI);
+            apiKey = resolution.valueOrNull();
+            if (!resolution.enabled()) {
+                enabled = false;
+                disabledReason = "missing-credential".equals(resolution.disabledReason())
+                        ? "missing_serpapi_api_key"
+                        : resolution.disabledReason();
+                log.warn("[AWX2AF2][search][serpapi] provider disabled enabled=false hasKey={} sourceName={} aliasCount={} disabledReason={}",
+                        resolution.credentialPresent(),
+                        resolution.sourceName(),
+                        resolution.configuredAliasCount(),
+                        disabledReason);
+                return;
+            }
         }
 
         if (ConfigValueGuards.isMissing(apiKey)) {
@@ -116,6 +148,38 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
         return disabledReason;
     }
 
+    private int configuredMaximum() {
+        return Math.max(1, Math.min(100, maxResults));
+    }
+
+    private RestTemplate requestScopedTemplateForCurrentBudget() {
+        TimeBudget budget = TimeBudgetContext.get();
+        if (budget == null) {
+            return restTemplate;
+        }
+        long remainingMs = budget.remainingMillis();
+        if (remainingMs <= 0L) {
+            return null;
+        }
+        // Socket phase limits; zero would mean unlimited and shared timeouts must stay unchanged.
+        int effectiveTimeoutMs = (int) Math.max(1L, Math.min(Math.max(timeoutMs, 2000), remainingMs));
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(effectiveTimeoutMs);
+        factory.setReadTimeout(effectiveTimeoutMs);
+        RestTemplate scoped = new RestTemplate(factory);
+        scoped.setInterceptors(new ArrayList<>(restTemplate.getInterceptors()));
+        scoped.setMessageConverters(new ArrayList<>(restTemplate.getMessageConverters()));
+        scoped.setErrorHandler(restTemplate.getErrorHandler());
+        return scoped;
+    }
+
+    private int admittedTopK(WebSearchQuery query) {
+        if (query == null || query.getTopK() <= 0) {
+            return 0;
+        }
+        return Math.min(query.getTopK(), configuredMaximum());
+    }
+
     private static String safeHost(String value) {
         if (value == null || value.isBlank()) {
             return "unknown";
@@ -137,7 +201,7 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
     @Override
     protected WebSearchResult blankQueryResult(WebSearchQuery query) {
         String queryText = query == null ? "" : query.getQuery();
-        int topK = query == null || query.getTopK() <= 0 ? 5 : query.getTopK();
+        int topK = admittedTopK(query);
         traceSerpApiCounts(queryText, topK, 0, 0, false, "blank_query");
         return new WebSearchResult(id().name(), Collections.emptyList());
     }
@@ -146,7 +210,11 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
     protected WebSearchResult doSearch(WebSearchQuery query) throws Exception {
         long t0Ns = System.nanoTime();
         String queryText = query == null ? "" : query.getQuery();
-        int topK = query == null || query.getTopK() <= 0 ? 5 : query.getTopK();
+        int topK = admittedTopK(query);
+        if (topK <= 0) {
+            traceSerpApiCounts(queryText, 0, 0, 0, false, "non_positive_top_k");
+            return new WebSearchResult(id().name(), Collections.emptyList());
+        }
         if (!enabled) {
             log.debug("[SerpApi] Skipping search - provider disabled");
             traceSerpApiCounts(queryText, topK, 0, 0, true, disabledReason);
@@ -155,6 +223,13 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
 
         if (queryText == null || queryText.isBlank()) {
             traceSerpApiCounts(queryText, topK, 0, 0, false, "blank_query");
+            return new WebSearchResult(id().name(), Collections.emptyList());
+        }
+
+        RestTemplate requestTemplate = requestScopedTemplateForCurrentBudget();
+        if (requestTemplate == null) {
+            traceSerpApiFailure(queryText, topK, -1, "request_budget_exhausted", false, false,
+                    null, (System.nanoTime() - t0Ns) / 1_000_000L);
             return new WebSearchResult(id().name(), Collections.emptyList());
         }
 
@@ -169,86 +244,159 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
                 .encode(StandardCharsets.UTF_8)
                 .toUri();
 
-        String body;
-        try {
-            body = restTemplate.getForObject(uri, String.class);
-        } catch (HttpClientErrorException.TooManyRequests e) {
-            traceSuppressed("serpapi.rateLimit", e);
-            long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
-            traceSerpApiRemoteCooldown("rate-limit", retryAfterToMs(e.getResponseHeaders()));
-            traceSerpApiFailure(queryText, topK, 429, "rate-limit", true, false,
-                    e.getResponseBodyAsString(), elapsedMs);
-            return new WebSearchResult(id().name(), Collections.emptyList());
-        } catch (HttpStatusCodeException e) {
-            traceSuppressed("serpapi.httpStatus", e);
-            int code = e.getStatusCode() == null ? -1 : e.getStatusCode().value();
-            boolean rateLimited = code == 429;
-            long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
-            if (rateLimited) {
-                traceSerpApiRemoteCooldown("rate-limit", retryAfterToMs(e.getResponseHeaders()));
-            }
-            traceSerpApiFailure(queryText, topK, code, rateLimited ? "rate-limit" : "http-error", rateLimited,
-                    false, e.getResponseBodyAsString(), elapsedMs);
-            return new WebSearchResult(id().name(), Collections.emptyList());
-        } catch (ResourceAccessException e) {
-            traceSuppressed("serpapi.resourceAccess", e);
-            long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
-            boolean cancelled = isCancellationFailure(e);
-            traceSerpApiFailure(queryText, topK, -1, cancelled ? "cancelled" : "timeout", false, !cancelled, null,
-                    elapsedMs);
-            if (cancelled) {
-                traceSerpApiCancellation();
-            }
-            return new WebSearchResult(id().name(), Collections.emptyList());
-        } catch (Exception e) {
-            traceSuppressed("serpapi.search", e);
-            long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
-            boolean cancelled = isCancellationFailure(e);
-            boolean timeout = !cancelled && isTimeoutFailure(e);
-            traceSerpApiFailure(queryText, topK, -1, cancelled ? "cancelled" : (timeout ? "timeout" : "exception"),
-                    false, timeout, null,
-                    elapsedMs);
-            if (cancelled) {
-                traceSerpApiCancellation();
-            }
-            return new WebSearchResult(id().name(), Collections.emptyList());
-        }
-        List<WebDocument> docs = new ArrayList<>();
-
-        if (body != null && !body.isBlank()) {
+        try (SerpApiAttemptObservation attempt = SerpApiAttemptObservation.start(queryText)) {
+            String body;
             try {
-                JsonNode root = objectMapper.readTree(body);
-                JsonNode organic = root.path("organic_results");
-                if (organic.isArray()) {
-                    for (JsonNode item : organic) {
-                        String title = safeText(item, "title");
-                        String link = safeText(item, "link");
-                        String snippet = safeText(item, "snippet");
-                        if (!title.isBlank() && !link.isBlank()) {
-                            WebDocument d = new WebDocument();
-                            d.setTitle(title);
-                            d.setUrl(link);
+                var response = requestTemplate.getForEntity(uri, String.class);
+                if (attempt != null) attempt.received(response.getStatusCode().value());
+                body = response.getBody();
+            } catch (HttpClientErrorException.TooManyRequests e) {
+                if (apiFailureRecorder != null) apiFailureRecorder.recordException(baseUrl, "google", e);
+                traceSuppressed("serpapi.rateLimit", e);
+                if (attempt != null) attempt.failed(429, "rate-limit");
+                long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
+                traceSerpApiRemoteCooldown("rate-limit", retryAfterToMs(e.getResponseHeaders()));
+                traceSerpApiFailure(queryText, topK, 429, "rate-limit", true, false,
+                        e.getResponseBodyAsString(), elapsedMs);
+                return new WebSearchResult(id().name(), Collections.emptyList());
+            } catch (HttpStatusCodeException e) {
+                if (apiFailureRecorder != null) apiFailureRecorder.recordException(baseUrl, "google", e);
+                traceSuppressed("serpapi.httpStatus", e);
+                int code = e.getStatusCode() == null ? -1 : e.getStatusCode().value();
+                boolean rateLimited = code == 429;
+                if (attempt != null) attempt.failed(code, rateLimited ? "rate-limit" : "http-error");
+                long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
+                if (rateLimited) {
+                    traceSerpApiRemoteCooldown("rate-limit", retryAfterToMs(e.getResponseHeaders()));
+                }
+                traceSerpApiFailure(queryText, topK, code, rateLimited ? "rate-limit" : "http-error", rateLimited,
+                        false, e.getResponseBodyAsString(), elapsedMs);
+                return new WebSearchResult(id().name(), Collections.emptyList());
+            } catch (ResourceAccessException e) {
+                if (apiFailureRecorder != null && !isCancellationFailure(e)) apiFailureRecorder.recordException(baseUrl, "google", e);
+                traceSuppressed("serpapi.resourceAccess", e);
+                long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
+                boolean cancelled = isCancellationFailure(e);
+                if (attempt != null) attempt.failed(-1, cancelled ? "cancelled" : "timeout");
+                traceSerpApiFailure(queryText, topK, -1, cancelled ? "cancelled" : "timeout", false, !cancelled, null,
+                        elapsedMs);
+                if (cancelled) {
+                    traceSerpApiCancellation();
+                }
+                return new WebSearchResult(id().name(), Collections.emptyList());
+            } catch (Exception e) {
+                traceSuppressed("serpapi.search", e);
+                if (apiFailureRecorder != null && !isCancellationFailure(e)) apiFailureRecorder.recordException(baseUrl, "google", e);
+                long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;
+                boolean cancelled = isCancellationFailure(e);
+                boolean timeout = !cancelled && isTimeoutFailure(e);
+                if (attempt != null) attempt.failed(-1, cancelled ? "cancelled" : (timeout ? "timeout" : "exception"));
+                traceSerpApiFailure(queryText, topK, -1, cancelled ? "cancelled" : (timeout ? "timeout" : "exception"),
+                        false, timeout, null,
+                        elapsedMs);
+                if (cancelled) {
+                    traceSerpApiCancellation();
+                }
+                return new WebSearchResult(id().name(), Collections.emptyList());
+            }
+            List<WebDocument> docs = new ArrayList<>();
+
+            if (body != null && !body.isBlank()) {
+                try {
+                    JsonNode root = objectMapper.readTree(body);
+                    JsonNode organic = root.path("organic_results");
+                    if (organic.isArray()) {
+                        for (JsonNode item : organic) {
+                            String title = safeText(item, "title");
+                            String link = safeText(item, "link");
+                            String snippet = safeText(item, "snippet");
+                            if (!title.isBlank() && !link.isBlank()) {
+                                WebDocument d = new WebDocument();
+                                d.setTitle(title);
+                                d.setUrl(link);
                             d.setSnippet(snippet);
                             docs.add(d);
+                            if (docs.size() >= topK) {
+                                break;
+                            }
                         }
                     }
+                    }
+                } catch (Exception e) {
+                    if (attempt != null) attempt.failed(-1, "parse-error");
+                    log.warn("[SerpApi] parse failed failureReason={} errorType={} bodyHash={} bodyLength={}",
+                            "parse-error",
+                            safeErrorType(e),
+                            SafeRedactor.hashValue(body),
+                            body.length());
                 }
-            } catch (Exception e) {
-                log.warn("[SerpApi] parse failed failureReason={} errorType={} bodyHash={} bodyLength={}",
-                        "parse-error",
-                        safeErrorType(e),
-                        SafeRedactor.hashValue(body),
-                        body.length());
+            }
+
+            traceSerpApiCounts(queryText, topK, docs.size(), docs.size(), false, null);
+            if (docs.isEmpty()) {
+                log.debug("[AWX2AF2][search][serpapi] zero results returnedCount=0 requestedCount={} timeoutMs={}",
+                        topK, timeoutMs);
+            }
+
+            if (attempt != null) attempt.completed(docs.size());
+            return new WebSearchResult(id().name(), docs);
+        }
+    }
+
+    /** One synchronous client invocation owns its outcome; legacy shared scalars are not read back. */
+    private static final class SerpApiAttemptObservation implements AutoCloseable {
+        private final java.util.Map<String, Object> parent;
+        private final java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+        private final long startedNs = System.nanoTime();
+
+        private SerpApiAttemptObservation(String query) {
+            parent = TraceStore.context();
+            var attemptContext = TraceStore.searchContext(parent, "providerAttemptId");
+            row.putAll(TraceStore.searchCorrelation(attemptContext));
+            row.put("provider", "serpapi");
+            row.put("queryHash", SafeRedactor.hashValue(query));
+            row.put("countScope", "admitted_document_list");
+            row.put("clientAttemptObserved", true);
+            row.put("clientAttemptBoundary", "resttemplate_get");
+            row.put("providerReceiptObserved", false);
+            row.put("startedAtEpochMs", System.currentTimeMillis());
+            for (String key : java.util.List.of("httpStatus", "returnedCount", "afterFilterCount", "failureReason")) row.put(key, "unknown");
+            row.put("outcome", "UNKNOWN");
+            TraceStore.installContext(attemptContext);
+        }
+
+        private static SerpApiAttemptObservation start(String query) {
+            try { return new SerpApiAttemptObservation(query); }
+            catch (RuntimeException unavailableContext) { return null; }
+        }
+
+        private void received(int status) { row.put("httpStatus", status); }
+
+        private void failed(int status, String reason) {
+            if (status > 0) received(status);
+            row.put("outcome", "ERROR");
+            row.put("failureReason", reason);
+        }
+
+        private void completed(int count) {
+            if (!"UNKNOWN".equals(row.get("outcome"))) return;
+            row.put("outcome", count == 0 ? "EMPTY" : "OK");
+            row.put("failureReason", count == 0 ? "provider_empty" : "none");
+            row.put("returnedCount", count);
+            row.put("afterFilterCount", count);
+        }
+
+        @Override public void close() {
+            try {
+                row.put("finishedAtEpochMs", System.currentTimeMillis());
+                row.put("elapsedMs", Math.max(0L, (System.nanoTime() - startedNs) / 1_000_000L));
+                TraceStore.append("web.serpapi.attempt.runs", java.util.Map.copyOf(row));
+            } catch (RuntimeException unavailableTraceSink) {
+                // A closed observation sink must never replace the provider outcome.
+            } finally {
+                TraceStore.installContext(parent);
             }
         }
-
-        traceSerpApiCounts(queryText, topK, docs.size(), docs.size(), false, null);
-        if (docs.isEmpty()) {
-            log.debug("[AWX2AF2][search][serpapi] zero results returnedCount=0 requestedCount={} timeoutMs={}",
-                    topK, timeoutMs);
-        }
-
-        return new WebSearchResult(id().name(), docs);
     }
 
     private void traceSerpApiCounts(String query,
@@ -281,9 +429,11 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
             if (!skipReason.isBlank()) {
                 TraceStore.put("web.serpapi.skipped.reason", skipReason);
             }
-            TraceStore.put("web.serpapi.failureReason", !skipReason.isBlank()
+            String failureReason = !skipReason.isBlank()
                     ? skipReason
-                    : classifySerpApiCountFailure(returned, after, providerDisabled));
+                    : classifySerpApiCountFailure(returned, after, providerDisabled);
+            TraceStore.put("web.serpapi.failureReason", failureReason);
+            traceCommonWebProviderCounts(query, returned, after, providerDisabled, disabledReason, failureReason);
             if (providerDisabled) {
                 String reason = disabledReason == null || disabledReason.isBlank()
                         ? "disabled"
@@ -325,6 +475,7 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
             if (rateLimited) {
                 TraceStore.put("web.rateLimited", true);
             }
+            traceCommonWebProviderCounts(query, 0, 0, false, null, safeFailureReason);
             traceErrorBody("web.serpapi", errorBody, query);
             log.warn("[AWX][search][serpapi] provider failure failureReason={} httpStatus={} queryHash={} queryLength={} bodyHash={} bodyLength={} tookMs={}",
                     safeFailureReason,
@@ -462,6 +613,41 @@ public class SerpApiProvider extends AbstractWebSearchProvider {
             return "after-filter-starvation";
         }
         return "none";
+    }
+
+    private static void traceCommonWebProviderCounts(String query,
+                                                     int returned,
+                                                     int after,
+                                                     boolean providerDisabled,
+                                                     String disabledReason,
+                                                     String failureReason) {
+        TraceStore.put("web.provider.name", "serpapi");
+        TraceStore.put("web.provider.enabled", !providerDisabled);
+        TraceStore.put("web.provider.resultCount", Math.max(0, returned));
+        TraceStore.put("web.provider.disabledReason", providerDisabled
+                ? WebProviderTraceReasons.disabledReason(disabledReason)
+                : null);
+        TraceStore.put("web.query.hash", query == null || query.isBlank()
+                ? null
+                : SafeRedactor.hashValue(query));
+        TraceStore.put("web.query.length", query == null ? 0 : query.length());
+        TraceStore.putIfAbsent("web.query.variantCount", 0);
+        if (returned > 0 && after <= 0) {
+            TraceStore.put("web.filter.starvationReason", "after-filter-starvation");
+        }
+        String commonReason = commonFailSoftReason(failureReason);
+        if (commonReason != null) {
+            TraceStore.put("web.failsoft.reason", commonReason);
+        }
+    }
+
+    private static String commonFailSoftReason(String reason) {
+        String safe = SafeRedactor.traceLabelOrFallback(reason, "none");
+        return switch (safe) {
+            case "none" -> null;
+            case "provider-empty" -> "empty-provider-output";
+            default -> safe;
+        };
     }
 
     private static String safeErrorType(Throwable error) {
