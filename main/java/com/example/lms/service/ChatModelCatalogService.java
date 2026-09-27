@@ -23,6 +23,8 @@ public class ChatModelCatalogService {
     private final RestTemplate http;
     private final String base;
     private final boolean allowRemote;
+    @Value("${app.ai.remote-model-selection-routes:}")
+    private String remoteSelectionRoutes = "";
     private volatile List<Choice> cached = List.of();
     private volatile long expiresAt;
     private List<Choice> publicCatalog = List.of();
@@ -111,10 +113,13 @@ public class ChatModelCatalogService {
                         && "attachment_unverified".equals(row.metadata().get("catalogTrust")))) continue;
                 String id = route == null || route.isBlank()
                         ? "catalog:" + row.provider() + ":" + row.modelId() : "llmrouter." + route;
-                String reason = !allowRemote ? "remote_selection_disabled"
+                boolean permitted = allowRemote || (route != null && !route.isBlank()
+                        && Arrays.stream(remoteSelectionRoutes.split(","))
+                                .map(String::trim).anyMatch(route::equals));
+                String reason = !permitted ? "remote_selection_disabled"
                         : row.disabledReason() == null ? "route_not_configured" : row.disabledReason();
                 // Availability is separate from generation success; no paid route is enabled here.
-                boolean ready = allowRemote && row.eligible() && route != null && !route.isBlank();
+                boolean ready = permitted && row.eligible() && route != null && !route.isBlank();
                 rows.add(new Choice(id, row.provider(), route == null ? "unconfigured" : route,
                         row.modelId(), ready ? "configured" : "unavailable", ready,
                         ready ? "" : reason, release(row.modelId(), row.metadata()),
