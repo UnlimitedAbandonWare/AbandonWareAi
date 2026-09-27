@@ -1,9 +1,0 @@
-{
-  "version": 1,
-  "patterns": {
-    "missing_findbugs_annotations": "package edu.umd.cs.findbugs.annotations does not exist",
-    "missing_lombok": "cannot find symbol class (Getter|Setter|Builder|NoArgsConstructor|AllArgsConstructor|RequiredArgsConstructor)",
-    "kapt_needed": "annotation processing is not enabled"
-  },
-  "updated": "2025-11-04T02:58:31.407045Z"
-}
