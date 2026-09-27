@@ -38,6 +38,7 @@ public class KnowledgeDecayService {
     public void decay() {
         try {
             List<DomainKnowledge> list = knowledgeRepo.findAll();
+            List<SynergyStat> stats = loadSynergyStats();
             Instant now = Instant.now();
             for (DomainKnowledge dk : list) {
                 double oldConf = dk.getConfidenceScore();
@@ -57,7 +58,6 @@ public class KnowledgeDecayService {
                 // incorporate synergy feedback: if negative feedback outweighs positive for this entity
                 if (dk.getEntityName() != null && !dk.getEntityName().isBlank()) {
                     try {
-                        List<SynergyStat> stats = synergyRepo.findAll();
                         long pos = 0;
                         long neg = 0;
                         for (SynergyStat s : stats) {
@@ -99,6 +99,16 @@ public class KnowledgeDecayService {
             log.error("[KnowledgeDecay] Error while decaying knowledge type={} errorHash={} errorLength={}",
                     e.getClass().getSimpleName(),
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+        }
+    }
+
+    private List<SynergyStat> loadSynergyStats() {
+        try {
+            List<SynergyStat> stats = synergyRepo.findAll();
+            return stats == null ? List.of() : stats;
+        } catch (Exception failure) {
+            AgentTraceSuppressions.traceSuppressed("knowledgeDecay.synergyLookup", failure);
+            return List.of();
         }
     }
 

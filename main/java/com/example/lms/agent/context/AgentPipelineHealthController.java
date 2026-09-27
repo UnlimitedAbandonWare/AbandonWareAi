@@ -8,6 +8,10 @@ import com.example.lms.debug.ai.DebugAiMetricsService;
 import com.example.lms.debug.ai.DebugAiRawTile;
 import com.example.lms.infra.resilience.NightmareBreaker;
 import com.example.lms.infra.resilience.NightmareKeys;
+import com.example.lms.guard.ProviderCredentialResolver;
+import com.example.lms.llm.LocalLlmSmokeHistoryDiagnosticsService;
+import com.example.lms.llm.ModelRuntimeHealthTracker;
+import com.example.lms.llm.OllamaNativeChatModel;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import com.example.lms.trace.TraceSnapshotStore;
@@ -20,15 +24,18 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -41,6 +48,7 @@ import java.util.stream.Stream;
 @RequestMapping("/agent/db-context")
 @Slf4j
 @RequiredArgsConstructor
+@ConditionalOnBean(AgentDbContextProvider.class)
 @ConditionalOnProperty(prefix = "agent.db-context", name = "enabled", havingValue = "true")
 public class AgentPipelineHealthController {
 
@@ -48,9 +56,14 @@ public class AgentPipelineHealthController {
     private static final String WARN = "WARN";
     private static final String DISABLED = "DISABLED";
     private static final String DB_CONTEXT_UNAVAILABLE = "__DB_CONTEXT_UNAVAILABLE__";
+    private static final String PUBLIC_BROWSER_HOST = "abandonwareai.kro.kr";
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ExternalEvidenceFreshnessPolicy EXTERNAL_EVIDENCE_FRESHNESS =
+            new ExternalEvidenceFreshnessPolicy();
     private static final List<String> PROVIDER_RUNTIME_NAMES = List.of(
             "naver", "brave", "serpapi", "tavily", "hybrid", "analyze");
+    private static final int MAX_PROVIDER_ATTEMPTS = 1_000;
+    private static final long MAX_PROVIDER_LATENCY_MS = 600_000L;
 
     private final AgentDbContextProvider dbContextProvider;
 
@@ -78,13 +91,27 @@ public class AgentPipelineHealthController {
     private DebugEventStore debugEventStore;
     @Autowired(required = false)
     private DebugAiMetricsService debugAiMetricsService;
+    @Autowired(required = false)
+    private LocalLlmSmokeHistoryDiagnosticsService localLlmSmokeHistoryDiagnosticsService;
+    @Autowired(required = false)
+    private ModelRuntimeHealthTracker modelRuntimeHealthTracker;
+    @Autowired(required = false)
+    private ProviderCredentialResolver providerCredentialResolver;
+    @Value("${gpt-search.brave.enabled:${search.brave.enabled:true}}")
+    private boolean braveConfigEnabled = true;
+    @Value("${gemini.gateway.enabled:true}")
+    private boolean geminiGatewayEnabled = true;
+    @Value("${gemini.gateway.purpose.search-expansion.enabled:true}")
+    private boolean geminiSearchExpansionEnabled = true;
+    @Value("${gemini.gateway.models.search-expansion:${gemini.gateway.models.default:gemini-2.5-flash}}")
+    private String geminiSearchExpansionModel = "gemini-2.5-flash";
     @Value("${naver.keys:}")
     private String naverKeys;
     @Value("${naver.client-id:}")
     private String naverClientId;
     @Value("${naver.client-secret:}")
     private String naverClientSecret;
-    @Value("${gpt-search.brave.subscription-token:${gpt-search.brave.api-key:${search.brave.subscription-token:${search.brave.api-key:${GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN:${GPT_SEARCH_BRAVE_API_KEY:${BRAVE_SUBSCRIPTION_TOKEN:${BRAVE_API_KEY:}}}}}}}}")
+    @Value("${gpt-search.brave.api-key:${BRAVE_API_KEY:${GPT_SEARCH_BRAVE_API_KEY:}}}")
     private String braveKey;
     @Value("${gpt-search.serpapi.api-key:${search.serpapi.api-key:${GPT_SEARCH_SERPAPI_API_KEY:${SERPAPI_API_KEY:}}}}")
     private String serpApiKey;
@@ -100,6 +127,8 @@ public class AgentPipelineHealthController {
     private String computerUseSmokePath;
     @Value("${awx.browser.smoke.path:var/codex-smoke/browser-ui-smoke.json}")
     private String browserSmokePath;
+    @Value("${app.public-base-url:${APP_PUBLIC_BASE_URL:https://abandonwareai.kro.kr}}")
+    private String appPublicBaseUrl;
     @Value("${awx.goal-next.summary.path:var/codex-smoke/goal-next-auto/goal-next-auto.summary.json}")
     private String goalNextAutoSummaryPath;
     @Value("${awx.noether.status.path:var/codex-smoke/noether-subagent-status.json}")
@@ -120,6 +149,7 @@ public class AgentPipelineHealthController {
         Map<String, Object> answerOutput = answerOutput();
         Map<String, Object> traceSnapshotHealth = traceSnapshotHealth();
         List<Map<String, Object>> providerStates = webProviders();
+        List<Map<String, Object>> providerStatus = providerStatus();
         Map<String, Object> providerRuntime = providerRuntime();
         Map<String, Object> failSoftLadder = failSoftLadder();
         List<Map<String, Object>> externalEvidence = externalEvidence();
@@ -137,6 +167,7 @@ public class AgentPipelineHealthController {
         out.put("answerOutput", answerOutput);
         out.put("traceSnapshotHealth", traceSnapshotHealth);
         out.put("webProviders", providerStates);
+        out.put("providerStatus", providerStatus);
         out.put("providerRuntime", providerRuntime);
         out.put("failSoftLadder", failSoftLadder);
         out.put("externalEvidence", externalEvidence);
@@ -200,11 +231,14 @@ public class AgentPipelineHealthController {
     }
 
     private List<Map<String, Object>> lanes() {
-        boolean naverKeyPresent = !"missing".equals(naverKeySource());
-        boolean webKeyPresent = naverKeyPresent
-                || !isBlankOrPlaceholder(braveKey)
-                || !isBlankOrPlaceholder(serpApiKey)
-                || !isBlankOrPlaceholder(tavilyKey);
+        boolean webKeyPresent = effectiveCredentialEnabled(
+                ProviderCredentialResolver.Provider.NAVER, !"missing".equals(naverKeySource()))
+                || effectiveCredentialEnabled(
+                        ProviderCredentialResolver.Provider.BRAVE, !isBlankOrPlaceholder(braveKey))
+                || effectiveCredentialEnabled(
+                        ProviderCredentialResolver.Provider.SERPAPI, !isBlankOrPlaceholder(serpApiKey))
+                || effectiveCredentialEnabled(
+                        ProviderCredentialResolver.Provider.TAVILY, !isBlankOrPlaceholder(tavilyKey));
         return List.of(
                 webLane(webKeyPresent),
                 lane("vectorSearch", vectorRetriever != null, "bean_missing"),
@@ -218,10 +252,14 @@ public class AgentPipelineHealthController {
 
     private List<Map<String, Object>> webProviders() {
         return List.of(
-                providerState("naver", naverKeySource(), "missing_naver_key"),
-                providerState("brave", isBlankOrPlaceholder(braveKey) ? "missing" : "brave.api-key", "missing_brave_api_key"),
-                providerState("serpapi", isBlankOrPlaceholder(serpApiKey) ? "missing" : "serpapi.api-key", "missing_serpapi_api_key"),
-                providerState("tavily", isBlankOrPlaceholder(tavilyKey) ? "missing" : "tavily.api-key", "missing_tavily_api_key"));
+                providerState("naver", ProviderCredentialResolver.Provider.NAVER,
+                        naverKeySource(), "missing_naver_key"),
+                providerState("brave", ProviderCredentialResolver.Provider.BRAVE,
+                        isBlankOrPlaceholder(braveKey) ? "missing" : "brave.api-key", "missing_brave_api_key"),
+                providerState("serpapi", ProviderCredentialResolver.Provider.SERPAPI,
+                        isBlankOrPlaceholder(serpApiKey) ? "missing" : "serpapi.api-key", "missing_serpapi_api_key"),
+                providerState("tavily", ProviderCredentialResolver.Provider.TAVILY,
+                        isBlankOrPlaceholder(tavilyKey) ? "missing" : "tavily.api-key", "missing_tavily_api_key"));
     }
 
     private List<Map<String, Object>> externalEvidence() {
@@ -260,23 +298,26 @@ public class AgentPipelineHealthController {
         String providerStatus = providerEnabled == 0L ? DISABLED : (providerDisabled > 0L ? WARN : OK);
         String providerReason = providerEnabled == 0L ? "all_providers_disabled" : (providerDisabled > 0L ? "provider_disabled" : "ready");
 
-        String externalStatus = worstListStatus(externalEvidence);
-        String externalReason = firstString(externalEvidence, "evidenceNeeded", externalStatus.equals(OK) ? "ready" : "evidence_needed");
+        List<Map<String, Object>> blockingExternalEvidence = blockingExternalEvidence(externalEvidence);
+        String externalStatus = worstListStatus(blockingExternalEvidence);
+        String externalReason = firstString(blockingExternalEvidence, "evidenceNeeded", externalStatus.equals(OK) ? "ready" : "evidence_needed");
         Map<String, Object> causalProbe = lanes.stream().filter(row -> "causalProbe".equals(row.get("name"))).findFirst().orElse(Map.of());
         String modelStatus = statusValue(modelRuntime.get("status"));
         String answerStatus = statusValue(answerOutput.get("status"));
-        Map<String, Object> blocker = firstNonOkExternalEvidence(externalEvidence);
+        Map<String, Object> blocker = firstNonOkExternalEvidence(blockingExternalEvidence);
         String blockerReason = firstString(blocker, "evidenceNeeded", "ready");
         String blockerDetail = "service=" + firstNonBlank(safeTraceLabel(stringValue(blocker.get("service"))), "none") + " action=" + firstNonBlank(safeTraceLabel(stringValue(blocker.get("nextAction"))), "none");
         Map<String, Object> browserUi = externalEvidenceRow(externalEvidence, "browser");
         String uiStatus = statusValue(browserUi == null ? null : browserUi.get("status"));
-        String rollupStatus = worstStatus(coreStatus, modelStatus, answerStatus, providerStatus, externalStatus, uiStatus);
+        String uiRollupStatus = isSupportingEvidenceOnly(browserUi) ? OK : uiStatus;
+        String uiDetailStatus = supportingEvidenceDetailStatus(browserUi, uiStatus);
+        String rollupStatus = worstStatus(coreStatus, modelStatus, answerStatus, providerStatus, externalStatus, uiRollupStatus);
         String rollupReason = firstNonBlank(coreReason, firstString(modelRuntime, "reason", null), firstString(answerOutput, "reason", null), providerReason, externalReason, "browser_session_evidence_needed");
         String uiReason = firstNonBlank(firstString(browserUi, "evidenceNeeded", null), firstString(browserUi, "nextAction", "browser_local_ui_smoke_current"));
         return List.of(
                 overviewRow("debugRollup", rollupStatus, rollupReason,
                         "core=" + coreStatus + " model=" + modelStatus + " answer=" + answerStatus
-                                + " search=" + providerStatus + " external=" + externalStatus + " ui=" + uiStatus,
+                                + " search=" + providerStatus + " external=" + externalStatus + " ui=" + uiDetailStatus,
                         "pipeline-health"),
                 overviewRow("debugBlocker", externalStatus, blockerReason, blockerDetail, "external-evidence"),
                 overviewRow("coreRuntime", coreStatus, coreReason == null ? "healthy" : coreReason,
@@ -385,7 +426,338 @@ public class AgentPipelineHealthController {
             row.put("modelHash", SafeRedactor.hashValue(observedModel));
             row.put("modelLength", observedModel.length());
         }
+        Map<String, Object> localLlmOperatorAction = localLlmOperatorAction(trace);
+        if (localLlmOperatorAction.isEmpty()) {
+            Map<String, Object> smokeHistoryOperatorAction = localLlmSmokeHistoryOperatorAction();
+            if (!smokeHistoryOperatorAction.isEmpty() && localModelRuntimeRecentlySucceeded()) {
+                row.put("status", OK);
+                row.put("reason", "recent_local_model_success");
+                row.put("source", "modelRuntimeHealth");
+                row.put("localLlmSmokeHistoryStale", true);
+                row.put("localLlmSmokeHistorySuppressedReason", "recent_local_model_success");
+                localLlmOperatorAction = localModelSuccessOperatorAction();
+            } else {
+                localLlmOperatorAction = smokeHistoryOperatorAction;
+            }
+        }
+        if (!localLlmOperatorAction.isEmpty()) {
+            if ("healthy".equals(reason) && !clearedLocalLlmOperatorAction(localLlmOperatorAction)) {
+                row.put("status", WARN);
+                row.put("reason", "local_llm_operator_action");
+            }
+            row.put("localLlmOperatorAction", localLlmOperatorAction);
+        }
         return row;
+    }
+
+    private List<Map<String, Object>> providerStatus() {
+        Map<String, Object> trace = new LinkedHashMap<>(latestProviderStatusTraceSnapshot());
+        trace.putAll(TraceStore.getAll());
+
+        ProviderCredentialResolver.Resolution brave = safeProviderResolution(
+                ProviderCredentialResolver.Provider.BRAVE);
+        ProviderCredentialResolver.Resolution naver = safeProviderResolution(
+                ProviderCredentialResolver.Provider.NAVER);
+        ProviderCredentialResolver.Resolution gemini = safeProviderResolution(
+                ProviderCredentialResolver.Provider.GEMINI);
+
+        boolean braveCredentialPresent = brave == null
+                ? !isBlankOrPlaceholder(braveKey)
+                : brave.credentialPresent();
+        boolean naverCredentialPresent = naver == null
+                ? !"missing".equals(naverKeySource())
+                : naver.credentialPresent();
+        boolean geminiCredentialPresent = gemini != null && gemini.credentialPresent();
+
+        return List.of(
+                providerStatusRow(trace, "brave", "search", "not_applicable",
+                        braveConfigEnabled && (brave == null ? braveCredentialPresent : brave.enabled()),
+                        braveCredentialPresent,
+                        !braveConfigEnabled
+                                ? "disabled_by_config"
+                                : brave == null ? "missing-credential" : brave.disabledReason()),
+                providerStatusRow(trace, "naver", "search", "not_applicable",
+                        naver == null ? naverCredentialPresent : naver.enabled(),
+                        naverCredentialPresent,
+                        naver == null ? "missing-credential" : naver.disabledReason()),
+                providerStatusRow(trace, "gemini", "search-expansion",
+                        safeProviderLabel(geminiSearchExpansionModel, "unavailable"),
+                        geminiGatewayEnabled && geminiSearchExpansionEnabled
+                                && gemini != null && gemini.enabled(),
+                        geminiCredentialPresent,
+                        geminiFallbackReason(gemini)));
+    }
+
+    private Map<String, Object> providerStatusRow(Map<String, Object> trace,
+                                                   String provider,
+                                                   String configuredRoute,
+                                                   String configuredModel,
+                                                   boolean configuredEnabled,
+                                                   boolean configuredCredentialPresent,
+                                                   String configuredFallbackReason) {
+        String exactPrefix = "provider.status." + provider + ".";
+        String webPrefix = "web." + provider + ".";
+        boolean enabled = booleanValue(traceValue(trace, exactPrefix + "enabled"), configuredEnabled)
+                && !truthy(traceValue(trace, webPrefix + "providerDisabled"));
+        boolean credentialPresent = booleanValue(
+                traceValue(trace, exactPrefix + "credentialPresent"), configuredCredentialPresent);
+        Object statusCode = providerStatusCode(firstTraceValue(trace,
+                exactPrefix + "statusCode", webPrefix + "httpStatus"));
+        long latencyMs = boundedProviderLong(firstTraceValue(trace,
+                exactPrefix + "latencyMs", webPrefix + "tookMs"), MAX_PROVIDER_LATENCY_MS);
+        int attemptCount = (int) boundedProviderLong(
+                traceValue(trace, exactPrefix + "attemptCount"), MAX_PROVIDER_ATTEMPTS);
+        boolean cacheHit = booleanValue(firstTraceValue(trace,
+                exactPrefix + "cacheHit", webPrefix + "cacheOnly.hit"), false);
+        String quotaDecision = safeProviderLabel(
+                traceValue(trace, exactPrefix + "quotaDecision"), null);
+        if (quotaDecision == null) {
+            quotaDecision = truthy(traceValue(trace, webPrefix + "quota.exhausted"))
+                    ? "exhausted"
+                    : (trace.containsKey(webPrefix + "quota.remaining") ? "allowed" : "not_observed");
+        }
+        String fallbackReason = safeProviderLabel(firstTraceValue(trace,
+                exactPrefix + "fallbackReason",
+                webPrefix + "disabledReasonCanonical",
+                webPrefix + "disabledReason",
+                webPrefix + "failureReason",
+                webPrefix + "skipped.reason"), null);
+        if (fallbackReason == null || fallbackReason.isBlank()) {
+            fallbackReason = !enabled
+                    ? safeProviderLabel(configuredFallbackReason, "unavailable")
+                    : "not_observed";
+        }
+        String errorClass = safeProviderLabel(firstTraceValue(trace,
+                exactPrefix + "errorClass", webPrefix + "exceptionType"), "not_observed");
+
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("provider", provider);
+        row.put("route", safeProviderLabel(traceValue(trace, exactPrefix + "route"), configuredRoute));
+        row.put("model", safeProviderLabel(traceValue(trace, exactPrefix + "model"), configuredModel));
+        row.put("enabled", enabled);
+        row.put("credentialPresent", credentialPresent);
+        row.put("attemptCount", attemptCount);
+        row.put("statusCode", statusCode);
+        row.put("latencyMs", latencyMs);
+        row.put("cacheHit", cacheHit);
+        row.put("quotaDecision", quotaDecision);
+        row.put("fallbackReason", fallbackReason);
+        row.put("errorClass", errorClass);
+        return row;
+    }
+
+    private ProviderCredentialResolver.Resolution safeProviderResolution(
+            ProviderCredentialResolver.Provider provider) {
+        if (providerCredentialResolver == null || provider == null) {
+            return null;
+        }
+        try {
+            return providerCredentialResolver.resolve(provider);
+        } catch (RuntimeException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("provider_credential_resolution", ex);
+            return null;
+        }
+    }
+
+    private boolean effectiveCredentialEnabled(
+            ProviderCredentialResolver.Provider provider,
+            boolean fallbackEnabled) {
+        ProviderCredentialResolver.Resolution resolution = safeProviderResolution(provider);
+        return resolution == null ? fallbackEnabled : resolution.enabled();
+    }
+
+    private String geminiFallbackReason(ProviderCredentialResolver.Resolution resolution) {
+        if (!geminiGatewayEnabled) {
+            return "gateway-disabled";
+        }
+        if (!geminiSearchExpansionEnabled) {
+            return "purpose-disabled";
+        }
+        return resolution == null ? "missing-credential" : resolution.disabledReason();
+    }
+
+    private Map<String, Object> latestProviderStatusTraceSnapshot() {
+        if (traceSnapshotStore == null) {
+            return Map.of();
+        }
+        try {
+            for (Map<String, Object> summary : traceSnapshotStore.listSummaries(5)) {
+                Object id = summary == null ? null : summary.get("id");
+                if (id == null || String.valueOf(id).isBlank()) {
+                    continue;
+                }
+                java.util.Optional<TraceSnapshotStore.TraceSnapshot> snapshot =
+                        traceSnapshotStore.get(String.valueOf(id));
+                if (snapshot.isPresent() && hasProviderStatusSignal(snapshot.get().trace())) {
+                    return snapshot.get().trace();
+                }
+            }
+        } catch (RuntimeException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("provider_status_snapshot", ex);
+        }
+        return Map.of();
+    }
+
+    private static boolean hasProviderStatusSignal(Map<String, Object> trace) {
+        if (trace == null || trace.isEmpty()) {
+            return false;
+        }
+        for (String provider : List.of("brave", "naver", "gemini")) {
+            if (trace.containsKey("provider.status." + provider + ".provider")
+                    || trace.containsKey("provider.status." + provider + ".attemptCount")
+                    || trace.containsKey("web." + provider + ".httpStatus")
+                    || trace.containsKey("web." + provider + ".tookMs")
+                    || trace.containsKey("web." + provider + ".failureReason")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean localModelRuntimeRecentlySucceeded() {
+        if (OllamaNativeChatModel.hasRecentNativeSuccess(Duration.ofMinutes(30))) {
+            return true;
+        }
+        if (ModelRuntimeHealthTracker.hasRecentLocalSuccess(Duration.ofMinutes(30))) {
+            return true;
+        }
+        if (modelRuntimeHealthTracker == null) {
+            return false;
+        }
+        try {
+            for (Map<String, Object> snapshot : modelRuntimeHealthTracker.redactedSnapshots()) {
+                String provider = safeTraceLabel(stringValue(snapshot.get("provider")));
+                if ("local".equals(provider)
+                        && truthy(snapshot.get("lastSuccess"))
+                        && intOrZero(snapshot.get("successCount")) > 0) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("model_runtime_health_snapshot", ex);
+        }
+        return false;
+    }
+
+    private static Map<String, Object> localModelSuccessOperatorAction() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("triggered", false);
+        out.put("triggerReason", "recent_local_model_success");
+        out.put("failureClass", "none");
+        out.put("nextAction", "none");
+        out.put("actionScore", 0);
+        out.put("scoreDelta", 0);
+        out.put("negativeSignalCount", 0);
+        return out;
+    }
+
+    private static boolean clearedLocalLlmOperatorAction(Map<String, Object> operatorAction) {
+        return operatorAction != null
+                && Boolean.FALSE.equals(operatorAction.get("triggered"))
+                && "none".equals(safeTraceLabel(stringValue(operatorAction.get("failureClass"))))
+                && "none".equals(safeActionLabel(stringValue(operatorAction.get("nextAction"))));
+    }
+
+    private Map<String, Object> localLlmSmokeHistoryOperatorAction() {
+        if (localLlmSmokeHistoryDiagnosticsService == null) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> snapshot = localLlmSmokeHistoryDiagnosticsService.snapshot(1);
+            Map<String, Object> latest = mapValue(snapshot.get("latest"));
+            return localLlmOperatorActionFromMap(mapValue(latest.get("operatorAction")));
+        } catch (RuntimeException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("local_llm_smoke_history", ex);
+            return Map.of();
+        }
+    }
+
+    private static Map<String, Object> localLlmOperatorAction(Map<String, Object> trace) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        putOperatorBoolean(out, "triggered", trace,
+                "llm.localSmoke.operatorAction.triggered",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.triggered",
+                "debug.ai.agentDebugEvidence.localLlm.operatorAction.triggered");
+        putOperatorLabel(out, "triggerReason", trace,
+                "llm.localSmoke.operatorAction.triggerReason",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.triggerReason",
+                "debug.ai.agentDebugEvidence.localLlm.operatorAction.triggerReason");
+        putOperatorLabel(out, "failureClass", trace,
+                "llm.localSmoke.operatorAction.failureClass",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.failureClass",
+                "debug.ai.agentDebugEvidence.localLlm.operatorAction.failureClass");
+        putOperatorAction(out, "nextAction", trace,
+                "llm.localSmoke.operatorAction.nextAction",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.nextAction",
+                "debug.ai.agentDebugEvidence.localLlm.operatorAction.nextAction");
+        putOperatorInt(out, "actionScore", trace,
+                "llm.localSmoke.operatorAction.actionScore",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.actionScore",
+                "debug.ai.agentDebugEvidence.localLlm.operatorAction.actionScore");
+        putOperatorInt(out, "scoreDelta", trace,
+                "llm.localSmoke.operatorAction.scoreDelta",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.scoreDelta",
+                "debug.ai.agentDebugEvidence.localLlm.operatorAction.scoreDelta");
+        putOperatorInt(out, "negativeSignalCount", trace,
+                "llm.localSmoke.operatorAction.negativeSignalCount",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.negativeSignalCount",
+                "debug.ai.agentDebugEvidence.localLlm.operatorAction.negativeSignalCount");
+        return out.isEmpty() ? Map.of() : out;
+    }
+
+    private static Map<String, Object> localLlmOperatorActionFromMap(Map<String, Object> source) {
+        if (source == null || source.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        putOperatorBoolean(out, "triggered", source, "triggered");
+        putOperatorLabel(out, "triggerReason", source, "triggerReason");
+        putOperatorLabel(out, "failureClass", source, "failureClass");
+        putOperatorAction(out, "nextAction", source, "nextAction");
+        putOperatorInt(out, "actionScore", source, "actionScore");
+        putOperatorInt(out, "scoreDelta", source, "scoreDelta");
+        putOperatorInt(out, "negativeSignalCount", source, "negativeSignalCount");
+        return out.isEmpty() ? Map.of() : out;
+    }
+
+    private static void putOperatorBoolean(Map<String, Object> out,
+                                           String outputKey,
+                                           Map<String, Object> trace,
+                                           String... traceKeys) {
+        Object value = firstTraceValue(trace, traceKeys);
+        if (value != null) {
+            out.put(outputKey, truthy(value));
+        }
+    }
+
+    private static void putOperatorLabel(Map<String, Object> out,
+                                         String outputKey,
+                                         Map<String, Object> trace,
+                                         String... traceKeys) {
+        String value = safeTraceLabel(stringValue(firstTraceValue(trace, traceKeys)));
+        if (value != null) {
+            out.put(outputKey, value);
+        }
+    }
+
+    private static void putOperatorAction(Map<String, Object> out,
+                                          String outputKey,
+                                          Map<String, Object> trace,
+                                          String... traceKeys) {
+        String value = safeActionLabel(stringValue(firstTraceValue(trace, traceKeys)));
+        if (value != null) {
+            out.put(outputKey, value);
+        }
+    }
+
+    private static void putOperatorInt(Map<String, Object> out,
+                                       String outputKey,
+                                       Map<String, Object> trace,
+                                       String... traceKeys) {
+        Object value = firstTraceValue(trace, traceKeys);
+        if (value != null) {
+            out.put(outputKey, intOrZero(value));
+        }
     }
 
     private Map<String, Object> debugEventHealth() {
@@ -484,6 +856,9 @@ public class AgentPipelineHealthController {
             row.put("queryRewriteBranchTitleHashCount", intOrZero(scorecard.get("queryRewriteBranchTitleHashCount")));
             row.put("queryRewriteBranchAxisCount", intOrZero(scorecard.get("queryRewriteBranchAxisCount")));
             row.put("queryRewritePaddedCount", intOrZero(scorecard.get("queryRewritePaddedCount")));
+            if (scorecard.get("chatUsage") instanceof Map<?, ?> chatUsage) {
+                row.put("chatUsage", new LinkedHashMap<>(chatUsage));
+            }
             row.put("topTile", topTile == null ? null : safeTraceLabel(topTile.tileName()));
             row.put("topTileStatus", topTile == null ? null : safeTraceLabel(topTile.status()));
             row.put("topFailureClass", topTile == null ? null : safeTraceLabel(topTile.topFailureClass()));
@@ -882,7 +1257,13 @@ public class AgentPipelineHealthController {
                 || trace.containsKey("llm.model.policy.blocked")
                 || trace.containsKey("llm.error.code")
                 || trace.containsKey("llm.model")
-                || trace.containsKey("answer.mode");
+                || trace.containsKey("answer.mode")
+                || trace.containsKey("llm.localSmoke.operatorAction.failureClass")
+                || trace.containsKey("llm.localSmoke.operatorAction.nextAction")
+                || trace.containsKey("prompt.agentDebugEvidence.localLlm.operatorAction.failureClass")
+                || trace.containsKey("prompt.agentDebugEvidence.localLlm.operatorAction.nextAction")
+                || trace.containsKey("debug.ai.agentDebugEvidence.localLlm.operatorAction.failureClass")
+                || trace.containsKey("debug.ai.agentDebugEvidence.localLlm.operatorAction.nextAction");
     }
 
     private AgentDbContextProvider.MemorySnapshot safeMemorySnapshot() {
@@ -948,14 +1329,32 @@ public class AgentPipelineHealthController {
         return "missing";
     }
 
-    private Map<String, Object> providerState(String provider, String keySource, String missingReason) {
-        boolean hasKey = !"missing".equals(keySource);
+    private Map<String, Object> providerState(
+            String provider,
+            ProviderCredentialResolver.Provider credentialProvider,
+            String fallbackKeySource,
+            String missingReason) {
+        ProviderCredentialResolver.Resolution resolution = safeProviderResolution(credentialProvider);
+        boolean hasKey = resolution == null
+                ? !"missing".equals(fallbackKeySource)
+                : resolution.enabled();
+        String keySource = resolution == null
+                ? fallbackKeySource
+                : safeProviderLabel(resolution.sourceName(), hasKey ? "unknown" : "none");
+        String disabledReason = null;
+        if (!hasKey) {
+            String resolvedReason = resolution == null ? null : resolution.disabledReason();
+            disabledReason = resolvedReason == null || resolvedReason.isBlank()
+                    || "missing-credential".equals(resolvedReason)
+                            ? missingReason
+                            : safeProviderLabel(resolvedReason, missingReason);
+        }
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("provider", provider);
         row.put("status", hasKey ? OK : DISABLED);
         row.put("hasKey", hasKey);
         row.put("keySource", keySource);
-        row.put("disabledReason", hasKey ? null : missingReason);
+        row.put("disabledReason", disabledReason);
         return row;
     }
 
@@ -1012,7 +1411,10 @@ public class AgentPipelineHealthController {
             boolean guiOnly = booleanField(root, "guiOnly", ok && countEvidence);
             boolean noTerminalAutomation = booleanField(root, "noTerminalAutomation", ok && countEvidence);
             boolean supportingOnly = booleanField(root, "supportingOnly", ok && countEvidence);
-            boolean stale = root.path("stale").asBoolean(false);
+            ExternalEvidenceFreshnessPolicy.Freshness freshness = EXTERNAL_EVIDENCE_FRESHNESS.evaluate(root);
+            int ageMinutes = freshness.ageMinutes();
+            int staleAfterMinutes = freshness.staleAfterMinutes();
+            boolean stale = freshness.stale();
             boolean storesRawAppNames = root.path("storesRawAppNames").asBoolean(false);
             boolean storesAppNames = root.path("storesAppNames").asBoolean(storesRawAppNames);
             boolean storesWindowTitles = root.path("storesWindowTitles").asBoolean(false);
@@ -1031,8 +1433,8 @@ public class AgentPipelineHealthController {
             row.put("stale", stale);
             row.put("decision", decision);
             row.put("generatedAt", generatedAtOrCheckedAt(root));
-            row.put("ageMinutes", Math.max(0, root.path("ageMinutes").asInt(0)));
-            row.put("staleAfterMinutes", Math.max(0, root.path("staleAfterMinutes").asInt(0)));
+            row.put("ageMinutes", ageMinutes);
+            row.put("staleAfterMinutes", staleAfterMinutes);
             row.put("countOnly", countOnly);
             row.put("storesAppNames", storesAppNames);
             row.put("storesRawAppNames", storesRawAppNames);
@@ -1092,12 +1494,18 @@ public class AgentPipelineHealthController {
         row.put("evidenceScope", "local-ui-proof");
         Path smokePath = Path.of(firstNonBlank(browserSmokePath, "var/codex-smoke/browser-ui-smoke.json"));
         if (!Files.isRegularFile(smokePath)) {
+            String configuredTargetHost = configuredBrowserTargetHost();
+            boolean configuredPublicDomain = PUBLIC_BROWSER_HOST.equals(configuredTargetHost);
+            row.put("evidenceScope", browserEvidenceScope(configuredPublicDomain, false));
             row.put("status", WARN);
             row.put("reachable", false);
             row.put("localhost", false);
+            row.put("publicDomain", configuredPublicDomain);
+            row.put("targetAccepted", configuredPublicDomain);
+            row.put("targetHost", configuredTargetHost);
             row.put("screenshotCaptured", false);
             row.put("evidenceNeeded", "browser_ui_smoke_missing");
-            row.put("nextAction", "run_browser_local_ui_smoke");
+            row.put("nextAction", browserRunAction(configuredPublicDomain, false));
             return row;
         }
         try {
@@ -1106,9 +1514,17 @@ public class AgentPipelineHealthController {
             boolean ok = booleanField(root, "ok", proofStripReady);
             boolean reachable = booleanField(root, "reachable", proofStripReady);
             boolean localhost = booleanField(root, "localhost", proofStripReady);
+            String targetHost = browserTargetHost(root);
+            boolean publicDomain = PUBLIC_BROWSER_HOST.equals(targetHost)
+                    || booleanField(root, "publicDomain", false)
+                    || booleanField(root, "targetPublicDomain", false);
+            boolean targetAccepted = localhost || publicDomain;
             boolean screenshotCaptured = booleanField(root, "screenshotCaptured", proofStripReady);
             boolean targetContentVisible = booleanField(root, "targetContentVisible", proofStripReady);
-            boolean stale = root.path("stale").asBoolean(false);
+            ExternalEvidenceFreshnessPolicy.Freshness freshness = EXTERNAL_EVIDENCE_FRESHNESS.evaluate(root);
+            int ageMinutes = freshness.ageMinutes();
+            int staleAfterMinutes = freshness.staleAfterMinutes();
+            boolean stale = freshness.stale();
             String statusClass = firstNonBlank(safeTraceLabel(root.path("statusClass").asText("")),
                     proofStripReady ? "proof_strip_visible" : "unknown");
             String errorClass = firstNonBlank(safeTraceLabel(root.path("errorClass").asText("")), "none");
@@ -1117,60 +1533,194 @@ public class AgentPipelineHealthController {
             String nextAction = firstNonBlank(safeActionLabel(root.path("nextAction").asText("")), null);
             int secretHits = countValue(root.path("secretHits"))
                     + countValue(root.path("rawSecretPatternHits"));
-            String evidenceNeeded = browserEvidenceNeeded(ok, reachable, localhost, screenshotCaptured, secretHits,
-                    root.path("evidenceNeeded").asText(""));
+            boolean publicListenerUnreachable = browserPublicListenerUnreachable(publicDomain, localhost, reachable,
+                    statusClass, root.path("evidenceNeeded").asText(""));
+            String evidenceNeeded = browserEvidenceNeeded(ok, reachable, targetAccepted, screenshotCaptured, stale,
+                    secretHits, root.path("evidenceNeeded").asText(""), publicListenerUnreachable);
+            row.put("evidenceScope", browserEvidenceScope(publicDomain, localhost));
             row.put("status", evidenceNeeded == null ? OK : WARN);
             row.put("reachable", reachable);
             row.put("localhost", localhost);
+            row.put("publicDomain", publicDomain);
+            row.put("targetAccepted", targetAccepted);
+            row.put("targetHost", targetHost);
             row.put("screenshotCaptured", screenshotCaptured);
             row.put("statusClass", statusClass);
             row.put("errorClass", errorClass);
             row.put("targetContentVisible", targetContentVisible);
             row.put("browserSurface", browserSurface);
             row.put("generatedAt", generatedAtOrCheckedAt(root));
-            row.put("ageMinutes", Math.max(0, root.path("ageMinutes").asInt(0)));
-            row.put("staleAfterMinutes", Math.max(0, root.path("staleAfterMinutes").asInt(0)));
+            row.put("ageMinutes", ageMinutes);
+            row.put("staleAfterMinutes", staleAfterMinutes);
             row.put("stale", stale);
             row.put("secretHits", secretHits);
             row.put("evidenceNeeded", evidenceNeeded);
-            row.put("nextAction", firstNonBlank(nextAction, evidenceNeeded == null
-                    ? "browser_local_ui_smoke_current"
-                    : "run_browser_local_ui_smoke"));
+            String recommendedNextAction = evidenceNeeded == null
+                    ? browserCurrentAction(publicDomain, localhost)
+                    : browserRerunAction(publicDomain, localhost, publicListenerUnreachable);
+            row.put("nextAction", publicListenerUnreachable ? recommendedNextAction
+                    : firstNonBlank(nextAction, recommendedNextAction));
             return row;
         } catch (IOException | RuntimeException ex) {
             AgentPipelineHealthTrace.traceSuppressed("browser_evidence", ex);
+            String configuredTargetHost = configuredBrowserTargetHost();
+            boolean configuredPublicDomain = PUBLIC_BROWSER_HOST.equals(configuredTargetHost);
+            row.put("evidenceScope", browserEvidenceScope(configuredPublicDomain, false));
             row.put("status", WARN);
             row.put("reachable", false);
             row.put("localhost", false);
+            row.put("publicDomain", configuredPublicDomain);
+            row.put("targetAccepted", configuredPublicDomain);
+            row.put("targetHost", configuredTargetHost);
             row.put("screenshotCaptured", false);
             row.put("evidenceNeeded", "browser_ui_smoke_unreadable");
-            row.put("nextAction", "rerun_browser_local_ui_smoke");
+            row.put("nextAction", browserRerunAction(configuredPublicDomain, false));
             return row;
         }
     }
 
     private static String browserEvidenceNeeded(boolean ok,
                                                 boolean reachable,
-                                                boolean localhost,
+                                                boolean targetAccepted,
                                                 boolean screenshotCaptured,
+                                                boolean stale,
                                                 int secretHits,
-                                                String reportedEvidenceNeeded) {
+                                                String reportedEvidenceNeeded,
+                                                boolean publicListenerUnreachable) {
         if (secretHits > 0) {
             return "browser_smoke_secret_pattern_hits";
+        }
+        if (publicListenerUnreachable) {
+            return "public-listener-unreachable";
         }
         if (!ok) {
             return firstNonBlank(safeTraceLabel(reportedEvidenceNeeded), "browser_session_evidence_needed");
         }
-        if (!reachable) {
-            return "browser_local_ui_unreachable";
+        if (stale) {
+            return "browser_ui_smoke_stale";
         }
-        if (!localhost) {
-            return "browser_localhost_evidence_missing";
+        if (!reachable) {
+            return "browser_ui_unreachable";
+        }
+        if (!targetAccepted) {
+            return "browser_target_evidence_missing";
         }
         if (!screenshotCaptured) {
             return "browser_screenshot_evidence_missing";
         }
         return null;
+    }
+
+    private static String browserCurrentAction(boolean publicDomain, boolean localhost) {
+        if (publicDomain && !localhost) {
+            return "browser_public_domain_ui_smoke_current";
+        }
+        return "browser_local_ui_smoke_current";
+    }
+
+    private static String browserEvidenceScope(boolean publicDomain, boolean localhost) {
+        if (publicDomain && !localhost) {
+            return "public-domain-ui-proof";
+        }
+        return "local-ui-proof";
+    }
+
+    private static String browserRunAction(boolean publicDomain, boolean localhost) {
+        if (publicDomain && !localhost) {
+            return "run_browser_public_domain_ui_smoke";
+        }
+        return "run_browser_local_ui_smoke";
+    }
+
+    private static String browserRerunAction(boolean publicDomain, boolean localhost) {
+        return browserRerunAction(publicDomain, localhost, false);
+    }
+
+    private static String browserRerunAction(boolean publicDomain, boolean localhost, boolean publicListenerUnreachable) {
+        if (publicDomain && !localhost) {
+            if (publicListenerUnreachable) {
+                return "open_public_80_443_then_rerun_browser_public_domain_ui_smoke";
+            }
+            return "rerun_browser_public_domain_ui_smoke";
+        }
+        return "run_browser_local_ui_smoke";
+    }
+
+    private static boolean browserPublicListenerUnreachable(boolean publicDomain,
+                                                           boolean localhost,
+                                                           boolean reachable,
+                                                           String statusClass,
+                                                           String reportedEvidenceNeeded) {
+        if (!publicDomain || localhost || reachable) {
+            return false;
+        }
+        String status = safeTraceLabel(statusClass);
+        String evidence = safeTraceLabel(reportedEvidenceNeeded);
+        return "public-listener-unreachable".equals(evidence)
+                || "connection_refused".equals(status)
+                || "tcp_unreachable".equals(status);
+    }
+
+    private String configuredBrowserTargetHost() {
+        return safeBrowserTargetHost(appPublicBaseUrl);
+    }
+
+    private static String browserTargetHost(JsonNode root) {
+        if (root == null) {
+            return "unknown";
+        }
+        String directHost = safeBrowserHost(firstNonBlank(
+                root.path("targetHost").asText(""),
+                root.path("host").asText("")));
+        if (!"unknown".equals(directHost)) {
+            return directHost;
+        }
+        String rawUrl = firstNonBlank(
+                root.path("targetUrl").asText(""),
+                root.path("url").asText(""),
+                root.path("rawUrl").asText(""));
+        if (rawUrl.isBlank()) {
+            return "unknown";
+        }
+        try {
+            return safeBrowserHost(URI.create(rawUrl).getHost());
+        } catch (IllegalArgumentException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("browser_target_host", ex);
+            return "unknown";
+        }
+    }
+
+    private static String safeBrowserTargetHost(String value) {
+        if (value == null || value.isBlank()) {
+            return "unknown";
+        }
+        String trimmed = value.trim();
+        try {
+            URI uri = URI.create(trimmed);
+            if (uri.getHost() != null) {
+                return safeBrowserHost(uri.getHost());
+            }
+        } catch (IllegalArgumentException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("browser_configured_host", ex);
+        }
+        return safeBrowserHost(trimmed);
+    }
+
+    private static String safeBrowserHost(String host) {
+        if (host == null || host.isBlank()) {
+            return "unknown";
+        }
+        String normalized = host.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("localhost".equals(normalized)
+                || "127.0.0.1".equals(normalized)
+                || "::1".equals(normalized)
+                || "[::1]".equals(normalized)) {
+            return "localhost";
+        }
+        if (PUBLIC_BROWSER_HOST.equals(normalized)) {
+            return PUBLIC_BROWSER_HOST;
+        }
+        return "unknown";
     }
 
     private Map<String, Object> patchDropEvidence() {
@@ -1229,24 +1779,144 @@ public class AgentPipelineHealthController {
 
     private Map<String, Object> causalProbeLane() {
         Map<String, Object> trace = TraceStore.getAll();
-        if (trace == null || trace.keySet().stream().noneMatch(key -> key != null && key.startsWith("causalProbe."))) {
+        String source = "current_trace";
+        if (!hasProbeRoundSignal(trace)) {
+            trace = latestProbeRoundTraceSnapshot(stringValue(traceValue(trace, "sessionId")));
+            source = trace.isEmpty() ? "none" : "trace_snapshot";
+        }
+        if (!hasProbeRoundSignal(trace)) {
             return lane("causalProbe", false, "not_observed");
         }
         boolean evidenceReady = truthy(traceValue(trace, "causalProbe.evidenceReady"));
         String reason = firstNonBlank(safeTraceLabel(stringValue(traceValue(trace, "causalProbe.triggerReason"))),
                 evidenceReady ? "axis_agreement" : "observe_only");
-        String dominant = firstNonBlank(safeTraceLabel(stringValue(traceValue(trace, "causalProbe.dominantFailure"))), "none");
+        String dominant = firstNonBlank(
+                safeTraceLabel(stringValue(firstTraceValue(trace,
+                        "orch.probeRound.hypothesis", "causalProbe.dominantFailure"))),
+                "none");
         String action = firstNonBlank(safeTraceLabel(stringValue(traceValue(trace, "causalProbe.action"))), "observe_only");
         String where = firstNonBlank(safeActionLabel(stringValue(traceValue(trace, "causalProbe.where"))), "unknown")
                 .toLowerCase(java.util.Locale.ROOT);
-        double confidence = boundedDouble(traceValue(trace, "causalProbe.confidence"));
+        double confidence = boundedDouble(firstTraceValue(trace,
+                "orch.probeRound.causalConfidence", "causalProbe.confidence"));
         int axisCount = intOrZero(traceValue(trace, "causalProbe.axisCount"));
-        Map<String, Object> row = lane("causalProbe", evidenceReady ? WARN : OK, true, reason);
+        String phase = firstNonBlank(
+                safeTraceLabel(stringValue(traceValue(trace, "orch.probeRound.phase"))),
+                evidenceReady ? "causal_only" : "observed").toUpperCase(java.util.Locale.ROOT);
+        String patchCandidate = firstNonBlank(
+                safeTraceLabel(stringValue(firstTraceValue(trace,
+                        "orch.probeRound.patchCandidate", "causalProbe.patchCandidate"))),
+                "none");
+        int counterEvidenceCount = intOrZero(firstTraceValue(trace,
+                "orch.probeRound.counterEvidenceCount", "counterEvidence.acceptedDocumentCount"));
+        double retrievalConfidence = boundedDouble(firstTraceValue(trace,
+                "orch.probeRound.retrievalConfidence", "counterEvidence.retrievalConfidenceScore"));
+        String coherenceStatus = firstNonBlank(
+                safeTraceLabel(stringValue(firstTraceValue(trace,
+                        "orch.probeRound.coherenceStatus", "evidenceCoherence.coherenceStatus"))),
+                "pending");
+        String releaseStatus = firstNonBlank(
+                safeTraceLabel(stringValue(firstTraceValue(trace,
+                        "orch.probeRound.releaseStatus", "evidenceCoherence.releaseStatus"))),
+                "hold");
+        String confidenceRange = firstNonBlank(
+                safeTraceLabel(stringValue(firstTraceValue(trace,
+                        "orch.probeRound.confidenceRange", "evidenceCoherence.confidenceRange"))),
+                "pending");
+        boolean verificationGatePassed = truthy(firstTraceValue(trace,
+                "orch.probeRound.verificationGatePassed", "evidenceCoherence.verificationGatePassed"));
+        Map<String, Object> row = lane("causalProbe",
+                verificationGatePassed ? OK : (evidenceReady || phaseNotTerminal(phase) ? WARN : OK),
+                true, reason);
         row.put("dominantFailure", dominant); row.put("action", action); row.put("confidence", confidence);
         row.put("axisCount", axisCount); row.put("where", where);
+        row.put("phase", phase); row.put("patchCandidate", patchCandidate);
+        row.put("counterEvidenceCount", counterEvidenceCount);
+        row.put("retrievalConfidence", retrievalConfidence);
+        row.put("coherenceStatus", coherenceStatus); row.put("releaseStatus", releaseStatus);
+        row.put("confidenceRange", confidenceRange);
+        row.put("verificationGatePassed", verificationGatePassed);
         row.put("detail", "dominant=" + dominant + " action=" + action + " confidence=" + confidence + " axes=" + axisCount);
-        row.put("source", "trace:causalProbe");
+        row.put("roundDetail", "phase=" + phase + " hypothesis=" + dominant
+                + " evidence=" + counterEvidenceCount + " confidence=" + confidence + "->" + confidenceRange
+                + " retrieval=" + retrievalConfidence + " coherence=" + coherenceStatus
+                + " release=" + releaseStatus + " gate=" + (verificationGatePassed ? "pass" : "hold"));
+        row.put("source", "trace_snapshot".equals(source) ? "trace:probeRound" : "trace:causalProbe");
         return row;
+    }
+
+    private Map<String, Object> latestProbeRoundTraceSnapshot(String sessionHash) {
+        if (traceSnapshotStore == null || sessionHash == null || sessionHash.isBlank()) {
+            return Map.of();
+        }
+        Map<String, Object> merged = new LinkedHashMap<>();
+        String targetRoundRef = null;
+        try {
+            for (Map<String, Object> summary : traceSnapshotStore.listSummaries(50)) {
+                Object id = summary == null ? null : summary.get("id");
+                if (id == null || String.valueOf(id).isBlank()) {
+                    continue;
+                }
+                java.util.Optional<TraceSnapshotStore.TraceSnapshot> snapshot =
+                        traceSnapshotStore.get(String.valueOf(id));
+                if (snapshot.isEmpty() || !sessionHash.equals(snapshot.get().sessionId())) {
+                    continue;
+                }
+                Map<String, Object> candidate = snapshot.get().trace();
+                if (!hasProbeRoundSignal(candidate)) {
+                    continue;
+                }
+                String candidateRoundRef = safeProbeRoundRef(
+                        stringValue(traceValue(candidate, "orch.probeRound.roundRef")));
+                if (candidateRoundRef == null) {
+                    candidate.forEach((key, value) -> {
+                        if (isProbeRoundTraceKey(key)) {
+                            merged.putIfAbsent(key, value);
+                        }
+                    });
+                    return merged;
+                }
+                if (targetRoundRef == null) {
+                    targetRoundRef = candidateRoundRef;
+                }
+                if (!targetRoundRef.equals(candidateRoundRef)) {
+                    continue;
+                }
+                candidate.forEach((key, value) -> {
+                    if (isProbeRoundTraceKey(key)) {
+                        merged.putIfAbsent(key, value);
+                    }
+                });
+            }
+        } catch (RuntimeException ex) {
+            log.debug("[AWX][agent][pipeline] probe round snapshot lookup skipped errorType={}",
+                    ex.getClass().getSimpleName());
+            return Map.of();
+        }
+        return merged;
+    }
+
+    private static String safeProbeRoundRef(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT);
+        return normalized.matches("hash:[0-9a-f]{12}") ? normalized : null;
+    }
+
+    private static boolean hasProbeRoundSignal(Map<String, Object> trace) {
+        return trace != null && trace.keySet().stream().anyMatch(AgentPipelineHealthController::isProbeRoundTraceKey);
+    }
+
+    private static boolean isProbeRoundTraceKey(String key) {
+        return key != null && (key.startsWith("orch.probeRound.")
+                || key.startsWith("causalProbe.")
+                || key.startsWith("counterEvidence.")
+                || key.startsWith("evidenceCoherence."));
+    }
+
+    private static boolean phaseNotTerminal(String phase) {
+        return !"VERIFIED".equals(phase) && !"OBSERVED".equals(phase);
     }
 
     private Map<String, Object> circuitBreakerLane() {
@@ -1356,6 +2026,47 @@ public class AgentPipelineHealthController {
     private static Map<String, Object> firstNonOkExternalEvidence(List<Map<String, Object>> rows) {
         return rows == null ? Map.of() : rows.stream()
                 .filter(row -> row != null && !OK.equals(statusValue(row.get("status")))).findFirst().orElse(Map.of());
+    }
+
+    private static List<Map<String, Object>> blockingExternalEvidence(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        return rows.stream()
+                .filter(row -> row != null && !isSupportingEvidenceOnly(row))
+                .toList();
+    }
+
+    private static boolean isSupportingEvidenceOnly(Map<String, Object> row) {
+        if (row == null) {
+            return false;
+        }
+        String service = stringValue(row.get("service"));
+        String scope = safeTraceLabel(stringValue(row.get("evidenceScope")));
+        String evidenceNeeded = safeTraceLabel(stringValue(row.get("evidenceNeeded")));
+        if ("supabase".equals(service)) {
+            return safeTraceLabel(stringValue(row.get("lanePolicy"))) == null
+                    && Boolean.TRUE.equals(row.get("readOnly"))
+                    && Boolean.FALSE.equals(row.get("mutationAllowed"))
+                    && ("project_ref_missing".equals(evidenceNeeded) || "auth_missing".equals(evidenceNeeded));
+        }
+        if ("patchdrop".equals(service)) {
+            return intOrZero(row.get("activeTopLevelPatchCount")) == 0
+                    && ("patchdrop_report_only_pending".equals(evidenceNeeded)
+                        || "nested_patchdrop_reference_not_apply_candidate".equals(evidenceNeeded));
+        }
+        if ("computer-use".equals(service)) {
+            return true;
+        }
+        return "browser".equals(service)
+                && ("local-ui-proof".equals(scope) || "public-domain-ui-proof".equals(scope));
+    }
+
+    private static String supportingEvidenceDetailStatus(Map<String, Object> row, String status) {
+        if (isSupportingEvidenceOnly(row) && WARN.equals(statusValue(status))) {
+            return "SUPPORTING_EVIDENCE_MISSING";
+        }
+        return statusValue(status);
     }
 
     private static String worstListStatus(List<Map<String, Object>> rows) {
@@ -1921,6 +2632,7 @@ public class AgentPipelineHealthController {
             double parsed = value instanceof Number number ? number.doubleValue() : Double.parseDouble(String.valueOf(value).trim());
             return Double.isFinite(parsed) ? Math.max(0.0d, Math.min(1.0d, parsed)) : 0.0d;
         } catch (NumberFormatException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("bounded_double_parse", ex);
             return 0.0d;
         }
     }
@@ -1954,6 +2666,11 @@ public class AgentPipelineHealthController {
         return null;
     }
 
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> mapValue(Object value) {
+        return value instanceof Map<?, ?> ? (Map<String, Object>) value : Map.of();
+    }
+
     private static int stageSelectedKeyCount(Object value) {
         if (value instanceof Map<?, ?> map) {
             return map.size();
@@ -1978,6 +2695,61 @@ public class AgentPipelineHealthController {
             return trimmed;
         }
         return SafeRedactor.hashValue(trimmed);
+    }
+
+    private static boolean booleanValue(Object value, boolean fallback) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text) {
+            if ("true".equalsIgnoreCase(text.trim())) {
+                return true;
+            }
+            if ("false".equalsIgnoreCase(text.trim())) {
+                return false;
+            }
+        }
+        return fallback;
+    }
+
+    private static Object providerStatusCode(Object value) {
+        long code = boundedProviderLong(value, 999L);
+        return code >= 100L && code <= 599L ? (int) code : "not_observed";
+    }
+
+    private static long boundedProviderLong(Object value, long maximum) {
+        if (value == null) {
+            return 0L;
+        }
+        try {
+            long parsed = value instanceof Number number
+                    ? number.longValue()
+                    : Long.parseLong(String.valueOf(value).trim());
+            return Math.max(0L, Math.min(Math.max(0L, maximum), parsed));
+        } catch (NumberFormatException ex) {
+            AgentPipelineHealthTrace.traceSuppressed("provider_status_number", ex);
+            return 0L;
+        }
+    }
+
+    private static String safeProviderLabel(Object value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String text = String.valueOf(value).trim();
+        String lower = text.toLowerCase(java.util.Locale.ROOT);
+        if (text.isBlank()
+                || text.length() > 80
+                || !text.matches("[A-Za-z0-9_.:-]{1,80}")
+                || lower.contains("authorization")
+                || lower.contains("cookie")
+                || lower.contains("api_key")
+                || lower.contains("apikey")
+                || lower.contains("secret=")
+                || lower.contains("token=")) {
+            return fallback;
+        }
+        return text;
     }
 
     private static String safeTraceLabel(String value) {

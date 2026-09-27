@@ -3,6 +3,7 @@ package com.example.lms.agent.context;
 import com.example.lms.search.TraceStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
@@ -18,6 +19,7 @@ import java.util.function.Supplier;
 
 @RestController
 @RequestMapping("/agent/db-context")
+@ConditionalOnBean(AgentDbContextProvider.class)
 @ConditionalOnProperty(prefix = "agent.db-context", name = "enabled", havingValue = "true")
 public class AgentDbContextController {
     private static final Logger log = LoggerFactory.getLogger(AgentDbContextController.class);

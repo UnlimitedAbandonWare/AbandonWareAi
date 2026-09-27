@@ -18,9 +18,8 @@ import org.slf4j.Logger;
 /**
  * Periodically verifies the internal knowledge base for logical inconsistencies.  It scans
  * relationship attributes on stored entities and flags contradictions such as the same partner being
- * both preferred and discouraged.  If the free-tier API throttle permits, this service could
- * leverage an external model (e.g. Gemini) for deeper semantic checks, but for now it performs a
- * simple heuristic analysis in-process.
+ * both preferred and discouraged. It performs heuristic analysis in-process and does not
+ * acquire external model request permits.
  */
 @Service
 @RequiredArgsConstructor
@@ -30,7 +29,6 @@ public class KnowledgeConsistencyVerifier {
 
     private final DomainKnowledgeRepository knowledgeRepo;
     private final KnowledgeBaseService knowledgeBase;
-    private final FreeTierApiThrottleService throttle;
 
     /**
      * Run the consistency check on a fixed schedule.  The interval can be tuned via application
@@ -70,14 +68,6 @@ public class KnowledgeConsistencyVerifier {
                                 conflict.size(), rels.size());
                         // In a full implementation we would persist this to a review table or notify administrators
                     }
-                }
-                // shim for future LLM-based checks: if throttle allows, send combined data to Gemini.
-                if (throttle != null && throttle.canProceed()) {
-                    // shim: integrate with the Gemini client for advanced contradiction detection.
-                    // For now we just log that the throttle permits a call; no API call is made.
-                    log.debug("[KnowledgeConsistency] Throttle permits an external consistency check domainHash={} domainLength={} entityHash={} entityLength={}",
-                            SafeRedactor.hashValue(domain), lengthOf(domain),
-                            SafeRedactor.hashValue(entity), lengthOf(entity));
                 }
             }
         } catch (Exception e) {

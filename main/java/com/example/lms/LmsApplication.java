@@ -1,5 +1,6 @@
 package com.example.lms;
 
+import ai.abandonware.subagent.SubagentFlowRuntimeConfiguration;
 import ai.abandonware.nova.config.LlmRouterProperties;
 import com.example.lms.config.ConfigValueGuards;
 import com.example.lms.service.AdminService;
@@ -10,6 +11,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.slf4j.Logger;
@@ -20,6 +22,7 @@ import org.slf4j.LoggerFactory;
 @ConfigurationPropertiesScan
 @EnableScheduling
 @EnableAsync
+@Import(SubagentFlowRuntimeConfiguration.class)
 public class LmsApplication {
     private static final Logger log = LoggerFactory.getLogger(LmsApplication.class);
 

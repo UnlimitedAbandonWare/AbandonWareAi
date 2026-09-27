@@ -30,16 +30,23 @@ public class AgentDbContextPromptInjector {
             return;
         }
         try {
+            // 주입 시도와 결과를 단계별로 기록해 "컨텍스트 주입 여부"를 진단 가능하게 한다.
+            TraceStore.put("agent.dbContext.prompt.attempted", true);
             AgentDbContextProvider.AgentDbSnapshot snapshot = provider.snapshot();
             String dbSummary = snapshotSummary(snapshot);
             if (dbSummary == null || dbSummary.isBlank()) {
+                TraceStore.put("agent.dbContext.prompt.injected", false);
+                TraceStore.put("agent.dbContext.prompt.reason",
+                        snapshot == null ? "db_context_snapshot_null" : "db_context_summary_blank");
                 return;
             }
             String existing = builder.build().learningContextSummary();
             builder.learningContextSummary(append(existing, dbSummary));
             TraceStore.put("agent.dbContext.prompt.injected", true);
+            TraceStore.put("agent.dbContext.prompt.summaryChars", dbSummary.length());
         } catch (DataAccessException | IllegalStateException ex) {
             TraceStore.put("agent.dbContext.prompt.failSoft", true);
+            TraceStore.put("agent.dbContext.prompt.injected", false);
             TraceStore.put("agent.dbContext.prompt.reason", "db_context_snapshot_unavailable");
         }
     }
@@ -185,6 +192,14 @@ public class AgentDbContextPromptInjector {
             return null;
         }
         int safeMax = Math.max(1, max);
-        return value.length() <= safeMax ? value : value.substring(0, safeMax);
+        if (value.length() <= safeMax) {
+            return value;
+        }
+        int end = safeMax;
+        if (Character.isHighSurrogate(value.charAt(end - 1))
+                && Character.isLowSurrogate(value.charAt(end))) {
+            end--;
+        }
+        return value.substring(0, end);
     }
 }

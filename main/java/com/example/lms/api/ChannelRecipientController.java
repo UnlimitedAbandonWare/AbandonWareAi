@@ -23,10 +23,13 @@ public class ChannelRecipientController {
 
     private static final String SESSION_TOKEN = "channelAccessToken";
     private static final String DISABLED_REASON = "missing_access_token";
+    private static final String INVALID_PAGINATION_REASON = "invalid_pagination";
+    private static final String INVALID_PAGINATION_MESSAGE = "invalid recipient page";
+    private static final int MAX_PAGE_SIZE = 100;
 
     private final ChannelRecipientService recipientService;
 
-    @Value("${channel.recipients.page-size:${kakao.friends.page-size:10}}")
+    @Value("${channel.recipients.page-size:10}")
     private int pageSize;
 
     @GetMapping("/recipients")
@@ -37,11 +40,16 @@ public class ChannelRecipientController {
             @ModelAttribute("error") String error,
             Model model) {
 
+        Integer offset = admittedOffset(page, pageSize);
+        if (offset == null) {
+            return renderInvalidPagination(page, result, model);
+        }
+
         String accessToken = (String) session.getAttribute(SESSION_TOKEN);
         if (accessToken == null || accessToken.isBlank()) {
-            traceMissingAccessToken(Math.max(1, page));
+            traceMissingAccessToken(page);
             model.addAttribute("recipients", List.of());
-            model.addAttribute("page", Math.max(1, page));
+            model.addAttribute("page", page);
             model.addAttribute("hasPrev", false);
             model.addAttribute("hasNext", false);
             model.addAttribute("error", error == null || error.isBlank()
@@ -51,9 +59,8 @@ public class ChannelRecipientController {
             return "channels/recipients";
         }
 
-        int safePage = Math.max(1, page);
-        int safePageSize = Math.max(1, pageSize);
-        int offset = (safePage - 1) * safePageSize;
+        int safePage = page;
+        int safePageSize = pageSize;
         List<String> recipients = recipientService.fetchRecipientIds(accessToken, offset, safePageSize);
 
         model.addAttribute("recipients", recipients);
@@ -69,6 +76,31 @@ public class ChannelRecipientController {
     public String movePage(@RequestParam int page, RedirectAttributes redir) {
         redir.addAttribute("page", page);
         return "redirect:/channels/recipients";
+    }
+
+    private static Integer admittedOffset(int page, int configuredPageSize) {
+        if (page < 1 || configuredPageSize < 1 || configuredPageSize > MAX_PAGE_SIZE) {
+            return null;
+        }
+        long offset = ((long) page - 1L) * configuredPageSize;
+        if (offset < 0L || offset > Integer.MAX_VALUE) {
+            return null;
+        }
+        return (int) offset;
+    }
+
+    private static String renderInvalidPagination(int requestedPage, String result, Model model) {
+        model.addAttribute("recipients", List.of());
+        model.addAttribute("page", 1);
+        model.addAttribute("hasPrev", false);
+        model.addAttribute("hasNext", false);
+        model.addAttribute("error", INVALID_PAGINATION_MESSAGE);
+        model.addAttribute("result", result);
+        TraceStore.put("channel.recipients.controller.validationFailed", true);
+        TraceStore.put("channel.recipients.controller.skipped.reason", INVALID_PAGINATION_REASON);
+        TraceStore.put("channel.recipients.controller.requestedPage", requestedPage);
+        TraceStore.put("channel.recipients.controller.returnedCount", 0);
+        return "channels/recipients";
     }
 
     private static void traceMissingAccessToken(int safePage) {

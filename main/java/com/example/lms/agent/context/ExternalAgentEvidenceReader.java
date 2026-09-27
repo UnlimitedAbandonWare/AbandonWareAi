@@ -18,12 +18,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 final class ExternalAgentEvidenceReader {
     private static final Logger log = LoggerFactory.getLogger(ExternalAgentEvidenceReader.class);
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String OK = "OK";
     private static final String WARN = "WARN";
+    private static final Pattern ENV_NAME = Pattern.compile("[A-Za-z][A-Za-z0-9_]{1,63}");
     private static final List<String> EXTERNAL_EVIDENCE_LANES =
             List.of("supabase", "superpowers", "computer-use", "browser");
 
@@ -145,7 +147,7 @@ final class ExternalAgentEvidenceReader {
             row.put("evidenceNeededCount", Math.max(
                     firstInt(supabaseApply, "evidenceNeededCount"),
                     firstInt(supabaseSmoke, "evidenceNeededCount")));
-            row.put("requiredEnvNames", firstNonBlank(jsonLabelList(supabaseApply.path("requiredEnvNames")), "none"));
+            row.put("requiredEnvNames", firstNonBlank(jsonEnvNameList(supabaseApply.path("requiredEnvNames")), "none"));
             row.put("requiredMcpTools", firstNonBlank(jsonLabelList(supabaseApply.path("requiredMcpTools")), "none"));
             row.put("requiredResultNames", firstNonBlank(jsonLabelList(supabaseApply.path("requiredResultNames")), "none"));
             return row;
@@ -263,7 +265,7 @@ final class ExternalAgentEvidenceReader {
         row.put("supabaseMcpDecision", firstNonBlank(label(supabaseSmoke.path("mcpDecision").asText(""), null), "unknown"));
         row.put("supabaseEvidenceNeededCount", Math.max(
                 firstInt(supabaseApply, "evidenceNeededCount"), firstInt(supabaseSmoke, "evidenceNeededCount")));
-        row.put("supabaseRequiredEnvNames", firstNonBlank(jsonLabelList(supabaseApply.path("requiredEnvNames")), "none"));
+        row.put("supabaseRequiredEnvNames", firstNonBlank(jsonEnvNameList(supabaseApply.path("requiredEnvNames")), "none"));
         row.put("supabaseRequiredMcpTools", firstNonBlank(jsonLabelList(supabaseApply.path("requiredMcpTools")), "none"));
         row.put("supabaseRequiredResultNames", firstNonBlank(jsonLabelList(supabaseApply.path("requiredResultNames")), "none"));
         row.put("externalEvidenceNeededCount", firstInt(externalApply, "evidenceNeededCount"));
@@ -293,6 +295,7 @@ final class ExternalAgentEvidenceReader {
         row.put("browserUseTargetContentVisible", browserUse.path("targetContentVisible").asBoolean(false));
         row.put("browserUseStatusClass", firstNonBlank(label(browserUse.path("statusClass").asText(""), null), "unknown"));
         row.put("browserUseSurface", firstNonBlank(label(browserUse.path("browserSurface").asText(""), null), "unknown"));
+        row.put("browserUseEvidenceNeeded", firstNonBlank(label(browserUse.path("evidenceNeeded").asText(""), null), "none"));
         row.put("browserUseNextAction", firstNonBlank(action(browserUse.path("nextAction").asText("")), "none"));
         row.put("browserUseSecretHits", firstInt(browserUse, "secretHits", "rawSecretPatternHits"));
     }
@@ -311,6 +314,7 @@ final class ExternalAgentEvidenceReader {
             long minutes = Duration.between(then, Instant.now()).toMinutes();
             return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, minutes));
         } catch (RuntimeException ex) {
+            traceSuppressed("goal_next_auto_generated_at", ex);
             return 0;
         }
     }
@@ -345,6 +349,35 @@ final class ExternalAgentEvidenceReader {
 
     private static String jsonActionList(JsonNode node) {
         return jsonList(node, true);
+    }
+
+    private static String jsonEnvNameList(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder();
+        for (JsonNode item : node) {
+            String value = envName(item.asText(""));
+            if (value == null) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append(',');
+            }
+            out.append(value);
+        }
+        return out.toString();
+    }
+
+    private static String envName(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (ENV_NAME.matcher(trimmed).matches()) {
+            return trimmed.toLowerCase(Locale.ROOT);
+        }
+        return label(trimmed, null);
     }
 
     private static String jsonList(JsonNode node, boolean keepCase) {

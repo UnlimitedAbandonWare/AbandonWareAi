@@ -3,6 +3,7 @@ package com.example.lms.api;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -14,6 +15,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -57,6 +59,34 @@ public class ApiSecurityExceptionAdvice {
         HttpStatus status = statusForAccessDenied();
         String code = (status == HttpStatus.UNAUTHORIZED) ? "unauthenticated" : "forbidden";
         return ResponseEntity.status(status).body(body(status, code, ex, request));
+    }
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleClientDisconnect(
+            AsyncRequestNotUsableException ex,
+            HttpServletRequest request,
+            HttpServletResponse response
+    ) {
+        TraceStore.put("api.clientDisconnect", true);
+        TraceStore.put("api.clientDisconnect.reason", "async_request_not_usable");
+        if (request != null) {
+            String path = request.getRequestURI();
+            TraceStore.put("api.clientDisconnect.pathHash", SafeRedactor.hashValue(path));
+            TraceStore.put("api.clientDisconnect.pathLength", path == null ? 0 : path.length());
+        }
+        TraceStore.put("api.clientDisconnect.errorType", errorType(ex));
+        TraceStore.put("api.clientDisconnect.errorHash", SafeRedactor.hashValue(String.valueOf(ex)));
+        LOG.log(System.Logger.Level.DEBUG,
+                "API client disconnected stage=async_request_not_usable errorType=" + errorType(ex));
+        try {
+            if (response != null && !response.isCommitted()) {
+                response.setStatus(HttpStatus.NO_CONTENT.value());
+            }
+        } catch (RuntimeException statusError) {
+            traceSuppressed("client_disconnect_status", statusError);
+            LOG.log(System.Logger.Level.DEBUG,
+                    "API client disconnect status skipped errorType=" + errorType(statusError));
+        }
     }
 
     private static HttpStatus statusForAccessDenied() {
