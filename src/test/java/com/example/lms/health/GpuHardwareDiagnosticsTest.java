@@ -102,6 +102,109 @@ class GpuHardwareDiagnosticsTest {
     }
 
     @Test
+    void uuidRoleMappingSurvivesReorderedIndicesWithoutPublishingRawUuid() {
+        String mainUuid = "GPU-11111111-1111-1111-1111-111111111111";
+        String fastUuid = "GPU-22222222-2222-2222-2222-222222222222";
+        String rows = "0, NVIDIA GeForce RTX 3090, 24576, 100, 0, 30, 8, " + mainUuid + ", 00000000:0A:00.0, 616.64, 24476\n"
+                + "1, NVIDIA GeForce RTX 3060, 12288, 200, 0, 40, 9, " + fastUuid + ", 00000000:05:00.0, 616.64, 12088";
+        List<Map<String, Object>> first = GpuHardwareDiagnostics.parseNvidiaSmiCsv(rows);
+        List<Map<String, Object>> swapped = GpuHardwareDiagnostics.parseNvidiaSmiCsv(
+                rows.replace("0, NVIDIA GeForce RTX 3090", "1, NVIDIA GeForce RTX 3090")
+                        .replace("1, NVIDIA GeForce RTX 3060", "0, NVIDIA GeForce RTX 3060"));
+        assertEquals(com.example.lms.trace.SafeRedactor.hashValue(mainUuid), first.get(0).get("uuidHash"));
+        assertEquals(first.get(0).get("uuidHash"), swapped.get(0).get("uuidHash"));
+        assertEquals(first.get(0).get("role"), swapped.get(0).get("role"));
+        assertEquals("00000000:0A:00.0", first.get(0).get("pciBusId"));
+        assertEquals("616.64", first.get(0).get("driverVersion"));
+        assertEquals(24476, first.get(0).get("memoryFreeMiB"));
+        assertFalse(first.toString().contains(mainUuid));
+    }
+
+    @Test
+    void repeatedAdmissionReadsReuseBoundedHardwareObservation() {
+        MockEnvironment env = new MockEnvironment().withProperty("awx.gpu-hardware.telemetry.enabled", "true");
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        GpuHardwareDiagnostics.CommandRunner runner = timeout -> {
+            calls.incrementAndGet();
+            return new GpuHardwareDiagnostics.CommandResult(0,
+                    "0, NVIDIA GeForce RTX 3060, 12288, 100, 0, 30, 8", "", false);
+        };
+        Map<String, Object> first = GpuHardwareDiagnostics.snapshot(env, runner);
+        for (int i = 0; i < 20; i++) {
+            Map<String, Object> next = GpuHardwareDiagnostics.snapshot(env, runner);
+            assertEquals(first.get("observedAtEpochMs"), next.get("observedAtEpochMs"));
+        }
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void concurrentExpiredCacheReadersShareOneHardwareProbe() throws Exception {
+        var env = new MockEnvironment().withProperty("awx.gpu-hardware.telemetry.enabled", "true");
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var start = new java.util.concurrent.CountDownLatch(1);
+        GpuHardwareDiagnostics.CommandRunner runner = timeout -> {
+            calls.incrementAndGet();
+            Thread.sleep(100);
+            return new GpuHardwareDiagnostics.CommandResult(0, "0, NVIDIA GeForce RTX 3060, 12288, 100, 0, 30, 8", "", false);
+        };
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(8);
+        try {
+            var results = new java.util.ArrayList<java.util.concurrent.Future<Map<String, Object>>>();
+            for (int i = 0; i < 8; i++) results.add(pool.submit(() -> { start.await(); return GpuHardwareDiagnostics.snapshot(env, runner); }));
+            start.countDown();
+            Object first = results.get(0).get(3, java.util.concurrent.TimeUnit.SECONDS).get("observedAtEpochMs");
+            for (var result : results) assertEquals(first, result.get(3, java.util.concurrent.TimeUnit.SECONDS).get("observedAtEpochMs"));
+            assertEquals(1, calls.get());
+        } finally { pool.shutdownNow(); }
+    }
+
+    @Test
+    void failedHardwareQueryIsAlsoCachedToAvoidPerRequestRetryStorm() {
+        MockEnvironment env = new MockEnvironment().withProperty("awx.gpu-hardware.telemetry.enabled", "true");
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        GpuHardwareDiagnostics.CommandRunner runner = timeout -> {
+            calls.incrementAndGet(); throw new IOException("driver_unavailable");
+        };
+        for (int i = 0; i < 20; i++) {
+            assertEquals("error", GpuHardwareDiagnostics.snapshot(env, runner).get("status"));
+        }
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void unavailableSensorsNeverBecomeZeroOrNominalMemoryAdmission() {
+        MockEnvironment env = new MockEnvironment().withProperty("awx.gpu-hardware.telemetry.enabled", "true");
+        Map<String, Object> snapshot = GpuHardwareDiagnostics.snapshot(env, timeout ->
+                new GpuHardwareDiagnostics.CommandResult(0,
+                        "0, NVIDIA GeForce RTX 3090, N/A, N/A, N/A, N/A, N/A\n"
+                                + "1, NVIDIA GeForce RTX 3060, 12288, 100, N/A, N/A, N/A", "", false));
+        assertEquals(null, snapshot.get("maxTemperatureC"));
+        assertEquals(null, snapshot.get("maxUtilizationGpuPct"));
+        assertEquals(false, snapshot.get("memoryEvidenceComplete"));
+        assertEquals("gpu_memory_evidence_needed", GpuHardwareDiagnostics.admissionFromSnapshot(snapshot).get("reason"));
+        assertEquals(false, GpuHardwareDiagnostics.admissionFromSnapshot(snapshot).get("heavyWorkloadsAllowed"));
+        assertEquals("not_observed", snapshot.get("inferenceStatus"));
+    }
+
+    @Test
+    void partialDriverFailureRetainsHealthyDeviceEvidenceWithoutClaimingBothReady() {
+        Map<String, Object> snapshot = GpuHardwareDiagnostics.snapshot(
+                new MockEnvironment().withProperty("awx.gpu-hardware.telemetry.enabled", "true"), timeout ->
+                        new GpuHardwareDiagnostics.CommandResult(15,
+                                "0, NVIDIA GeForce RTX 3060, 12288, 100, 2, 40, 9\n"
+                                        + "Unable to determine the device handle for GPU-11111111-1111-1111-1111-111111111111: GPU is lost",
+                                "driver query failed", false));
+        assertEquals(1, snapshot.get("detectedCount"));
+        assertEquals(true, snapshot.get("hasRtx3060"));
+        assertEquals(false, snapshot.get("hasRtx3090"));
+        assertEquals(false, snapshot.get("heavyLaneReady"));
+        assertEquals("partial", snapshot.get("status"));
+        assertEquals(15, snapshot.get("queryExitCode"));
+        assertEquals(false, snapshot.get("driverQuerySucceeded"));
+        assertTrue(snapshot.containsKey("observedAtEpochMs"));
+    }
+
+    @Test
     void invalidNumericConfigLeavesStableReasonCodeWithoutRawValues() {
         MockEnvironment env = new MockEnvironment()
                 .withProperty("awx.gpu-hardware.telemetry.enabled", "false")

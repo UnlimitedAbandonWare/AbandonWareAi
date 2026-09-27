@@ -1,15 +1,19 @@
 package com.example.lms.infra.resilience;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NoiseRoutingGateRedactionTest {
@@ -53,5 +57,42 @@ class NoiseRoutingGateRedactionTest {
         assertTrue(source.contains("traceSuppressed(\"noiseGate.trace\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"noiseGate.decide\", ignore);"));
         assertTrue(source.contains("TraceStore.put(\"orch.noiseGate.suppressed.\" + safeStage, true);"));
+    }
+
+    @Test
+    void supplementaryBoundaryDoesNotAliasQuestionMarkSeed() throws Exception {
+        System.setProperty(NoiseRoutingGate.PROP_ENABLED, "true");
+        System.setProperty(NoiseRoutingGate.PROP_DETERMINISTIC, "true");
+        String prefix = "x".repeat(199);
+        String supplementary = prefix + "\uD83D\uDE00" + "tail";
+        String replacement = prefix + "?" + "tail";
+
+        String safeSupplementary = invokeSafe(supplementary);
+
+        GuardContext supplementaryContext = new GuardContext();
+        supplementaryContext.setUserQuery(supplementary);
+        GuardContext replacementContext = new GuardContext();
+        replacementContext.setUserQuery(replacement);
+        long supplementarySeed = NoiseRoutingGate
+                .decideEscape("unicode.boundary", 1.0d, supplementaryContext).seed();
+        long replacementSeed = NoiseRoutingGate
+                .decideEscape("unicode.boundary", 1.0d, replacementContext).seed();
+
+        assertAll(
+                () -> assertEquals(prefix, safeSupplementary),
+                () -> assertNotEquals(replacementSeed, supplementarySeed));
+    }
+
+    @Test
+    void safePrefixKeepsBmpAndCompletePairControls() throws Exception {
+        assertEquals("y".repeat(200), invokeSafe("y".repeat(201)));
+        String completePair = "q".repeat(198) + "\uD83D\uDE00";
+        assertEquals(completePair, invokeSafe(completePair + "tail"));
+    }
+
+    private static String invokeSafe(String value) throws Exception {
+        Method method = NoiseRoutingGate.class.getDeclaredMethod("safe", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, value);
     }
 }

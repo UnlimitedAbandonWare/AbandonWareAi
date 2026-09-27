@@ -188,8 +188,12 @@ class NightmareBreakerTaxonomyTest {
         Object msgObj = TraceStore.get(NightmareBreaker.TRACE_OPEN_ERRMSG_KEY);
         assertTrue(msgObj instanceof Map<?, ?>);
         String rendered = String.valueOf(msgObj);
-        String error = String.valueOf(((Map<?, ?>) msgObj).get("qtx:rewrite"));
+        Map<?, ?> messages = (Map<?, ?>) msgObj;
+        assertEquals(1, messages.size(), rendered);
+        String diagnosticKey = String.valueOf(messages.keySet().iterator().next());
+        String error = String.valueOf(messages.values().iterator().next());
 
+        assertTrue(diagnosticKey.startsWith("hash:"), rendered);
         assertTrue(error.startsWith("hash:"), rendered);
         assertFalse(rendered.contains(raw));
         assertFalse(rendered.contains("private query"));
@@ -342,12 +346,16 @@ class NightmareBreakerTaxonomyTest {
         NightmareBreaker breaker = new NightmareBreaker(props);
         String rawSecret = "sk-" + "nightmaresilentrawkey1234567890";
         String rawKey = "silent stage owner_token=" + rawSecret;
+        String rawContext = "private context marker=nmsilentctx-48271";
+        String rawReason = "private reason marker=nmsilentreason-48272";
 
-        breaker.recordSilentFailure(rawKey, "private prompt context", "blank model output");
+        breaker.recordSilentFailure(rawKey, rawContext, rawReason);
 
         String trace = String.valueOf(TraceStore.getAll());
         assertFalse(trace.contains(rawKey), trace);
         assertFalse(trace.contains(rawSecret), trace);
+        assertFalse(trace.contains(rawContext), trace);
+        assertFalse(trace.contains(rawReason), trace);
         assertTrue(trace.contains("hash:"), trace);
     }
 
@@ -403,20 +411,11 @@ class NightmareBreakerTaxonomyTest {
         assertTrue(source.contains("traceSuppressed(\"nightmare.rateLimitCooldownTrace\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"nightmare.rateLimitOnceTrace\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"nightmare.rateLimitDuplicateTrace\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.openSincePolicy\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.inspectOpenSincePolicy\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.openAtPolicy\", ignored);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.openBlockEvent\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.halfOpenStartEvent\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.halfOpenCloseEvent\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.closeEvent\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.blankTrace\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.blankEvent\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.silentTrace\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.silentEvent\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.kindNormalize\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.halfOpenInterruptTrace\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.configDuration\", ignore);"));
+        assertTrue(source.contains("traceSuppressed(\"nightmare.permitDuplicateTrace\", ignore);"));
+        assertTrue(source.contains("traceSuppressed(\"nightmare.externalSignalTrace\", ignore);"));
+        assertTrue(source.contains("traceSuppressed(\"nightmare.permitOpenEvent\", ignore);"));
+        assertTrue(source.contains("traceSuppressed(\"nightmare.stateSignal\", ignore);"));
+        assertTrue(source.contains("traceSuppressed(\"nightmare.legacySuccessTrace\", ignore);"));
         assertTrue(source.contains("TraceStore.put(\"nightmare.suppressed.\" + safeStage, true);"));
     }
 
@@ -431,9 +430,6 @@ class NightmareBreakerTaxonomyTest {
         assertTrue(source.contains("traceSuppressed(\"nightmare.executeOpenCircuitFallback\", oce);"));
         assertTrue(source.contains("traceSuppressed(\"nightmare.executeFailureFallback\", t);"));
         assertTrue(source.contains("traceSuppressed(\"nightmare.executeRateLimitReason\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.tripOpenConfigDuration\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.openEvent\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"nightmare.searchDebugBoost\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"nightmare.openAtTrace\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"nightmare.openMetaTrace\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"nightmare.classifyClassName\", ignore);"));
@@ -461,10 +457,10 @@ class NightmareBreakerTaxonomyTest {
         assertFalse(source.contains("SafeRedactor.safeMessage(String.valueOf(error), 180)"));
         assertFalse(source.contains("SafeRedactor.safeMessage(String.valueOf(s.lastError), 180)"));
 
-        assertTrue(source.contains("contextHash={} contextLength={}"));
-        assertTrue(source.contains("SafeRedactor.hashValue(context)"));
-        assertTrue(source.contains("SafeRedactor.traceLabelOrFallback(error.getMessage(), \"\")"));
-        assertTrue(source.contains("SafeRedactor.traceLabelOrFallback(s.lastError.getMessage(), \"\")"));
+        assertTrue(source.contains("event.put(\"ctxLen\", context == null ? 0 : context.length());"));
+        assertTrue(source.contains("next.lastErrorSummary = redactedErrorSummary(error);"));
+        assertTrue(source.contains("return error.getClass().getSimpleName() + \":\" + SafeRedactor.hashValue(error.getMessage());"));
+        assertTrue(source.contains("recordOpenMetaForTrace(base, gateState.lastKind, gateState.lastErrorSummary);"));
         assertTrue(source.contains("String traceKey = safeBreakerKey(k);"));
         assertFalse(source.contains("TraceStore.putIfAbsent(\"nightmare.rateLimit.cooldown.reason.\" + traceKey, SafeRedactor.safeMessage(reason, 120));"));
         assertFalse(source.contains("TraceStore.put(\"nightmare.rateLimit.dup.lastReason.\" + traceKey, SafeRedactor.safeMessage(reason, 120));"));
@@ -475,7 +471,8 @@ class NightmareBreakerTaxonomyTest {
         assertFalse(source.contains("\"silent-failure reason=\" + SafeRedactor.safeMessage(reason, 120)"));
         assertFalse(source.contains("SafeRedactor.safeMessage(reason, 120),"));
         assertFalse(source.contains("String safeReason = SafeRedactor.safeMessage(reason, 120);"));
-        assertTrue(source.contains("String safeReason = SafeRedactor.traceLabelOrFallback(reason, \"unknown\");"));
-        assertTrue(source.contains("\"silent-failure reason=\" + safeReason"));
+        assertTrue(source.contains("private static String safeExternalSignalReason(String reason)"));
+        assertTrue(source.contains("default -> SafeRedactor.hashValue(value);"));
+        assertTrue(source.contains("event.put(\"reason\", safeExternalSignalReason(reason));"));
     }
 }

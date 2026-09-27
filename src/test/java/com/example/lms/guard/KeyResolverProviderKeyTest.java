@@ -141,8 +141,8 @@ class KeyResolverProviderKeyTest {
         MockEnvironment env = new MockEnvironment()
                 .withProperty("naver.keys", "dummy")
                 .withProperty("NAVER_KEYS", "env-id:env-secret")
-                .withProperty("naver.client-id", "fallback-id")
-                .withProperty("naver.client-secret", "fallback-secret");
+                .withProperty("naver.client-id", "env-id")
+                .withProperty("naver.client-secret", "env-secret");
 
         KeyResolver resolver = new KeyResolver(env);
         Method method = KeyResolver.class.getMethod("resolveNaverKeysCsvSafe");

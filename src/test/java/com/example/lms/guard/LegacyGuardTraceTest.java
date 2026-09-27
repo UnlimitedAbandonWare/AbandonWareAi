@@ -34,6 +34,18 @@ class LegacyGuardTraceTest {
     }
 
     @Test
+    void legacyCitationGateRejectsOfficialListWithNoSourceOverlap() {
+        CitationGate gate = new CitationGate(2, true);
+
+        assertFalse(gate.check(
+                List.of("https://community.example/a", "https://community.example/b"),
+                List.of("https://developers.openai.com/unrelated")));
+
+        assertEquals("official_source_mismatch", TraceStore.get("guard.legacyCitation.reason"));
+        assertEquals(Boolean.FALSE, TraceStore.get("gate.citation.passed"));
+    }
+
+    @Test
     void piiSanitizerStoresLengthOnlyTraceWithoutRawPii() {
         PiiSanitizer sanitizer = new PiiSanitizer(true, "redact");
         String raw = "Call 555-121-9090 or mail user@example.com";

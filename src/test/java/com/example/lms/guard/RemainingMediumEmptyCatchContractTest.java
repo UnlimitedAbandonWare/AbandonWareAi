@@ -88,4 +88,22 @@ class RemainingMediumEmptyCatchContractTest {
         assertTrue(relevanceScorer.contains("Relevance scoring embedding failed aLength={0} bLength={1}"));
         assertTrue(tokenCounter.contains("OpenAI compat usage token parse skipped"));
     }
+
+    @Test
+    void topCatchPressureParsersUseTypedValidationExceptions() throws Exception {
+        String safeRedactor = Files.readString(Path.of("main/java/com/example/lms/trace/SafeRedactor.java"));
+        String coherenceVerifier = Files.readString(
+                Path.of("main/java/com/abandonware/ai/agent/tool/impl/ops/EvidenceCoherenceVerifyTool.java"));
+        String isoInstantParser = safeRedactor.substring(
+                safeRedactor.indexOf("private static boolean isIsoInstant"),
+                safeRedactor.indexOf("private static Map<String, Object> scalarSummary"));
+        String normalizedEvidenceParser = coherenceVerifier.substring(
+                coherenceVerifier.indexOf("private static NormalizedEvidence normalize"),
+                coherenceVerifier.indexOf("private static String evidenceId"));
+
+        assertTrue(isoInstantParser.contains("catch (DateTimeParseException ignored)"));
+        assertTrue(!isoInstantParser.contains("catch (RuntimeException ignored)"));
+        assertTrue(normalizedEvidenceParser.contains("catch (IllegalArgumentException | DateTimeException error)"));
+        assertTrue(!normalizedEvidenceParser.contains("catch (RuntimeException error)"));
+    }
 }
