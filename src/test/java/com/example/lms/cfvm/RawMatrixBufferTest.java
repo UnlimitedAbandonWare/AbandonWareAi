@@ -8,9 +8,12 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -93,17 +96,31 @@ class RawMatrixBufferTest {
     }
 
     @Test
-    void degenerateBoltzmannSumLeavesBreadcrumbInsteadOfSilentReturn() {
+    void settingBoltzmannTempImmediatelyRebalancesEffectiveWeights() {
         RawMatrixBuffer buffer = new RawMatrixBuffer(3);
-        buffer.restoreFromSnapshot(new double[]{Double.POSITIVE_INFINITY, 0.0d, 0.0d}, 0.35d);
-        TraceStore.clear();
+        buffer.updateWeight(1, 1.0d);
+        double[] before = buffer.getWeights();
 
+        buffer.setBoltzmannTemp(0.10d);
+
+        double[] after = buffer.getWeights();
+        assertFalse(Arrays.equals(before, after));
+        assertTrue(after[1] > before[1]);
+        assertEquals(1.0d, after[0] + after[1] + after[2], 1.0e-12d);
+    }
+
+    @Test
+    void restoreRejectsNegativeSnapshotWithoutMutatingState() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer(3, 0.35d);
         buffer.updateWeight(1, 0.25d);
+        double[] before = buffer.getWeights();
 
-        assertEquals(Boolean.TRUE, TraceStore.get("cfvm.rawBuffer.boltzmannSum.degenerate"));
-        assertEquals("non_finite", TraceStore.get("cfvm.rawBuffer.boltzmannSum.value"));
-        assertEquals(Boolean.FALSE, TraceStore.get("cfvm.rawBuffer.boltzmannRebalanced"));
-        assertEquals(0.35d, (Double) TraceStore.get("cfvm.boltzmannTemp"), 0.0001d);
+        assertThrows(IllegalArgumentException.class, () ->
+                buffer.restoreFromSnapshot(new double[]{0.20d, -0.10d, 0.90d}, 0.35d));
+
+        assertEquals("invalid_weight", TraceStore.get("cfvm.rawBuffer.restoreSkipped"));
+        assertArrayEquals(before, buffer.getWeights(), 1.0e-12d);
+        assertEquals(0.35d, buffer.getBoltzmannTemp(), 1.0e-12d);
     }
 
     @Test

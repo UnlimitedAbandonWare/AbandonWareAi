@@ -52,6 +52,26 @@ class RuntimeVerificationRunbookTest {
     }
 
     @Test
+    void topologyVerifierRejectsMaskedFocusedSelectorsWithFreshPerClassReports() throws Exception {
+        String verifier = Files.readString(Path.of("scripts/verify_control_plane_topology.ps1"), StandardCharsets.UTF_8);
+        int focusedTests = verifier.indexOf("Invoke-Step \"focused-tests\"");
+        int buildSurface = verifier.indexOf("Invoke-Step \"build-surface\"");
+        assertTrue(focusedTests >= 0 && buildSurface > focusedTests);
+        String focusedBlock = verifier.substring(focusedTests, buildSurface);
+
+        assertTrue(verifier.contains("$FocusedTestClasses = @("));
+        assertTrue(focusedBlock.contains("\"--rerun-tasks\""));
+        assertTrue(focusedBlock.contains("$FocusedTestsStartedAtUtc = [DateTime]::UtcNow"));
+        assertTrue(focusedBlock.contains("Assert-FocusedTestReports"));
+        assertTrue(focusedBlock.indexOf("Assert-FocusedTestReports") > focusedBlock.indexOf("Invoke-Native"));
+        assertTrue(verifier.contains("TEST-$className.xml"));
+        assertTrue(verifier.contains("LastWriteTimeUtc"));
+        assertTrue(verifier.contains("$executed = $tests - $skipped"));
+        assertTrue(verifier.contains("$executed -lt 1"));
+        assertTrue(verifier.contains("tests=$tests executed=$executed failures=$failures errors=$errors skipped=$skipped"));
+    }
+
+    @Test
     void fullSuiteStaleClassOutputRecoveryIsDocumentedAndExecutable() throws Exception {
         String agents = Files.readString(Path.of("AGENTS.md"), StandardCharsets.UTF_8);
         String verifier = Files.readString(Path.of("scripts/verify_full_test_refresh.ps1"), StandardCharsets.UTF_8);

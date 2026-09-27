@@ -16,6 +16,7 @@ import java.util.Set;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RuntimeApplicationYamlDuplicateKeyTest {
@@ -102,7 +103,7 @@ class RuntimeApplicationYamlDuplicateKeyTest {
 
     @Test
     void rootNonRuntimeApplicationProfilesAreNotProcessedAsRuntimeResources() {
-        Path processed = Path.of("build/resources/main");
+        Path processed = buildDir(null).resolve("resources/main");
 
         for (String fileName : ROOT_PACKAGED_OUT_APPLICATION_FILES) {
             assertTrue(Files.notExists(processed.resolve(fileName)),
@@ -157,11 +158,11 @@ class RuntimeApplicationYamlDuplicateKeyTest {
         Path normalized = source.normalize();
         Path mainRoot = Path.of("main/resources").normalize();
         if (normalized.startsWith(mainRoot)) {
-            return Files.exists(Path.of("build/resources/main").resolve(mainRoot.relativize(normalized)));
+            return Files.exists(buildDir(null).resolve("resources/main").resolve(mainRoot.relativize(normalized)));
         }
         Path appRoot = Path.of("app/src/main/resources").normalize();
         if (normalized.startsWith(appRoot)) {
-            return Files.exists(Path.of("app/build/resources/main").resolve(appRoot.relativize(normalized)));
+            return Files.exists(buildDir("app").resolve("resources/main").resolve(appRoot.relativize(normalized)));
         }
         return false;
     }
@@ -222,8 +223,9 @@ class RuntimeApplicationYamlDuplicateKeyTest {
     }
 
     private static Path newestAppJar() throws IOException {
-        Path libs = Path.of("app/build/libs");
-        assertTrue(Files.isDirectory(libs), "app/build/libs must exist; Gradle test should build :app:jar first");
+        Path libs = buildDir("app").resolve("libs");
+        assertTrue(Files.isDirectory(libs),
+                () -> ":app libs directory must exist; Gradle test should build :app:jar first: " + libs);
         try (Stream<Path> jars = Files.list(libs)) {
             return jars.filter(path -> path.getFileName().toString().endsWith(".jar"))
                     .max((a, b) -> {
@@ -235,5 +237,76 @@ class RuntimeApplicationYamlDuplicateKeyTest {
                     })
                     .orElseThrow(() -> new IOException("No :app jar found under " + libs));
         }
+    }
+
+    @Test
+    void buildDirMatchesGradleSplitOutputMapping() {
+        Path absoluteRoot = Path.of(System.getProperty("java.io.tmpdir"), "awx-build-root").toAbsolutePath();
+        Path relativeRoot = Path.of("relative-awx-build");
+
+        assertEquals(Path.of("app", "build"),
+                buildDir("app", " 1 ", "node", absoluteRoot.toString()));
+        assertEquals(Path.of("app", "build", "local"),
+                buildDir("app", "1", null, null));
+        assertEquals(Path.of("app", "build", "host"),
+                buildDir("app", "1", " ", null));
+        assertEquals(absoluteRoot.resolve("node-name").resolve("app"),
+                buildDir("app", "1", "node name", absoluteRoot.toString()));
+        assertEquals(absoluteRoot.resolve("node-name").resolve("root"),
+                buildDir(null, "1", "node name", absoluteRoot.toString()));
+        assertEquals(Path.of("app").resolve(relativeRoot).resolve("node").resolve("app"),
+                buildDir("app", "1", "node", relativeRoot.toString()));
+        assertEquals(relativeRoot.resolve("node").resolve("root"),
+                buildDir(null, "1", "node", relativeRoot.toString()));
+    }
+
+    private static Path buildDir(String module) {
+        return buildDir(
+                module,
+                System.getenv("AWX_SPLIT_BUILD_OUTPUTS"),
+                System.getenv("AWX_BUILD_HOST_ID"),
+                System.getenv("AWX_BUILD_ROOT_DIR"));
+    }
+
+    private static Path buildDir(String module, String splitValue, String hostValue, String buildRootValue) {
+        Path base = module == null ? Path.of("build") : Path.of(module).resolve("build");
+        if (!truthy(splitValue)) {
+            return base;
+        }
+
+        String hostId = sanitizeHostId(hostValue == null ? "local" : hostValue);
+        if (buildRootValue != null && !buildRootValue.isBlank()) {
+            Path externalRoot = Path.of(buildRootValue.trim());
+            if (!externalRoot.isAbsolute() && module != null && !module.isBlank()) {
+                externalRoot = Path.of(module.replaceFirst("^:+", "").replace(':', '/')).resolve(externalRoot);
+            }
+            String projectSegment = module == null
+                    ? "root"
+                    : module.replaceFirst("^:+", "").replace(':', '-');
+            if (projectSegment.isBlank()) {
+                projectSegment = "root";
+            }
+            return externalRoot.resolve(hostId).resolve(projectSegment);
+        }
+        return base.resolve(hostId);
+    }
+
+    private static boolean truthy(String value) {
+        if (value == null) {
+            return false;
+        }
+        return value.equals("1")
+                || value.equalsIgnoreCase("true")
+                || value.equalsIgnoreCase("yes")
+                || value.equalsIgnoreCase("on");
+    }
+
+    private static String sanitizeHostId(String value) {
+        if (value == null) {
+            return "";
+        }
+        String sanitized = value.replaceAll("[^A-Za-z0-9._-]+", "-")
+                .replaceAll("^[._-]+|[._-]+$", "");
+        return sanitized.isBlank() ? "host" : sanitized;
     }
 }

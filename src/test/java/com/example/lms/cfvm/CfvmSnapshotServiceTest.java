@@ -74,7 +74,8 @@ class CfvmSnapshotServiceTest {
 
     @Test
     void serviceConstructorIsExplicitlyAutowiredForSpringBootWiring() throws Exception {
-        String source = Files.readString(Path.of("main/java/com/example/lms/cfvm/CfvmSnapshotService.java"));
+        String source = Files.readString(Path.of("main/java/com/example/lms/cfvm/CfvmSnapshotService.java"))
+                .replace("\r\n", "\n");
 
         assertTrue(source.contains("@Autowired\n    public CfvmSnapshotService("));
     }

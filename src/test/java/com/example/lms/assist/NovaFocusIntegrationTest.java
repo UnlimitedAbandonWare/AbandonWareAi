@@ -11,6 +11,24 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusIntegrationTest {
+    @Test void audioEpochRolloverKeepsFocusButExplicitContextResetClosesIt(){
+        var history=mock(NovaFocusHistoryService.class);var d=NovaFocusSettings.defaults();
+        var enabled=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),d.presentation());
+        when(history.settings(anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Settings(1,enabled));
+        @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
+        try(var focus=new NovaFocusService(history,provider,new PublicChatAdmissionGuard());var sessions=new ConversateSessionService()){
+            ReflectionTestUtils.setField(sessions,"novaFocus",focus);var first=sessions.startPublicDisplay(owner);
+            focus.attach(owner,"live",first.assistId(),first.epoch());
+            sessions.submit(owner,first.assistId(),first.epoch(),new ConversateQuestionPolicy.Utterance("a","a",0,true,"노바 first"),"phone_voice","r");
+            sessions.audioMetrics(owner,first.assistId(),first.epoch(),new ConversateSessionService.AudioMetrics(0,0,1,0,0,"WAITING"));
+            var next=sessions.nextSegment(owner,first.assistId(),first.epoch());
+            focus.attach(owner,"live",next.assistId(),next.epoch());
+            assertEquals("first",focus.view(owner,next.assistId(),next.epoch()).draftText());
+            var reset=sessions.control(owner,next.assistId(),next.epoch(),"context_reset");
+            assertEquals(next.epoch(),reset.epoch());assertEquals("RUNNING",reset.state());
+            assertFalse(focus.active(next.assistId()));assertEquals("context_reset",reset.focus().reason());
+        }
+    }
     final String owner="a".repeat(64),client="a".repeat(32);
     @Test void hintsOffStillDeliversFocusAndDoesNotStopCapture(){
         var history=mock(NovaFocusHistoryService.class);

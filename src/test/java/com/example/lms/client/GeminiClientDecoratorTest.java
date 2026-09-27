@@ -1,7 +1,9 @@
 package com.example.lms.client;
 
 import com.example.lms.guard.KeyResolver;
+import com.example.lms.guard.ProviderCredentialResolver;
 import com.example.lms.learning.gemini.GeminiClient;
+import com.example.lms.learning.gemini.GeminiGateway;
 import com.example.lms.search.TraceStore;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.retry.RetryRegistry;
@@ -64,12 +66,20 @@ class GeminiClientDecoratorTest {
 
     private static final class FailingGeminiClient extends GeminiClient {
         private FailingGeminiClient() {
-            super(WebClient.builder(), new KeyResolver(new MockEnvironment()));
+            super(gateway());
         }
 
         @Override
         public List<String> keywordVariants(String cleaned, String anchor, int cap) {
             throw new IllegalStateException("api_key=raw-secret ownerToken=raw-secret");
+        }
+
+        private static GeminiGateway gateway() {
+            MockEnvironment environment = new MockEnvironment();
+            return new GeminiGateway(
+                    WebClient.builder(),
+                    new ProviderCredentialResolver(environment),
+                    environment);
         }
     }
 }

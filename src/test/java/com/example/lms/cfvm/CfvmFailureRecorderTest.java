@@ -3,6 +3,12 @@ package com.example.lms.cfvm;
 import ai.abandonware.nova.orch.failpattern.FailurePatternMemoryService;
 import com.abandonware.ai.agent.contract.ToolManifestCatalog;
 import com.example.lms.search.TraceStore;
+import com.example.lms.orchestration.control.RagControlCoordinator;
+import com.example.lms.orchestration.control.RagControlLearningGate;
+import com.example.lms.orchestration.control.RagControlProperties;
+import com.example.lms.orchestration.control.RagControlRolloutState;
+import com.example.lms.orchestration.control.RagControlRuntimeAdapter;
+import com.example.lms.orchestration.control.RagGuardProbeComposer;
 import com.example.lms.service.TrainingService;
 import com.example.lms.strategy.RetrievalOrderService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,6 +32,8 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class CfvmFailureRecorderTest {
 
@@ -86,6 +94,176 @@ class CfvmFailureRecorderTest {
         assertFalse(line.contains("dummy-value"));
         assertFalse(line.contains("dummy-token"));
         assertFalse(line.contains("Authorization"));
+    }
+
+    @Test
+    void enforcedRagControlHoldSkipsEveryCfvmMutation() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer();
+        FailurePatternMemoryService memory = mock(FailurePatternMemoryService.class);
+        RetrievalOrderService retrievalOrder = mock(RetrievalOrderService.class);
+        TrainingService training = mock(TrainingService.class);
+        CfvmFailureRecorder recorder = new CfvmFailureRecorder(
+                provider(buffer),
+                provider(memory),
+                provider((CfvmJbCbCalculator) null),
+                provider(retrievalOrder),
+                provider(training),
+                provider(enforcedLearningGate()));
+
+        CfvmFailureRecorder.RecordResult result = recorder.record(
+                "rag",
+                "silent_failure",
+                "ChatWorkflow.finalAnswer",
+                "session-id",
+                Map.of("ragOrigin", true, "returnedCount", 0, "responseObserved", false));
+
+        assertFalse(result.buffered());
+        assertFalse(result.memoryRecorded());
+        assertEquals(0, buffer.size());
+        assertEquals("rag_control_hold", TraceStore.get("cfvm.record.skipReason"));
+        assertEquals(Boolean.TRUE, TraceStore.get("cfvm.ragControl.hold"));
+        assertEquals(Boolean.FALSE, TraceStore.get("cfvm.training.recorded"));
+        verifyNoInteractions(memory, retrievalOrder, training);
+    }
+
+    @Test
+    void explicitExtremeZRagOriginIsConsumedBeforeSignatureAndTraceCount() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer();
+        CfvmFailureRecorder recorder = new CfvmFailureRecorder(
+                provider(buffer),
+                provider((FailurePatternMemoryService) null),
+                provider((CfvmJbCbCalculator) null),
+                provider((RetrievalOrderService) null),
+                provider((TrainingService) null),
+                provider(enforcedLearningGate()));
+
+        CfvmFailureRecorder.RecordResult result = recorder.record(
+                "extremez",
+                "provider_disabled",
+                "ExtremeZBurstAspect",
+                "session-id",
+                Map.of(
+                        CfvmFailureRecorder.RAG_ORIGIN_MARKER, true,
+                        "returnedCount", 0,
+                        "responseObserved", false));
+
+        assertFalse(result.buffered());
+        assertEquals(2, result.traceSize());
+        assertEquals("rag_control_hold", TraceStore.get("cfvm.record.skipReason"));
+    }
+
+    @Test
+    void ragGateProviderResolutionFailureFailsClosedBeforeAnyMutation() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer();
+        @SuppressWarnings("unchecked")
+        ObjectProvider<RagControlLearningGate> failingProvider = mock(ObjectProvider.class);
+        when(failingProvider.getIfAvailable()).thenThrow(new IllegalStateException("private-provider-detail"));
+        CfvmFailureRecorder recorder = new CfvmFailureRecorder(
+                provider(buffer),
+                provider((FailurePatternMemoryService) null),
+                provider((CfvmJbCbCalculator) null),
+                provider((RetrievalOrderService) null),
+                provider((TrainingService) null),
+                failingProvider);
+
+        CfvmFailureRecorder.RecordResult result = recorder.record(
+                "rag", "timeout", "retrieval", "session-id",
+                Map.of(CfvmFailureRecorder.RAG_ORIGIN_MARKER, true));
+
+        assertFalse(result.buffered());
+        assertEquals(0, buffer.size());
+        assertEquals("learning_gate_failed", TraceStore.get("cfvm.ragControl.failureClass"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("private-provider-detail"));
+    }
+
+    @Test
+    void missingRagGateFailsClosedBeforeAnyExplicitRagMutation() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer();
+        CfvmFailureRecorder recorder = new CfvmFailureRecorder(
+                provider(buffer),
+                provider((FailurePatternMemoryService) null),
+                provider((CfvmJbCbCalculator) null),
+                provider((RetrievalOrderService) null),
+                provider((TrainingService) null),
+                provider((RagControlLearningGate) null));
+
+        CfvmFailureRecorder.RecordResult result = recorder.record(
+                "rag", "timeout", "retrieval", "session-id",
+                Map.of(CfvmFailureRecorder.RAG_ORIGIN_MARKER, true));
+
+        assertFalse(result.buffered());
+        assertEquals(0, buffer.size());
+        assertEquals(Boolean.TRUE, TraceStore.get("cfvm.ragControl.hold"));
+        assertEquals("learning_gate_unavailable", TraceStore.get("cfvm.ragControl.failureClass"));
+    }
+
+    @Test
+    void genericRetrievalSourceWithoutExplicitMarkerIsNotTeamKilled() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer();
+        CfvmFailureRecorder recorder = new CfvmFailureRecorder(
+                provider(buffer),
+                provider((FailurePatternMemoryService) null),
+                provider((CfvmJbCbCalculator) null),
+                provider((RetrievalOrderService) null),
+                provider((TrainingService) null),
+                provider(enforcedLearningGate()));
+
+        CfvmFailureRecorder.RecordResult result = recorder.record(
+                "retrieval", "timeout", "allied-health-probe", "session-id", Map.of());
+
+        assertTrue(result.buffered());
+        assertEquals(1, buffer.size());
+        assertEquals(Boolean.FALSE, TraceStore.get("cfvm.ragControl.hold"));
+    }
+
+    @Test
+    void enforcedGateDoesNotTeamKillNonRagSourceHealthRecording() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer();
+        CfvmFailureRecorder recorder = new CfvmFailureRecorder(
+                provider(buffer),
+                provider((FailurePatternMemoryService) null),
+                provider((CfvmJbCbCalculator) null),
+                provider((RetrievalOrderService) null),
+                provider((TrainingService) null),
+                provider(enforcedLearningGate()));
+
+        CfvmFailureRecorder.RecordResult result = recorder.record(
+                "source_health",
+                "timeout",
+                "SourceHealthFailurePatternTraceBridge",
+                "",
+                Map.of("sourceHealth", true));
+
+        assertTrue(result.buffered());
+        assertEquals(1, buffer.size());
+        assertEquals("recorded", TraceStore.get("cfvm.failureRecorder"));
+    }
+
+    @Test
+    void nonCancelQualityDowngradeDoesNotRecordFailurePattern() {
+        RawMatrixBuffer buffer = new RawMatrixBuffer();
+        FailurePatternMemoryService memory = mock(FailurePatternMemoryService.class);
+        TrainingService training = mock(TrainingService.class);
+        CfvmFailureRecorder recorder = new CfvmFailureRecorder(
+                provider(buffer),
+                provider(memory),
+                provider((CfvmJbCbCalculator) null),
+                provider((RetrievalOrderService) null),
+                provider(training));
+
+        CfvmFailureRecorder.RecordResult result = recorder.record(
+                "rag",
+                "quality_downgrade",
+                "orchestration",
+                "s1",
+                Map.of());
+
+        assertFalse(result.buffered());
+        assertFalse(result.memoryRecorded());
+        assertEquals(0, buffer.size());
+        assertEquals("non_cancel_downgrade", TraceStore.get("cfvm.record.skipReason"));
+        assertEquals("skipped", TraceStore.get("cfvm.failureRecorder"));
+        verifyNoInteractions(memory, training);
     }
 
     @Test
@@ -417,6 +595,15 @@ class CfvmFailureRecorderTest {
         assertEquals(Boolean.FALSE, TraceStore.get("cfvm.memoryRecorded"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains(fakeKey()));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("ownerToken"));
+    }
+
+    private static RagControlLearningGate enforcedLearningGate() {
+        RagControlRolloutState rollout = new RagControlRolloutState(
+                new RagControlProperties(1, 0.01d, 20));
+        rollout.record(new RagControlRolloutState.Observation(true, false, false, false, 1));
+        return new RagControlLearningGate(
+                new RagControlCoordinator(new RagGuardProbeComposer(), rollout),
+                new RagControlRuntimeAdapter());
     }
 
     private static String fakeKey() {

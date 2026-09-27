@@ -10,6 +10,98 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusServiceTest {
+    @Test void workerDiagnosticsAreOwnerBoundAllowlistedAndClearedOnClose() throws Exception {
+        try(var f=new EpochFixture()){
+            when(f.answer.answer(anyLong(),anyString(),any(),any(),any())).thenAnswer(call->{
+                com.example.lms.search.TraceStore.put("focus.selection.fallbackCount",1);
+                com.example.lms.search.TraceStore.put("focus.request.evidenceBoundary","model_adapter");
+                com.example.lms.search.TraceStore.put("focus.privatePayload","synthetic-private");
+                return "answer";
+            });
+            f.ask(1,"first");f.awaitAnswer(1);
+            var metadata=(Map<?,?>)f.service.diagnostics(f.owner,"assist",1).get("answerModel");
+            assertEquals(Map.of("focus.selection.fallbackCount",1,"focus.request.evidenceBoundary","model_adapter"),metadata);
+            assertThrows(IllegalArgumentException.class,()->f.service.diagnostics("b".repeat(64),"assist",1));
+            assertThrows(IllegalArgumentException.class,()->f.service.diagnostics(f.owner,"assist",2));
+            f.service.attach(f.owner,"live","assist",2);
+            assertEquals(metadata,f.service.diagnostics(f.owner,"assist",2).get("answerModel"));
+            f.service.close(f.owner,"assist",2,"user_closed");
+            assertEquals(Map.of(),f.service.diagnostics(f.owner,"assist",2).get("answerModel"));
+        }
+    }
+    @Test void audioEpochRebindKeepsInFlightAnswerAndRejectsOldAudio() throws Exception {
+        try(var f=new EpochFixture()){
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var current=new java.util.concurrent.atomic.AtomicReference<java.util.function.BooleanSupplier>();
+            when(f.answer.answer(anyLong(),anyString(),any(),any(),any())).thenAnswer(call->{
+                current.set(call.getArgument(4));entered.countDown();
+                assertTrue(release.await(3,TimeUnit.SECONDS));return "answer";
+            });
+            try{
+                f.ask(1,"first");assertTrue(entered.await(3,TimeUnit.SECONDS));
+                String activation=f.service.view(f.owner,"assist",1).activationId();
+                f.service.attach(f.owner,"live","assist",2);
+                assertTrue(current.get().getAsBoolean());
+                assertEquals("THINKING",f.service.view(f.owner,"assist",2).phase());
+                assertEquals(activation,f.service.view(f.owner,"assist",2).activationId());
+                assertFalse(f.service.audio(f.owner,"assist",1,new ConversateQuestionPolicy.Utterance("old","old",1,true,"stale")));
+                assertNull(f.service.view(f.owner,"assist",1));verify(f.answer,never()).cancel(anyLong());
+                release.countDown();f.awaitAnswer(2);
+                assertEquals("answer",f.service.view(f.owner,"assist",2).answerText());
+            }finally{release.countDown();}
+        }
+    }
+    @Test void audioEpochRebindPreservesRecentPairsButExplicitCloseClearsThem() throws Exception {
+        try(var f=new EpochFixture()){
+            var contexts=new java.util.concurrent.CopyOnWriteArrayList<NovaFocusHistoryService.Context>();
+            when(f.answer.answer(anyLong(),anyString(),any(),any(),any())).thenAnswer(call->{contexts.add(call.getArgument(2));return "answer";});
+            f.ask(1,"first");f.awaitAnswer(1);f.presented(1);
+            f.service.attach(f.owner,"live","assist",2);f.ask(2,"second");f.awaitAnswer(2);
+            assertEquals(1,contexts.get(1).recent().size());
+            assertEquals("first",contexts.get(1).recent().get(0).question());
+            f.service.close(f.owner,"assist",2,"user_closed");f.service.open(f.owner,"assist",2,"fold");
+            f.ask(2,"third");f.awaitAnswer(2);assertTrue(contexts.get(2).recent().isEmpty());
+        }
+    }
+    @Test void audioEpochOldAttachCannotRollBindingBack() {
+        try(var f=new EpochFixture()){
+            f.service.attach(f.owner,"live","assist",2);f.service.attach(f.owner,"live","assist",1);
+            assertNotNull(f.service.view(f.owner,"assist",2));assertNull(f.service.view(f.owner,"assist",1));
+        }
+    }
+    private static final class EpochFixture implements AutoCloseable {
+        final String owner="a".repeat(64);
+        final Time time=new Time();
+        final NovaFocusHistoryService history=mock(NovaFocusHistoryService.class);
+        final NovaFocusAnswer answer=mock(NovaFocusAnswer.class);
+        final NovaFocusService service;
+        EpochFixture(){
+            @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
+            when(provider.getIfAvailable()).thenReturn(answer);
+            when(history.settings(anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Settings(0,NovaFocusSettings.defaults()));
+            when(history.open(anyString(),anyString())).thenReturn(7L);
+            var sequence=new java.util.concurrent.atomic.AtomicInteger();
+            when(history.accept(anyString(),anyString(),anyString(),anyString(),anyString())).thenAnswer(call->
+                new NovaFocusHistoryService.Accepted("turn-"+sequence.incrementAndGet(),7L,"ACCEPTED",true));
+            when(history.terminal(anyString(),anyString(),anyString(),eq("COMPLETED"),anyString())).thenReturn(true);
+            service=new NovaFocusService(history,provider,new PublicChatAdmissionGuard(),time);
+            service.attach(owner,"live","assist",1);service.open(owner,"assist",1,"fold");
+        }
+        void ask(long epoch,String question){service.input(owner,"assist",epoch,question,question);time.now+=1200;service.maintain();}
+        void awaitAnswer(long epoch) throws Exception {
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+            while(System.nanoTime()<deadline){
+                if("ANSWER_READY".equals(service.view(owner,"assist",epoch).phase())&&!Boolean.TRUE.equals(service.diagnostics(owner,"assist",epoch).get("busy")))return;
+                Thread.sleep(5);
+            }
+            fail("answer did not complete");
+        }
+        void presented(long epoch){
+            var v=service.view(owner,"assist",epoch);
+            for(String event:List.of("first_visible","presentation_done"))assertTrue(service.rendered(new NovaFocusService.Receipt(v.serverInstanceId(),v.activationId(),v.turnId(),v.answerVersion(),v.renderReceiptTicket(),event)));
+        }
+        public void close(){service.close();}
+    }
     @Test void memorySearchRequiresOwnerEpochAndNeverCallsChat(){
         var history=mock(NovaFocusHistoryService.class);var memory=mock(FocusMemoryService.class);
         @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
@@ -92,6 +184,64 @@ class NovaFocusServiceTest {
             assertThrows(IllegalStateException.class,()->service.open("a".repeat(64),"assist",1,"lens"));
             assertFalse(service.rendered(new NovaFocusService.Receipt("wrong","wrong","wrong",1,"0".repeat(64),"presentation_done")));
             verify(history,never()).open(anyString(),anyString());
+        }
+    }
+    @Test void snapshotLifecycleClaimsOnceAndFeedsGenerateWithOneImage() throws Exception {
+        var history=mock(NovaFocusHistoryService.class);var answer=mock(NovaFocusAnswer.class);
+        when(answer.answer(anyLong(),anyString(),any(),any())).thenCallRealMethod();
+        when(answer.answer(anyLong(),anyString(),any(),any(),any())).thenCallRealMethod();
+        @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(answer);
+        var d=NovaFocusSettings.defaults();
+        var snap=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),d.presentation(),false,false,new NovaFocusSettings.Snapshot(true,"FOLD_REAR"));
+        when(history.settings(anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Settings(0,snap));
+        when(history.open(anyString(),anyString())).thenReturn(7L);
+        when(history.accept(anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Accepted("turn",7L,"ACCEPTED",true));
+        when(history.context(anyString(),anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Context(List.of(),"",List.of()));
+        var entered=new CountDownLatch(1);
+        when(answer.answer(anyLong(),anyString(),anyString(),anyString(),any(),any(),any())).thenAnswer(call->{
+            entered.countDown();assertEquals("QUJD",call.getArgument(2));assertEquals("image/jpeg",call.getArgument(3));return "seen";});
+        var time=new Time();String owner="a".repeat(64);
+        try(var service=new NovaFocusService(history,provider,new PublicChatAdmissionGuard(),time)){
+            service.attach(owner,"live","assist",1);service.open(owner,"assist",1,"fold");
+            service.input(owner,"assist",1,"r","question");time.now=1200;service.maintain();
+            var cmd=service.snapshotCommand(owner,"assist",1,time.now);assertNotNull(cmd);assertEquals("FOLD_REAR",cmd.source());
+            assertNull(service.snapshotCommand("b".repeat(64),"assist",1,time.now));
+            assertThrows(IllegalArgumentException.class,()->service.snapshotClaim("b".repeat(64),"assist",1,cmd.requestId(),cmd.captureId()));
+            assertThrows(IllegalArgumentException.class,()->service.snapshotClaim(owner,"assist",2,cmd.requestId(),cmd.captureId()));
+            var claim=service.snapshotClaim(owner,"assist",1,cmd.requestId(),cmd.captureId());
+            assertEquals(true,claim.get("claimed"));assertEquals(true,claim.get("granted"));
+            // 같은 명령의 두 번째 claim은 합류로만 기록되고 새 촬영을 승인하지 않는다.
+            assertEquals(false,service.snapshotClaim(owner,"assist",1,cmd.requestId(),cmd.captureId()).get("granted"));
+            var accepted=service.snapshotResult(owner,"assist",1,cmd.requestId(),cmd.captureId(),"QUJD","image/jpeg",null);
+            assertEquals(true,accepted.get("accepted"));assertEquals(false,accepted.get("duplicate"));
+            assertEquals(true,service.snapshotResult(owner,"assist",1,cmd.requestId(),cmd.captureId(),"QUJD","image/jpeg",null).get("duplicate"));
+            time.now=1400;service.maintain();assertTrue(entered.await(3,TimeUnit.SECONDS));
+            verify(history).accept(owner,"live",cmd.activationId(),cmd.requestId(),"question");
+        }
+    }
+    @Test void snapshotErrorReportFailsQuestionButKeepsIt() {
+        var history=mock(NovaFocusHistoryService.class);var answer=mock(NovaFocusAnswer.class);
+        @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
+        var d=NovaFocusSettings.defaults();
+        var snap=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),d.presentation(),false,false,new NovaFocusSettings.Snapshot(true,"META_GLASSES"));
+        when(history.settings(anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Settings(0,snap));
+        when(provider.getIfAvailable()).thenReturn(answer);
+        when(history.open(anyString(),anyString())).thenReturn(7L);
+        when(history.accept(anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Accepted("turn",7L,"ACCEPTED",true));
+        var time=new Time();String owner="a".repeat(64);
+        try(var service=new NovaFocusService(history,provider,new PublicChatAdmissionGuard(),time)){
+            service.attach(owner,"live","assist",1);service.open(owner,"assist",1,"fold");
+            service.input(owner,"assist",1,"r","question");time.now=1200;service.maintain();
+            var cmd=service.snapshotCommand(owner,"assist",1,time.now);assertNotNull(cmd);assertEquals("META_GLASSES",cmd.source());
+            var failed=service.snapshotResult(owner,"assist",1,cmd.requestId(),cmd.captureId(),null,null,"device_unavailable");
+            assertEquals(true,failed.get("failed"));
+            var view=service.view(owner,"assist",1);
+            assertEquals("device_unavailable",view.reason());assertEquals("question",view.questionText());
+            assertNull(service.snapshotCommand(owner,"assist",1,time.now));
+            // 촬영 실패 뒤에도 같은 질문이 사진 없이 생성 경로로 진행된다.
+            time.now=1400;service.maintain();
+            verify(answer,timeout(3000)).answer(anyLong(),eq("question"),any(),isNull(),any());
         }
     }
     @Test void turningVoiceWakeOffCancelsFocusWorkAndPreservesBinding() throws Exception {

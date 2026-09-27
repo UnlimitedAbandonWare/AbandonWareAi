@@ -74,10 +74,66 @@ class NovaFocusHistoryTest {
         assertTrue(memory.relevant().isEmpty());assertEquals("",memory.summary());
         assertTrue(store.page(owner+"stranger","c",null,30).turns().isEmpty());
     }
+    @Test void snapshotSettingsSurviveLegacyPayloadSavesAndOldJson() throws Exception {
+        String owner=UUID.randomUUID().toString();var d=NovaFocusSettings.defaults();
+        var withSnap=new NovaFocusSettings(d.enabled(),d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),d.presentation(),d.recallEnabled(),d.rememberFactsEnabled(),new NovaFocusSettings.Snapshot(true,"META_GLASSES"));
+        assertEquals(1,store.settings(owner,"snap",0,withSnap).settingsVersion());
+        var legacy=new NovaFocusSettings(true,"노바",1200,20000,8000,NovaFocusSettings.Presentation.defaults(),false,false);
+        assertNull(legacy.snapshot());
+        assertEquals(2,store.settings(owner,"snap",1,legacy).settingsVersion());
+        var read=store.settings(owner,"snap").settings();
+        assertNotNull(read.snapshot());assertTrue(read.snapshot().enabled());assertEquals("META_GLASSES",read.snapshot().source());
+        var old=new ObjectMapper().readValue("{\"enabled\":true,\"wakeWord\":\"노바\",\"utteranceQuietMs\":1200,\"followupIdleMs\":20000,\"wakeListenTimeoutMs\":8000}",NovaFocusSettings.class);
+        assertNull(old.snapshot());assertFalse(old.snapshotOrDefault().enabled());
+    }
     @Test void multilingualMemoryUsesByteCeilingRatherThanEnglishCharacterRatio(){
         String text="한글👨‍👩‍👧‍👦é".repeat(500);
         String bounded=NovaFocusHistoryService.memoryClip(text,600);
         assertTrue(bounded.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=600);
         assertFalse(Character.isHighSurrogate(bounded.charAt(bounded.length()-1)));
+    }
+    @Test void answerSelectionSurvivesLegacySaveAndExplicitAutoClearsFixedChoice() throws Exception {
+        String owner=UUID.randomUUID().toString();var d=NovaFocusSettings.defaults();
+        var fixed=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"fixture-model-a");
+        var selected=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),
+            d.presentation(),false,false,d.snapshot(),fixed);
+        store.settings(owner,"selected",0,selected);
+        var legacy=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),
+            d.presentation(),false,false,new NovaFocusSettings.Snapshot(true,"FOLD_REAR"));
+        var preserved=store.settings(owner,"selected",1,legacy).settings();
+        assertEquals(fixed,preserved.answerSelection());assertTrue(preserved.snapshot().enabled());
+        var automatic=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),
+            d.presentation(),false,false,null,NovaFocusSettings.AnswerSelection.defaults());
+        var cleared=store.settings(owner,"selected",2,automatic).settings();
+        assertEquals(NovaFocusSettings.AnswerSelection.Mode.AUTO,cleared.answerSelection().mode());
+        assertNull(cleared.answerSelection().modelId());assertTrue(cleared.snapshot().enabled());
+        assertThrows(IllegalArgumentException.class,()->new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,null));
+        assertThrows(IllegalArgumentException.class,()->new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"bad\nmodel"));
+    }
+    @Test void legacyAnswerSelectionPreservesRoutingUntilAnExplicitReplacement(){
+        String owner=UUID.randomUUID().toString();var d=NovaFocusSettings.defaults();
+        var route=new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.API_ONLY,true,List.of("llmrouter.backup"));
+        var selected=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"llmrouter.primary",route);
+        var initial=new NovaFocusSettings(true,d.wakeWord(),1200,20000,8000,d.presentation(),false,false,d.snapshot(),selected);
+        store.settings(owner,"routing",0,initial);
+        var legacyChoice=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"llmrouter.next");
+        var legacy=new NovaFocusSettings(true,d.wakeWord(),1200,20000,8000,d.presentation(),false,false,d.snapshot(),legacyChoice);
+        var preserved=store.settings(owner,"routing",1,legacy).settings().answerSelection();
+        assertEquals("llmrouter.next",preserved.modelId());assertEquals(route,preserved.routing());
+        var openRoute=new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of());
+        var explicit=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.AUTO,null,openRoute);
+        var cleared=store.settings(owner,"routing",2,new NovaFocusSettings(true,d.wakeWord(),1200,20000,8000,d.presentation(),false,false,d.snapshot(),explicit));
+        assertEquals(openRoute,cleared.settings().answerSelection().routing());
+    }
+    @Test void omittedRecentSettingsPreserveStoredPolicyAndExplicitValuesReplaceIt(){
+        String owner=UUID.randomUUID().toString();var d=NovaFocusSettings.defaults();
+        var custom=new NovaFocusSettings.RecentContext(false,60,3,800);
+        var initial=new NovaFocusSettings(true,d.wakeWord(),1200,20000,8000,d.presentation(),false,false,d.snapshot(),d.answerSelection(),custom);
+        store.settings(owner,"recent-settings",0,initial);
+        var legacy=new NovaFocusSettings(true,d.wakeWord(),1200,20000,8000,d.presentation(),false,false,d.snapshot(),d.answerSelection());
+        assertEquals(custom,store.settings(owner,"recent-settings",1,legacy).settings().recentContext());
+        var explicit=new NovaFocusSettings(true,d.wakeWord(),1200,20000,8000,d.presentation(),false,false,d.snapshot(),d.answerSelection(),NovaFocusSettings.RecentContext.defaults());
+        assertEquals(NovaFocusSettings.RecentContext.defaults(),store.settings(owner,"recent-settings",2,explicit).settings().recentContext());
+        assertThrows(IllegalArgumentException.class,()->new NovaFocusSettings.RecentContext(true,180,12,2001));
     }
 }

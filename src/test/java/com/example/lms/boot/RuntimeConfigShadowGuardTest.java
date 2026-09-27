@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.regex.Pattern;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -139,6 +140,49 @@ class RuntimeConfigShadowGuardTest {
         assertTrue(appProps.contains("probe.search.enabled=${PROBE_SEARCH_ENABLED:false}"));
         assertTrue(appProps.contains("local-llm.enabled=${LOCAL_LLM_ENABLED:false}"));
         assertTrue(appProps.contains("onnx.enabled=${ONNX_ENABLED:false}"));
+    }
+
+    @Test
+    void packagedUltraAndLearningProfilesUseSafeDefaults() throws IOException {
+        List<String> base = activeLines(Path.of("main/resources/application.yml"));
+        List<String> ultra = activeLines(Path.of("main/resources/application-ultra.properties"));
+        List<String> learning = activeLines(Path.of("main/resources/application-learning.yml"));
+        String rootBuild = Files.readString(Path.of("build.gradle.kts"));
+        String appBuild = Files.readString(Path.of("app/build.gradle.kts"));
+
+        assertNoActive(base, "^wiretap\\s*:\\s*true(?:\\s*#.*)?$");
+        assertTrue(ultra.contains("spring.reactor.netty.http.server.wiretap=false"));
+        assertTrue(ultra.contains("spring.reactor.netty.http.client.wiretap=false"));
+        assertTrue(rootBuild.contains("srcDirs(\"main/resources\")"),
+                "root module must own packaged runtime configuration");
+        assertTrue(appBuild.contains(
+                        "exclude(\"application*.yml\", \"application*.yaml\", \"application*.properties\")"),
+                ":app must exclude duplicate application configuration resources");
+
+        assertAll(
+                () -> assertTrue(ultra.contains(
+                        "server.error.include-stacktrace=${ULTRA_ERROR_INCLUDE_STACKTRACE:never}")),
+                () -> assertTrue(ultra.contains(
+                        "logging.level.org.hibernate.type.descriptor.sql.BasicBinder=${ULTRA_HIBERNATE_BINDER_LOG_LEVEL:WARN}")),
+                () -> assertTrue(ultra.contains(
+                        "logging.level.org.springframework.transaction=${ULTRA_TRANSACTION_LOG_LEVEL:WARN}")),
+                () -> assertTrue(ultra.contains(
+                        "logging.level.dev.langchain4j=${ULTRA_LANGCHAIN4J_LOG_LEVEL:WARN}")),
+                () -> assertTrue(learning.contains(
+                        "ddl-auto: ${LEARNING_JPA_DDL_AUTO:validate}")),
+                () -> assertNoActive(ultra,
+                        "^server\\.error\\.include-stacktrace\\s*=\\s*always(?:\\s*[#!].*)?$"),
+                () -> assertNoActive(ultra,
+                        "^logging\\.level\\.org\\.hibernate\\.type\\.descriptor\\.sql\\.BasicBinder"
+                                + "\\s*=\\s*TRACE(?:\\s*[#!].*)?$"),
+                () -> assertNoActive(ultra,
+                        "^logging\\.level\\.org\\.springframework\\.transaction"
+                                + "\\s*=\\s*TRACE(?:\\s*[#!].*)?$"),
+                () -> assertNoActive(ultra,
+                        "^logging\\.level\\.dev\\.langchain4j\\s*=\\s*TRACE(?:\\s*[#!].*)?$"),
+                () -> assertNoActive(learning,
+                        "^ddl-auto\\s*:\\s*create-drop(?:\\s*#.*)?$")
+        );
     }
 
     private static List<String> activeLines(Path path) throws IOException {
