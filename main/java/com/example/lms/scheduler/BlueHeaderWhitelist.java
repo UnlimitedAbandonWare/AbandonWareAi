@@ -4,6 +4,7 @@ import org.springframework.http.HttpHeaders;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -43,7 +44,7 @@ public final class BlueHeaderWhitelist {
         for (Map.Entry<String, List<String>> e : headers.entrySet()) {
             String name = e.getKey();
             if (name == null) continue;
-            String key = name.toLowerCase();
+            String key = name.toLowerCase(Locale.ROOT);
             if (!isWhitelisted(key)) continue;
 
             List<String> vals = e.getValue();

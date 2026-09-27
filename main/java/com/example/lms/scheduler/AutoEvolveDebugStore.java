@@ -347,20 +347,22 @@ public class AutoEvolveDebugStore {
         try {
             if (!Files.isDirectory(persistDir)) return;
 
-            List<Path> files = Files.list(persistDir)
-                    .filter(p -> {
-                        String n = p.getFileName().toString();
-                        return n.startsWith(basePrefix + "-") && n.endsWith(".ndjson");
-                    })
-                    .sorted((a, b) -> {
-                        try {
-                            return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));
-                        } catch (Exception e) {
-                            traceSuppressed("cleanup.lastModified", e);
-                            return 0;
-                        }
-                    })
-                    .toList();
+            List<Path> files;
+            try (var paths = Files.list(persistDir)) {
+                files = paths.filter(p -> {
+                            String n = p.getFileName().toString();
+                            return n.startsWith(basePrefix + "-") && n.endsWith(".ndjson");
+                        })
+                        .sorted((a, b) -> {
+                            try {
+                                return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));
+                            } catch (Exception e) {
+                                traceSuppressed("cleanup.lastModified", e);
+                                return 0;
+                            }
+                        })
+                        .toList();
+            }
 
             if (files.size() <= ndjsonMaxFiles) return;
             for (int i = ndjsonMaxFiles; i < files.size(); i++) {
@@ -402,9 +404,8 @@ public class AutoEvolveDebugStore {
         if (!Files.isDirectory(persistDir)) return List.of();
 
         List<Path> ndjsons;
-        try {
-            ndjsons = Files.list(persistDir)
-                    .filter(p -> p.getFileName().toString().endsWith(".ndjson"))
+        try (var paths = Files.list(persistDir)) {
+            ndjsons = paths.filter(p -> p.getFileName().toString().endsWith(".ndjson"))
                     .sorted((a, b) -> {
                         try {
                             return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));

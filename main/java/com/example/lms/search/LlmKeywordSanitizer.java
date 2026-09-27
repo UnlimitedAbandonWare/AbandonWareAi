@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 
@@ -27,6 +29,8 @@ import org.slf4j.Logger;
 @RequiredArgsConstructor
 public class LlmKeywordSanitizer {
     private static final Logger log = LoggerFactory.getLogger(LlmKeywordSanitizer.class);
+    private static final Pattern APPROVED_KEYWORD = Pattern.compile(
+            "\\\"kw\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"\\s*,\\s*\\\"ok\\\"\\s*:\\s*true");
 
     @Qualifier("judgeChatModel")
     private final ChatModel judgeChatModel;
@@ -78,16 +82,13 @@ public class LlmKeywordSanitizer {
             String json = judgeChatModel.chat(java.util.List.of(dev.langchain4j.data.message.UserMessage.from(keywordVerifierPrompt)))
                     .aiMessage().text();
 
-            // 아주 단순한 파싱 (의존성 줄이기 위해 Jackson 생략)
+            // 의존성 추가 없이 prompt contract의 {"kw":"...","ok":true} 항목만 추출한다.
             List<String> passed = new ArrayList<>();
-            for (String line : json.split("[\\[{\\]}]")) {
-                if (line.contains("\"ok\":true")) {
-                    int s = line.indexOf("\"kw\"");
-                    if (s > -1) {
-                        String kw = line.substring(line.indexOf('"', s + 4) + 1,
-                                line.lastIndexOf('"')).trim();
-                        if (StringUtils.hasText(kw)) passed.add(kw);
-                    }
+            Matcher approvedKeyword = APPROVED_KEYWORD.matcher(json);
+            while (approvedKeyword.find()) {
+                String kw = approvedKeyword.group(1).trim();
+                if (StringUtils.hasText(kw) && candidates.contains(kw)) {
+                    passed.add(kw);
                 }
             }
             return passed.isEmpty() ? candidates : passed;

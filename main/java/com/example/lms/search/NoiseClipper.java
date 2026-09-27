@@ -37,7 +37,7 @@ public class NoiseClipper {
     private static final Pattern MULTISPC = Pattern.compile("\\s{2,}");
     /** Pattern matching "X이/가 뭐야/어떤 곳..." queries to extract the entity anchor. */
     private static final Pattern ENTITY_WHAT = Pattern.compile(
-            "^\\s*(.+?)(?:이|가)\\s*(어떤\\s*곳|뭐|무엇|어디).*$");
+            "^\\s*(.+?)(?:이|가)\\s*(?:어떤\\s*곳(?:이야|인가요|이니|이냐)?|뭐(?:야|지|예요|에요|니)?|무엇(?:이야|인가요|인지)?|어디(?:야|인가요|지)?)\\s*[?？.!！。]*\\s*$");
     /** ASCII/유니코드 따옴표 제거용 패턴: “ ” ‘ ’ ` ´ " ' */
     private static final Pattern QUOTE_CHARS =
             Pattern.compile("[\\u201C\\u201D\\u2018\\u2019\\u0060\\u00B4\"']");

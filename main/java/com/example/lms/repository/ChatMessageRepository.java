@@ -4,6 +4,8 @@ import java.util.List;
 import com.example.lms.domain.ChatMessage;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 
 
@@ -11,6 +13,8 @@ import java.util.Optional;
 
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
+    List<ChatMessage> findBySession_IdAndIdLessThanEqualOrderByIdDesc(
+            Long sessionId, Long id, Pageable pageable);
     List<ChatMessage> findBySessionId(Long sessionId);
 
     /** createdAt ASC 로 정렬해서 반환 (대화 순서 보존) */
@@ -39,6 +43,21 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
      * 세션 메시지가 많아도 서버 부하를 최소화합니다.</p>
      */
     List<ChatMessage> findBySession_IdOrderByCreatedAtDesc(Long sessionId, Pageable pageable);
+
+    /**
+     * Select the newest bounded window deterministically before the service
+     * projects it back into chronological order.
+     */
+    @Query("""
+            select m from ChatMessage m
+            where m.session.id = :sessionId
+            order by case when m.createdAt is null then 1 else 0 end asc,
+                     m.createdAt desc,
+                     m.id desc
+            """)
+    List<ChatMessage> findNewestWindowBySessionId(
+            @Param("sessionId") Long sessionId,
+            Pageable pageable);
 
     // ----- RollingSummary (RSUM) helpers -----
     /** Latest RSUM system message for the session (fast, id-desc). */

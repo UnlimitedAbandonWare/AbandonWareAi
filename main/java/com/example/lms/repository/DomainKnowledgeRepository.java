@@ -23,9 +23,9 @@ public interface DomainKnowledgeRepository extends JpaRepository<DomainKnowledge
     Optional<DomainKnowledge> findByDomainAndEntityNameIgnoreCase(String domain, String entityName);
 
     /**
-     * DomainKnowledge 엔티티는 현재 entityName을 전역 유니크로 선언하고 있습니다.
-     * (도메인별 유니크가 아닌) 이 제약으로 인해 동일 entityName이 이미 존재할 경우
-     * 도메인별 조회가 실패할 수 있어, 오버레이(예: Nova KB persist AOP)에서 폴백 조회로 사용합니다.
+     * 도메인 분류가 어긋난 조회의 레거시 폴백입니다. 저장에는 사용하지 않습니다.
+     * 여러 도메인에 동명 행이 있으면 단일 결과를 보장할 수 없으므로 호출자가
+     * 비고유 결과를 처리해야 합니다. 정확한 도메인 조회가 우선합니다.
      */
     Optional<DomainKnowledge> findByEntityNameIgnoreCase(String entityName);
 

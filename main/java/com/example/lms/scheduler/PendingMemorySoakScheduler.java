@@ -16,7 +16,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -69,6 +71,7 @@ public class PendingMemorySoakScheduler {
             );
             if (claimed <= 0) return;
 
+            List<TranslationMemory> promotions = new ArrayList<>();
             for (TranslationMemory tm : repo.findByLockedByAndLockedAtOrderByCreatedAtAsc(lockedBy, now)) {
                 if (tm == null) continue;
 
@@ -162,42 +165,79 @@ public class PendingMemorySoakScheduler {
                     continue;
                 }
 
-                // promote
-                tm.setStatus(TranslationMemory.MemoryStatus.ACTIVE);
-                tm.setLockedAt(null);
-                tm.setLockedBy(null);
-                repo.save(tm);
-
-                // re-index
                 try {
                     Map<String, Object> meta = new HashMap<>();
                     meta.put(VectorMetaKeys.META_SOURCE_TAG, "PENDING_SOAK");
                     meta.put(VectorMetaKeys.META_DOC_TYPE, "MEMORY");
                     meta.put("evidenceSignals", evidence);
                     vectorStoreService.enqueue(tm.getSessionId(), content, meta);
+                    promotions.add(tm);
                 } catch (Exception enqueueErr) {
-                    // fail-soft: leave ACTIVE but record
                     log.debug("[PENDING_SOAK] enqueue failed idHash={} errorHash={} errorLength={}",
                             com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(tm.getId())),
                             com.example.lms.trace.SafeRedactor.hashValue(messageOf(enqueueErr)),
                             messageLength(enqueueErr));
+                    releasePendingLease(tm, "enqueue_failure");
                 }
-
-                log.info("[PENDING_SOAK] promoted memory idHash={} sessionHash={} evidence={}", com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(tm.getId())), com.example.lms.trace.SafeRedactor.hashValue(tm.getSessionId()), evidence);
             }
 
-            // batch flush so enqueue storms don't synchronously block the scheduler
-            try {
-                vectorStoreService.triggerFlushIfDue();
-            } catch (Exception flushErr) {
-                log.warn("[PENDING_SOAK] triggerFlushIfDue failed err={}", flushErr.getClass().getSimpleName());
-                com.example.lms.search.TraceStore.inc("vectorstore.flush.failed");
+            if (!promotions.isEmpty()) {
+                VectorStoreService.VectorFlushOutcome outcome = null;
+                try {
+                    outcome = vectorStoreService.flush();
+                } catch (Exception flushErr) {
+                    log.warn("[PENDING_SOAK] flush failed errorHash={} errorLength={}",
+                            com.example.lms.trace.SafeRedactor.hashValue(messageOf(flushErr)),
+                            messageLength(flushErr));
+                    com.example.lms.search.TraceStore.inc("vectorstore.flush.failed");
+                }
+
+                if (outcome != null && outcome.durable()) {
+                    for (TranslationMemory promotion : promotions) {
+                        promotion.setStatus(TranslationMemory.MemoryStatus.ACTIVE);
+                        promotion.setLockedAt(null);
+                        promotion.setLockedBy(null);
+                        repo.save(promotion);
+                        log.info("[PENDING_SOAK] promoted memory idHash={} sessionHash={} evidence={}",
+                                com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(promotion.getId())),
+                                com.example.lms.trace.SafeRedactor.hashValue(promotion.getSessionId()),
+                                countEvidenceSignals(promotion.getContent()));
+                    }
+                } else {
+                    String reasonCode = flushRetryReason(outcome);
+                    for (TranslationMemory promotion : promotions) {
+                        releasePendingLease(promotion, reasonCode);
+                    }
+                }
             }
         } catch (Exception e) {
             log.warn("[PENDING_SOAK] failed errorHash={} errorLength={}",
                     com.example.lms.trace.SafeRedactor.hashValue(messageOf(e)),
                     messageLength(e));
         }
+    }
+
+    private void releasePendingLease(TranslationMemory memory, String reasonCode) {
+        String safeReasonCode = switch (reasonCode == null ? "" : reasonCode) {
+            case "enqueue_failure", "flush_backoff", "flush_failure", "flush_partial" -> reasonCode;
+            default -> "flush_failure";
+        };
+        memory.setStatus(TranslationMemory.MemoryStatus.PENDING);
+        memory.setLockedAt(null);
+        memory.setLockedBy(null);
+        repo.save(memory);
+        com.example.lms.search.TraceStore.put("pendingSoak.retry.reason", safeReasonCode);
+        com.example.lms.search.TraceStore.put("pendingSoak.retry.memoryIdHash",
+                com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(memory.getId())));
+        com.example.lms.search.TraceStore.put("pendingSoak.retry.sessionHash",
+                com.example.lms.trace.SafeRedactor.hashValue(memory.getSessionId()));
+    }
+
+    private static String flushRetryReason(VectorStoreService.VectorFlushOutcome outcome) {
+        if (outcome == null) return "flush_failure";
+        if ("backoff".equals(outcome.reasonCode())) return "flush_backoff";
+        if (outcome.succeededCount() > 0) return "flush_partial";
+        return "flush_failure";
     }
 
     private static int countEvidenceSignals(String s) {

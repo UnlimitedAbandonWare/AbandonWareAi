@@ -9,8 +9,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -55,16 +57,17 @@ public class QueryExpander {
         질문: %s
         """;
 
-    /* 10 분 캐시 (key = 원질문|첫 스니펫 해시) */
+    /* 10 분 캐시 */
     private static final long CACHE_TTL_MS = 10 * 60 * 1_000L;
-    private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    private static final int CACHE_MAX_ENTRIES = 256;
+    private final Map<String, CacheEntry> cache = new LinkedHashMap<>(16, 0.75f, true);
 
     public List<String> expand(String original, List<String> snippets) {
 
-        String cacheKey = original + "|" + snippets.hashCode();
-        CacheEntry cached = cache.get(cacheKey);
-        if (cached != null && !cached.isExpired()) {
-            return cached.value();
+        String cacheKey = cacheKey(original, snippets);
+        CacheEntry cached = cached(cacheKey, System.currentTimeMillis());
+        if (cached != null) {
+            return new ArrayList<>(cached.value());
         }
 
         /* 순서 보존 + 중복 제거 */
@@ -114,11 +117,70 @@ public class QueryExpander {
         });
 
         List<String> result = out.stream().collect(Collectors.toList());
-        cache.put(cacheKey, new CacheEntry(result));
+        cache(cacheKey, result, System.currentTimeMillis());
         return result;
     }
 
     /* ───────────── 내부 util ───────────── */
+    private CacheEntry cached(String key, long now) {
+        synchronized (cache) {
+            CacheEntry entry = cache.get(key);
+            if (entry != null && entry.isExpired(now)) {
+                cache.remove(key);
+                return null;
+            }
+            return entry;
+        }
+    }
+
+    private void cache(String key, List<String> value, long now) {
+        synchronized (cache) {
+            cache.entrySet().removeIf(entry -> entry.getValue().isExpired(now));
+            cache.put(key, new CacheEntry(List.copyOf(value), now));
+            while (cache.size() > CACHE_MAX_ENTRIES) {
+                Iterator<String> eldest = cache.keySet().iterator();
+                eldest.next();
+                eldest.remove();
+            }
+        }
+    }
+
+    private static String cacheKey(String original, List<String> snippets) {
+        MessageDigest digest = sha256();
+        updateDigestPart(digest, original);
+        if (snippets == null) {
+            digest.update((byte) 0);
+        } else {
+            digest.update((byte) 1);
+            for (String snippet : snippets) {
+                updateDigestPart(digest, snippet);
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static MessageDigest sha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private static void updateDigestPart(MessageDigest digest, String value) {
+        if (value == null) {
+            digest.update((byte) 0);
+            return;
+        }
+        digest.update((byte) 1);
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        digest.update((byte) (bytes.length >>> 24));
+        digest.update((byte) (bytes.length >>> 16));
+        digest.update((byte) (bytes.length >>> 8));
+        digest.update((byte) bytes.length);
+        digest.update(bytes);
+    }
+
     private static List<String> splitLines(String raw) {
         if (!StringUtils.hasText(raw)) return List.of();
         return Arrays.stream(raw.split("\\R+"))
@@ -137,11 +199,8 @@ public class QueryExpander {
     }
 
     private record CacheEntry(List<String> value, long timestamp) {
-        CacheEntry(List<String> value) {
-            this(value, System.currentTimeMillis());
-        }
-        boolean isExpired() {
-            return System.currentTimeMillis() - timestamp > CACHE_TTL_MS;
+        boolean isExpired(long now) {
+            return now - timestamp > CACHE_TTL_MS;
         }
     }
 }

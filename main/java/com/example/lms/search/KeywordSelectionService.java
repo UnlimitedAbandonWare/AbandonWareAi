@@ -164,6 +164,27 @@ public class KeywordSelectionService {
         }
     }
 
+    private static boolean isDiagnosticSmokeScopeActive() {
+        try {
+            Object value = TraceStore.get("aux.queryTransformer.diagnosticSmokeScope");
+            return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
+        } catch (Throwable suppressed) {
+            traceSuppressed("diagnosticSmoke.scopeRead", suppressed);
+            return false;
+        }
+    }
+
+    private static void traceDiagnosticSmokeSkip(String conversation) {
+        try {
+            TraceStore.put("aux.keywordSelection.skipped", true);
+            TraceStore.put("aux.keywordSelection.skipReason", "diagnostic_smoke");
+            TraceStore.put("aux.keywordSelection.skipConversationHash", SafeRedactor.hashValue(conversation));
+            TraceStore.put("aux.keywordSelection.skipConversationLength", conversation == null ? 0 : conversation.length());
+        } catch (Throwable suppressed) {
+            traceSuppressed("diagnosticSmoke.skipTrace", suppressed);
+        }
+    }
+
     /**
      * Request term selection from the LLM. When the call succeeds and
      * valid JSON is returned, the parsed {@link SelectedTerms} is
@@ -182,6 +203,28 @@ public class KeywordSelectionService {
 
         String cacheKey = cacheKey(conversation, domainProfile, mustLim);
         SelectedTerms cached = selectionCache.getIfPresent(cacheKey);
+
+        if (isDiagnosticSmokeScopeActive()) {
+            traceDiagnosticSmokeSkip(conversation);
+            if (cached != null) {
+                try {
+                    TraceStore.put("keywordSelection.mode", "cache_rescue_diagnostic_smoke");
+                } catch (Throwable suppressed) {
+                    traceSuppressed("diagnosticSmoke.cacheMode", suppressed);
+                }
+                traceRule("keywordSelection.mode=cache_rescue_diagnostic_smoke");
+                return Optional.of(ensureMinMust(deepCopy(cached), conversation, domainProfile, 2,
+                        "cache_rescue_diagnostic_smoke"));
+            }
+            SelectedTerms fb = fallbackTerms(conversation, domainProfile, mustLim);
+            try {
+                TraceStore.put("keywordSelection.mode", "fallback_diagnostic_smoke");
+            } catch (Throwable suppressed) {
+                traceSuppressed("diagnosticSmoke.fallbackMode", suppressed);
+            }
+            traceRule("keywordSelection.mode=fallback_diagnostic_smoke");
+            return Optional.of(ensureMinMust(fb, conversation, domainProfile, 2, "fallback_diagnostic_smoke"));
+        }
 
         // UAW: If auxiliary LLM calls are already degraded for this request (or we are
         // in STRIKE/COMPRESSION),
@@ -538,6 +581,10 @@ public class KeywordSelectionService {
         } catch (Throwable ignore) {
             traceSuppressed("blockedGuard.outer", ignore);
         }
+        NightmareBreaker.CallPermit permit = null;
+        boolean permitCompleted = false;
+        boolean modelResponseReceived = false;
+        long modelStarted = 0L;
         try {
             int maxConvChars = positiveIntProperty("keywordSelection.maxConversationChars", 2400,
                     "maxConversationChars");
@@ -570,21 +617,37 @@ public class KeywordSelectionService {
             // 1.0.1 API and avoids implicit conversions.
             String json;
             if (nightmareBreaker != null) {
-                json = nightmareBreaker.execute(
-                        NightmareKeys.KEYWORD_SELECTION_SELECT,
-                        selectedTermsPrompt,
-                        () -> chatModel.chat(java.util.List.of(UserMessage.from(selectedTermsPrompt))).aiMessage().text(),
-                        FriendShieldPatternDetector::looksLikeSilentFailure,
-                        () -> "");
-            } else {
-                json = chatModel
-                        .chat(java.util.List.of(UserMessage.from(selectedTermsPrompt)))
-                        .aiMessage()
-                        .text();
+                try {
+                    permit = nightmareBreaker.acquire(NightmareKeys.KEYWORD_SELECTION_SELECT, "keyword-selection");
+                } catch (NightmareBreaker.OpenCircuitException open) {
+                    traceSuppressed("breaker.acquireOpen", open);
+                    return cached != null
+                            ? Optional.of(ensureMinMust(deepCopy(cached), conversation, domainProfile, 2,
+                                    "cache_rescue_breaker_open"))
+                            : Optional.of(fallbackTerms(conversation, domainProfile, mustLim));
+                }
+            }
+            modelStarted = System.nanoTime();
+            json = chatModel
+                    .chat(java.util.List.of(UserMessage.from(selectedTermsPrompt)))
+                    .aiMessage()
+                    .text();
+            modelResponseReceived = true;
+            boolean friendShieldResponse = FriendShieldPatternDetector.looksLikeSilentFailure(json);
+            if (friendShieldResponse && permit != null) {
+                permit.completeSilentFailure("keyword-selection", "friendshield");
+                permitCompleted = true;
+            }
+            if (friendShieldResponse) {
+                json = "";
             }
             // Strip markdown fences before JSON parsing
             json = sanitizeJson(json);
             if (json == null || json.isBlank()) {
+                if (permit != null && !permitCompleted) {
+                    permit.completeBlank("keyword-selection");
+                    permitCompleted = true;
+                }
                 // MERGE_HOOK:PROJ_AGENT::KEYWORD_FALLBACK_BLANK_DEGRADED_V1
                 // Blank output is a *cheap* degradation signal (not a hard block).
                 // Record degraded KPI so dashboards can distinguish "blocked" vs "degraded".
@@ -603,9 +666,6 @@ public class KeywordSelectionService {
                     traceSuppressed("blank.degradedTrace", suppressed);
                 }
                 traceRule("keywordSelection.mode=fallback_blank degraded=true reason=blank");
-                if (nightmareBreaker != null) {
-                    nightmareBreaker.recordBlank(NightmareKeys.KEYWORD_SELECTION_SELECT, selectedTermsPrompt);
-                }
                 if (irregularityProfiler != null) {
                     irregularityProfiler.bump(GuardContextHolder.getOrDefault(), 0.15, "keyword_blank");
                 }
@@ -650,6 +710,10 @@ public class KeywordSelectionService {
             }
             SelectedTerms terms = om.readValue(json, SelectedTerms.class);
             if (terms == null) {
+                if (permit != null && !permitCompleted) {
+                    permit.completeSilentFailure("keyword-selection", "null-result");
+                    permitCompleted = true;
+                }
                 AuxDownTracker.markSoft("keyword-selection", "json-null");
                 try {
                     TraceStore.put("keywordSelection.mode", "fallback_json_null");
@@ -691,6 +755,10 @@ public class KeywordSelectionService {
             // Ensure at least one meaningful must-term so downstream query planning doesn't
             // collapse.
             if (terms.getMust() == null || terms.getMust().isEmpty()) {
+                if (permit != null && !permitCompleted) {
+                    permit.completeSilentFailure("keyword-selection", "empty-must");
+                    permitCompleted = true;
+                }
                 AuxDownTracker.markSoft("keyword-selection", "empty_must");
                 try {
                     TraceStore.putIfAbsent("aux.keywordSelection", "degraded:empty_must");
@@ -716,9 +784,17 @@ public class KeywordSelectionService {
                 traceSuppressed("llmJson.mode", suppressed);
             }
             traceRule("keywordSelection.mode=llm_json");
+            if (permit != null && !permitCompleted) {
+                permit.completeSuccess(Math.max(0L, (System.nanoTime() - modelStarted) / 1_000_000L));
+                permitCompleted = true;
+            }
             selectionCache.put(cacheKey, deepCopy(terms));
             return Optional.of(terms);
         } catch (IOException parseEx) {
+            if (permit != null && !permitCompleted) {
+                permit.completeSilentFailure("keyword-selection", "invalid-json");
+                permitCompleted = true;
+            }
             log.warn("[KeywordSelection] JSON parse failed, fall back to heuristics. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(parseEx)), messageLength(parseEx));
             try {
@@ -736,10 +812,6 @@ public class KeywordSelectionService {
                 traceSuppressed("parse.degradedTrace", suppressed);
             }
             traceRule("keywordSelection.mode=fallback_parse (invalid json)");
-            if (nightmareBreaker != null) {
-                nightmareBreaker.recordSilentFailure(NightmareKeys.KEYWORD_SELECTION_SELECT, "invalid_json",
-                        "parse_failed");
-            }
             if (irregularityProfiler != null) {
                 irregularityProfiler.bump(GuardContextHolder.getOrDefault(), 0.10, "keyword_parse_failed");
             }
@@ -755,6 +827,18 @@ public class KeywordSelectionService {
             }
             return Optional.of(fallbackTerms(conversation, domainProfile, mustLim));
         } catch (Exception ex) {
+            if (permit != null && !permitCompleted) {
+                NightmareBreaker.FailureKind kind = NightmareBreaker.classify(ex);
+                if (kind == NightmareBreaker.FailureKind.INTERRUPTED
+                        || ex instanceof java.util.concurrent.CancellationException) {
+                    permit.completeCancelled(ex, "keyword-selection");
+                } else if (modelResponseReceived) {
+                    permit.completeSilentFailure("keyword-selection", "invalid-response");
+                } else {
+                    permit.completeFailure(kind, ex, "keyword-selection");
+                }
+                permitCompleted = true;
+            }
             log.error("[KeywordSelection] unexpected failure in keyword selection, fall back to heuristics type={} errorHash={} errorLength={}",
                     ex.getClass().getSimpleName(),
                     SafeRedactor.hashValue(messageOf(ex)), messageLength(ex));
@@ -773,10 +857,6 @@ public class KeywordSelectionService {
                 traceSuppressed("exception.degradedTrace", suppressed);
             }
             traceRule("keywordSelection.mode=fallback_exception");
-            if (nightmareBreaker != null) {
-                NightmareBreaker.FailureKind kind = NightmareBreaker.classify(ex);
-                nightmareBreaker.recordFailure(NightmareKeys.KEYWORD_SELECTION_SELECT, kind, ex, "keyword_selection");
-            }
             if (irregularityProfiler != null) {
                 irregularityProfiler.markHighRisk(GuardContextHolder.getOrDefault(), "keyword_failed");
             }

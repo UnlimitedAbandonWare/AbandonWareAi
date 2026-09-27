@@ -634,11 +634,13 @@ public class RagFailureBlackboxService {
             double priorRisk = Math.max(point.riskScore, point.priorityScore);
             double applyThreshold = Math.max(0.0d, historyCorrectionApplyThreshold);
             if (priorRisk < applyThreshold) {
-                traceVirtualPointPrior(true, prior.similarity(), point.patternId, false, "prior_below_threshold");
+                traceVirtualPointPrior(true, prior.similarity(), point.patternId, false,
+                        "prior_below_threshold", point);
                 return snapshot;
             }
             if ("none".equals(point.dominantFailure) && "observe_only".equals(point.restoreAction)) {
-                traceVirtualPointPrior(true, prior.similarity(), point.patternId, false, "prior_observe_only");
+                traceVirtualPointPrior(true, prior.similarity(), point.patternId, false,
+                        "prior_observe_only", point);
                 return snapshot;
             }
 
@@ -655,7 +657,8 @@ public class RagFailureBlackboxService {
             }
             boolean highRisk = Math.max(boostedRisk, boostedPriority) >= applyThreshold;
             if (!highRisk) {
-                traceVirtualPointPrior(true, prior.similarity(), point.patternId, false, "boost_below_threshold");
+                traceVirtualPointPrior(true, prior.similarity(), point.patternId, false,
+                        "boost_below_threshold", point);
                 return snapshot;
             }
 
@@ -668,7 +671,8 @@ public class RagFailureBlackboxService {
             if ("SHADOW_REVIEW".equals(vectorDecision) && highRisk) {
                 vectorDecision = "QUARANTINE";
             }
-            traceVirtualPointPrior(true, prior.similarity(), point.patternId, true, "virtual_point_prior");
+            traceVirtualPointPrior(true, prior.similarity(), point.patternId, true,
+                    "virtual_point_prior", point);
             return new Snapshot(
                     boostedRisk,
                     boostedPriority,
@@ -1214,17 +1218,46 @@ public class RagFailureBlackboxService {
         return Collections.unmodifiableMap(out);
     }
 
+    private static long virtualPointAgeMs(VirtualPoint point, long nowMs) {
+        if (point == null || point.seenAtMs <= 0L || nowMs < point.seenAtMs) {
+            return -1L;
+        }
+        return nowMs - point.seenAtMs;
+    }
+
     private static void traceVirtualPointPrior(boolean matched,
                                                double similarity,
                                                String priorPatternId,
                                                boolean applied,
                                                String reason) {
+        traceVirtualPointPrior(matched, similarity, priorPatternId, applied, reason, null);
+    }
+
+    private static void traceVirtualPointPrior(boolean matched,
+                                               double similarity,
+                                               String priorPatternId,
+                                               boolean applied,
+                                               String reason,
+                                               VirtualPoint point) {
         try {
             TraceStore.put(PREFIX + "virtualPoint.matched", matched);
             TraceStore.put(PREFIX + "virtualPoint.similarity", round4(similarity));
             TraceStore.put(PREFIX + "virtualPoint.priorPatternId", safeLabel(priorPatternId, ""));
             TraceStore.put(PREFIX + "virtualPoint.applied", applied);
             TraceStore.put(PREFIX + "virtualPoint.reason", safePublicLabel(reason, "none"));
+            if (point != null) {
+                long ageMs = virtualPointAgeMs(point, System.currentTimeMillis());
+                TraceStore.put(PREFIX + "virtualPoint.ageKnown", ageMs >= 0L);
+                TraceStore.put(PREFIX + "virtualPoint.ageMs", ageMs);
+                TraceStore.put(PREFIX + "virtualPoint.freshnessDisposition", "shadow_uncalibrated");
+                TraceStore.put(PREFIX + "virtualPoint.decisionAuthority",
+                        applied ? "legacy_applied" : "not_applied");
+            } else {
+                TraceStore.put(PREFIX + "virtualPoint.ageKnown", null);
+                TraceStore.put(PREFIX + "virtualPoint.ageMs", null);
+                TraceStore.put(PREFIX + "virtualPoint.freshnessDisposition", null);
+                TraceStore.put(PREFIX + "virtualPoint.decisionAuthority", null);
+            }
         } catch (Throwable t) {
             traceSkipped("virtual_point_prior_trace", reason, t);
         }

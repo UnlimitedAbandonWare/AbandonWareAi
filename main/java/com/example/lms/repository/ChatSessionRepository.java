@@ -2,6 +2,7 @@ package com.example.lms.repository;
 
 import com.example.lms.domain.ChatSession;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Pageable;
 
 import java.util.Collection;
 import java.util.List;
@@ -14,15 +15,26 @@ import java.util.List;
  */
 public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> {
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select s from ChatSession s where s.id = :sessionId")
+    java.util.Optional<ChatSession> findByIdForUpdate(
+            @org.springframework.data.repository.query.Param("sessionId") Long sessionId);
+
     /**
      * 생성일시 기준 전체 세션 목록 (최신순)
      */
     List<ChatSession> findAllByOrderByCreatedAtDesc();
 
+    List<ChatSession> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
     /**
      * 관리자 username 기준 세션 목록 (최신순)
      */
     List<ChatSession> findByAdministrator_UsernameOrderByCreatedAtDesc(String username);
+
+    List<ChatSession> findByAdministrator_UsernameOrderByCreatedAtDesc(String username, Pageable pageable);
+
+    long countByAdministrator_Username(String username);
 
     /**
      * 게스트/비회원 소유 키 기준으로 생성일시 내림차순 조회
@@ -31,10 +43,14 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> 
      */
     List<ChatSession> findByOwnerKeyOrderByCreatedAtDesc(String ownerKey);
 
+    long countByOwnerKey(String ownerKey);
+
     // MERGE_HOOK:PROJ_AGENT::JAMMINI_PROJECTION_V1
     /**
      * [IMPROVED] 다중 소유 키 기반 조회 (게스트 식별 강화용)
      * 쿠키 ID 또는 IP 해시 중 하나라도 일치하면 조회합니다.
      */
     List<ChatSession> findByOwnerKeyInOrderByCreatedAtDesc(Collection<String> ownerKeys);
+
+    List<ChatSession> findByOwnerKeyInOrderByCreatedAtDesc(Collection<String> ownerKeys, Pageable pageable);
 }

@@ -582,7 +582,14 @@ public class TrainingJobRunner {
             String t = s == null ? "" : s.trim();
             if (t.isEmpty()) continue;
             t = t.replaceAll("^[0-9]+[).:-]\\s*", "");
-            if (t.length() > 200) t = t.substring(0, 200);
+            if (t.length() > 200) {
+                int end = 200;
+                if (Character.isHighSurrogate(t.charAt(end - 1))
+                        && Character.isLowSurrogate(t.charAt(end))) {
+                    end--;
+                }
+                t = t.substring(0, end);
+            }
             if (!t.isBlank()) out.add(t);
             if (out.size() >= cap) break;
         }

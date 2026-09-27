@@ -79,12 +79,15 @@ final class RagFailureBlackboxValues {
         if (raw.isBlank()) {
             return "none";
         }
-        String token = raw.toLowerCase(Locale.ROOT);
+        String label = SafeRedactor.traceLabelOrFallback(raw, "");
+        if (label == null || label.isBlank()) {
+            return "none";
+        }
+        String token = label.toLowerCase(Locale.ROOT);
         if (token.matches("[a-z0-9_.:-]+")) {
             return token.length() > 96 ? token.substring(0, 96) : token;
         }
-        String label = SafeRedactor.traceLabelOrFallback(raw, "");
-        return label == null || label.isBlank() ? "none" : label;
+        return label;
     }
 
     static double clamp01(double value) {

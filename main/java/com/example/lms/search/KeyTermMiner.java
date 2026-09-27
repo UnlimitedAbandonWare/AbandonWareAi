@@ -4,6 +4,8 @@ import com.example.lms.trace.SafeRedactor;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.ko.KoreanAnalyzer;
 import org.apache.lucene.document.Document;
+import org.apache.lucene.document.Field;
+import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.*;
 import org.apache.lucene.search.*;
@@ -21,6 +23,7 @@ public class KeyTermMiner {
     private static final Logger log = LoggerFactory.getLogger(KeyTermMiner.class);
 
     private static final int DEFAULT_TOP_N = 3;
+    private static final FieldType TERM_VECTOR_BODY = termVectorBodyFieldType();
     private final Analyzer analyzer = new KoreanAnalyzer();
 
     /** 스니펫 리스트 → BM25 상위 N 단어 반환 (1글자 제외) */
@@ -32,35 +35,43 @@ public class KeyTermMiner {
             try (IndexWriter w = new IndexWriter(ram, cfg)) {
                 for (String s : snippets) {
                     Document d = new Document();
-                    d.add(new TextField("body", s, TextField.Store.NO));
+                    d.add(new Field("body", s, TERM_VECTOR_BODY));
                     w.addDocument(d);
                 }
             }
-            IndexReader r = DirectoryReader.open(ram);
-            TermsEnum te;
-            Map<String, Long> tf = new HashMap<>();
+            try (IndexReader r = DirectoryReader.open(ram)) {
+                TermsEnum te;
+                Map<String, Long> tf = new HashMap<>();
 
-            for (int i = 0; i < r.maxDoc(); i++) {
-                Terms terms = r.getTermVector(i, "body");
-                if (terms == null) continue;
-                te = terms.iterator();
-                while (te.next() != null) {
-                    String term = te.term().utf8ToString();
-                    if (term.length() <= 1) continue;
-                    tf.merge(term, te.totalTermFreq(), Long::sum);
+                for (int i = 0; i < r.maxDoc(); i++) {
+                    Terms terms = r.getTermVector(i, "body");
+                    if (terms == null) continue;
+                    te = terms.iterator();
+                    while (te.next() != null) {
+                        String term = te.term().utf8ToString();
+                        if (term.length() <= 1) continue;
+                        tf.merge(term, te.totalTermFreq(), Long::sum);
+                    }
                 }
+                return tf.entrySet().stream()
+                        .sorted(Map.Entry.<String,Long>comparingByValue().reversed())
+                        .limit(topN <= 0 ? DEFAULT_TOP_N : topN)
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
             }
-            return tf.entrySet().stream()
-                    .sorted(Map.Entry.<String,Long>comparingByValue().reversed())
-                    .limit(topN <= 0 ? DEFAULT_TOP_N : topN)
-                    .map(Map.Entry::getKey)
-                    .collect(Collectors.toList());
 
         } catch (Exception e) {
             log.warn("[KeyTermMiner] failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             return List.of();
         }
+    }
+
+    private static FieldType termVectorBodyFieldType() {
+        FieldType type = new FieldType(TextField.TYPE_NOT_STORED);
+        type.setStoreTermVectors(true);
+        type.freeze();
+        return type;
     }
 
     private static String messageOf(Throwable t) {

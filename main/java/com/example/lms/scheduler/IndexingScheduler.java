@@ -84,7 +84,8 @@ public class IndexingScheduler {
             return;
         }
 
-        boolean flushOk = false;
+        VectorStoreService.VectorFlushOutcome outcome = null;
+        String flushFailureReason = "exception";
         try {
             // Use VectorStoreService to enqueue segments for embedding & upload
             for (TextSegment seg : segments) {
@@ -99,24 +100,26 @@ public class IndexingScheduler {
                 vectorStoreService.enqueue("0", seg.text(), extra);
             }
             // Trigger flush explicitly to upload immediately
-            vectorStoreService.flush();
-            flushOk = true;
+            outcome = vectorStoreService.flush();
+            flushFailureReason = indexingFlushFailureReason(outcome);
         } catch (Exception e) {
-            com.example.lms.search.TraceStore.inc("indexing.flush.failed");
             log.warn("[Indexing] vector store load failed errorHash={} errorLength={}",
                     com.example.lms.trace.SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
 
-        // Reinforce snippets into long-term memory with max score
-        segments.forEach(seg -> memorySvc.reinforceWithSnippet(
-                "0", null, seg.text(), "WEB", 1.0));
-
-        if (flushOk) {
+        boolean batchPersisted = outcome != null && outcome.durable();
+        if (batchPersisted) {
+            // Reinforce only after the same vector batch is durably persisted.
+            segments.forEach(seg -> memorySvc.reinforceWithSnippet(
+                    "0", null, seg.text(), "WEB", 1.0));
             lastFetchTime.set(LocalDateTime.now());
         } else {
-            log.warn("[Indexing] lastFetchTime not advanced due to vector flush failure");
+            com.example.lms.search.TraceStore.inc("indexing.flush.failed");
+            com.example.lms.search.TraceStore.put("indexing.flush.failed.reason", flushFailureReason);
+            log.warn("[Indexing] lastFetchTime not advanced due to vector flush failure reason={}",
+                    flushFailureReason);
         }
-        log.info("[Indexing] 완료: {}개 세그먼트 저장", segments.size());
+        log.info("[Indexing] 완료: {}개 세그먼트 처리 durable={}", segments.size(), batchPersisted);
 
     }
 
@@ -133,6 +136,16 @@ public class IndexingScheduler {
          * @return 새 문서 목록; 없으면 빈 리스트
          */
         List<Document> fetchNewDocumentsSince(LocalDateTime lastFetchTime);
+    }
+
+    private static String indexingFlushFailureReason(VectorStoreService.VectorFlushOutcome outcome) {
+        if (outcome == null) return "null_outcome";
+        if (!outcome.durable() && outcome.succeededCount() > 0) return "partial";
+        return switch (outcome.reasonCode()) {
+            case "backoff" -> "backoff";
+            case "store_failure" -> "store_failure";
+            default -> "non_durable";
+        };
     }
 
     private static String messageOf(Throwable t) {
