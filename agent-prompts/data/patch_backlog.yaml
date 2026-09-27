@@ -51,7 +51,10 @@ verificationEvidence:
   patchdropJanitorInventory: "janitor_inventory.ps1 shows source-lease activeCount=0, producer pending total=0, nested producer pending=0, notebook reconciliation recorded=1; nested report-only tailscale-smb-load-shed remains supporting evidence only."
   safeDeletePathPresence: "safe_delete_path_presence.ps1 writes awx.safe_delete_path_presence.v1 read-only JSON; completion audit requires safe-delete.path-presence and safe-delete-readonly-gate."
   computerUseSmoke: "var/codex-smoke/computer-use-smoke.json records count-only Windows helper reachability with storesRawAppNames=false, storesWindowTitles=false, and rawSecretPatternHits=0."
-  archiveIndexProbe: "BackupsXS was absent under Desktop root, parent root, and C:/AbandonWare/demo-1 during the continuation probe; archive_search remains evidence_needed until a real index exists or ARCHIVE_INDEX/NAS_ARCHIVE_ROOT points to one."
+  archiveIndexProbe: "BackupsXS/index.jsonl is present under the Desktop root; archive_search path resolution is satisfied, while individual zero-result queries remain evidence_needed per query."
+  desktopControlLoopLocalReady: "desktop_control_loop reports ok=true, localReady=true, nextActions=[], and completionReady=false only because project-scoped Supabase proof is still evidence_needed."
+  browserUiSmoke: "var/codex-smoke/browser-ui-smoke.json reports ok=true, decision=ok, browserSurface=in_app_browser, storesRawUrl=false, storesScreenshotPath=false, and rawSecretPatternHits=0."
+  sourceHealthPostprocessCurrent: "source_health_scorecard reports strictEvidenceAdjustedScore=78.1425, activeRiskCount=0, and evidenceNeededCount=1 for Supabase live result-set proof."
   harmonyDirectiveCoverageReport: "harmonyScoreReport writes verification/harmony-build-report.txt with S01-S08 directive keys including overdrive.trigger.*, overdrive.blackbox.available, cfvm.triggered, chain.steps.planned, llm.versionPurity, llm.primary.port, and strategy.conflict.overdriveDeferred."
 items:
   - id: PATCH-01
@@ -502,24 +505,21 @@ items:
       - "count-only secret scan over computer-use-smoke and goal-next artifacts"
   - id: ARCHIVE-01
     priority: P1
-    status: EVIDENCE_NEEDED
+    status: MONITOR
     targetFiles:
       - "BackupsXS/index.jsonl"
-    claim: "Archive search two-pass index proof cannot be completed from the Desktop checkout because the archive root/index is absent."
+    claim: "Archive search two-pass index path proof is available from the Desktop checkout; zero-result archive queries stay demand-driven evidence_needed."
     blockers:
-      - "BackupsXS is missing under the Desktop root."
-      - "..\\BackupsXS is missing from the Desktop root parent."
-      - "C:/AbandonWare/demo-1/BackupsXS is missing."
-      - "ARCHIVE_INDEX or NAS_ARCHIVE_ROOT must point to a real index before archive_search can prove results."
+      - "No source mutation is allowed from archive.search; restore work still requires archive.restore pre-review and checksum proof."
+      - "Individual archive queries can still return evidence_needed when the two-pass search returns 0 results."
     recentVerification:
-      - "archive.search skill contract confirmed index_path -> ARCHIVE_INDEX -> NAS_ARCHIVE_ROOT/index.jsonl -> BackupsXS/index.jsonl resolution."
-      - "completion audit still reports archive-search-two-pass-index evidence_needed."
+      - "Test-Path BackupsXS/index.jsonl returned True; current file length is 206663 bytes."
+      - "completion audit reports archive-search-two-pass-index satisfied via default.BackupsXS;exists=True."
+      - "archive.search q=mcp-control-loop top_k=3 used payload.index_path, passCount=2, outputCount=0, and returned query-specific evidence_needed without source mutation."
     nextActions:
-      - "provide real BackupsXS/index.jsonl"
-      - "set ARCHIVE_INDEX to a real index file"
-      - "set NAS_ARCHIVE_ROOT to a real archive root containing index.jsonl"
-      - "run archive_index_build only after a real archive_root exists"
-      - "rerun archive_search"
+      - "use archive.search with a task-specific q and filters before claiming archive evidence"
+      - "if search returns 0, report the expanded queries and evidence_needed instead of restoring blindly"
+      - "use archive.restore only after pre-review, checksum, and explicit target_dir proof"
   - id: EXT-01
     priority: P0
     status: EVIDENCE_NEEDED

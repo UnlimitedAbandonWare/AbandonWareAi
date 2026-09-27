@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "awx.directive-artifact-verification.v1",
+  "verificationDate": "2026-09-13",
+  "directiveId": "desktop-grok-subscription-review-mcp-20260913",
+  "artifactPath": "C:/AbandonWare/demo-1/demo-1/src/agent-prompts/desktop_grok_subscription_review_mcp_source_directive_20260913.md",
+  "artifactSha256": "c02ac382500ab2721314ef4aa376a52a251974fe1dcef59181fdf38d587c2d10",
+  "artifactBytes": 36116,
+  "artifactLines": 282,
+  "artifactStatus": "directive_ready",
+  "checksPassed": 14,
+  "checksTotal": 14,
+  "checks": {
+    "utf8": true,
+    "firstLineGoal": true,
+    "lastLineDone": true,
+    "sections13": true,
+    "fencesBalanced": true,
+    "noReplacementCharacter": true,
+    "noUnresolvedTodoMarker": true,
+    "artifactAndIntegrationStatusesSeparated": true,
+    "authCostIsolationColdStartRequirementsPresent": true,
+    "existingIntegrationPreservationRequirementsPresent": true,
+    "guardAndRollbackRequirementsPresent": true,
+    "officialSourceLinksPresent": true,
+    "secretPatternHitsZero": true,
+    "personalCodexConfigMatchesBaseline": true
+  },
+  "secretPatternScan": {
+    "scope": "directive bytes only",
+    "patternClasses": ["long-api-key-like-string", "private-key-header", "jwt-like-string"],
+    "hits": 0,
+    "wholeRepositoryCertification": false
+  },
+  "personalCodexConfigSha256BeforeAndAfter": "17286ea08dd1f5ea77dc2e7c20654eb4e6d9a4029bafd28c84693c72901b711a",
+  "review": {
+    "readOnlyExplorerCount": 1,
+    "sourceGateScopeClarified": true,
+    "redundantApprovalCheckpointAdded": false,
+    "parentOwnsFinalJudgment": true
+  },
+  "observations": {
+    "grokOnPath": false,
+    "defaultGrokHomePresent": false,
+    "defaultGrokAuthFilePresent": false,
+    "registeredAwxAndGeminiStdioPreserved": true,
+    "awxSourceScan": "output_schema_validation_failed",
+    "glmCalls": 0,
+    "glmReason": "existing-0.144.1-v2-transport-hold",
+    "gitWhitespaceCheck": "LF-to-CRLF conversion warning; not recorded as a clean exit"
+  },
+  "executionStatus": {
+    "cliInstalledByThisTask": false,
+    "loginPerformed": false,
+    "grokGenerationCount": 0,
+    "sourceApplied": false,
+    "runtimeTestsRun": false,
+    "accountUiInspected": false,
+    "automaticInvocationVerified": false,
+    "providerAttemptEvidence": "not_observed"
+  },
+  "nextAction": "Apply the exact directive in a Desktop implementation session; establish installed CLI, official subscription authentication, cost boundary and isolation before generation."
+}

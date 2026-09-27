@@ -170,9 +170,47 @@ Do not use 3-way decomposition when the failure is a one-file syntax issue, exac
 
 Do not interpret this as "delete every file named PatchDrop or SMB".
 
+```text
+defaultDirectSmbEdit=false
+legacyCompatibilityInput=MACSRC_SMB_DIRECT
+guardedDirectMode=YDRIVE_SMB_GUARDED_DIRECT
+canonicalWorkspace=Y:\
+backingShareIdentityVerified=true|false
+backingShareIdentityReason=match|mismatch|evidence-needed
+sourceWriteRoot=Y:\|null
+authorizedMutation=true|false
+externalReadAccess=unrestricted
+applicationSourceWriteRootOnly=true
+fallbackWorkspace=null
+directGateBackingIdentity=required
+directGateSourceLease=required
+directGatePreimageCas=required
+requiredGuardSkill=demo1-macsrc-smb-direct-patch
+guardRollbackRequired=true
+desktopFinalProof=evidence_needed
+canonicalQueryCount=3
+```
+
+`MACSRC_SMB_DIRECT` is accepted only as a compatibility input and must never be emitted.
+
+| Mode | Select when | Result |
+|---|---|---|
+| `SMB_ACCESS` | Read, search, audit, build, or evidence work on the canonical workspace | Access is allowed with `sourceWriteRoot=null` and `authorizedMutation=false`. |
+| `YDRIVE_SMB_GUARDED_DIRECT` | A Notebook user explicitly requests application-source implementation on proven `Y:\`, with declared targets and every repository direct gate passing | Run the existing `demo1-macsrc-smb-direct-patch` identity/lease/CAS guard, including rollback, focused verification, and postimage hashes; set `sourceWriteRoot=Y:\`, `authorizedMutation=true`, and retain `desktopFinalProof=evidence_needed`. |
+| `LOCAL_PRODUCER` | The default producer path, direct mode is unavailable, or isolation is selected | Use a local clone/worktree and the existing PatchDrop producer contract. |
+| `HOLD` | Root, authorization, targets, guard, or verification evidence is absent or fails | Do not mutate source; set `sourceWriteRoot=null`, `authorizedMutation=false`, and `fallbackWorkspace=null`, then request the smallest decision-changing proof. |
+
+Only when all direct gates pass may the result be `YDRIVE_SMB_GUARDED_DIRECT` with `sourceWriteRoot=Y:\` and `authorizedMutation=true`.
+
+If backing identity, index lock, source lease, preimage CAS, reparse traversal, secret safety, or verification fails, return `HOLD` with `sourceWriteRoot=null`, `authorizedMutation=false`, and `fallbackWorkspace=null`; never choose a fallback source root.
+
+Reads, searches, web access, tools, evidence collection, and explicit non-source output remain unrestricted; `YDRIVE_SMB_GUARDED_DIRECT` restricts only the application-source write root.
+
+This decommission removes always-on SMB coordination and unguarded direct editing from the default path. It does not invalidate an explicit repository-owned guarded direct session. Desktop retains canonical ownership and final proof; Mac mini remains a producer and Notebook evidence remains supporting evidence unless every guarded direct gate is proven.
+
 For this repo, "remove SMB service" means:
 
-1. Direct SMB source editing is forbidden and should not appear as a normal workflow.
+1. Direct SMB source editing is not the default workflow (`defaultDirectSmbEdit=false`); only an explicit, fully gated `YDRIVE_SMB_GUARDED_DIRECT` session may mutate application source.
 2. Mac mini and Notebook producer workflows are optional, manual, and supporting evidence only.
 3. Desktop should be able to run a local source-analysis and patch loop without waiting for external producer sidecars.
 4. PatchDrop remains as a manual, explicit handoff and janitor safety mechanism.
@@ -584,6 +622,62 @@ Hard gates:
 - classify unknown response hashes as `partial`;
 - classify mixed request hashes, duplicate sequences, or changed source hashes as `ambiguous` or `worktree-overlap`;
 - do not add a controller, endpoint, response field, or source instrumentation to make the harness green.
+
+### Lane G - Independent Positive, Negative, And Neutral Review
+
+Use this lane for decision-sensitive prompt, harness, provider-proof, or fallback changes. When available, follow `.agents/skills/demo1-agentic-chat-postprocess/SKILL.md`. Produce four isolated, count/hash-only packets; do not turn them into votes or let one review inherit another review's conclusion.
+
+`SUPPORT_CONTRACT` prompt:
+
+```text
+Role: positive contract reviewer.
+Input: exact claim, changed-file hashes, focused command outcomes, and the
+awx.chat-request-proof.v1 aggregate for one request hash.
+Check: schema fields, unique sequence counts, prompt/options/response hash
+presence, and clientHttpResponse <= clientHttpExchange <= adapterAttempt.
+Output: SUPPORT | HOLD, supportedInvariants, missingEvidence, counterexample.
+Do not inspect raw prompts, raw responses, credentials, or full proof lines.
+```
+
+`SUPPORT_SCENARIO` prompt:
+
+```text
+Role: positive scenario reviewer, independent from SUPPORT_CONTRACT.
+Input: redacted Korean/English scenario IDs, expected reason codes, count-only
+request aggregates, and current focused test outcomes.
+Check: adverse negation, ambiguous intent, missing optional provider evidence,
+and zero-attempt behavior without assuming the contract review passed.
+Output: SUPPORT | HOLD, passedScenarios, failedScenarios, missingEvidence.
+Do not read or reproduce raw user prompts or provider responses.
+```
+
+`FALSIFY` prompt:
+
+```text
+Role: negative reviewer.
+Input: the exact claim and the same bounded hashes, counts, and command evidence.
+Search for: mixed request hashes, duplicate sequences, unknown response hashes,
+stale source hashes, provider/wire inference from a UI answer, and false-green
+zero-attempt cases.
+Output: FALSIFIED | NOT_FALSIFIED | EVIDENCE_NEEDED, disproofs,
+minimalReproduction, decisionChangingGap.
+A single reproducible false green can force HOLD even if both SUPPORT packets pass.
+```
+
+`NEUTRAL` prompt:
+
+```text
+Role: neutral adjudicator; do not gather evidence, browse, call providers, or
+implement a patch.
+Input: SUPPORT_CONTRACT, SUPPORT_SCENARIO, FALSIFY, and the current verification
+summary with exact source/request hashes.
+Output: APPLY | HOLD | REJECT, decisiveFactors (maximum three), unresolvedGap,
+and one next action.
+Rules: no majority voting; FALSIFY controls when it proves a false green;
+providerEvidenceStatus=observed_zero|not_emitted forbids a model-success claim.
+```
+
+Store only role, verdict, counts, hashes, reason codes, and bounded command outcomes. Keep `rawPromptStored=false`, `rawOptionsStored=false`, `rawResponseStored=false`, and `rawProofLinesStored=false` in every packet.
 
 ---
 

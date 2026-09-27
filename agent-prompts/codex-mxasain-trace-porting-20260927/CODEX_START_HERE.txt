@@ -1,0 +1,23 @@
+# Codex START — mxasain 트레이스 이식 (2026-09-27)
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+SSOT: agent-prompts/codex-mxasain-trace-porting-20260927/PASTE_TO_CODEX.md
+근거(첨부 SSOT, 읽기 전용): agent-prompts/codex-mxasain-trace-porting-20260927/evidence/
+교차: madasin design recovery CONTINUE / Devin nonadmin — admin 로그인·logout-block PASS 기준 넣지 말 것.
+Remote: AbandonWareAi only. AbandonWare3 discarded. push/add -A 금지 until user asks.
+
+목표 한 줄: 구형 로그 화면 통복사 금지. 현재 트레이스가 정제→저장→조회→화면에서 안 사라지게 하고, 같은 답변의 검색/문맥/라우팅/가드 로그를 연결해 보이게 한다.
+
+이번 세션 활성 단위: A만 — WP0 → WP1 → WP2.
+B/C/D(WP3+)는 WP2 체크포인트 + 사용자 확인 전 시작 금지.
+
+먼저 읽을 것:
+1) PASTE_TO_CODEX.md (이 폴더)
+2) evidence/mxasain_trace_porting_directive_2026-09-27.md (참고 계약; LIVE 소스가 우선)
+3) evidence/mxasain_trace_audit_evidence_2026-09-27.md (E01–E18)
+4) LIVE SafeRedactor / TraceHtmlBuilder / chat-trace-ui.js — ZIP 줄번호보다 메서드·해시 대조
+
+금지: legacy 통덮어쓰기, secret/raw prompt 허용, 최신 전역 snapshot 대체, 로그 보려고 LLM/검색 재실행, 무제한 log tail, 새 RAG 엔진, proto-open=false / admin harden, foreign staging 건드림.
+
+각 WP: 실패 테스트 → 최소 수정 → 회귀 → 파일별 diff+검증 → 체크포인트. 재현 안 되면 still_present가 아니라 not_reproduced로 남기고 건너뜀.
+끝나면 CODEX_TRACE_PORTING_A: DONE|PARTIAL + baseline 경로 + NOT_RUN 보고.

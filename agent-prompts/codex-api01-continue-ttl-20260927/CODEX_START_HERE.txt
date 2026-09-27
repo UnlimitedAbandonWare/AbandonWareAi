@@ -1,0 +1,8 @@
+﻿# CODEX_START_HERE — API-01 CONTINUE (after HOLD) 2026-09-27
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+Prior HOLD report (read first): docs/diagnostics/API01-main-selection-20260927.md
+TTL policy brief (same goal): agent-prompts/devin-groq-evidence-ttl-extend-20260927/PASTE_TO_DEVIN.md
+
+Paste into a **NEW** Codex session: PASTE_TO_CODEX.md (this folder) + plugin-roles block at bottom.
+Do NOT reopen the paused session that only investigated.

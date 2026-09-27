@@ -1,0 +1,567 @@
+{
+  "mxasain.zip": {
+    "size": 5954151,
+    "sha256": "2f9590c7806f63b1ff960089359efef338c6322ede433d3b0f2009a02e934a58",
+    "entries": 3007,
+    "files": 2364,
+    "build_candidates": []
+  },
+  "src111_mergex15.zip": {
+    "size": 6007297,
+    "sha256": "4381359c3f04f57ad309f1da950192c2f3484e63950507e170bbf79c7d0e33f1",
+    "entries": 5895,
+    "files": 4252,
+    "build_candidates": [
+      "buildSrc/build.gradle.kts",
+      "gradlew",
+      "gradlew.bat",
+      "src/app/build.gradle.kts",
+      "src/build.gradle.kts",
+      "src/cfvm-raw/build.gradle.kts",
+      "src/demo-1/build.gradle",
+      "src/demo-1/build.gradle.kts",
+      "src/gradlew",
+      "src/gradlew.bat",
+      "src/lms-core/build.gradle.kts",
+      "src/settings.gradle",
+      "src/settings.gradle.kts",
+      "src/tools-scorecard/build.gradle.kts"
+    ]
+  },
+  "UAW.txt": {
+    "size": 286051,
+    "sha256": "a4ab90929e7c7541c3b4a9b28a60ed4234578d708f641d3479380ff15cffbe16"
+  },
+  "Abandon_X.txt": {
+    "size": 30280,
+    "sha256": "ee74bf2dba9a28a7c7c93036b941dce755b7b20c7b03a69441ef983917252b06"
+  },
+  "mxasain_trace_porting_pack/mxasain_trace_porting_directive_2026-09-27.md": {
+    "size": 48675,
+    "sha256": "1e5c0d338f3400f7677aa157dc2cdd1fc153c6103d2ba3f8603ed16cfbfe7080"
+  },
+  "mxasain_trace_porting_pack/mxasain_trace_audit_evidence_2026-09-27.md": {
+    "size": 143968,
+    "sha256": "1457226b3599da59b9a901cf65a98e130cb115c2db3518547f6488f8bfbe13c3"
+  },
+  "verification_scope": "static_source_and_js_syntax_only",
+  "source_evidence": [
+    {
+      "id": "S01",
+      "archive": "mxasain.zip",
+      "member": "main/resources/application.properties",
+      "sha256": "ff911b7fbafd52d7fd15a3a16ae46a732dafcd369a2a37055d43af61bc7b81a4",
+      "ranges": [
+        [
+          662,
+          666
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S02",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/service/ChatModelCatalogService.java",
+      "sha256": "60ecbb4f5553b427ff22807503c4ac42369414d1d022236538db6954a7e27c26",
+      "ranges": [
+        [
+          38,
+          47
+        ],
+        [
+          104,
+          126
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S03",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/llm/gateway/CloudModelRouteClassifier.java",
+      "sha256": "6de94b6ea1c23b217c2eb14b0f8a4b21c98306c7ba84df471c11601d7d233b95",
+      "ranges": [
+        [
+          53,
+          104
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S04",
+      "archive": "mxasain.zip",
+      "member": "main/resources/application-llm.yaml",
+      "sha256": "18e001db99aeca776d78249c6352a89ef77320a58f52aa234c324f0c4e12ca11",
+      "ranges": [
+        [
+          511,
+          559
+        ],
+        [
+          572,
+          579
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S05",
+      "archive": "mxasain.zip",
+      "member": "main/resources/configs/cloud-models.manifest.yaml",
+      "sha256": "ee779d82c71f11a0b6b7ddc66fe4dbeadbe4ec11e368a5f321388ee07fdb8a95",
+      "ranges": [
+        [
+          44,
+          61
+        ],
+        [
+          139,
+          155
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S06",
+      "archive": "mxasain.zip",
+      "member": "main/java/ai/abandonware/nova/config/LlmRouterProperties.java",
+      "sha256": "4391607af49caa2125c67404940f4d980e7e10bdac36fcad559f3666337c864b",
+      "ranges": [
+        [
+          92,
+          127
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S07",
+      "archive": "mxasain.zip",
+      "member": "main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java",
+      "sha256": "c0029d9bde6c156fc282645b608ca1b0d86fc8013f2b6f21ebce6a6e3e2b8449",
+      "ranges": [
+        [
+          140,
+          175
+        ],
+        [
+          204,
+          243
+        ],
+        [
+          363,
+          371
+        ],
+        [
+          435,
+          440
+        ],
+        [
+          1396,
+          1404
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S08",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/llm/DynamicChatModelFactory.java",
+      "sha256": "8957f784cae002c9e409df1e066ded71ad4907e0fa5f75cc0176ee6d2a86882a",
+      "ranges": [
+        [
+          230,
+          258
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S09",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/service/ChatWorkflow.java",
+      "sha256": "c22033ab26b012f1efc69a444f1d9f2d713fb76e6ebd1b9f3cf2c946ea32d488",
+      "ranges": [
+        [
+          1338,
+          1348
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S10",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/llm/OpenAiModelSelectionPolicy.java",
+      "sha256": "5f0a2d7c5dab3105376b1f7c58ce91575196a033b30ec4ceae411c8ca7ac6359",
+      "ranges": [
+        [
+          26,
+          37
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S11",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/service/ModelSettingsService.java",
+      "sha256": "50ccee58fccbaaf6ee711426755061f0a4cdc94b9b935db649ca2f01bc80eea4",
+      "ranges": [
+        [
+          49,
+          79
+        ],
+        [
+          95,
+          115
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S12",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/web/PageController.java",
+      "sha256": "6b9e1689ac1fd683dc5170339321ff72a658d913d7a682ccc71ce8bfffd92bf1",
+      "ranges": [
+        [
+          113,
+          119
+        ],
+        [
+          141,
+          154
+        ],
+        [
+          230,
+          246
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S13",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/config/ProviderGuardConfig.java",
+      "sha256": "1f21a4c40d0240820dbd82afe4b1261c2ebfb33546ecf25370aaeeeed6a96a1a",
+      "ranges": [
+        [
+          17,
+          21
+        ],
+        [
+          61,
+          78
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S14",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/llm/gateway/HybridLlmGatewayProbeService.java",
+      "sha256": "04a4293530011fab6bbd1bc7149f2f25f71f2b8b4cec37f1a602820dee24b26e",
+      "ranges": [
+        [
+          74,
+          110
+        ],
+        [
+          157,
+          164
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S15",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/agent/GroqFreeTierGuard.java",
+      "sha256": "e875be8d44d97fef9c0c74d90c63177ae7db0e648bc752c56bed330e791d9223",
+      "ranges": [
+        [
+          35,
+          36
+        ],
+        [
+          44,
+          59
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S16",
+      "archive": "mxasain.zip",
+      "member": "main/resources/static/js/chat-model-picker.js",
+      "sha256": "0476365342cd50c342bcea82e5cd21856fa79f78dae1d3be131e3f9d5175a816",
+      "ranges": [
+        [
+          53,
+          56
+        ],
+        [
+          242,
+          288
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S17",
+      "archive": "mxasain.zip",
+      "member": "main/resources/static/js/chat.js",
+      "sha256": "7c95705186770283364a1a90852a548deaa9cc5debba7e09d6acb49984105636",
+      "ranges": [
+        [
+          6594,
+          6599
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S18",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/service/VectorMetaKeys.java",
+      "sha256": "b4be7e24c3130ca1a385456cb62fe97936fd57c0ff58ad1ffb0251b4dd294475",
+      "ranges": [
+        [
+          12,
+          34
+        ],
+        [
+          49,
+          63
+        ],
+        [
+          124,
+          136
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S19",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/service/VectorStoreService.java",
+      "sha256": "1d15b1cc02e15588eea82aa4907ab3f5f7e110dedb142f722f92240e7e2c433e",
+      "ranges": [
+        [
+          488,
+          510
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S20",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/uaw/autolearn/ingest/TrainRagIngestService.java",
+      "sha256": "2aecdd40ef6b8c6ad1311d27816a1677a3d9ffcbc4b1ecb52e78aca1a21c7d13",
+      "ranges": [
+        [
+          389,
+          401
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S21",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/assist/JevDecisionAdvisor.java",
+      "sha256": "1c558dfd09234cc1f9662c6cbd43a0dd5de3b77795843fd584681e628b5d4452",
+      "ranges": [
+        [
+          24,
+          36
+        ],
+        [
+          131,
+          134
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S22",
+      "archive": "mxasain.zip",
+      "member": "main/java/com/example/lms/LmsApplication.java",
+      "sha256": "f4d766a7943d690222889614c8baa59fbc8d081651a8a7aa28a06590d8a1036f",
+      "ranges": [
+        [
+          20,
+          21
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S23",
+      "archive": "mxasain.zip",
+      "member": "main/java/ai/abandonware/nova/autoconfig/NovaOrchestrationAutoConfiguration.java",
+      "sha256": "43316571926fa49a76c652631ab00dea60085ef652b12b2d1ba4c3c7b8cf3c07",
+      "ranges": [
+        [
+          380,
+          403
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "S24",
+      "archive": "mxasain.zip",
+      "member": "main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports",
+      "sha256": "5c647cb81692df339ef336f4acfc5dcc4e169d879278616ebaf9973fad22d241",
+      "ranges": [
+        [
+          1,
+          6
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "D01",
+      "archive": "src111_mergex15.zip",
+      "member": "docs/TRACESTORE_FLOW.md",
+      "sha256": "e46f5bf54db6c2356cbab835b5d03980cd99b90302fe1ab8d6061d59b6b220d1",
+      "ranges": [
+        [
+          3,
+          12
+        ],
+        [
+          67,
+          83
+        ],
+        [
+          86,
+          135
+        ]
+      ],
+      "assessment": "static_source_only"
+    },
+    {
+      "id": "D02",
+      "archive": "src111_mergex15.zip",
+      "member": "src/AGENT/50_DEBUG_PRESERVE.md",
+      "sha256": "d9bf40d9289a39781f3c10d4e4fa22c5c0812b36d7d32b600ff76577b6c542e3",
+      "ranges": [
+        [
+          8,
+          25
+        ],
+        [
+          43,
+          49
+        ]
+      ],
+      "assessment": "static_source_only"
+    }
+  ],
+  "component_comparison": [
+    {
+      "current": "main/java/com/example/lms/transform/QueryTransformer.java",
+      "donor": "src/main/java/com/example/lms/transform/QueryTransformer.java",
+      "identical": false,
+      "current_sha256": "17becb0571605767de639470e158b284df9f676b1afde1993f38cf7228162d13",
+      "donor_sha256": "7cfa2baa880cb4a233dff0539aa996d44a9484193948fbf97b6701e5dda86008"
+    },
+    {
+      "current": "main/java/com/example/lms/search/KeywordSelectionService.java",
+      "donor": "src/main/java/com/example/lms/search/KeywordSelectionService.java",
+      "identical": false,
+      "current_sha256": "45dad070eea947ec164023a96e70040c89cfcafb7ddb82d07fb621c0617ba76b",
+      "donor_sha256": "f20ad88058cb83482da4187fe50c516da2f7291751fd2933e7327daa71e1029f"
+    },
+    {
+      "current": "main/java/com/example/lms/service/disambiguation/QueryDisambiguationService.java",
+      "donor": "src/main/java/com/example/lms/service/disambiguation/QueryDisambiguationService.java",
+      "identical": false,
+      "current_sha256": "b9b96108ace7a0f2efbc53d5082daa873a22e8cbd0971e507eee9b58bbf68e6e",
+      "donor_sha256": "339eb7e28d3a32e7442dbd2b5e9a12c663296685a1efacd80891f81d55db7be7"
+    },
+    {
+      "current": "main/java/com/example/lms/service/rag/SelfAskPlanner.java",
+      "donor": "src/main/java/com/example/lms/service/rag/SelfAskPlanner.java",
+      "identical": false,
+      "current_sha256": "500c33a0645907a604a40e2d89faea32ed05980f2bc4a50ca1dc1132f6e878eb",
+      "donor_sha256": "cc6a71e6c34b0ecfe30e30b6a9db3f6bc2eb92934380f081e1ee96dbe60fb77f"
+    },
+    {
+      "current": "main/java/com/example/lms/service/trace/TraceHtmlBuilder.java",
+      "donor": "src/main/java/com/example/lms/service/trace/TraceHtmlBuilder.java",
+      "identical": false,
+      "current_sha256": "e42a3dbaa5f3f2fdcacdb0136115a2fa99489af17011275d629086f58c7534ab",
+      "donor_sha256": "2427c0513464f4fd2d60f19157423c612dca4b07184428c57e127f2b8136e529"
+    },
+    {
+      "current": "main/java/com/example/lms/trace/SafeRedactor.java",
+      "donor": "src/main/java/com/example/lms/trace/SafeRedactor.java",
+      "identical": false,
+      "current_sha256": "ba75dc0945fe1e3f1470b773483c21e0222de553bb7dd208d5757d66cb28ef6e",
+      "donor_sha256": "5b44a3e8553c09ee6379a4f1710a671211ac83a8cd9aa431bd4490f4f37c151b"
+    },
+    {
+      "current": "main/java/com/example/lms/service/trace/DebugCopilotService.java",
+      "donor": "src/main/java/com/example/lms/service/trace/DebugCopilotService.java",
+      "identical": false,
+      "current_sha256": "1bf6a5d617ec07ba654b5523c80106584b2a7c4acd8f4222a8f31ab5bafdc64f",
+      "donor_sha256": "8efd7deb5926fa29232fc1aa675e3403275699b9010e4091b99f956ce53cdb57"
+    },
+    {
+      "current": "main/java/com/example/lms/trace/TraceLogger.java",
+      "donor": "src/main/java/com/example/lms/trace/TraceLogger.java",
+      "identical": false,
+      "current_sha256": "ea9b65f4b035d6d203c4137d2d7f5bd4ed5169883132996ae279ace35c876694",
+      "donor_sha256": "98a0aa3dd1b1095c0cdea47d2e0a082fa1268213e7cf95aeab50304776ecdf88"
+    }
+  ],
+  "static_checks": {
+    "current_source_overlay_only": true,
+    "remote_picker_default_false": true,
+    "exact_route_aspect_present": true,
+    "donor_flow_present": true,
+    "compared_components_exist": true,
+    "all_compared_components_changed": true,
+    "evidence_ranges_exist": true
+  },
+  "commands": [
+    {
+      "command": "node --check /mnt/data/_mxasain_v2_work/chat-model-picker.js",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "scope": "syntax_only_not_browser_or_app_test"
+    },
+    {
+      "command": "node --check /mnt/data/_mxasain_v2_work/chat-trace-ui.js",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "scope": "syntax_only_not_browser_or_app_test"
+    },
+    {
+      "command": "node --check /mnt/data/_mxasain_v2_work/chat.js",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "scope": "syntax_only_not_browser_or_app_test"
+    }
+  ],
+  "not_run": [
+    "application_build",
+    "unit_tests",
+    "browser_E2E",
+    "server_start",
+    "paid_or_free_generation",
+    "live_vector_database",
+    "live_user_git_repository"
+  ]
+}

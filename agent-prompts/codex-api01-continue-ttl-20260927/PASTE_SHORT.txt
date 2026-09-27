@@ -1,0 +1,13 @@
+﻿# 새 Codex 세션에 붙여넣기 (짧은 버전)
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+SSOT: agent-prompts/codex-api01-continue-ttl-20260927/PASTE_TO_CODEX.md
+먼저: docs/diagnostics/API01-main-selection-20260927.md
+
+이전 HOLD 이어 API-01만. PROTO_OPEN 유지. admin 차단 매트릭스 NOT_RUN. ChangeIntent 신규 금지.
+
+U0: GroqFreeTierGuard 증빙 TTL 24h→기본 90일(evidence-max-age-ms). 문서/테스트 정합. 가드 삭제 금지.
+U1: api3 직접선택 최소 패치. 공통 remote ON 시 타 API 노출되면 좁혀라. 몰래 fallback 금지.
+U2: 한 단위 후 사용자확인대기. ExactRequestedModelTest backend_unavailable≠model_unavailable 기대값 완화 금지.
+
+플러그인: Superpowers/Browser/GitHub/Exa/AWX/Computer/glm_worker 역할 제한. Supabase·Data·Sites·Meta Wearables 등 이번엔 금지.
