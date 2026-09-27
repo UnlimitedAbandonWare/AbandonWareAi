@@ -64,6 +64,8 @@ class CloudPointerClientRedactionTest {
         assertTrue(source.contains("TraceStore.put(\"trace.cloudPointer.suppressed.parseInt\", true)"));
         assertTrue(source.contains("TraceStore.put(\"trace.cloudPointer.suppressed.stage\", \"parseInt\")"));
         assertTrue(source.contains("TraceStore.put(\"trace.cloudPointer.suppressed.errorType\", \"invalid_number\")"));
+        assertTrue(source.contains("TraceStore.inc(\"trace.cloudPointer.suppressed.dispatch.count\")"));
+        assertTrue(source.contains("TraceStore.inc(\"trace.cloudPointer.suppressed.httpPost.count\")"));
         assertTrue(source.contains("return def;"));
     }
 
@@ -80,6 +82,21 @@ class CloudPointerClientRedactionTest {
         assertEquals("invalid_number", TraceStore.get("trace.cloudPointer.suppressed.parseInt.errorType"));
         assertEquals("parseInt", TraceStore.get("trace.cloudPointer.suppressed.stage"));
         assertEquals("invalid_number", TraceStore.get("trace.cloudPointer.suppressed.errorType"));
+    }
+
+    @Test
+    void httpPostFailureAddsCountOnlyTraceWithoutEndpointPayload() throws Exception {
+        TraceStore.clear();
+        Method method = CloudPointerClient.class.getDeclaredMethod("post", String.class, byte[].class);
+        method.setAccessible(true);
+
+        method.invoke(null, "http://[private-endpoint token", "{}".getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(1L, TraceStore.get("trace.cloudPointer.suppressed.httpPost.count"));
+        assertEquals("http_post", TraceStore.get("trace.cloudPointer.suppressed.stage"));
+        assertEquals("invalid_url", TraceStore.get("trace.cloudPointer.suppressed.errorType"));
+        assertFalse(TraceStore.getAll().toString().contains("private-endpoint"));
+        assertFalse(TraceStore.getAll().toString().contains("token"));
     }
 
     @Test

@@ -125,7 +125,14 @@ class CloudModelRouteClassifierTest {
                         new LlmRouteScorer(),
                         new MockEnvironment().withProperty("GROQ_API_KEY", "real-looking-value-123")));
 
-        List<CloudModelRouteClassifier.CloudModelRouteRow> rows = classifier.classifyDefaultCatalog("chat");
+        // The disabled-manifest contract is independent of the operator's
+        // explicit api3 opt-in in the real catalog.
+        ModelSpecSnapshot disabledSnapshot = ModelSpecSnapshot.of(
+                "groq", "openai/gpt-oss-120b", "api.groq.com", 131_072, null,
+                List.of("chat"), Map.of("enabled", false,
+                        "routingDecision", "metadata_for_existing_api3_fallback"));
+        List<CloudModelRouteClassifier.CloudModelRouteRow> rows =
+                classifier.classify(List.of(disabledSnapshot), "chat");
 
         CloudModelRouteClassifier.CloudModelRouteRow row = row(rows, "groq", "openai/gpt-oss-120b");
         assertEquals("api3", row.routeKey());

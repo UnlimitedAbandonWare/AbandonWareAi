@@ -100,6 +100,8 @@ class HarmonyBuildScannerTest {
 
         String text = Files.readString(report);
         assertTrue(text.contains("Dynamic RAG Harmony Build Report"));
+        assertTrue(text.contains("[harmony][contract] status=DONE"));
+        assertTrue(text.contains("[harmony][fingerprint] status=DONE roots=6"));
         assertTrue(text.contains("[harmony][trace] boosterMode.active=FOUND"));
         assertTrue(text.contains("[harmony][trace] extremeZ.activated=FOUND"));
         assertTrue(text.contains("[harmony][trace] extremeZ.subQueryCount=FOUND"));
@@ -121,6 +123,8 @@ class HarmonyBuildScannerTest {
         assertTrue(text.contains("[harmony][trace] strategy.conflict.overdriveDeferred=FOUND"));
         assertTrue(text.contains("[harmony][tests] S01=FOUND"));
         assertTrue(text.contains("[harmony][HB-03] DONE"));
+        assertTrue(text.contains("[harmony][runtime-evidence] status=BLOCKED_EVIDENCE"));
+        assertTrue(text.contains("[harmony][score] score=0.0 promotionAllowed=false status=BLOCKED_EVIDENCE"));
         assertTrue(text.contains("[harmony][security] secretPatternHits=0"));
     }
 
@@ -140,7 +144,8 @@ class HarmonyBuildScannerTest {
 
         String text = Files.readString(report);
         assertTrue(text.contains("[harmony][trace] boosterMode.active=MISSING"));
-        assertTrue(text.contains("[harmony][HB-03] OPEN"));
+        assertTrue(text.contains("[harmony][HB-03] BLOCKED_EVIDENCE"));
+        assertTrue(text.contains("[harmony][score] score=0.0 promotionAllowed=false status=BLOCKED_EVIDENCE"));
         assertTrue(text.contains("[harmony][security] secretPatternHits=1"));
         assertFalse(text.contains(secret));
     }
@@ -168,6 +173,58 @@ class HarmonyBuildScannerTest {
     }
 
     @Test
+    void separatesCrossSourceRootDuplicatesFromCompileBlockingDuplicates() throws Exception {
+        write("main/java/com/example/lms/Shared.java", """
+                package com.example.lms;
+                class Shared {}
+                """);
+        write("app/src/main/java_clean/com/example/lms/Shared.java", """
+                package com.example.lms;
+                class Shared {}
+                """);
+        write("main/java/com/example/lms/CompileBlocker.java", """
+                package com.example.lms;
+                class CompileBlocker {}
+                """);
+        write("main/java/com/example/lms/CompileBlockerCopy.java", """
+                package com.example.lms;
+                class CompileBlocker {}
+                """);
+
+        Path report = root.resolve("verification/harmony-build-report.txt");
+
+        HarmonyBuildScanner.main(new String[]{"--root", root.toString(), "--output", report.toString()});
+
+        String text = Files.readString(report);
+        assertTrue(text.contains("[harmony][duplicate-fqcn] duplicateCount=2"));
+        assertTrue(text.contains("crossSourceRootDuplicateCount=1"));
+        assertTrue(text.contains("sameSourceRootDuplicateCount=1"));
+        assertTrue(text.contains("compileBlockingDuplicateCount=1"));
+    }
+
+    @Test
+    void fingerprintsEveryRegularFileAcrossSixContractRootsDeterministically() throws Exception {
+        write("main/java/example/Runtime.java", "class Runtime {}");
+        write("main/resources/example.json", "{}");
+        write("src/test/java/example/fixture.txt", "test");
+        write("src/test/resources/example.bin", "binary-fixture");
+        write("app/src/main/java_clean/example/Adapter.kt", "class Adapter");
+        write("app/src/main/resources/example.properties", "enabled=true");
+
+        Path report = root.resolve("verification/harmony-build-report.txt");
+        HarmonyBuildScanner.main(new String[]{"--root", root.toString(), "--output", report.toString()});
+        String first = lineStarting(Files.readString(report), "[harmony][fingerprint] ");
+
+        HarmonyBuildScanner.main(new String[]{"--root", root.toString(), "--output", report.toString()});
+        String second = lineStarting(Files.readString(report), "[harmony][fingerprint] ");
+
+        assertTrue(first.contains("status=DONE roots=6 fileCount=6 errorCount=0"));
+        assertTrue(Files.readString(report).contains(
+                "[harmony][fingerprint-root] id=testResources path=src/test/resources exists=true fileCount=1"));
+        assertTrue(first.equals(second), "same six-root tree must produce the same aggregate fingerprint");
+    }
+
+    @Test
     void rootGradleExposesHarmonyScoreReportTask() throws Exception {
         String build = Files.readString(Path.of("build.gradle.kts"));
 
@@ -187,5 +244,12 @@ class HarmonyBuildScannerTest {
         Path file = root.resolve(relativePath);
         Files.createDirectories(file.getParent());
         Files.writeString(file, content);
+    }
+
+    private static String lineStarting(String text, String prefix) {
+        return text.lines()
+                .filter(line -> line.startsWith(prefix))
+                .findFirst()
+                .orElseThrow();
     }
 }

@@ -108,6 +108,20 @@ class ScheduledJobGovernanceContractTest {
                 "both scheduled tuning methods must return unless translate.tuning.scheduler.enabled=true");
     }
 
+    @Test
+    void debugAiMetricsHistorySchedulerRequiresExplicitOptIn() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/debug/ai/DebugAiMetricsHistoryScheduler.java"),
+                StandardCharsets.UTF_8);
+
+        assertTrue(source.contains("name = \"scheduled\""),
+                "debug history collection must keep its explicit owner flag");
+        assertTrue(source.contains("havingValue = \"true\""),
+                "debug history collection should run only when explicitly enabled");
+        assertTrue(source.contains("matchIfMissing = false"),
+                "debug history collection must be disabled by default");
+    }
+
     private static SortedMap<String, Path> scheduledClasses() throws Exception {
         SortedMap<String, Path> result = new TreeMap<>();
         try (var files = Files.walk(ACTIVE_SOURCE_ROOT)) {
@@ -152,6 +166,7 @@ class ScheduledJobGovernanceContractTest {
             com.example.lms.agent.KnowledgeConsistencyVerifier=owner=agent-knowledge-consistency; enablement=class gate agent.knowledge-consistency.enabled; schedule=agent.knowledge-consistency.initial-delay-ms and agent.knowledge-consistency.period-ms; sideEffect=read-only,diagnostics; defaultBehavior=disabled unless enabled; noClassGateReason=class-gated
             com.example.lms.agent.KnowledgeCurationScheduler=owner=agent-knowledge-curation; enablement=class gate agent.knowledge-curation.enabled; schedule=agent.knowledge-curation.initial-delay-ms and agent.knowledge-curation.period-ms; sideEffect=memory-promotion,network; defaultBehavior=disabled unless enabled; noClassGateReason=class-gated
             com.example.lms.agent.KnowledgeDecayService=owner=agent-knowledge-decay; enablement=class gate agent.knowledge-decay.enabled; schedule=agent.knowledge-decay.initial-delay-ms and agent.knowledge-decay.period-ms; sideEffect=parameter-mutation,memory-promotion; defaultBehavior=disabled unless enabled; noClassGateReason=class-gated
+            com.example.lms.api.ChatGenerationAdmissionFilter=owner=chat-generation-admission; enablement=internal guard demoAdmission early-return; schedule=fixedDelay 60000; sideEffect=db-write,state-eviction; defaultBehavior=body guarded; noClassGateReason=admission filter bean remains active for request claim lifecycle
             com.example.lms.cfvm.CfvmSnapshotService=owner=cfvm-snapshot; enablement=internal guard buffer/repository availability; schedule=cfvm.snapshot.fixed-delay-ms and cfvm.snapshot.initial-delay-ms; sideEffect=db-write,cfvm-restore; defaultBehavior=body guarded; noClassGateReason=service remains active for CFVM restore and snapshot persistence
             com.example.lms.infra.resilience.NightmareBreaker=owner=nightmare-breaker; enablement=internal guard nightmare.breaker.enabled; schedule=nightmare.breaker.evict-interval-ms; sideEffect=state-eviction,diagnostics; defaultBehavior=body guarded; noClassGateReason=breaker bean remains active for synchronous guard calls
             com.example.lms.learning.ops.RagLearningOpsCurationCollector=owner=learning-ops; enablement=internal enabled guard; schedule=awx.learning-ops.collector.interval-ms; sideEffect=file-write,diagnostics; defaultBehavior=body guarded; noClassGateReason=collector keeps runtime guard inside scheduled body
@@ -165,7 +180,8 @@ class ScheduledJobGovernanceContractTest {
             com.example.lms.scheduler.VectorStoreFlushScheduler=owner=vector-store-flush; enablement=class gate vectorstore.flush.scheduler.enabled; schedule=vectorstore.flush.scheduler.period-ms; sideEffect=vector-write; defaultBehavior=enabled when missing; noClassGateReason=class-gated
             com.example.lms.scheduler.WhiteningRefitScheduler=owner=rag-mp-whitening; enablement=config bean gate rag.mp.enabled; schedule=rag.mp.refit.cron; sideEffect=parameter-mutation,file-write; defaultBehavior=disabled unless rag.mp enabled; noClassGateReason=bean-gated by MpWhiteningConfig
             com.example.lms.service.AdaptiveTranslationService=owner=adaptive-translation; enablement=internal guard translate.tuning.scheduler.enabled; schedule=fixedRate 3600000 and 7200000 with initialDelay 1800000; sideEffect=parameter-mutation; defaultBehavior=body guarded and disabled by default; noClassGateReason=service remains active for normal translation
-            com.example.lms.debug.ai.DebugAiMetricsHistoryScheduler=owner=debug-ai-metrics-history; enablement=class gate lms.debug.ai.history.scheduled; schedule=lms.debug.ai.history.interval-ms; sideEffect=diagnostics,in-memory; defaultBehavior=enabled unless disabled; noClassGateReason=class-gated
+            com.example.lms.service.AttachmentService=owner=attachment-retention; enablement=always-on service scheduler; schedule=attachments.retention.cleanup-interval-ms; sideEffect=in-memory,state-eviction; defaultBehavior=enabled with 24h metadata TTL and 5m cleanup; noClassGateReason=service remains active for synchronous attachment APIs
+            com.example.lms.debug.ai.DebugAiMetricsHistoryScheduler=owner=debug-ai-metrics-history; enablement=class gate lms.debug.ai.history.scheduled; schedule=lms.debug.ai.history.interval-ms; sideEffect=diagnostics,in-memory; defaultBehavior=disabled unless enabled; noClassGateReason=class-gated
             com.example.lms.service.ModelFetchService=owner=model-fetch; enablement=class gate modelfetch.enabled; schedule=literal cron 0 0 * * * *; sideEffect=network,file-write; defaultBehavior=disabled unless enabled; noClassGateReason=class-gated
             com.example.lms.service.ModelSyncService=owner=model-fetch; enablement=class gate modelfetch.enabled; schedule=literal cron 0 0 0 * * *; sideEffect=network,file-write; defaultBehavior=disabled unless enabled; noClassGateReason=class-gated
             com.example.lms.service.soak.metrics.SoakWebKpiMinuteSummaryLogger=owner=soak-web-kpi-summary; enablement=class gate nova.orch.web-failsoft.soak-kpi-summary.enabled; schedule=nova.orch.web-failsoft.soak-kpi-summary.interval-ms; sideEffect=diagnostics,file-write; defaultBehavior=disabled unless enabled; noClassGateReason=class-gated

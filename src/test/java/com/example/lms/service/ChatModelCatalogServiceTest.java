@@ -14,6 +14,53 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
 class ChatModelCatalogServiceTest {
+    @Test void exactRouteOptInDoesNotOpenOtherEligibleCloudModels() {
+        var catalog = remoteCatalog("api3", true, "");
+        assertThat(catalog.resolve("llmrouter.api3").orElseThrow().selectable()).isTrue();
+        var other = catalog.resolve("llmrouter.openai-economy").orElseThrow();
+        assertThat(other.selectable()).isFalse();
+        assertThat(other.reason()).isEqualTo("remote_selection_disabled");
+    }
+
+    @Test void routeOptInCannotOverrideManifestOrGatewayRejection() {
+        for (String reason : List.of("cloud_manifest_disabled", "groq_free_account_evidence_needed",
+                "missing_api_key", "stage_not_allowed")) {
+            var row = remoteCatalog("api3", false, reason).resolve("llmrouter.api3").orElseThrow();
+            assertThat(row.selectable()).isFalse();
+            assertThat(row.reason()).isEqualTo(reason);
+        }
+    }
+
+    @Test void routeOptInUsesExactKeysAndIsClosedByDefault() {
+        for (String routes : List.of("", "*", "api", "api30", "llmrouter.api3", "API3")) {
+            var row = remoteCatalog(routes, true, "").resolve("llmrouter.api3").orElseThrow();
+            assertThat(row.selectable()).isFalse();
+            assertThat(row.reason()).isEqualTo("remote_selection_disabled");
+        }
+        assertThat(remoteCatalog(" api3 ", true, "")
+                .resolve("llmrouter.api3").orElseThrow().selectable()).isTrue();
+    }
+
+    private static ChatModelCatalogService remoteCatalog(String routes, boolean eligible, String reason) {
+        var cloud = mock(CloudModelRouteClassifier.class);
+        var api3 = mock(CloudModelRouteClassifier.CloudModelRouteRow.class);
+        when(api3.routeKey()).thenReturn("api3");
+        when(api3.provider()).thenReturn("groq");
+        when(api3.modelId()).thenReturn("openai/gpt-oss-120b");
+        when(api3.eligible()).thenReturn(eligible);
+        when(api3.disabledReason()).thenReturn(reason);
+        var other = mock(CloudModelRouteClassifier.CloudModelRouteRow.class);
+        when(other.routeKey()).thenReturn("openai-economy");
+        when(other.provider()).thenReturn("openai");
+        when(other.modelId()).thenReturn("fixture-openai");
+        when(other.eligible()).thenReturn(true);
+        when(cloud.classifyDefaultCatalog("chat")).thenReturn(List.of(api3, other));
+        var catalog = new ChatModelCatalogService(cloud, null, new RestTemplateBuilder(),
+                "https://remote.invalid", false);
+        org.springframework.test.util.ReflectionTestUtils.setField(catalog, "remoteSelectionRoutes", routes);
+        return catalog;
+    }
+
     @Test void explicitPublicDiscoveryIsCredentialFreeCachedAndNeverSelectable() {
         RestTemplate http = new RestTemplate();
         var server = MockRestServiceServer.bindTo(http).build();

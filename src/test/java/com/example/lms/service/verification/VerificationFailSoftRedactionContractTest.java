@@ -3,7 +3,16 @@ package com.example.lms.service.verification;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+import ai.abandonware.nova.orch.llm.ExpectedFailureChatModel;
+import com.example.lms.config.LlmConfig;
+import com.example.lms.debug.DebugEvent;
+import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugEventTracePromotionService;
+import com.example.lms.guard.KeyResolver;
+import com.example.lms.search.TraceStore;
+import com.example.lms.trace.StageBoundaryBreadcrumbs;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -12,12 +21,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
+import org.springframework.mock.env.MockEnvironment;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class VerificationFailSoftRedactionContractTest {
 
@@ -183,6 +196,95 @@ class VerificationFailSoftRedactionContractTest {
     }
 
     @Test
+    void verificationServicesUseJudgeChatModelQualifierAndRedactedFailSoftTrace() throws Exception {
+        String factStatusClassifier = Files.readString(
+                Path.of("main/java/com/example/lms/service/verification/FactStatusClassifier.java"),
+                StandardCharsets.UTF_8);
+        String claimVerifier = Files.readString(
+                Path.of("main/java/com/example/lms/service/verification/ClaimVerifierService.java"),
+                StandardCharsets.UTF_8);
+
+        assertTrue(factStatusClassifier.contains(
+                "public FactStatusClassifier(@Qualifier(\"judgeChatModel\") ObjectProvider<ChatModel> chatModelProvider)"));
+        assertTrue(factStatusClassifier.contains(
+                "TraceStore.put(\"factStatusClassifier.judge.disabledReason\", SafeRedactor.traceLabelOrFallback(reason, \"unknown\"));"));
+        assertTrue(claimVerifier.contains(
+                "public ClaimVerifierService(@Qualifier(\"judgeChatModel\") ChatModel chatModel,"));
+        assertTrue(claimVerifier.contains(
+                "TraceStore.put(\"claimVerifier.judge.disabledReason\", SafeRedactor.traceLabelOrFallback(reason, \"unknown\"));"));
+    }
+
+    @Test
+    void missingJudgeCredentialCreatesCoherentProviderDisabledBreadcrumbThroughRealProducers() {
+        TraceStore.clear();
+        String endpointSentinel = "http://127.0.0.1:9/v1";
+        String modelSentinel = "cycle7-private-judge-model";
+        try {
+            ChatModel judge = new LlmConfig().judgeChatModel(
+                    endpointSentinel,
+                    new KeyResolver(new MockEnvironment()),
+                    modelSentinel,
+                    1L,
+                    0,
+                    512);
+            assertInstanceOf(ExpectedFailureChatModel.class, judge);
+
+            String draft = "A deterministic local claim.";
+            ClaimVerifierService.VerificationResult claimResult =
+                    new ClaimVerifierService(judge, null, null, null)
+                            .verifyClaims("safe local context", draft, "local-model");
+
+            StaticListableBeanFactory beanFactory = new StaticListableBeanFactory();
+            beanFactory.addBean("judgeChatModel", judge);
+            FactVerificationStatus factStatus =
+                    new FactStatusClassifier(beanFactory.getBeanProvider(ChatModel.class)).classify(
+                            "deterministic claim",
+                            "deterministic claim " + "supporting local context ".repeat(8),
+                            draft,
+                            "local-model");
+
+            assertEquals(draft, claimResult.verifiedAnswer());
+            assertTrue(claimResult.unsupportedClaims().isEmpty());
+            assertFalse(claimResult.outcomeKnown());
+            assertEquals(FactVerificationStatus.PASS, factStatus);
+            assertEquals("judge_model_unavailable",
+                    TraceStore.get("claimVerifier.judge.disabledReason"));
+            assertEquals("judge_model_unavailable",
+                    TraceStore.get("factStatusClassifier.judge.disabledReason"));
+
+            List<StageBoundaryBreadcrumbs.BoundaryBreadcrumb> rows =
+                    StageBoundaryBreadcrumbs.recordFromCurrentTrace("final");
+            assertEquals(1, rows.size());
+            StageBoundaryBreadcrumbs.BoundaryBreadcrumb row = rows.get(0);
+            Map<String, Object> data = row.data();
+            assertEquals("verification", row.stage());
+            assertEquals("fail_soft", data.get("status"));
+            assertEquals("provider-disabled", data.get("failureClass"));
+            assertEquals("judge_model_unavailable", data.get("reasonCode"));
+            assertEquals("both", data.get("judgeLane"));
+            assertEquals(2, data.get("judgeFailSoftLaneCount"));
+            assertEquals(Boolean.FALSE, data.get("judgeCallAttempted"));
+            assertEquals(Boolean.FALSE, data.get("verificationOutcomeKnown"));
+            assertEquals(Boolean.TRUE, data.get("redacted"));
+
+            DebugEventStore store = enabledDebugEventStore();
+            new DebugEventTracePromotionService(store).promoteStageBoundaryBreadcrumbsOnly(
+                    "final",
+                    TraceStore.getAll(),
+                    "VerificationFailSoftRedactionContractTest");
+            DebugEvent event = store.list(5).stream()
+                    .filter(candidate -> "verification".equals(candidate.data().get("boundaryStage")))
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals("verification.judge", event.data().get("layer"));
+            assertFalse(event.toString().contains(endpointSentinel), event.toString());
+            assertFalse(event.toString().contains(modelSentinel), event.toString());
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @Test
     void queryCorrectionPromptCallsiteUsesStageSpecificPromptName() throws Exception {
         String source = Files.readString(
                 Path.of("main/java/com/example/lms/service/correction/LLMQueryCorrectionService.java"),
@@ -203,7 +305,9 @@ class VerificationFailSoftRedactionContractTest {
         assertFalse(source.contains("String prompt = promptBuilder.buildUniversal(query, history, seed);"));
         assertFalse(source.contains("completeWithKey(NightmareKeys.DISAMBIGUATION_CLARIFY, prompt)"));
         assertTrue(source.contains("String queryDisambiguationPrompt = promptBuilder.buildUniversal(query, history, seed);"));
-        assertTrue(source.contains("completeWithKey(NightmareKeys.DISAMBIGUATION_CLARIFY, queryDisambiguationPrompt)"));
+        assertTrue(source.contains("nightmareBreaker.acquire(NightmareKeys.DISAMBIGUATION_CLARIFY, \"disambiguation\")"));
+        assertTrue(source.contains(
+                "llmClient.completeWithPermit(permit, \"disambiguation\", queryDisambiguationPrompt)"));
     }
 
     @Test
@@ -216,6 +320,24 @@ class VerificationFailSoftRedactionContractTest {
         assertFalse(source.contains("UserMessage.from(prompt)"));
         assertTrue(source.contains("callChatModel(String factVerifierPrompt)"));
         assertTrue(source.contains("UserMessage.from(factVerifierPrompt)"));
+    }
+
+    @Test
+    void factVerifierMetaVerdictParserMapsAllowlistedStatusesWithoutExceptionFallback() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/FactVerifierService.java"),
+                StandardCharsets.UTF_8);
+        int start = source.indexOf("private static MetaVerdict parseMetaVerdict(");
+        int end = source.indexOf("private static boolean isMetaControlReason(", start);
+        assertTrue(start >= 0 && end > start, "meta verdict parser span should be locatable");
+        String parser = source.substring(start, end);
+
+        assertFalse(parser.contains("catch (IllegalArgumentException"),
+                "regex-allowlisted verdicts should not rely on an exception fallback");
+        assertTrue(parser.contains("case \"CONSISTENT\" -> MetaVerdict.CONSISTENT;"));
+        assertTrue(parser.contains("case \"MISMATCH\" -> MetaVerdict.MISMATCH;"));
+        assertTrue(parser.contains("case \"INSUFFICIENT\" -> MetaVerdict.INSUFFICIENT;"));
+        assertTrue(parser.contains("default -> null;"));
     }
 
     @Test
@@ -232,6 +354,7 @@ class VerificationFailSoftRedactionContractTest {
 
         ClaimVerifierService.VerificationResult result = service.verifyClaims("safe context", claim + ".", "model");
 
+        assertTrue(result.outcomeKnown());
         assertEquals(1, result.unsupportedClaims().size());
         String unsupportedClaim = result.unsupportedClaims().get(0);
         assertFalse(unsupportedClaim.contains(ownerSecret), unsupportedClaim);
@@ -256,6 +379,17 @@ class VerificationFailSoftRedactionContractTest {
                 List.of(true, true, false));
 
         assertEquals((2.0d / 3.0d) + 0.1d, out, 1.0e-9d);
+    }
+
+    private static DebugEventStore enabledDebugEventStore() {
+        DebugEventStore store = new DebugEventStore();
+        ReflectionTestUtils.setField(store, "enabled", true);
+        ReflectionTestUtils.setField(store, "maxSize", 20);
+        ReflectionTestUtils.setField(store, "windowMs", 60_000L);
+        ReflectionTestUtils.setField(store, "maxPerWindow", 20L);
+        ReflectionTestUtils.setField(store, "flushIntervalMs", 15_000L);
+        ReflectionTestUtils.setField(store, "ndjsonEnabled", false);
+        return store;
     }
 
     private static final class SequentialModel implements ChatModel {

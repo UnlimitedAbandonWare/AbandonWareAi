@@ -10,7 +10,12 @@ import com.example.lms.agent.context.AgentDbContextProvider;
 import com.example.lms.guard.rulebreak.RuleBreakContext;
 import com.example.lms.guard.rulebreak.RuleBreakContextHolder;
 import com.example.lms.guard.rulebreak.RuleBreakPolicy;
+import com.example.lms.infra.selection.SelectionDecisionLedger;
+import com.example.lms.infra.selection.SelectionEntropyFactory;
+import com.example.lms.infra.selection.SelectionReplaySpec;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,12 +39,36 @@ class RetrievalOrderServiceTest {
     void setUp() {
         TraceStore.clear();
         RuleBreakContextHolder.clear();
+        GuardContextHolder.clear();
     }
 
     @AfterEach
     void tearDown() {
+        GuardContextHolder.clear();
         RuleBreakContextHolder.clear();
         TraceStore.clear();
+    }
+
+    @Test
+    void fixedModeDoesNotConsumeReplayEntropy() {
+        SelectionDecisionLedger ledger = SelectionDecisionLedger.forReplay();
+        GuardContext context = new GuardContext();
+        context.attachSelectionEntropy(
+                SelectionEntropyFactory.replay(SelectionReplaySpec.v1(new byte[32])),
+                ledger);
+        GuardContextHolder.set(context);
+
+        RetrievalOrderService service = new RetrievalOrderService();
+        ReflectionTestUtils.setField(service, "mode", "fixed");
+
+        List<RetrievalOrderService.Source> order = service.decideOrder("fixed retrieval");
+
+        assertEquals(List.of(
+                RetrievalOrderService.Source.WEB,
+                RetrievalOrderService.Source.VECTOR,
+                RetrievalOrderService.Source.KG), order);
+        assertEquals(0, ledger.snapshot(true).decisionCount());
+        assertEquals(0, ledger.snapshot(true).drawCount());
     }
 
     @Test

@@ -34,8 +34,10 @@ class MediaWikiClientRedactionContractTest {
         assertTrue(source.contains("SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), \"unknown\")"));
         assertTrue(source.contains("SafeRedactor.hash12(query)"));
         assertTrue(source.contains("TraceStore.put(\"web.mediawiki.suppressed.query\", true)"));
+        assertTrue(source.contains("TraceStore.inc(\"web.mediawiki.suppressed.query.count\")"));
         assertTrue(source.contains("TraceStore.put(\"web.mediawiki.suppressed.query.errorType\""));
         assertTrue(source.contains("TraceStore.put(\"web.mediawiki.suppressed.urlEncode\", true)"));
+        assertTrue(source.contains("TraceStore.inc(\"web.mediawiki.suppressed.urlEncode.count\")"));
         assertTrue(source.contains("TraceStore.put(\"web.mediawiki.suppressed.urlEncode.errorType\""));
     }
 
@@ -48,6 +50,7 @@ class MediaWikiClientRedactionContractTest {
 
         assertEquals(null, result);
         assertEquals(Boolean.TRUE, TraceStore.get("web.mediawiki.suppressed.urlEncode"));
+        assertEquals(1L, TraceStore.get("web.mediawiki.suppressed.urlEncode.count"));
         assertEquals("NullPointerException", TraceStore.get("web.mediawiki.suppressed.urlEncode.errorType"));
     }
 }
