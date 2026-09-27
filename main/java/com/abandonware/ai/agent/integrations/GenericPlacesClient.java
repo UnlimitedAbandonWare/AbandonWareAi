@@ -13,7 +13,7 @@ import java.util.Map;
  * this shim the query always returns an empty list; implementors should
  * replace this with a real HTTP client that calls Channel's Local API.
  */
-@Service
+@Service("agentGenericPlacesClient")
 public class GenericPlacesClient {
 
     private static final Logger log = LoggerFactory.getLogger(GenericPlacesClient.class);

@@ -21,7 +21,7 @@ import java.util.Map;
  * address based on the provided coordinates.  A real implementation
  * would call Channel's address lookup endpoint.
  */
-@Service
+@Service("agentGenericReverseGeocodingClient")
 public class GenericReverseGeocodingClient {
     private static final Logger log = LoggerFactory.getLogger(GenericReverseGeocodingClient.class);
 

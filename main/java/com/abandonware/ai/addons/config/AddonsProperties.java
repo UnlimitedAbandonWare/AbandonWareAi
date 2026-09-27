@@ -32,7 +32,7 @@ public class AddonsProperties {
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
     }
     public static class Budget {
-        private long defaultMs = 1500;
+        private long defaultMs = 1_500;
         public long getDefaultMs() { return defaultMs; }
         public void setDefaultMs(long defaultMs) { this.defaultMs = Math.max(1L, defaultMs); }
     }

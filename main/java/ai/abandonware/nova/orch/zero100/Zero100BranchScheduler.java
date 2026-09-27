@@ -76,7 +76,7 @@ public final class Zero100BranchScheduler {
         int consensusStart = clampInt(planInt(ctx, "search.zero100.consensusStartPct",
                 DEFAULT_CONSENSUS_START_PCT), crossStart + 1, 100);
         int queryBurstMax = clampInt(planInt(ctx, "search.zero100.queryBurstMax",
-                DEFAULT_QUERY_BURST_MAX), 0, 32);
+                DEFAULT_QUERY_BURST_MAX), 0, 12);
 
         int progress = progressPct(slice);
         Phase phase = phaseFor(progress, crossStart, consensusStart);

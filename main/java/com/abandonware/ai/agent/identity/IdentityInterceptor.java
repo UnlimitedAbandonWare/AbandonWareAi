@@ -6,7 +6,10 @@ import com.example.lms.search.TraceStore;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.web.servlet.HandlerInterceptor;
+import java.time.Duration;
 import java.util.UUID;
 
 
@@ -20,6 +23,8 @@ import java.util.UUID;
  * Cookie: gid (HttpOnly, SameSite=Lax) - random UUID string.
  */
 public class IdentityInterceptor implements HandlerInterceptor {
+
+    private static final int GID_TTL_SECONDS = 60 * 60 * 24 * 180;
 
     private final ContextBridge bridge;
 
@@ -40,13 +45,14 @@ public class IdentityInterceptor implements HandlerInterceptor {
             gid = UUID.randomUUID().toString();
         }
         // 항상 슬라이딩 TTL로 재발급: 같은 gid 값으로 Max-Age 연장
-        Cookie cookie = new Cookie("gid", gid);
-        cookie.setHttpOnly(true);
-        cookie.setPath("/");
-        cookie.setMaxAge(60 * 60 * 24 * 180); // 180 days
-        response.addHeader("Set-Cookie",
-                "gid=" + gid + "; Max-Age=" + (60*60*24*180) + "; Path=/; HttpOnly; SameSite=Lax");
-        response.addCookie(cookie);
+        ResponseCookie cookie = ResponseCookie.from("gid", gid)
+                .httpOnly(true)
+                .secure(isHttpsRequest(request))
+                .path("/")
+                .maxAge(Duration.ofSeconds(GID_TTL_SECONDS))
+                .sameSite("Lax")
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
 
         // Establish a minimal channel with the session id; room/execution remains null.
         bridge.setCurrent(new ChannelRef(null, gid, null));
@@ -65,6 +71,10 @@ public class IdentityInterceptor implements HandlerInterceptor {
             if (name.equals(c.getName())) return c.getValue();
         }
         return null;
+    }
+
+    private static boolean isHttpsRequest(HttpServletRequest request) {
+        return request != null && request.isSecure();
     }
 
     private static String usableGid(String candidate) {

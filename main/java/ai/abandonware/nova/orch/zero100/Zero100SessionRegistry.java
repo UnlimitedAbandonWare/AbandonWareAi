@@ -9,7 +9,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.SplittableRandom;
 
 /**
  * Conversation/session registry for Emperor Pro Time (Zero-100).
@@ -214,10 +213,10 @@ public class Zero100SessionRegistry {
 
         long idx = (st.sliceMs > 0L) ? Math.max(0L, (now - st.createdAtMs) / st.sliceMs) : 0L;
 
-        // Deterministic pseudo-random per (sid, sliceIdx).
-        SplittableRandom rnd = new SplittableRandom(st.seed ^ (idx * 0x9E3779B97F4A7C15L));
-        double exploration = clampDouble(0.10d + rnd.nextDouble() * 0.25d, 0.05d, 0.40d);
-        ClampMode clamp = (rnd.nextDouble() < 0.50d) ? ClampMode.PRECISION_CLAMP : ClampMode.RECALL_CLAMP;
+        double jitter = Math.floorMod(st.seed + (idx * 0x9E3779B97F4A7C15L), 10_000L) / 10_000.0d;
+        double exploration = clampDouble(0.08d + (idx % 3L) * 0.04d + jitter * 0.02d,
+                0.05d, 0.22d);
+        ClampMode clamp = (idx % 3L == 2L) ? ClampMode.RECALL_CLAMP : ClampMode.PRECISION_CLAMP;
 
         long webBox = clampLong(firstNonNull(overrideWebTimeboxMs, props.getWebCallTimeboxMs()), 100L, 20_000L);
         long hardCap = clampLong(firstNonNull(overrideBackoffHardCapMs, props.getBackoffHardCapMs()), 200L, 10_000L);
