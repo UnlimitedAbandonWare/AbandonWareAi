@@ -1,0 +1,17 @@
+{
+  "description": "demo-1 shared source-edit guard: deny writes to files covered by an active foreign source-edit lease. Detection layer only — enforcement is in scripts/codex_work_checkpoint.py apply.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(search_replace|edit_file|write_file|create_file|multi_edit|apply_patch|notebook_edit|write|edit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/devin_pre_edit_guard.ps1",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

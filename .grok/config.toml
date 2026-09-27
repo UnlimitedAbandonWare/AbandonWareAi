@@ -1,0 +1,8 @@
+[mcp_servers.awx-control-tower]
+command = "C:\\Users\\nninn\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe"
+args = [
+    "-B",
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\scripts\\awx_mcp_stdio_server.py",
+]
+enabled = true
+env = { "AWX_MCP_SOURCE_ACCESS" = "shared-read" }

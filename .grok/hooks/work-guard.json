@@ -1,0 +1,41 @@
+{
+  "description": "demo-1 work guard: block missing-file reads, doubled src\\main joins, and same-file retry loops. Ledger in var/agent-work-guard. Fail-open on guard errors.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(run_terminal_command|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(run_terminal_command|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "^(run_terminal_command|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+            "timeout": 12
+          }
+        ]
+      }
+    ]
+  }
+}
