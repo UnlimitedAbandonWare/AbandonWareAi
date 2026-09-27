@@ -3,6 +3,7 @@ package com.example.lms.service;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.guard.VectorPoisonGuard;
 import com.example.lms.service.guard.VectorScopeGuard;
+import com.example.lms.service.vector.DocumentChunkingService;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -25,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class VectorStoreServiceLmsDiagnosticsRedactionTest {
@@ -198,6 +200,83 @@ class VectorStoreServiceLmsDiagnosticsRedactionTest {
     }
 
     @Test
+    void fullDocumentPoisonInspectionRunsBeforeChunking() throws Exception {
+        EmbeddingModel model = mock(EmbeddingModel.class);
+        @SuppressWarnings("unchecked")
+        EmbeddingStore<TextSegment> store = mock(EmbeddingStore.class);
+        when(model.embedAll(anyList())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            List<TextSegment> segments = invocation.getArgument(0, List.class);
+            return Response.from(segments.stream()
+                    .map(ignored -> Embedding.from(new float[]{1.0f}))
+                    .toList());
+        });
+
+        VectorStoreService service = new VectorStoreService(model, store);
+        setInt(service, "batchSize", 1000);
+        setBoolean(service, "shadowWriteEnabled", false);
+        setBoolean(service, "quarantineRewriteStableId", false);
+
+        setField(service, "vectorPoisonGuard", configuredPoisonGuard());
+
+        DocumentChunkingService chunking = new DocumentChunkingService();
+        setBoolean(chunking, "enabled", true);
+        setInt(chunking, "chunkSizeChars", 1000);
+        setInt(chunking, "overlapChars", 120);
+        setInt(chunking, "minSplitChars", 1400);
+        setField(service, "documentChunkingService", chunking);
+
+        String generatedReport = "# Source Difficulty Report\n\n"
+                + "x".repeat(1_600)
+                + "\n\n## scorecard\n\n| metric | value |\n|---|---|\n| Java file | 2026 |";
+
+        service.enqueue(
+                "generated-report-id",
+                "primary-session",
+                generatedReport,
+                Map.of(VectorMetaKeys.META_DOC_TYPE, "MEMORY"));
+        service.flush();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<TextSegment>> segmentsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(store).addAll(anyList(), anyList(), segmentsCaptor.capture());
+        List<TextSegment> segments = segmentsCaptor.getValue();
+
+        assertEquals(1, segments.size(), "the rejected whole document must not be split into primary chunks");
+        Map<String, Object> metadata = segments.get(0).metadata().toMap();
+        assertEquals("generated_report", metadata.get(VectorMetaKeys.META_POISON_REASON));
+        assertEquals("Q", metadata.get(VectorMetaKeys.META_SID));
+        assertFalse(metadata.containsKey(VectorMetaKeys.META_CHUNK_ID));
+        assertEquals("quarantine", TraceStore.get("ml.vector.ingest.route"));
+    }
+
+    @Test
+    void generatedArtifactPathNeverReachesVectorEmbeddingStore() throws Exception {
+        EmbeddingModel model = mock(EmbeddingModel.class);
+        @SuppressWarnings("unchecked")
+        EmbeddingStore<TextSegment> store = mock(EmbeddingStore.class);
+        VectorStoreService service = new VectorStoreService(model, store);
+        setInt(service, "batchSize", 1000);
+        setField(service, "vectorPoisonGuard", configuredPoisonGuard());
+
+        service.enqueue(
+                "artifact-id",
+                "primary-session",
+                "Ordinary artifact content without poison markers.",
+                Map.of(
+                        VectorMetaKeys.META_DOC_TYPE, "MEMORY",
+                        VectorMetaKeys.META_SOURCE_PATH, "__patch_drop__/topic-v3.patch"));
+        service.flush();
+
+        verifyNoInteractions(model, store);
+        assertEquals(Boolean.TRUE, TraceStore.get("ml.vector.ingest.drop"));
+        assertEquals("generated_artifact_path", TraceStore.get("ml.vector.ingest.drop.reason"));
+        String trace = String.valueOf(TraceStore.getAll());
+        assertFalse(trace.contains("topic-v3.patch"), trace);
+        assertFalse(trace.contains("__patch_drop__"), trace);
+    }
+
+    @Test
     void vectorFlushErrorBreadcrumbUsesSafeRedactor() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/service/VectorStoreService.java"));
 
@@ -223,6 +302,7 @@ class VectorStoreServiceLmsDiagnosticsRedactionTest {
 
         assertTrue(helper.contains("TraceStore.put(\"ml.vector.suppressed.\" + safeStage, true);"));
         assertTrue(helper.contains("[VectorStore] suppression trace failed stage={} errorHash={} errorLength={}"));
+        assertVectorStage(source, "ingest.preChunkGuard");
         assertVectorStage(source, "scope.inspectIngest");
         assertVectorStage(source, "ingestProtection.quarantineActive");
         assertVectorStage(source, "sidRotationAdvisor.recordQuarantine");
@@ -329,6 +409,10 @@ class VectorStoreServiceLmsDiagnosticsRedactionTest {
         assertTrue(message.startsWith("hash:"), message);
         assertFalse(message.contains(rawSecret));
         assertFalse(message.contains("Bearer " + rawSecret));
+        assertEquals(Boolean.TRUE, TraceStore.get("ml.vector.suppressed.ingest.poisonGuard"));
+        assertEquals("IllegalStateException",
+                TraceStore.get("ml.vector.suppressed.ingest.poisonGuard.errorType"));
+        assertFalse(TraceStore.getAll().toString().contains(rawSecret));
     }
 
     @SuppressWarnings("unchecked")
@@ -352,6 +436,19 @@ class VectorStoreServiceLmsDiagnosticsRedactionTest {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private static VectorPoisonGuard configuredPoisonGuard() throws Exception {
+        VectorPoisonGuard guard = new VectorPoisonGuard();
+        setBoolean(guard, "enabled", true);
+        setBoolean(guard, "blockLogLike", true);
+        setBoolean(guard, "sanitizeTraceDump", true);
+        setInt(guard, "maxTextChars", 20_000);
+        setInt(guard, "maxLines", 400);
+        setField(guard, "logLineRatioThreshold", 0.22d);
+        setInt(guard, "minLogLineMatches", 3);
+        setBoolean(guard, "allowLegacyNoDocType", true);
+        return guard;
     }
 
     private static void assertVectorStage(String source, String stage) {

@@ -178,6 +178,100 @@ class DecoratingEmbeddingModelTest {
         assertFalse(trace.contains("RuntimeException"), trace);
     }
 
+    @Test
+    void batchFallbackStopsAfterThreeConsecutiveSingleComputeFailures() {
+        TraceStore.put("dbg.search.enabled", true);
+        BatchAndSingleFailingEmbeddingModel delegate = new BatchAndSingleFailingEmbeddingModel();
+        DecoratingEmbeddingModel model = new DecoratingEmbeddingModel(
+                delegate,
+                new EmbeddingCache.InMemory(),
+                Duration.ofMinutes(5));
+        List<TextSegment> segments = new ArrayList<>();
+        for (int i = 0; i < 16; i++) {
+            segments.add(TextSegment.from("segment-" + i));
+        }
+
+        List<Embedding> result = model.embedAll(segments).content();
+
+        assertEquals(16, result.size());
+        assertEquals(1, delegate.batchCalls.get());
+        assertEquals(3, delegate.singleCalls.get(),
+                "consecutive unrecovered failures must stop the remaining per-item fallback attempts");
+        assertTrue(result.stream().allMatch(embedding -> embedding.vector().length == 0));
+        assertEquals(Boolean.TRUE, TraceStore.get("embed.batch.perItemFallback.stopped"));
+        assertEquals(13, TraceStore.get("embed.batch.perItemFallback.remaining"));
+    }
+
+    @Test
+    void batchFallbackContinuesAfterOneItemSpecificFailureAndClearsStopTrace() {
+        TraceStore.put("embed.batch.perItemFallback.stopped", true);
+        TraceStore.put("embed.batch.perItemFallback.remaining", 99);
+        LeadingSingleFailuresEmbeddingModel delegate = new LeadingSingleFailuresEmbeddingModel(1);
+        DecoratingEmbeddingModel model = new DecoratingEmbeddingModel(
+                delegate,
+                new EmbeddingCache.InMemory(),
+                Duration.ofMinutes(5));
+        List<TextSegment> segments = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            segments.add(TextSegment.from("segment-" + i));
+        }
+
+        List<Embedding> result = model.embedAll(segments).content();
+
+        assertEquals(4, result.size());
+        assertEquals(1, delegate.batchCalls.get());
+        assertEquals(4, delegate.singleCalls.get(),
+                "one item-specific failure must not suppress later recoverable embeddings");
+        assertEquals(0, result.get(0).vector().length);
+        assertTrue(result.subList(1, result.size()).stream()
+                .allMatch(embedding -> embedding.vector().length > 0));
+        assertEquals(Boolean.FALSE, TraceStore.get("embed.batch.perItemFallback.stopped"));
+        assertEquals(0, TraceStore.get("embed.batch.perItemFallback.remaining"));
+    }
+
+    @Test
+    void batchFallbackContinuesAfterTwoItemSpecificFailures() {
+        LeadingSingleFailuresEmbeddingModel delegate = new LeadingSingleFailuresEmbeddingModel(2);
+        DecoratingEmbeddingModel model = new DecoratingEmbeddingModel(
+                delegate,
+                new EmbeddingCache.InMemory(),
+                Duration.ofMinutes(5));
+        List<TextSegment> segments = List.of(
+                TextSegment.from("bad-0"),
+                TextSegment.from("bad-1"),
+                TextSegment.from("good-2"),
+                TextSegment.from("good-3"));
+
+        List<Embedding> result = model.embedAll(segments).content();
+
+        assertEquals(4, delegate.singleCalls.get(),
+                "two item-specific failures must not suppress later recoverable embeddings");
+        assertEquals(0, result.get(0).vector().length);
+        assertEquals(0, result.get(1).vector().length);
+        assertTrue(result.subList(2, result.size()).stream()
+                .allMatch(embedding -> embedding.vector().length > 0));
+        assertEquals(Boolean.FALSE, TraceStore.get("embed.batch.perItemFallback.stopped"));
+    }
+
+    @Test
+    void batchFallbackTraceResetsWhenNextBatchIsAllCacheHits() {
+        CountingEmbeddingModel delegate = new CountingEmbeddingModel();
+        DecoratingEmbeddingModel model = new DecoratingEmbeddingModel(
+                delegate,
+                new EmbeddingCache.InMemory(),
+                Duration.ofMinutes(5));
+        List<TextSegment> segments = List.of(TextSegment.from("cached-0"), TextSegment.from("cached-1"));
+        model.embedAll(segments);
+        TraceStore.put("embed.batch.perItemFallback.stopped", true);
+        TraceStore.put("embed.batch.perItemFallback.remaining", 99);
+
+        model.embedAll(segments);
+
+        assertEquals(1, delegate.batchCalls.get(), "the second batch must be served from cache");
+        assertEquals(Boolean.FALSE, TraceStore.get("embed.batch.perItemFallback.stopped"));
+        assertEquals(0, TraceStore.get("embed.batch.perItemFallback.remaining"));
+    }
+
     private static final class CountingEmbeddingModel implements EmbeddingModel {
         private final AtomicInteger batchCalls = new AtomicInteger();
         private final AtomicInteger singleCalls = new AtomicInteger();
@@ -236,6 +330,58 @@ class DecoratingEmbeddingModelTest {
 
         @Override
         public Response<List<Embedding>> embedAll(List<TextSegment> textSegments) {
+            throw secretFailure();
+        }
+    }
+
+    private static final class BatchAndSingleFailingEmbeddingModel implements EmbeddingModel {
+        private final AtomicInteger batchCalls = new AtomicInteger();
+        private final AtomicInteger singleCalls = new AtomicInteger();
+
+        @Override
+        public Response<Embedding> embed(String text) {
+            singleCalls.incrementAndGet();
+            throw secretFailure();
+        }
+
+        @Override
+        public Response<Embedding> embed(TextSegment textSegment) {
+            singleCalls.incrementAndGet();
+            throw secretFailure();
+        }
+
+        @Override
+        public Response<List<Embedding>> embedAll(List<TextSegment> textSegments) {
+            batchCalls.incrementAndGet();
+            throw secretFailure();
+        }
+    }
+
+    private static final class LeadingSingleFailuresEmbeddingModel implements EmbeddingModel {
+        private final AtomicInteger batchCalls = new AtomicInteger();
+        private final AtomicInteger singleCalls = new AtomicInteger();
+        private final int failureCount;
+
+        private LeadingSingleFailuresEmbeddingModel(int failureCount) {
+            this.failureCount = failureCount;
+        }
+
+        @Override
+        public Response<Embedding> embed(String text) {
+            return embed(TextSegment.from(text));
+        }
+
+        @Override
+        public Response<Embedding> embed(TextSegment textSegment) {
+            if (singleCalls.incrementAndGet() <= failureCount) {
+                throw secretFailure();
+            }
+            return Response.from(Embedding.from(new float[] { 1.0f, 0.5f }));
+        }
+
+        @Override
+        public Response<List<Embedding>> embedAll(List<TextSegment> textSegments) {
+            batchCalls.incrementAndGet();
             throw secretFailure();
         }
     }

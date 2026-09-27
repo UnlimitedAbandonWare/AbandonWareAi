@@ -1,5 +1,8 @@
 package com.example.lms.service.agent;
 
+import com.example.lms.artplate.ArtPlateRegistry;
+import com.example.lms.artplate.NineArtPlateGate;
+import com.example.lms.artplate.PlateContext;
 import com.example.lms.cfvm.RawMatrixBuffer;
 import com.example.lms.debug.DebugEventLevel;
 import com.example.lms.debug.DebugEventStore;
@@ -111,6 +114,21 @@ class ReportSnapshotServiceTest {
     }
 
     @Test
+    void artplateStatusNeverBorrowsPreviousRequestsGlobalSelection() {
+        NineArtPlateGate gate = new NineArtPlateGate(new ArtPlateRegistry());
+        gate.decide(new PlateContext(false, true, 0, 0, 0.5d, false,
+                0.3d, 0.4d, 0.1d, 0.2d));
+        TraceStore.clear();
+        ReportSnapshotService service = new ReportSnapshotService(
+                new DebugEventStore(), new RawMatrixBuffer(), null, gate,
+                null, null, null, null, 0.35d, 24, 2, true);
+
+        assertEquals("not_observed", service.artplateStatus().get("selectedPlate"));
+        TraceStore.put("artplate.selector.selected", "AP3_VEC_DENSE");
+        assertEquals("AP3_VEC_DENSE", service.artplateStatus().get("selectedPlate"));
+    }
+
+    @Test
     void traceKpiCountsAgentReportDebugEventsByProbe() {
         DebugEventStore store = new DebugEventStore();
         store.emit(DebugProbeType.AGENT_REPORT_CFVM, DebugEventLevel.INFO,
@@ -147,6 +165,8 @@ class ReportSnapshotServiceTest {
         TraceStore.put("specialMode.conflict.suppressed", "OVERDRIVE,HYPERNOVA");
         TraceStore.put("specialMode.priority", "EXTREMEZ>HYPERNOVA>OVERDRIVE");
         TraceStore.put("hypernova.twpmP", 4.0d);
+        TraceStore.put("hypernova.twpmP.max", 8.0d);
+        TraceStore.put("hypernova.twpmP.maxBounded", true);
         TraceStore.put("hypernova.cvarFusedScore", 0.77d);
         TraceStore.put("hypernova.cvarAlpha", 0.25d);
         TraceStore.put("hypernova.cvarPhi", 0.618d);
@@ -233,6 +253,8 @@ class ReportSnapshotServiceTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> hypernova = (Map<String, Object>) kpi.get("hypernova");
         assertEquals(4.0d, hypernova.get("hypernova.twpmP"));
+        assertEquals(8.0d, hypernova.get("hypernova.twpmP.max"));
+        assertEquals(true, hypernova.get("hypernova.twpmP.maxBounded"));
         assertEquals(0.77d, hypernova.get("hypernova.cvarFusedScore"));
         assertEquals(0.25d, hypernova.get("hypernova.cvarAlpha"));
         assertEquals(0.618d, hypernova.get("hypernova.cvarPhi"));

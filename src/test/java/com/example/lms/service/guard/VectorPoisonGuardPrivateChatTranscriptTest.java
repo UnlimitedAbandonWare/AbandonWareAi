@@ -2,10 +2,15 @@ package com.example.lms.service.guard;
 
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.VectorMetaKeys;
+import dev.langchain4j.data.document.Metadata;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -84,6 +89,84 @@ class VectorPoisonGuardPrivateChatTranscriptTest {
         assertFalse(trace.contains("소스 난이도 평가 리포트"), trace);
         assertFalse(trace.contains("255,612"), trace);
         assertTrue(trace.contains("generated_report"), trace);
+    }
+
+    @Test
+    void blocksGeneratedArtifactPathsBeforeVectorIngestWithoutTracingRawPaths() {
+        VectorPoisonGuard guard = guard();
+        List<String> generatedPaths = List.of(
+                "__patch_drop__/topic-v3.patch",
+                "build/classes/java/main/Example.class",
+                "build/libs/application.jar",
+                "build-logs/boot-run.log",
+                "__reports__/safe-patch-score.json",
+                "agent-prompts/out/generated.prompt",
+                "data/agent-handoff/codex/raw-dump.bin");
+
+        for (String sourcePath : generatedPaths) {
+            VectorPoisonGuard.IngestDecision decision = guard.inspectIngest(
+                    "sid-artifact",
+                    "Ordinary text that has no content-based contamination markers.",
+                    Map.of(VectorMetaKeys.META_SOURCE_PATH, sourcePath),
+                    "artifact.ingest");
+
+            assertFalse(decision.allow(), sourcePath);
+            assertEquals("", decision.text(), sourcePath);
+            assertEquals("generated_artifact_path", decision.reason(), sourcePath);
+            assertEquals("ARTIFACT", decision.meta().get(VectorMetaKeys.META_DOC_TYPE), sourcePath);
+            assertEquals("generated_artifact_path",
+                    decision.meta().get(VectorMetaKeys.META_POISON_REASON), sourcePath);
+            assertFalse(String.valueOf(TraceStore.getAll()).contains(sourcePath), sourcePath);
+            TraceStore.clear();
+        }
+    }
+
+    @Test
+    void allowsCanonicalDynamicRagMemoryDocumentPath() {
+        VectorPoisonGuard guard = guard();
+
+        VectorPoisonGuard.IngestDecision decision = guard.inspectIngest(
+                "sid-memory",
+                "Canonical Dynamic RAG orchestration memory with bounded design facts.",
+                Map.of(VectorMetaKeys.META_SOURCE_PATH,
+                        "docs/ai-memory/Dynamic_RAG_Orchestration_Platform.memory.md"),
+                "memory.ingest");
+
+        assertTrue(decision.allow());
+        assertEquals("", decision.reason());
+    }
+
+    @Test
+    void retrievalDropsLegacyArtifactPathButKeepsCanonicalMemory() {
+        VectorPoisonGuard guard = guard();
+        String sid = "sid-retrieval";
+        EmbeddingMatch<TextSegment> artifact = new EmbeddingMatch<>(
+                0.9d,
+                "artifact-id",
+                Embedding.from(new float[]{1.0f}),
+                TextSegment.from(
+                        "Ordinary legacy vector content.",
+                        Metadata.from(Map.of(
+                                VectorMetaKeys.META_SID, sid,
+                                VectorMetaKeys.META_DOC_TYPE, "MEMORY",
+                                VectorMetaKeys.META_SOURCE_PATH, "__patch_drop__/topic-v3.patch"))));
+        EmbeddingMatch<TextSegment> canonical = new EmbeddingMatch<>(
+                0.8d,
+                "canonical-id",
+                Embedding.from(new float[]{1.0f}),
+                TextSegment.from(
+                        "Canonical Dynamic RAG memory.",
+                        Metadata.from(Map.of(
+                                VectorMetaKeys.META_SID, sid,
+                                VectorMetaKeys.META_DOC_TYPE, "MEMORY",
+                                VectorMetaKeys.META_SOURCE_PATH,
+                                "docs/ai-memory/Dynamic_RAG_Orchestration_Platform.memory.md"))));
+
+        List<EmbeddingMatch<TextSegment>> filtered = guard.filterMatches(List.of(artifact, canonical), sid);
+
+        assertEquals(1, filtered.size());
+        assertEquals("canonical-id", filtered.get(0).embeddingId());
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("topic-v3.patch"));
     }
 
     private static VectorPoisonGuard guard() {

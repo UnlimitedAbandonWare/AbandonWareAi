@@ -54,6 +54,7 @@ class CitationGateTest {
         assertEquals(1, TraceStore.get("gate.citation.count"));
         assertEquals(Boolean.FALSE, TraceStore.get("gate.citation.passed"));
         assertEquals(Boolean.FALSE, TraceStore.get("gate.hypernova.override"));
+        assertEquals("DEGRADE", TraceStore.get("web.citation.gateStatus"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("private source"));
     }
 }

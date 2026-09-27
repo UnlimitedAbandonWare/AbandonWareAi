@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,6 +53,26 @@ class RerankerSelectorTest {
                 "onnx-runtime",
                 true,
                 true);
+
+        assertSame(onnx, selector.select());
+    }
+
+    @Test
+    void uppercaseOnnxBackendSelectionIsIndependentOfDefaultLocale() {
+        CrossEncoderReranker embedding = new TestReranker();
+        CrossEncoderReranker onnx = new TestReranker();
+        RerankerSelector selector;
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            selector = new RerankerSelector(
+                    rerankers(embedding, onnx),
+                    "ONNX-RUNTIME",
+                    true,
+                    true);
+        } finally {
+            Locale.setDefault(previous);
+        }
 
         assertSame(onnx, selector.select());
     }

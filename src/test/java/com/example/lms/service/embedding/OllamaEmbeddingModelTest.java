@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -21,6 +22,57 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OllamaEmbeddingModelTest {
+
+    @Test
+    void unknownBackupIdentityCannotSupplyQueryOrDocumentVectorsEvenAtSameDimension() {
+        TraceStore.clear();
+        OllamaEmbeddingModel model = newModel(false, false);
+        ReflectionTestUtils.setField(model, "provider", "ollama");
+        ReflectionTestUtils.setField(model, "model", "model-a");
+        ReflectionTestUtils.setField(model, "dimensions", 2);
+        var backup = org.mockito.Mockito.mock(dev.langchain4j.model.embedding.EmbeddingModel.class);
+        var vector = dev.langchain4j.data.embedding.Embedding.from(new float[]{0.6f, 0.8f});
+        org.mockito.Mockito.when(backup.embed("probe")).thenReturn(dev.langchain4j.model.output.Response.from(vector));
+        org.mockito.Mockito.when(backup.embedAll(org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(dev.langchain4j.model.output.Response.from(List.of(vector)));
+        ReflectionTestUtils.setField(model, "backupModel", backup);
+
+        assertThrows(IllegalStateException.class,
+                () -> ReflectionTestUtils.invokeMethod(model, "callBackupVector", "probe", "fallback"));
+        assertThrows(IllegalStateException.class, () -> ReflectionTestUtils.invokeMethod(model,
+                "callBackupBatch", List.of(dev.langchain4j.data.segment.TextSegment.from("probe")), "fallback"));
+        org.mockito.Mockito.verifyNoInteractions(backup);
+        assertEquals("embedding_space_unverified", TraceStore.get("embed.failover.blockedReason"));
+    }
+
+    @Test
+    void verifiedSameLocalModelBackupKeepsVectorSpaceAndRejectsDifferentModelOrPreprocessing() {
+        OllamaEmbeddingModel model = newModel(false, false);
+        OllamaEmbeddingModel backup = org.mockito.Mockito.mock(OllamaEmbeddingModel.class);
+        for (OllamaEmbeddingModel endpoint : List.of(model, backup)) {
+            ReflectionTestUtils.setField(endpoint, "provider", "ollama");
+            ReflectionTestUtils.setField(endpoint, "model", "model-a");
+            ReflectionTestUtils.setField(endpoint, "dimensions", 2);
+            ReflectionTestUtils.setField(endpoint, "normalizationMode", "SLICE_TO_CONFIGURED_DIM");
+        }
+        ReflectionTestUtils.setField(model, "backupModel", backup);
+        var vector = dev.langchain4j.data.embedding.Embedding.from(new float[]{0.6f, 0.8f});
+        org.mockito.Mockito.when(backup.embed("probe")).thenReturn(dev.langchain4j.model.output.Response.from(vector));
+        float[] result = ReflectionTestUtils.invokeMethod(model, "callBackupVector", "probe", "fallback");
+        assertEquals(2, result.length);
+        ReflectionTestUtils.setField(backup, "model", "model-b");
+        assertThrows(IllegalStateException.class,
+                () -> ReflectionTestUtils.invokeMethod(model, "callBackupVector", "probe", "fallback"));
+        ReflectionTestUtils.setField(backup, "model", "model-a");
+        ReflectionTestUtils.setField(backup, "normalizationMode", "NONE");
+        assertThrows(IllegalStateException.class,
+                () -> ReflectionTestUtils.invokeMethod(model, "callBackupVector", "probe", "fallback"));
+        ReflectionTestUtils.setField(backup, "normalizationMode", "SLICE_TO_CONFIGURED_DIM");
+        ReflectionTestUtils.setField(backup, "backupModel", model);
+        assertThrows(IllegalStateException.class,
+                () -> ReflectionTestUtils.invokeMethod(model, "callBackupVector", "probe", "fallback"));
+        org.mockito.Mockito.verify(backup, org.mockito.Mockito.times(1)).embed("probe");
+    }
 
     @Test
     void diagnosticLogsAndEventsDoNotWriteRawModelUrlOrTag() throws Exception {
@@ -72,6 +124,7 @@ class OllamaEmbeddingModelTest {
         assertOllamaStage(source, "health.cacheHitTrace");
         assertOllamaStage(source, "health.concurrentWait");
         assertOllamaStage(source, "health.concurrentSkipTrace");
+        assertOllamaStage(source, "health.concurrentLocalProbeTrace");
         assertOllamaStage(source, "health.okTrace");
         assertOllamaStage(source, "health.failTrace");
         assertOllamaStage(source, "embedProbe");
@@ -331,6 +384,24 @@ class OllamaEmbeddingModelTest {
                 () -> ReflectionTestUtils.invokeMethod(model, "callBackupBatch", List.of(), "health"));
 
         assertTrue(ex.getMessage().contains("backup model is missing"));
+    }
+
+    @Test
+    void concurrentHealthCheckWithoutBackupAllowsLocalProbeInsteadOfMissingBackup() {
+        TraceStore.clear();
+        OllamaEmbeddingModel model = newModel(false, false);
+        ReflectionTestUtils.setField(model, "fastFailEnabled", true);
+        ReflectionTestUtils.setField(model, "fastFailHealthEnabled", true);
+        ReflectionTestUtils.setField(model, "fastFailHealthConcurrentGuard", true);
+
+        AtomicBoolean healthInFlight = (AtomicBoolean) ReflectionTestUtils.getField(model, "healthInFlight");
+        healthInFlight.set(true);
+
+        Boolean healthy = ReflectionTestUtils.invokeMethod(model, "ensureLocalHealthy", "batch");
+
+        assertTrue(Boolean.TRUE.equals(healthy));
+        assertEquals(1L, TraceStore.getLong("embed.fastfail.health.concurrent_local_probe"));
+        TraceStore.clear();
     }
 
     @Test
