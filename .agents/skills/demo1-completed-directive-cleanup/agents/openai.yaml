@@ -1,0 +1,4 @@
+interface:
+  display_name: "Completed Directive Cleanup"
+  short_description: "Stop verified tasks and safely clean owned surplus artifacts"
+  default_prompt: "Use $demo1-completed-directive-cleanup at whole-task finalization. Bind the verified patch or report-only result, current postimages, required acceptance logs, preserved final deliverables and recovery, and exact disposable artifact hashes. Prepare task-cleanup-request.json for the successful checkpoint finish hook, or invoke the same helper directly. Stop completed work; separate task completion from cleanup failure. Delete only owned surplus with durable receipts and verified recovery copies; preserve source, final reports, applied patches and all verification evidence. Keep standalone directive marking and authorized retention review on their existing contract. Never infer completion from age or one green test, sweep a queue, or replay a patch after cleanup failure."

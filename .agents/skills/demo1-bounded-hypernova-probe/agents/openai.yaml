@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Bounded HYPERNOVA Probe"
+  short_description: "Bound high-risk TWPM tuning with source proof"
+  default_prompt: "Use $demo1-bounded-hypernova-probe to run a bounded Desktop evidence pass and apply a Safe Patch only when a focused probe falsifies the current HYPERNOVA contract."

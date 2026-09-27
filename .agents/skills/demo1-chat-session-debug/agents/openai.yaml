@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Chat Session Debug"
+  short_description: "왜 이 모델/이 경고? — per-run 채팅 trace 공용 export"
+  default_prompt: "Use $demo1-chat-session-debug when a chat or Meta Display session needs a shared answer for 'why this model/warning': run scripts/chat_session_debug_export.py status|list|show|export over var/debug/chat-session-traces and hand off only the export path."

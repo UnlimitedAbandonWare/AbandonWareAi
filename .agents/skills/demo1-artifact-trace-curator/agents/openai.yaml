@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Artifact Trace Curator"
+  short_description: "Capture and recheck traces without overstating proof"
+  default_prompt: "Use $demo1-artifact-trace-curator to capture or recheck one explicit demo-1 trace without treating integrity as success proof."
