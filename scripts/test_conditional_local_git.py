@@ -207,19 +207,72 @@ class ConditionalLocalGitTests(unittest.TestCase):
             self.assertEqual(payload["missingBlobPaths"], ["staged.txt"])
             self.assertEqual(payload["blockedPaths"], [])
 
-    def test_scan_flags_non_intended_origin_without_hard_stop(self) -> None:
+    def test_scan_hard_fails_on_discarded_or_mismatched_origin(self) -> None:
+        for url, reason in (
+            ("https://github.com/UnlimitedAbandonWare/AbandonWare3", "forbidden-remote"),
+            ("https://example.com/other/repo.git", "origin-mismatch"),
+        ):
+            with self.subTest(url=url), FixtureDirectory() as tmp:
+                repo = self.make_repo(Path(tmp))
+                (repo / "a.txt").write_text("a\n", encoding="utf-8")
+                git(repo, "add", "--", "a.txt")
+                git(repo, "remote", "add", "origin", url)
+                proc = run_tool("scan", "--repo", str(repo))
+                payload = json.loads(proc.stdout)
+                self.assertEqual(proc.returncode, 2, proc.stdout)
+                self.assertEqual(payload["reason"], reason)
+                self.assertEqual(payload["intendedRemote"], "AbandonWareAi")
+                self.assertTrue(payload["originMismatch"])
+                self.assertNotIn(url, proc.stdout)
+
+    def test_scan_hard_fails_when_non_origin_remote_names_discarded_upstream(self) -> None:
         with FixtureDirectory() as tmp:
             repo = self.make_repo(Path(tmp))
             (repo / "a.txt").write_text("a\n", encoding="utf-8")
             git(repo, "add", "--", "a.txt")
             git(repo, "remote", "add", "origin",
-                "https://github.com/UnlimitedAbandonWare/AbandonWare3")
+                "https://github.com/UnlimitedAbandonWare/AbandonWareAi")
+            git(repo, "remote", "add", "backup",
+                "https://github.com/UnlimitedAbandonWare/AbandonWare3.git")
+            proc = run_tool("scan", "--repo", str(repo))
+            payload = json.loads(proc.stdout)
+            self.assertEqual(proc.returncode, 2, proc.stdout)
+            self.assertEqual(payload["reason"], "forbidden-remote")
+            self.assertTrue(payload["forbiddenRemote"])
+            self.assertFalse(payload["originMismatch"])
+
+    def test_commit_paths_hard_fail_while_discarded_remote_present(self) -> None:
+        with FixtureDirectory() as tmp:
+            repo = self.make_repo(Path(tmp))
+            (repo / "owned.txt").write_text("owned\n", encoding="utf-8")
+            git(repo, "add", "--", "owned.txt")
+            git(repo, "remote", "add", "origin",
+                "https://github.com/UnlimitedAbandonWare/AbandonWare3.git")
+            message = repo / "msg.txt"
+            message.write_text("Reason: x\nVerify: y\nConstraint: z\n", encoding="utf-8")
+            for extra in ([], ["--preserve-foreign-staged"]):
+                proc = run_tool("commit", "--repo", str(repo), "--message-file",
+                                str(message), *extra, "--path", "owned.txt")
+                payload = json.loads(proc.stdout)
+                self.assertEqual(proc.returncode, 2, proc.stdout)
+                self.assertEqual(payload["reason"], "forbidden-remote")
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "HEAD"],
+                                  capture_output=True)
+            self.assertNotEqual(head.returncode, 0)
+
+    def test_scan_passes_with_sole_intended_origin(self) -> None:
+        with FixtureDirectory() as tmp:
+            repo = self.make_repo(Path(tmp))
+            (repo / "a.txt").write_text("a\n", encoding="utf-8")
+            git(repo, "add", "--", "a.txt")
+            git(repo, "remote", "add", "origin",
+                "https://github.com/UnlimitedAbandonWare/AbandonWareAi")
             proc = run_tool("scan", "--repo", str(repo))
             payload = json.loads(proc.stdout)
             self.assertEqual(proc.returncode, 0, proc.stdout)
             self.assertEqual(payload["reason"], "ok")
-            self.assertEqual(payload["intendedRemote"], "AbandonWareAi")
-            self.assertTrue(payload["originMismatch"])
+            self.assertFalse(payload["forbiddenRemote"])
+            self.assertFalse(payload["originMismatch"])
 
     def selected_fixture(self, root):
         repo = self.make_repo(root)

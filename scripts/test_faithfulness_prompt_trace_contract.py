@@ -36,12 +36,16 @@ class FaithfulnessPromptTraceContractTest(unittest.TestCase):
         call = text.find("FaithfulnessPromptTracePublisher.publishBeforeLlm(")
         projection = text.find("RagFailureBlackboxService.projectCurrentTrace(", call)
         route = text.find("modelRouter.route(", call)
-        chat = text.find("modelForCall.chat(msgs)", call)
+        primary_call = text.find("draft = callWithRetryReportingSuccess(", route)
+        retry_wrapper = text.find("private String callWithRetryReportingSuccess(", primary_call)
+        timed_chat = text.find("TimedChatModelCaller.chat(", retry_wrapper)
 
         self.assertGreater(call, 0, "ChatWorkflow must publish prompt metrics")
         self.assertGreater(projection, call, "scorecard projection should run after metric publish")
         self.assertGreater(route, projection, "metric publish must happen before model routing")
-        self.assertGreater(chat, route, "metric publish must happen before LLM call")
+        self.assertGreater(primary_call, route, "metric publish must happen before the primary LLM call")
+        self.assertGreater(retry_wrapper, primary_call, "primary call must use the retry wrapper")
+        self.assertGreater(timed_chat, retry_wrapper, "retry wrapper must own the timed model invocation")
 
 
 if __name__ == "__main__":

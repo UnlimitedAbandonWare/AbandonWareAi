@@ -66,6 +66,8 @@ class BroadCatchClassifierTest(unittest.TestCase):
             'traceFailure("stage", error);',
             'traceCancelFailure(query, error);',
             'traceSearchPolicyFailure(query, "apply", error);',
+            'traceChatSuppressed("stage", error);',
+            'traceContextFallbackSkipped("stage", error);',
         ]
 
         for body in helper_calls:
@@ -78,6 +80,78 @@ class BroadCatchClassifierTest(unittest.TestCase):
                 )
 
                 self.assertEqual("HAS_BREADCRUMB", block.classify())
+
+    def test_similar_trace_chat_name_is_not_a_breadcrumb(self):
+        block = CatchBlock(
+            "SimilarHelperName.java",
+            10,
+            "catch (Exception error) {",
+            'notraceChatSuppressed("stage", error);',
+        )
+
+        self.assertEqual("GENUINE_SILENT", block.classify())
+
+    def test_qualified_trace_chat_name_is_not_a_verified_breadcrumb(self):
+        block = CatchBlock(
+            "QualifiedHelperName.java",
+            10,
+            "catch (Exception error) {",
+            'other.traceChatSuppressed("stage", error);',
+        )
+
+        self.assertEqual("GENUINE_SILENT", block.classify())
+
+    def test_context_fallback_lookalikes_are_not_verified_breadcrumbs(self):
+        bodies = [
+            'traceContextFallbackSkippedButDoesNothing("stage", error);',
+            'other.traceContextFallbackSkipped("stage", error);',
+        ]
+
+        for body in bodies:
+            with self.subTest(body=body):
+                block = CatchBlock(
+                    "ContextFallbackLookalike.java",
+                    10,
+                    "catch (Exception error) {",
+                    body,
+                )
+
+                self.assertEqual("GENUINE_SILENT", block.classify())
+
+    def test_exact_logger_receivers_and_levels_are_breadcrumbs(self):
+        for receiver in ("log", "LOG", "logger", "LOGGER"):
+            for level in ("info", "warn", "error", "debug", "trace"):
+                with self.subTest(receiver=receiver, level=level):
+                    block = CatchBlock(
+                        "LoggerBreadcrumb.java",
+                        10,
+                        "catch (Exception error) {",
+                        f'{receiver}.{level} ("suppressed", error);',
+                    )
+
+                    self.assertEqual("HAS_BREADCRUMB", block.classify())
+
+    def test_logger_receiver_lookalikes_and_non_calls_are_not_breadcrumbs(self):
+        bodies = [
+            'catalog.warn("suppressed", error);',
+            'mylogger.error("suppressed", error);',
+            'audit.trace("suppressed", error);',
+            'other.log.warn("suppressed", error);',
+            'holder.logger.error("suppressed", error);',
+            'log.warn;',
+            'LOGGER.errorCode;',
+        ]
+
+        for body in bodies:
+            with self.subTest(body=body):
+                block = CatchBlock(
+                    "LoggerLookalike.java",
+                    10,
+                    "catch (Exception error) {",
+                    body,
+                )
+
+                self.assertNotEqual("HAS_BREADCRUMB", block.classify())
 
     def test_rethrowing_catch_is_not_genuine_silent(self):
         block = CatchBlock(
@@ -141,6 +215,33 @@ class BroadCatchClassifierTest(unittest.TestCase):
             blocks = extract_catch_blocks(source)
 
         self.assertEqual([], blocks)
+
+    def test_ignores_catch_syntax_inside_java_literals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "LiteralCatch.java"
+            source.write_text(
+                '''
+                class LiteralCatch {
+                    String normal = "catch (Exception fake) { }";
+                    String textBlock = """
+                        catch (RuntimeException textFake) { }
+                    """;
+
+                    void run() {
+                        try { risky(); }
+                        catch (Exception actual) { traceSuppressed("stage", actual); }
+                    }
+                }
+                ''',
+                encoding="utf-8",
+            )
+
+            blocks = extract_catch_blocks(source)
+
+        self.assertEqual(1, len(blocks))
+        self.assertEqual(10, blocks[0].line)
+        self.assertEqual("actual", blocks[0].var_name)
+        self.assertEqual("HAS_BREADCRUMB", blocks[0].category)
 
 
 if __name__ == "__main__":

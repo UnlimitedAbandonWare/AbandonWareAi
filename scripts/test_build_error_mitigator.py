@@ -27,6 +27,47 @@ class BuildErrorMitigatorRedactionTest(unittest.TestCase):
         self.assertGreater(summary["errorLength"], 0)
         self.assertNotIn(secret, str(summary))
 
+    def test_partial_dependency_injection_adds_only_missing_snippets(self):
+        mitigator = load_module()
+        cases = (
+            (
+                "groovy",
+                mitigator.patch_groovy,
+                "compileOnly 'example:annotations:1'",
+                "annotationProcessor 'example:annotations:1'",
+                "tasks.withType(JavaCompile).configureEach",
+            ),
+            (
+                "kotlin",
+                mitigator.patch_kts,
+                'compileOnly("example:annotations:1")',
+                'annotationProcessor("example:annotations:1")',
+                "tasks.withType<JavaCompile>().configureEach",
+            ),
+        )
+
+        for name, patcher, existing, missing, compile_hook in cases:
+            with self.subTest(name=name):
+                original = "\n".join(
+                    (
+                        "plugins {}",
+                        "dependencies {",
+                        "  // injected by build_error_mitigator.py",
+                        f"  {existing}",
+                        "}",
+                        "",
+                    )
+                )
+
+                requested = [existing, missing, missing]
+                patched = patcher(original, requested)
+
+                self.assertEqual(1, patched.count(existing))
+                self.assertEqual(1, patched.count(missing))
+                self.assertEqual(1, patched.count("// injected by build_error_mitigator.py"))
+                self.assertEqual(1, patched.count(compile_hook))
+                self.assertEqual(patched, patcher(patched, requested))
+
 
 if __name__ == "__main__":
     unittest.main()

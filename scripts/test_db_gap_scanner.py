@@ -111,6 +111,12 @@ class DbGapScannerClassificationTest(unittest.TestCase):
                     volatile_storage=["ThreadLocal"],
                 ),
                 ClassInfo(
+                    fqcn="com.example.lms.compat.TraceStore",
+                    simple_name="TraceStore",
+                    file_path="com/example/lms/compat/TraceStore.java",
+                    package="com.example.lms.compat",
+                ),
+                ClassInfo(
                     fqcn="com.example.lms.debug.DebugEventStore",
                     simple_name="DebugEventStore",
                     file_path="com/example/lms/debug/DebugEventStore.java",
@@ -136,12 +142,61 @@ class DbGapScannerClassificationTest(unittest.TestCase):
         )
 
         self.assertTrue(gap.has_db_persistence)
-        self.assertEqual("NDJSON", gap.persistence_type)
-        self.assertEqual("resolved_ndjson", gap.persistence_status)
+        self.assertEqual("NDJSON_TRACE_SNAPSHOT", gap.persistence_type)
+        self.assertEqual("review_ndjson_trace_snapshot", gap.persistence_status)
         self.assertFalse(gap.action_required)
         self.assertEqual([], gap.entities_missing)
         self.assertEqual([], gap.repositories_missing)
         self.assertEqual("LOW", gap.gap_severity)
+        self.assertIn("durable MLA breadcrumb records", gap.gap_details)
+
+    def test_trace_snapshot_exporter_alias_name_does_not_satisfy_s07_ndjson(self):
+        gap = assess_subsystem(
+            "S07_CIH_RAG",
+            SUBSYSTEM_SPECS["S07_CIH_RAG"],
+            [
+                ClassInfo(
+                    fqcn="com.example.lms.search.TraceStore",
+                    simple_name="TraceStore",
+                    file_path="com/example/lms/search/TraceStore.java",
+                    package="com.example.lms.search",
+                    volatile_storage=["ThreadLocal"],
+                ),
+                ClassInfo(
+                    fqcn="com.example.lms.debug.DebugEventStore",
+                    simple_name="DebugEventStore",
+                    file_path="com/example/lms/debug/DebugEventStore.java",
+                    package="com.example.lms.debug",
+                    volatile_storage=["ConcurrentLinkedDeque"],
+                ),
+                ClassInfo(
+                    fqcn="com.example.lms.telemetry.LoggingSseEventPublisher",
+                    simple_name="LoggingSseEventPublisher",
+                    file_path="com/example/lms/telemetry/LoggingSseEventPublisher.java",
+                    package="com.example.lms.telemetry",
+                ),
+                ClassInfo(
+                    fqcn="example.alias.LoggingSseEventPublisher",
+                    simple_name="LoggingSseEventPublisher",
+                    file_path="example/alias/LoggingSseEventPublisher.java",
+                    package="example.alias",
+                ),
+                ClassInfo(
+                    fqcn="example.fake.TraceSnapshotExporter",
+                    simple_name="TraceSnapshotExporter",
+                    file_path="example/fake/TraceSnapshotExporter.java",
+                    package="example.fake",
+                ),
+            ],
+            [],
+            [],
+            {},
+        )
+
+        self.assertFalse(gap.has_db_persistence)
+        self.assertNotEqual("NDJSON_TRACE_SNAPSHOT", gap.persistence_type)
+        self.assertNotEqual("review_ndjson_trace_snapshot", gap.persistence_status)
+        self.assertTrue(gap.action_required)
 
     def test_cfvm_snapshot_satisfies_s02_persistence_contract(self):
         gap = assess_subsystem(
