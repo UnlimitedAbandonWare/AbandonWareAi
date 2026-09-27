@@ -265,8 +265,17 @@ private String memoryProfile;
     public String getSessionId() { return sessionId; }
     public void setSessionId(String sessionId) { this.sessionId = sessionId; }
 
+    public String getQuery() { return query; }
+    public void setQuery(String query) { this.query = query; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+
     public String getCorrected() { return corrected; }
     public void setCorrected(String corrected) { this.corrected = corrected; }
+
+    public String getContent() { return content; }
+    public void setContent(String content) { this.content = content; }
 
     public Integer getHitCount() { return hitCount; }
     public void setHitCount(Integer hitCount) { this.hitCount = hitCount; }
@@ -279,6 +288,9 @@ private String memoryProfile;
 
     public Double getCosineSimilarity() { return cosineSimilarity; }
     public void setCosineSimilarity(Double cosineSimilarity) { this.cosineSimilarity = cosineSimilarity; }
+
+    public Double getScore() { return score; }
+    public void setScore(Double score) { this.score = score; }
 
     public double getQValue() { return qValue; }
     public void setQValue(double qValue) { this.qValue = qValue; }
@@ -297,5 +309,8 @@ private String memoryProfile;
 
     public Double getTemperature() { return temperature; }
     public void setTemperature(Double temperature) { this.temperature = temperature; }
+
+    public MemoryStatus getStatus() { return status; }
+    public void setStatus(MemoryStatus status) { this.status = status; }
 
 }

@@ -425,7 +425,12 @@ public class FileIngestionService {
     private static String truncate(String text) {
         if (text == null) return null;
         if (text.length() > MAX_CHARS) {
-            return text.substring(0, MAX_CHARS) + "\n[TRUNCATED]";
+            int end = MAX_CHARS;
+            if (Character.isHighSurrogate(text.charAt(end - 1))
+                    && Character.isLowSurrogate(text.charAt(end))) {
+                end--;
+            }
+            return text.substring(0, end) + "\n[TRUNCATED]";
         }
         return text;
     }

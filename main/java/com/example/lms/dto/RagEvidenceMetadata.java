@@ -26,7 +26,7 @@ public record RagEvidenceMetadata(
         marker = clean(marker);
         kind = clean(kind);
         title = clean(title);
-        source = clean(source);
+        source = cleanSource(source);
         filePath = clean(filePath);
         confidenceSource = clean(confidenceSource);
         if (confidence != null && !Double.isFinite(confidence)) {
@@ -57,6 +57,23 @@ public record RagEvidenceMetadata(
             return;
         }
         out.put(key, value);
+    }
+
+    private static String cleanSource(String value) {
+        if (value == null) {
+            return null;
+        }
+        String s = value.replace('\u0000', ' ').replaceAll("\\s+", " ").trim();
+        String safe = SafeRedactor.safeMessage(s, 1000);
+        if (s.isEmpty() || !s.equals(safe)) {
+            return null;
+        }
+        try {
+            java.net.URI.create(safe);
+            return safe;
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
     }
 
     private static String clean(String value) {

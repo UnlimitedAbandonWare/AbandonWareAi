@@ -1,8 +1,6 @@
 package com.example.lms.entity;
 
 import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.Setter;
 
 import java.time.LocalDateTime;
 
@@ -24,8 +22,6 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_vqdlq_created", columnList = "created_at")
         }
 )
-@Getter
-@Setter
 public class VectorQuarantineDlq {
 
     public enum Status {
@@ -115,4 +111,61 @@ public class VectorQuarantineDlq {
     void preUpdate() {
         this.updatedAt = LocalDateTime.now();
     }
+
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
+
+    public String getDedupeKey() { return dedupeKey; }
+    public void setDedupeKey(String dedupeKey) { this.dedupeKey = dedupeKey; }
+
+    public String getQuarantineVectorId() { return quarantineVectorId; }
+    public void setQuarantineVectorId(String quarantineVectorId) { this.quarantineVectorId = quarantineVectorId; }
+
+    public String getOriginalVectorId() { return originalVectorId; }
+    public void setOriginalVectorId(String originalVectorId) { this.originalVectorId = originalVectorId; }
+
+    public String getOriginalSid() { return originalSid; }
+    public void setOriginalSid(String originalSid) { this.originalSid = originalSid; }
+
+    public String getOriginalSidBase() { return originalSidBase; }
+    public void setOriginalSidBase(String originalSidBase) { this.originalSidBase = originalSidBase; }
+
+    public String getQuarantineReason() { return quarantineReason; }
+    public void setQuarantineReason(String quarantineReason) { this.quarantineReason = quarantineReason; }
+
+    public String getPayload() { return payload; }
+    public void setPayload(String payload) { this.payload = payload; }
+
+    public String getMetaJson() { return metaJson; }
+    public void setMetaJson(String metaJson) { this.metaJson = metaJson; }
+
+    public Status getStatus() { return status; }
+    public void setStatus(Status status) { this.status = status; }
+
+    public int getAttemptCount() { return attemptCount; }
+    public void setAttemptCount(int attemptCount) { this.attemptCount = attemptCount; }
+
+    public LocalDateTime getNextAttemptAt() { return nextAttemptAt; }
+    public void setNextAttemptAt(LocalDateTime nextAttemptAt) { this.nextAttemptAt = nextAttemptAt; }
+
+    public LocalDateTime getLastAttemptAt() { return lastAttemptAt; }
+    public void setLastAttemptAt(LocalDateTime lastAttemptAt) { this.lastAttemptAt = lastAttemptAt; }
+
+    public String getLastError() { return lastError; }
+    public void setLastError(String lastError) { this.lastError = lastError; }
+
+    public LocalDateTime getLockedAt() { return lockedAt; }
+    public void setLockedAt(LocalDateTime lockedAt) { this.lockedAt = lockedAt; }
+
+    public String getLockedBy() { return lockedBy; }
+    public void setLockedBy(String lockedBy) { this.lockedBy = lockedBy; }
+
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }
