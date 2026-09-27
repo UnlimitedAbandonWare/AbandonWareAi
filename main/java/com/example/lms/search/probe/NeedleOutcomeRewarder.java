@@ -53,6 +53,7 @@ public class NeedleOutcomeRewarder {
                 reward, contribution.isEffective(),
                 contribution.docsUsedInTopN(), contribution.qualityDelta());
 
+        recordOutcome(contribution, reward);
         return reward;
     }
 

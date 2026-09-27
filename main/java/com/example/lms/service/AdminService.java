@@ -42,8 +42,24 @@ public class AdminService {
      * @return 생성되었거나 이미 존재하는 관리자 엔티티
      */
     public Administrator createIfAbsent(String username, String rawPw, String name) {
-        return repo.findByUsername(username)
-                .orElseGet(() -> this.create(username, rawPw, name));
+        String normalized = username == null ? "" : username.trim();
+        return repo.findByUsername(normalized)
+                .map(existing -> {
+                    // 이미 존재하는 계정은 덮어쓰지 않되, 요청한 부트스트랩 비밀과
+                    // 일치하는지 BCrypt로 검증해 로그만으로는 판정하지 않게 한다.
+                    boolean passwordMatches = rawPw != null
+                            && !rawPw.isBlank()
+                            && encoder.matches(rawPw, existing.getPassword());
+                    log.info("[bootstrap] admin account status={} usernameHash={}",
+                            passwordMatches ? "ALREADY_EXISTS_MATCH" : "EXISTING_ACCOUNT_CONFLICT",
+                            com.example.lms.trace.SafeRedactor.hash12(normalized));
+                    return existing;
+                })
+                .orElseGet(() -> {
+                    log.info("[bootstrap] admin account status=CREATED usernameHash={}",
+                            com.example.lms.trace.SafeRedactor.hash12(normalized));
+                    return this.create(normalized, rawPw, name);
+                });
     }
 
     /* ───────── ID 조회 ───────── */

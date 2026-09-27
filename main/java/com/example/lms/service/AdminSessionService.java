@@ -16,6 +16,8 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Service;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -64,12 +66,14 @@ public class AdminSessionService {
         String sig     = hmacSha256(payload, signingSecret);
         String token   = Base64.getUrlEncoder().encodeToString((payload + "|" + sig).getBytes(StandardCharsets.UTF_8));
 
-        Cookie c = new Cookie(COOKIE_NAME, token);
-        c.setMaxAge((int) (VALIDITY_MS / 1000));  // 24h
-        c.setPath("/");
-        c.setHttpOnly(true);
-        // 필요 시 c.setSecure(true);
-        res.addCookie(c);
+        ResponseCookie c = ResponseCookie.from(COOKIE_NAME, token)
+                .maxAge(VALIDITY_MS / 1000)
+                .path("/")
+                .httpOnly(true)
+                .secure(true)
+                .sameSite("Lax")
+                .build();
+        res.addHeader(HttpHeaders.SET_COOKIE, c.toString());
         log.info("[AWX][admin-session] token-cookie-issued usernamePresent={}",
                 username != null && !username.isBlank());
     }

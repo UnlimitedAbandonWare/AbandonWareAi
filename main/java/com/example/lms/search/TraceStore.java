@@ -46,6 +46,8 @@ public final class TraceStore {
     private static final String TRACE_POOL_ITEMS_KEY = "tracePool.items";
     private static final String TRACE_POOL_RESCUE_ITEMS_KEY =
             "web.failsoft.hybridEmptyFallback.cacheOnly.rescueMerge.tracePool.items";
+    private static final String MLA_BREADCRUMBS_KEY = "ml.breadcrumbs.v1";
+    private static final String MLA_BREADCRUMB_COUNT_KEY = "cihRag.mlaBreadcrumbCount";
 
     private TraceStore() {
     }
@@ -62,6 +64,50 @@ public final class TraceStore {
             return;
         }
         TRACE.set(ctx);
+    }
+
+    private static final Set<String> SEARCH_CORRELATION_KEYS = Set.of(
+            "retrievalExecutionId", "searchExecutionId", "providerAttemptId");
+
+    /** Immutable invocation bindings travel with the existing captured context, not a new ThreadLocal.
+     * Legacy scalar writes still reach the caller and respect HybridSearchExecution's late-write cutoff.
+     */
+    public static Map<String, Object> searchContext(Map<String, Object> parent, String key) {
+        if (!SEARCH_CORRELATION_KEYS.contains(key)) throw new IllegalArgumentException("unsupported search scope");
+        String id = SafeRedactor.hashValue(java.util.UUID.randomUUID().toString());
+        return new java.util.AbstractMap<>() {
+            @Override public Object get(Object k) { return key.equals(k) ? id : parent.get(k); }
+            @Override public Object put(String k, Object v) { return key.equals(k) ? id : parent.put(k, v); }
+            @Override public Object remove(Object k) { return key.equals(k) ? id : parent.remove(k); }
+            @Override public Object putIfAbsent(String k, Object v) { return key.equals(k) ? id : parent.putIfAbsent(k, v); }
+            @Override public Object compute(String k, java.util.function.BiFunction<? super String, ? super Object, ?> f) {
+                return key.equals(k) ? id : parent.compute(k, f);
+            }
+            @Override public Object computeIfAbsent(String k, java.util.function.Function<? super String, ?> f) {
+                return key.equals(k) ? id : parent.computeIfAbsent(k, f);
+            }
+            @Override public Set<Entry<String, Object>> entrySet() {
+                Map<String, Object> view = new HashMap<>(parent);
+                view.put(key, id);
+                return java.util.Collections.unmodifiableMap(view).entrySet();
+            }
+        };
+    }
+
+    public static <T> T withSearchContext(String key, java.util.function.Supplier<T> action) {
+        Map<String, Object> previous = context();
+        installContext(searchContext(previous, key));
+        try { return action.get(); }
+        finally { installContext(previous); }
+    }
+
+    public static Map<String, Object> searchCorrelation(Map<String, Object> context) {
+        Map<String, Object> ids = new HashMap<>();
+        for (String key : SEARCH_CORRELATION_KEYS) {
+            Object value = context.get(key);
+            if (value instanceof String id && id.matches("hash:[a-f0-9]{12}")) ids.put(key, id);
+        }
+        return Map.copyOf(ids);
     }
 
     public static void put(String key, Object value) {
@@ -181,7 +227,22 @@ public final class TraceStore {
             return;
         }
         Map<String, Object> m = TRACE.get();
-        m.compute(key, (k, cur) -> {
+        if ("web.naver.filter.runs".equals(key) || "web.brave.attempt.runs".equals(key) || "web.tavily.attempt.runs".equals(key) || "web.serpapi.attempt.runs".equals(key)) {
+            boolean[] dropped = {false};
+            m.compute(key, (k, cur) -> {
+                List<Object> rows = new java.util.ArrayList<>();
+                if (cur instanceof List<?> prior) rows.addAll(prior);
+                if (rows.size() >= 128) {
+                    rows.remove(0);
+                    dropped[0] = true;
+                }
+                rows.add(value instanceof Map<?, ?> row ? Map.copyOf(row) : value);
+                return List.copyOf(rows);
+            });
+            if (dropped[0]) m.compute(key + ".dropped", (ignored, count) -> count instanceof Number n ? n.longValue() + 1 : 1L);
+            return;
+        }
+        Object appended = m.compute(key, (k, cur) -> {
             if (cur == null) {
                 CopyOnWriteArrayList list = new CopyOnWriteArrayList();
                 list.add(value);
@@ -201,6 +262,10 @@ public final class TraceStore {
             list.add(value);
             return list;
         });
+        if (MLA_BREADCRUMBS_KEY.equals(key)) {
+            int count = appended instanceof java.util.Collection<?> rows ? rows.size() : 1;
+            maxLong(MLA_BREADCRUMB_COUNT_KEY, count);
+        }
     }
 
     private static List<Object> poolItems(String key) {

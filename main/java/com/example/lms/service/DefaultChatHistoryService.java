@@ -51,6 +51,12 @@ public class DefaultChatHistoryService implements ChatHistoryService {
     }
 
     @Override
+    public void updateSessionMeta(Long sessionId, java.util.Map<String, Object> meta) {
+        log.debug("[ChatHistory] updateSessionMeta sessionHash={}, keyCount={} (shim)",
+                hashSession(sessionId), meta == null ? 0 : meta.size());
+    }
+
+    @Override
     public List<ChatSession> getAllSessionsForAdmin() {
         log.debug("[ChatHistory] getAllSessionsForAdmin -> []");
         return Collections.emptyList();

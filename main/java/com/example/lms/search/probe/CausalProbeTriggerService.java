@@ -57,15 +57,31 @@ public class CausalProbeTriggerService {
         return projectCurrentTrace(goal, where, blackbox, recent);
     }
 
+    public Decision projectCurrentTrace(String goal, String where, ProbeConstraints constraints) {
+        Map<String, Object> trace = snapshotTrace();
+        RagFailureBlackboxService.Snapshot blackbox = currentBlackbox(where, trace);
+        List<FailurePatternMatch> recent = recentFailurePatterns();
+        return projectCurrentTrace(goal, where, blackbox, recent, constraints);
+    }
+
     public Decision projectCurrentTrace(
             String goal,
             String where,
             RagFailureBlackboxService.Snapshot blackbox,
             List<FailurePatternMatch> recentFailures) {
+        return projectCurrentTrace(goal, where, blackbox, recentFailures, null);
+    }
+
+    public Decision projectCurrentTrace(
+            String goal,
+            String where,
+            RagFailureBlackboxService.Snapshot blackbox,
+            List<FailurePatternMatch> recentFailures,
+            ProbeConstraints constraints) {
         Map<String, Object> trace = snapshotTrace();
-        Decision decision = evaluate(goal, trace, blackbox, recentFailures);
+        Decision decision = evaluate(goal, trace, blackbox, recentFailures, constraints);
         writeTrace(goal, where, decision);
-        emitDebug(where, decision);
+        emitDebug(goal, where, decision);
         return decision;
     }
 
@@ -74,6 +90,15 @@ public class CausalProbeTriggerService {
             Map<String, Object> trace,
             RagFailureBlackboxService.Snapshot blackbox,
             List<FailurePatternMatch> recentFailures) {
+        return evaluate(goal, trace, blackbox, recentFailures, null);
+    }
+
+    static Decision evaluate(
+            String goal,
+            Map<String, Object> trace,
+            RagFailureBlackboxService.Snapshot blackbox,
+            List<FailurePatternMatch> recentFailures,
+            ProbeConstraints constraints) {
         Map<String, Object> safeTrace = trace == null ? Map.of() : trace;
         RagFailureBlackboxService.Snapshot snapshot = blackbox == null
                 ? RagFailureBlackboxService.analyze(safeTrace)
@@ -95,10 +120,11 @@ public class CausalProbeTriggerService {
 
         String triggerReason = triggerReason(sampleCount, agreeingAxes, confidence);
         boolean ready = "axis_agreement".equals(triggerReason);
-        String patchCandidate = patchCandidate(dominant, snapshot);
-        String action = ready && !"provider_disabled".equals(dominant)
+        String proposedPatchCandidate = patchCandidate(dominant, snapshot);
+        String proposedAction = ready && !"provider_disabled".equals(dominant)
                 ? "source_patch_candidate"
                 : "observe_only";
+        PolicyOutcome policy = applyConstraints(proposedPatchCandidate, proposedAction, constraints);
 
         return new Decision(
                 sampleCount,
@@ -107,9 +133,33 @@ public class CausalProbeTriggerService {
                 dominant,
                 hotspot,
                 round4(confidence),
-                patchCandidate,
-                action,
-                agreeingAxes);
+                policy.patchCandidate(),
+                policy.action(),
+                agreeingAxes,
+                policy.decision(),
+                constraintHash(constraints));
+    }
+
+    private static PolicyOutcome applyConstraints(
+            String patchCandidate,
+            String action,
+            ProbeConstraints constraints) {
+        if (!"source_patch_candidate".equals(action)) {
+            return new PolicyOutcome(patchCandidate, action, "not_applicable");
+        }
+        if (constraints == null) {
+            return new PolicyOutcome("observe_only", "observe_only", "constraints_missing");
+        }
+        if (constraints.stopRequested()) {
+            return new PolicyOutcome("observe_only", "observe_only", "operator_stop");
+        }
+        if (constraints.forbiddenActions().contains(action)) {
+            return new PolicyOutcome("observe_only", "observe_only", "action_forbidden");
+        }
+        if (!constraints.allowedPatchCandidates().contains(patchCandidate)) {
+            return new PolicyOutcome("observe_only", "observe_only", "candidate_out_of_scope");
+        }
+        return new PolicyOutcome(patchCandidate, action, "allowed");
     }
 
     private static void addBlackboxAxis(Map<String, Set<String>> axes, RagFailureBlackboxService.Snapshot snapshot) {
@@ -338,6 +388,10 @@ public class CausalProbeTriggerService {
             TraceStore.put(PREFIX + "confidence", decision.confidence());
             TraceStore.put(PREFIX + "patchCandidate", safeLabel(decision.patchCandidate(), "observe_only"));
             TraceStore.put(PREFIX + "action", safeLabel(decision.action(), "observe_only"));
+            TraceStore.put(PREFIX + "policyDecision", safeLabel(decision.policyDecision(), "unknown"));
+            TraceStore.put(PREFIX + "constraintHash", safeLabel(decision.constraintHash(), "none"));
+            TraceStore.put(PREFIX + "decisionAuthority", "probe_only");
+            TraceStore.put(PREFIX + "verificationGatePassed", false);
             TraceStore.put(PREFIX + "axisCount", Math.max(0, decision.axisCount()));
             TraceStore.put(PREFIX + "where", safeLabel(where, "unknown"));
         } catch (Throwable t) {
@@ -345,7 +399,7 @@ public class CausalProbeTriggerService {
         }
     }
 
-    private void emitDebug(String where, Decision decision) {
+    private void emitDebug(String goal, String where, Decision decision) {
         if (decision == null || !decision.evidenceReady()) {
             return;
         }
@@ -361,6 +415,11 @@ public class CausalProbeTriggerService {
             data.put("confidence", decision.confidence());
             data.put("patchCandidate", safeLabel(decision.patchCandidate(), "observe_only"));
             data.put("action", safeLabel(decision.action(), "observe_only"));
+            data.put("policyDecision", safeLabel(decision.policyDecision(), "unknown"));
+            data.put("decisionAuthority", "probe_only");
+            data.put("verificationGatePassed", false);
+            data.put("constraintHash", safeLabel(decision.constraintHash(), "none"));
+            data.put("goalHash", goalHash(goal));
             data.put("triggerReason", safeLabel(decision.triggerReason(), "unknown"));
             data.put("axisCount", Math.max(0, decision.axisCount()));
             store.emit(
@@ -577,6 +636,34 @@ public class CausalProbeTriggerService {
         return Math.round(clamp01(value) * 10_000.0d) / 10_000.0d;
     }
 
+    private static String constraintHash(ProbeConstraints constraints) {
+        if (constraints == null) {
+            return "none";
+        }
+        List<String> allowed = new ArrayList<>(constraints.allowedPatchCandidates());
+        List<String> forbidden = new ArrayList<>(constraints.forbiddenActions());
+        allowed.sort(String::compareTo);
+        forbidden.sort(String::compareTo);
+        String hash = SafeRedactor.hashValue(
+                String.join(",", allowed) + "|" + String.join(",", forbidden)
+                        + "|" + constraints.stopRequested() + "|" + constraints.stopReasonHash());
+        return hash == null ? "none" : hash;
+    }
+
+    private static Set<String> safeLabels(Collection<String> values) {
+        if (values == null || values.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> safe = new LinkedHashSet<>();
+        for (String value : values) {
+            String label = safeLabel(value, "none");
+            if (!"none".equals(label)) {
+                safe.add(label);
+            }
+        }
+        return Set.copyOf(safe);
+    }
+
     private static void traceSuppressed(String stage, Throwable error) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
         String errorType = error == null ? "unknown" : error.getClass().getSimpleName();
@@ -593,6 +680,37 @@ public class CausalProbeTriggerService {
             double confidence,
             String patchCandidate,
             String action,
-            int axisCount) {
+            int axisCount,
+            String policyDecision,
+            String constraintHash) {
+    }
+
+    public record ProbeConstraints(
+            Set<String> allowedPatchCandidates,
+            Set<String> forbiddenActions,
+            boolean stopRequested,
+            String stopReasonHash) {
+
+        public ProbeConstraints {
+            allowedPatchCandidates = safeLabels(allowedPatchCandidates);
+            forbiddenActions = safeLabels(forbiddenActions);
+            stopReasonHash = safeLabel(stopReasonHash, "none");
+        }
+
+        public static ProbeConstraints allowOnly(String... candidates) {
+            return new ProbeConstraints(
+                    candidates == null ? Set.of() : Set.of(candidates),
+                    Set.of(),
+                    false,
+                    "none");
+        }
+
+        public static ProbeConstraints stop(String reason) {
+            String hash = SafeRedactor.hashValue(reason);
+            return new ProbeConstraints(Set.of(), Set.of(), true, hash == null ? "none" : hash);
+        }
+    }
+
+    private record PolicyOutcome(String patchCandidate, String action, String decision) {
     }
 }

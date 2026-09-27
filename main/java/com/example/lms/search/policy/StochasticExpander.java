@@ -3,6 +3,7 @@ package com.example.lms.search.policy;
 import com.abandonware.ai.agent.integrations.TextUtils;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -61,33 +62,36 @@ public final class StochasticExpander {
                     "docs",
                     "guide");
         };
+        if (isAsciiSearchable(q)) {
+            suffixes = suffixes.stream().filter(StochasticExpander::isAsciiSearchable).toList();
+        }
 
         List<String> out = new ArrayList<>();
 
-        // 1) Quote exact phrase (helps precision) - only when short enough.
+        // Quote exact phrase to preserve conservative verification before broader facets.
         if (q.length() <= 80 && q.contains(" ")) {
             out.add('"' + q + '"');
         }
 
-        // 2) Add suffix expansions
         int budget = maxExpansions;
         while (budget > 0 && out.size() < maxExpansions) {
-            String suf = suffixes.get(rnd.nextInt(suffixes.size()));
-            String candidate = q + " " + suf;
+            String suffix = suffixes.get(rnd.nextInt(suffixes.size()));
+            String candidate = q + " " + suffix;
             if (!equalsLoose(candidate, q)) {
                 out.add(candidate);
             }
             budget--;
         }
 
-        // 3) Token-focused variants
-        List<String> toks = TextUtils.tokenize(q);
-        if (!toks.isEmpty() && out.size() < maxExpansions) {
-            int take = Math.min(4, toks.size());
+        List<String> tokens = TextUtils.tokenize(q);
+        if (!tokens.isEmpty() && out.size() < maxExpansions) {
+            int take = Math.min(4, tokens.size());
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < take; i++) {
-                if (i > 0) sb.append(' ');
-                sb.append(toks.get(i));
+                if (i > 0) {
+                    sb.append(' ');
+                }
+                sb.append(tokens.get(i));
             }
             String tokenQuery = sb.toString();
             if (!tokenQuery.isBlank() && !equalsLoose(tokenQuery, q)) {
@@ -95,34 +99,92 @@ public final class StochasticExpander {
             }
         }
 
-        // Trim to maxExpansions
         if (out.size() > maxExpansions) {
             return List.copyOf(out.subList(0, maxExpansions));
         }
         return List.copyOf(out);
     }
 
+    static List<String> expandCreative(
+            String query,
+            SearchPolicyMode mode,
+            int maxExpansions,
+            String requestedOptionsHash) {
+        String q = Objects.toString(query, "").trim();
+        if (q.isBlank() || maxExpansions <= 0) {
+            return List.of();
+        }
+        List<String> suffixes = new ArrayList<>(suffixes(mode));
+        Collections.shuffle(suffixes, new Random(stableSeedFromOptions(requestedOptionsHash, mode)));
+        List<String> out = new ArrayList<>();
+        for (String suffix : suffixes) {
+            String candidate = q + " " + suffix;
+            if (!equalsLoose(candidate, q)) {
+                out.add(candidate);
+            }
+            if (out.size() >= maxExpansions) {
+                break;
+            }
+        }
+        return List.copyOf(out);
+    }
+
     private static long stableSeed(String q, SearchPolicyMode mode) {
         String key = mode.name() + "|" + q.toLowerCase(Locale.ROOT);
-        String h = TextUtils.sha1(key);
-        // Use lower 16 hex chars as a signed long-ish seed.
+        String hash = TextUtils.sha1(key);
         long seed = 0L;
-        for (int i = Math.max(0, h.length() - 16); i < h.length(); i++) {
-            char c = h.charAt(i);
+        for (int i = Math.max(0, hash.length() - 16); i < hash.length(); i++) {
+            char c = hash.charAt(i);
             int v;
-            if (c >= '0' && c <= '9') v = (c - '0');
-            else if (c >= 'a' && c <= 'f') v = 10 + (c - 'a');
-            else if (c >= 'A' && c <= 'F') v = 10 + (c - 'A');
-            else v = 0;
+            if (c >= '0' && c <= '9') {
+                v = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                v = 10 + (c - 'a');
+            } else if (c >= 'A' && c <= 'F') {
+                v = 10 + (c - 'A');
+            } else {
+                v = 0;
+            }
             seed = (seed << 4) ^ v;
         }
         return seed;
     }
 
+    private static long stableSeedFromOptions(String requestedOptionsHash, SearchPolicyMode mode) {
+        String safeHash = Objects.toString(requestedOptionsHash, "hash:unknown");
+        return stableSeed(safeHash, mode == null ? SearchPolicyMode.OFF : mode);
+    }
+
+    private static List<String> suffixes(SearchPolicyMode mode) {
+        return switch (mode == null ? SearchPolicyMode.OFF : mode) {
+            case PRECISION -> List.of("official docs", "documentation", "release notes", "spec", "primary source");
+            case RECALL -> List.of("summary", "guide", "implementation guide", "usage examples", "tutorial",
+                    "examples", "docs", "reference", "release notes", "changelog", "counterexample", "failure modes");
+            case DISAMBIGUATE -> List.of("meaning", "definition", "overview", "what is", "difference", "vs",
+                    "compare", "comparison");
+            case BALANCED, OFF -> List.of("summary", "guide", "docs", "overview", "examples", "counterexample");
+        };
+    }
+
     private static boolean equalsLoose(String a, String b) {
-        if (a == null || b == null) return false;
+        if (a == null || b == null) {
+            return false;
+        }
         String na = a.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
         String nb = b.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
         return na.equals(nb);
+    }
+
+    private static boolean isAsciiSearchable(String value) {
+        if (value == null) {
+            return true;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (ch < 32 || ch > 126) {
+                return false;
+            }
+        }
+        return true;
     }
 }

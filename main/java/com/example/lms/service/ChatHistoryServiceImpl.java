@@ -15,22 +15,30 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import com.example.lms.domain.enums.MemoryProfile;
 import com.example.lms.trace.SafeRedactor;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 @Primary
 @RequiredArgsConstructor
 public class ChatHistoryServiceImpl implements ChatHistoryService {
     private static final Logger log = LoggerFactory.getLogger(ChatHistoryServiceImpl.class);
+    private static final long MAX_SESSIONS_PER_OWNER = 200L;
+    private final Object sessionQuotaReservationLock = new Object();
+    private final Map<String, Integer> pendingSessionCreatesByOwnerHash = new HashMap<>();
 
     private static void traceSuppressed(String stage, Throwable failure) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
@@ -59,6 +67,17 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     private final AdministratorRepository administratorRepository;
 
     private final ObjectMapper objectMapper;
+
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
+    private ChatSession lockedSession(Long sessionId) {
+        ChatSession session = sessionRepository.findByIdForUpdate(sessionId).orElse(null);
+        if (session != null && entityManager != null) {
+            entityManager.refresh(session, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        }
+        return session;
+    }
 
     private final com.example.lms.web.ClientOwnerKeyResolver ownerKeyResolver;
     @org.springframework.beans.factory.annotation.Value("${history.skip-weak-assistant:false}")
@@ -210,34 +229,47 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     public Optional<ChatSession> startNewSession(String firstMessage, String username, String clientIp) {
         // Allow both admin-owned and guest sessions.
         String safe = java.util.Objects.toString(firstMessage, "");
-        String title = safe.length() > 20 ? safe.substring(0, 20) + "/* ... */" : safe;
+        String title = safe.length() > 20 ? safe.substring(0, 20) + "..." : safe;
 
         ChatSession session;
 
         if (isGuest(username)) {
             // 게스트 세션: 쿠키 → IP 해시 → UUID 순으로 ownerKey 결정
             String ownerKey = resolveGuestOwnerKey(clientIp);
-
-            session = new ChatSession(title);
-            session.setOwnerKey(ownerKey);
-            session.setOwnerType("ANON");
-            session = sessionRepository.save(session);
+            try (SessionQuotaReservation ignored = reserveSessionQuota(null, ownerKey)) {
+                session = new ChatSession(title);
+                session.setOwnerKey(ownerKey);
+                session.setOwnerType("ANON");
+                session = saveSessionWithinQuota(session, null, ownerKey);
+                ChatMessage initialMessage = messageRepository.save(new ChatMessage(session, "user", safe));
+                session.setInitialUserMessageId(initialMessage == null ? null : initialMessage.getId());
+            }
 
             log.info("익명 게스트 세션 시작 (Hybrid): ownerKeyHash={} titleHash={} titleLength={} sessionHash={}",
                     hash12(ownerKey), hash12(title), title.length(), hash12(String.valueOf(session.getId())));
         } else {
-            Administrator admin = administratorRepository.findByUsername(username)
-                    .orElseThrow(() -> new IllegalArgumentException("admin_not_found adminHash=" + hash12(username)));
-            session = sessionRepository.save(new ChatSession(title, admin));
+            try (SessionQuotaReservation ignored = reserveSessionQuota(username, null)) {
+                Administrator admin = administratorRepository.findByUsername(username)
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "admin_not_found adminHash=" + hash12(username)));
+                session = saveSessionWithinQuota(new ChatSession(title, admin), username, null);
+                ChatMessage initialMessage = messageRepository.save(new ChatMessage(session, "user", safe));
+                session.setInitialUserMessageId(initialMessage == null ? null : initialMessage.getId());
+            }
             log.info("adminHash={} 관리자가 세션을 시작했습니다. titleHash={} titleLength={} sessionHash={}",
                     hash12(username), hash12(title), title.length(), hash12(String.valueOf(session.getId())));
         }
 
-        // 첫 사용자 메시지 즉시 저장
-        save(new ChatMessage(session, "user", safe));
         log.debug("sessionHash={}: first user message stored", hash12(String.valueOf(session.getId())));
 
         return Optional.of(session);
+    }
+
+    @Transactional
+    public ChatSession createEmptyAnonymousSession(String title, String ownerKey) {
+        try (SessionQuotaReservation ignored = reserveSessionQuota(null, ownerKey)) {
+            return saveSessionWithinQuota(new ChatSession(title, ownerKey, "ANON"), null, ownerKey);
+        }
     }
 
     /* -------------------- Message utilities -------------------- */
@@ -343,7 +375,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     public void updateSessionAnswerModeAndTrace(Long sessionId, String answerMode, Long traceTurnId) {
         if (sessionId == null) return;
 
-        ChatSession session = sessionRepository.findById(sessionId).orElse(null);
+        ChatSession session = lockedSession(sessionId);
         if (session == null) return;
 
         String mode = (answerMode != null && !answerMode.isBlank()) ? answerMode.trim() : null;
@@ -362,7 +394,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 if (meta == null) meta = new java.util.LinkedHashMap<>();
             } catch (Exception ignore) {
                 traceSuppressed("history.answerMeta.read", ignore);
-                meta = new java.util.LinkedHashMap<>();
+                return; // Do not erase a policy epoch hidden by malformed metadata.
             }
         }
 
@@ -390,27 +422,74 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         }
     }
 
+    @Override
+    @Transactional
+    public void updateSessionMeta(Long sessionId, java.util.Map<String, Object> meta) {
+        if (sessionId == null) return;
+
+        ChatSession session = lockedSession(sessionId);
+        if (session == null) return;
+
+        try {
+            java.util.Map<String, Object> current =
+                    com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.readMetadata(
+                            objectMapper, session.getSessionMeta());
+            java.util.Map<String, Object> safeMeta =
+                    com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.preserveEpoch(current, meta);
+            session.setSessionMeta(objectMapper.writeValueAsString(safeMeta));
+            sessionRepository.save(session);
+        } catch (Exception ignore) {
+            traceSuppressed("history.sessionMeta.update", ignore);
+        }
+    }
+
     /* -------------------- Query helpers -------------------- */
 
     @Override
     @Transactional(readOnly = true)
     public List<ChatSession> getAllSessionsForAdmin() {
-        return sessionRepository.findAllByOrderByCreatedAtDesc();
+        return getAllSessionsForAdmin(DEFAULT_SESSION_LIST_LIMIT);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatSession> getAllSessionsForAdmin(int requestedLimit) {
+        int limit = ChatHistoryService.clampSessionListLimit(requestedLimit);
+        return sessionRepository.findAllByOrderByCreatedAtDesc(
+                org.springframework.data.domain.PageRequest.of(0, limit));
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ChatSession> getSessionsForUser(String username) {
         // 레거시 호출은 IP 정보를 모름 → null 전달
-        return getSessionsForUser(username, null);
+        return getSessionsForUser(username, null, DEFAULT_SESSION_LIST_LIMIT);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatSession> getSessionsForUser(String username, int requestedLimit) {
+        return getSessionsForUser(username, null, requestedLimit);
     }
 
     // MERGE_HOOK:PROJ_AGENT::JAMMINI_PROJECTION_V1
     @Transactional(readOnly = true)
     public List<ChatSession> getSessionsForUser(String username, String clientIp) {
+        return getSessionsForUser(username, clientIp, DEFAULT_SESSION_LIST_LIMIT);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatSession> getSessionsForUser(
+            String username,
+            String clientIp,
+            int requestedLimit) {
+        int limit = ChatHistoryService.clampSessionListLimit(requestedLimit);
         // 로그인 사용자 (관리자 포함)
         if (!isGuest(username)) {
-            return sessionRepository.findByAdministrator_UsernameOrderByCreatedAtDesc(username);
+            return sessionRepository.findByAdministrator_UsernameOrderByCreatedAtDesc(
+                    username,
+                    org.springframework.data.domain.PageRequest.of(0, limit));
         }
 
         java.util.Set<String> keys = new java.util.LinkedHashSet<>();
@@ -446,9 +525,11 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         log.debug("getSessionsForUser (guest): keyCount={} keyHashes={}",
                 keys.size(), keys.stream().map(ChatHistoryServiceImpl::hash12).toList());
 
-        java.util.List<ChatSession> sessions = sessionRepository.findByOwnerKeyInOrderByCreatedAtDesc(keys);
+        java.util.List<ChatSession> sessions = sessionRepository.findByOwnerKeyInOrderByCreatedAtDesc(
+                keys,
+                org.springframework.data.domain.PageRequest.of(0, limit));
         sessions.sort(java.util.Comparator.comparing(ChatSession::getCreatedAt).reversed());
-        return sessions;
+        return sessions.size() <= limit ? sessions : new java.util.ArrayList<>(sessions.subList(0, limit));
     }
 
     public ChatSession getSessionWithMessages(Long id) {
@@ -468,9 +549,31 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public ChatSession getSessionWithMessages(Long id, int requestedLimit) {
+        ChatSession session = sessionRepository.findById(id).orElse(null);
+        if (session == null) {
+            log.warn("getSessionWithMessages: sessionHash={} not found; returning null", hash12(String.valueOf(id)));
+            return null;
+        }
+
+        int limit = ChatHistoryService.clampSessionDetailLimit(requestedLimit);
+        List<ChatMessage> list = new java.util.ArrayList<>(
+                messageRepository.findNewestWindowBySessionId(
+                        id,
+                        org.springframework.data.domain.PageRequest.of(0, limit)));
+        list.sort(Comparator
+                .comparing(ChatMessage::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(ChatMessage::getId, Comparator.nullsLast(Comparator.naturalOrder())));
+        session.setMessages(list);
+        return session;
+    }
+
+    @Override
     @Transactional
     public void deleteSession(Long id) {
-        sessionRepository.deleteById(id);
+        ChatSession session = lockedSession(id);
+        if (session != null) sessionRepository.delete(session);
         log.info("세션 {} 삭제 완료", id);
     }
 
@@ -481,17 +584,30 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     public List<String> getFormattedRecentHistory(Long sessionId, int limit) {
         if (sessionId == null)
             return List.of();
-        List<ChatMessage> all = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        List<ChatMessage> visible = all.stream()
-                // [FIX] Exclude TRACE/USUM/RSUM meta messages before applying the limit
-                // so summary rows at the tail do not starve real conversation turns.
-                .filter(m -> {
-                    String c = (m.getContent() == null ? "" : m.getContent());
-                    return !isMetaMessage(c);
-                })
-                .toList();
-        int from = Math.max(0, visible.size() - Math.max(1, limit));
-        return visible.subList(from, visible.size()).stream()
+        int requestedLimit = Math.max(1, limit);
+        int pageSize = ChatHistoryService.clampSessionDetailLimit(requestedLimit);
+        List<ChatMessage> visible = new java.util.ArrayList<>();
+        // Read newest pages until enough real turns are found. Keep the Java
+        // meta predicate so database collation cannot change prefix matching.
+        for (int page = 0; visible.size() < requestedLimit; page++) {
+            List<ChatMessage> window = messageRepository.findNewestWindowBySessionId(
+                    sessionId, org.springframework.data.domain.PageRequest.of(page, pageSize));
+            for (ChatMessage message : window) {
+                if (!isMetaMessage(message.getContent())) {
+                    visible.add(message);
+                    if (visible.size() == requestedLimit) {
+                        break;
+                    }
+                }
+            }
+            if (window.size() < pageSize) {
+                break;
+            }
+        }
+        visible.sort(Comparator
+                .comparing(ChatMessage::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(ChatMessage::getId, Comparator.nullsLast(Comparator.naturalOrder())));
+        return visible.stream()
                 .map(m -> {
                     String rawRole = (m.getRole() == null ? "user" : m.getRole());
                     String r = rawRole.trim().toLowerCase(Locale.ROOT);
@@ -559,8 +675,17 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                     .thenComparing(ChatMessage::getId, Comparator.nullsLast(Comparator.naturalOrder())));
         }
 
-        List<String> lines = delta.stream()
+        List<ChatMessage> selectedDelta = delta.stream()
                 .filter(m -> m != null && m.getId() != null && m.getId() <= effectiveLastId)
+                .toList();
+        if (selectedDelta.isEmpty()) {
+            return;
+        }
+        Long processedLastId = selectedDelta.stream()
+                .map(ChatMessage::getId)
+                .max(Comparator.naturalOrder())
+                .orElseThrow();
+        List<String> lines = selectedDelta.stream()
                 .filter(ChatHistoryServiceImpl::isConversationMessage)
                 .map(ChatHistoryServiceImpl::formatSummaryLine)
                 .filter(s -> s != null && !s.isBlank())
@@ -594,7 +719,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 : "";
 
         java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
-        payload.put("lastMessageId", effectiveLastId);
+        payload.put("lastMessageId", processedLastId);
         payload.put("anchors", anchors);
         payload.put("importantSentences", importantSentences);
         payload.put("turns", turns);
@@ -803,21 +928,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
             return List.of();
         }
         java.util.Map<String, Integer> freq = new java.util.LinkedHashMap<>();
-        try {
-            CharSequence normalized = org.openkoreantext.processor.OpenKoreanTextProcessorJava.normalize(text);
-            scala.collection.Seq<org.openkoreantext.processor.tokenizer.KoreanTokenizer.KoreanToken> tokens =
-                    org.openkoreantext.processor.OpenKoreanTextProcessorJava.tokenize(normalized);
-            List<org.openkoreantext.processor.tokenizer.KoreanTokenizer.KoreanToken> list =
-                    scala.collection.JavaConverters.seqAsJavaList(tokens);
-            for (org.openkoreantext.processor.tokenizer.KoreanTokenizer.KoreanToken token : list) {
-                String pos = token.pos() == null ? "" : token.pos().toString();
-                if ("Noun".equals(pos) || "Alpha".equals(pos) || "Number".equals(pos) || "Hashtag".equals(pos)) {
-                    addAnchorToken(freq, token.text());
-                }
-            }
-        } catch (Throwable ignore) {
-            traceSuppressed("history.anchorTokenizer", ignore);
-        }
+        traceAnchorTokenizerFallback();
         addRegexTokens(freq, text);
         int limit = Math.max(1, maxAnchors);
         return freq.entrySet().stream()
@@ -826,6 +937,11 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 .map(java.util.Map.Entry::getKey)
                 .limit(limit)
                 .toList();
+    }
+
+    private static void traceAnchorTokenizerFallback() {
+        IllegalStateException ignore = new IllegalStateException();
+        traceSuppressed("history.anchorTokenizer", ignore);
     }
 
     private static void addRegexTokens(java.util.Map<String, Integer> freq, String text) {
@@ -1073,22 +1189,26 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 && !preResolvedOwnerKey.isBlank()) {
 
             String safe = Objects.toString(firstMessage, "");
-            String title = safe.length() > 20 ? safe.substring(0, 20) + "/* ... */" : safe;
+            String title = safe.length() > 20 ? safe.substring(0, 20) + "..." : safe;
             String ownerKey = preResolvedOwnerKey.trim();
+            ChatSession session;
+            try (SessionQuotaReservation ignored = reserveSessionQuota(null, ownerKey)) {
+                session = new ChatSession(title);
+                session.setOwnerKey(ownerKey);
+                session.setOwnerType("ANON");
+                if (memoryProfile != null) {
+                    session.setMemoryProfile(memoryProfile);
+                }
+                session = saveSessionWithinQuota(session, null, ownerKey);
 
-            ChatSession session = new ChatSession(title);
-            session.setOwnerKey(ownerKey);
-            session.setOwnerType("ANON");
-            if (memoryProfile != null) {
-                session.setMemoryProfile(memoryProfile);
+                // 첫 사용자 메시지 즉시 저장
+                ChatMessage initialMessage = messageRepository.save(new ChatMessage(session, "user", safe));
+                session.setInitialUserMessageId(initialMessage == null ? null : initialMessage.getId());
             }
-            session = sessionRepository.save(session);
 
             log.info("익명 게스트 세션 시작 (Hybrid): ownerKeyHash={} titleHash={} titleLength={} sessionHash={}",
                     hash12(ownerKey), hash12(title), title.length(), hash12(String.valueOf(session.getId())));
 
-            // 첫 사용자 메시지 즉시 저장
-            save(new ChatMessage(session, "user", safe));
             log.debug("sessionHash={}: first user message stored", hash12(String.valueOf(session.getId())));
 
             return Optional.of(session);
@@ -1121,10 +1241,104 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         }
 
         if (dirty) {
+            Long initialUserMessageId = session.getInitialUserMessageId();
             session = sessionRepository.save(session);
+            session.setInitialUserMessageId(initialUserMessageId);
         }
 
         return Optional.of(session);
+    }
+
+    private SessionQuotaReservation reserveSessionQuota(String username, String ownerKey) {
+        String ownerHash = username != null
+                ? AttachmentOwnerIdentity.forAdministrator(username).hash()
+                : AttachmentOwnerIdentity.forAnonymous(ownerKey).hash();
+        SessionQuotaReservation reservation;
+        synchronized (sessionQuotaReservationLock) {
+            long persisted = sessionCount(username, ownerKey);
+            int pending = pendingSessionCreatesByOwnerHash.getOrDefault(ownerHash, 0);
+            if (persisted + pending >= MAX_SESSIONS_PER_OWNER) {
+                throw new ChatHistoryService.SessionQuotaExceededException();
+            }
+            pendingSessionCreatesByOwnerHash.put(ownerHash, pending + 1);
+            reservation = new SessionQuotaReservation(ownerHash);
+        }
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            reservation.releaseAfterTransactionCompletion();
+        }
+        return reservation;
+    }
+
+    private long sessionCount(String username, String ownerKey) {
+        return username != null
+                ? sessionRepository.countByAdministrator_Username(username)
+                : sessionRepository.countByOwnerKey(ownerKey);
+    }
+
+    private ChatSession saveSessionWithinQuota(
+            ChatSession session,
+            String username,
+            String ownerKey) {
+        try {
+            return sessionRepository.save(session);
+        } catch (org.springframework.dao.DataIntegrityViolationException
+                | org.springframework.dao.OptimisticLockingFailureException conflict) {
+            if (sessionCount(username, ownerKey) >= MAX_SESSIONS_PER_OWNER) {
+                throw new ChatHistoryService.SessionQuotaExceededException();
+            }
+            throw conflict;
+        }
+    }
+
+    private void releaseSessionQuotaReservation(String ownerHash) {
+        synchronized (sessionQuotaReservationLock) {
+            int pending = pendingSessionCreatesByOwnerHash.getOrDefault(ownerHash, 0);
+            if (pending <= 1) {
+                pendingSessionCreatesByOwnerHash.remove(ownerHash);
+            } else {
+                pendingSessionCreatesByOwnerHash.put(ownerHash, pending - 1);
+            }
+        }
+    }
+
+    private final class SessionQuotaReservation implements AutoCloseable {
+        private final String ownerHash;
+        private final AtomicBoolean released = new AtomicBoolean();
+        private boolean transactionManaged;
+
+        private SessionQuotaReservation(String ownerHash) {
+            this.ownerHash = ownerHash;
+        }
+
+        private void releaseAfterTransactionCompletion() {
+            transactionManaged = true;
+            try {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCompletion(int status) {
+                        release();
+                    }
+                });
+            } catch (RuntimeException | Error registrationFailure) {
+                transactionManaged = false;
+                release();
+                throw registrationFailure;
+            }
+        }
+
+        @Override
+        public void close() {
+            if (!transactionManaged) {
+                release();
+            }
+        }
+
+        private void release() {
+            if (released.compareAndSet(false, true)) {
+                releaseSessionQuotaReservation(ownerHash);
+            }
+        }
     }
 
 

@@ -1,7 +1,6 @@
 // ───── src/main/java/com/example/lms/service/AdaptiveTranslationService.java ─────
 package com.example.lms.service;
 
-import com.example.lms.client.GTranslateClient;
 import com.example.lms.learning.gemini.GeminiClient;
 import com.example.lms.entity.TranslationMemory;
 import com.example.lms.domain.TranslationSample;
@@ -17,21 +16,14 @@ import com.example.lms.service.ml.BanditSelector;
 import com.example.lms.service.ml.PerformanceMetricService;
 import com.example.lms.util.HashUtil;
 import com.example.lms.util.TextSimilarityUtil;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
-import io.github.resilience4j.reactor.retry.RetryOperator;
-import io.github.resilience4j.retry.Retry;
-import io.github.resilience4j.retry.RetryConfig;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import java.text.DecimalFormat;
-import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -50,7 +42,6 @@ import org.slf4j.Logger;
  */
 @Service
 @RequiredArgsConstructor
-@RefreshScope
 public class AdaptiveTranslationService {
     private static final Logger log = LoggerFactory.getLogger(AdaptiveTranslationService.class);
 
@@ -58,7 +49,6 @@ public class AdaptiveTranslationService {
     private final RuleEngine ruleEngine;
     private final MemoryRepository         memoryRepo;
     private final SampleRepository         sampleRepo;
-    private final GTranslateClient         gTranslate;
     private final GeminiClient             gemini;
     private final QualityMetricService qualityMetric;
     private final TextSimilarityUtil       similarityUtil;
@@ -97,13 +87,6 @@ public class AdaptiveTranslationService {
     /* 포맷터 */
     private static final DecimalFormat DF = new DecimalFormat("#.####");
 
-    /* ──────────────────────────────── 외부 API 회로차단/재시도 ─────────────────── */
-    private final CircuitBreaker cb = CircuitBreaker.ofDefaults("gtranslate");
-    private final Retry retry       = Retry.of("gtranslate-retry",
-            RetryConfig.custom()
-                    .maxAttempts(2)
-                    .waitDuration(Duration.ofMillis(200))
-                    .build());
 
     /* ═══════════════════ 초기화 - DB persistance ═══════════════════ */
     @PostConstruct
@@ -189,15 +172,8 @@ public class AdaptiveTranslationService {
     /* 2-C Fallback API 경로 */
     private Mono<TranslationOutcome> fallbackTranslate(String text, String src, String tgt) {
 
-        /* Google → Gemini 순으로 시도 */
-        return gTranslate.translate(text, src, tgt)
-                .transformDeferred(CircuitBreakerOperator.of(cb))
-                .transformDeferred(RetryOperator.of(retry))
-                .map(t -> new TranslationOutcome(t, TranslationRoute.GT, 0.0))
-                .switchIfEmpty(
-                        gemini.translate(text, src, tgt)
-                                .map(t -> new TranslationOutcome(t, TranslationRoute.GEMINI, 0.0))
-                )
+        return gemini.translate(text, src, tgt)
+                .map(t -> new TranslationOutcome(t, TranslationRoute.GEMINI, 0.0))
                 .defaultIfEmpty(new TranslationOutcome(text, TranslationRoute.FAILED, 0.0));
     }
 
@@ -205,7 +181,6 @@ public class AdaptiveTranslationService {
     private void recordReward(TranslationRoute route) {
         double reward = switch (route) {
             case MEMORY  -> 1.0;
-            case GT      -> 0.7;
             case GEMINI  -> 0.6;
             default      -> 0.5; // FAILED 등
         };

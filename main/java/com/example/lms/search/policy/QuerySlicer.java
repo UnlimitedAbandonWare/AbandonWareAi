@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
 public final class QuerySlicer {
 
     // Sentence boundary split (Latin & CJK punctuation + newlines)
-    private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=[.!?。！？])\\s+|\\R+");
+    private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=[.!?])\\s+|(?<=[。！？])\\s*|\\R+");
 
     private QuerySlicer() {
     }

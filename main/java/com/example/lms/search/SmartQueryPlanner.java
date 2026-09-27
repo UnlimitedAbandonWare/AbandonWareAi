@@ -19,6 +19,7 @@ import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import com.example.lms.search.KeywordSelectionService;
 import com.example.lms.search.terms.SelectedTerms;
@@ -304,7 +305,7 @@ public class SmartQueryPlanner {
                     List<String> qs = new ArrayList<>();
                     qs.add(q0);
                     if (subject != null && !subject.isBlank()
-                            && !q0.toLowerCase().contains(subject.toLowerCase())) {
+                            && !q0.toLowerCase(Locale.ROOT).contains(subject.toLowerCase(Locale.ROOT))) {
                         qs.add((subject + " " + q0).trim());
                     }
                     // Apply hygiene filtering based on domain caps and thresholds

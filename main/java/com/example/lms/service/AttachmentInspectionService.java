@@ -558,9 +558,15 @@ public class AttachmentInspectionService {
             return "";
         }
         String normalized = text.replace("\u0000", "").trim();
-        return normalized.length() <= MAX_PREVIEW_CHARS
-                ? normalized
-                : normalized.substring(0, MAX_PREVIEW_CHARS);
+        if (normalized.length() <= MAX_PREVIEW_CHARS) {
+            return normalized;
+        }
+        int end = MAX_PREVIEW_CHARS;
+        if (Character.isHighSurrogate(normalized.charAt(end - 1))
+                && Character.isLowSurrogate(normalized.charAt(end))) {
+            end--;
+        }
+        return normalized.substring(0, end);
     }
 
     private static String safeName(String name) {

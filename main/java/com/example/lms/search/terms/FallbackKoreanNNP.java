@@ -1,9 +1,8 @@
 package com.example.lms.search.terms;
 
 import java.util.List;
+import java.util.Arrays;
 import java.util.stream.Collectors;
-import org.openkoreantext.processor.OpenKoreanTextProcessorJava;
-import scala.collection.JavaConverters;
 
 
 
@@ -25,12 +24,11 @@ public final class FallbackKoreanNNP {
         if (query == null) {
             query = "";
         }
-        // Tokenize and extract proper nouns (NNP)
-        var tokens = OpenKoreanTextProcessorJava.tokenize(query);
-        var javaList = JavaConverters.seqAsJavaList(tokens);
-        List<String> nnp = javaList.stream()
-                .filter(t -> t.pos().toString().equals("NNP"))
-                .map(t -> t.text())
+        List<String> nnp = Arrays.stream(query.split("[^\\p{L}\\p{N}_-]+"))
+                .map(String::trim)
+                .filter(token -> token.length() >= 2)
+                .filter(FallbackKoreanNNP::looksLikeNamedTerm)
+                .distinct()
                 .collect(Collectors.toList());
         // Remove any parenthesised sections from the query for the exact phrase
         String exact = query.replaceAll("\\s*\\(.*?\\)\\s*", "").trim();
@@ -43,5 +41,13 @@ public final class FallbackKoreanNNP {
                 .domains(List.of())
                 .aliases(List.of())
                 .build();
+    }
+
+    private static boolean looksLikeNamedTerm(String token) {
+        if (token == null || token.isBlank()) {
+            return false;
+        }
+        return token.codePoints().anyMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HANGUL)
+                || Character.isUpperCase(token.codePointAt(0));
     }
 }

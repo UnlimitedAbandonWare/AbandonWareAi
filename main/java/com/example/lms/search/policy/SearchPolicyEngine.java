@@ -23,6 +23,8 @@ import java.util.Objects;
 @Component
 public class SearchPolicyEngine {
 
+    private static final String CREATIVE_OPTIONS_HASH_TRACE = "search.policy.creative.requestedOptionsHash";
+
     // Hard caps (safety guard)
     private static final int ABS_MAX_QUERIES = 16;
     private static final int MIN_TOPK = 3;
@@ -50,11 +52,17 @@ public class SearchPolicyEngine {
         boolean nightmare = boolish(meta.get("nightmareMode"));
 
         if (override != null) {
-            return forMode(override, "override");
+            return withCreativeProfile(forMode(override, "override"), meta);
         }
 
         if (strike || bypass || compression || nightmare) {
-            return forMode(SearchPolicyMode.PRECISION, "guard/cheap-mode");
+            return withCreativeProfile(forMode(SearchPolicyMode.PRECISION, "guard/cheap-mode"), meta);
+        }
+
+        SearchPolicyMode uiMode = policyModeFromSearchMode(meta.get("searchMode"));
+        if (uiMode == null) uiMode = policyModeFromSearchMode(meta.get("search_mode"));
+        if (uiMode != null) {
+            return withCreativeProfile(forMode(uiMode, "ui-search-mode"), meta);
         }
 
         // Lightweight intent heuristics
@@ -62,22 +70,22 @@ public class SearchPolicyEngine {
         int tokCount = TextUtils.tokenize(q).size();
 
         if (containsAny(lower, "최신", "최근", "업데이트", "release", "changelog", "patch", "변경사항", "버전", "릴리즈")) {
-            return forMode(SearchPolicyMode.RECALL, "recency");
+            return withCreativeProfile(forMode(SearchPolicyMode.RECALL, "recency"), meta);
         }
 
         if (containsAny(lower, "뜻", "의미", "정의", "difference", "vs", "비교", "차이")) {
-            return forMode(SearchPolicyMode.DISAMBIGUATE, "disambiguate");
+            return withCreativeProfile(forMode(SearchPolicyMode.DISAMBIGUATE, "disambiguate"), meta);
         }
 
         if (containsAny(lower, "공식", "근거", "출처", "citation", "source", "정확")) {
-            return forMode(SearchPolicyMode.PRECISION, "precision-keyword");
+            return withCreativeProfile(forMode(SearchPolicyMode.PRECISION, "precision-keyword"), meta);
         }
 
         if (tokCount <= 2 && q.length() <= 16) {
-            return forMode(SearchPolicyMode.DISAMBIGUATE, "short-query");
+            return withCreativeProfile(forMode(SearchPolicyMode.DISAMBIGUATE, "short-query"), meta);
         }
 
-        return forMode(SearchPolicyMode.BALANCED, "default");
+        return withCreativeProfile(forMode(SearchPolicyMode.BALANCED, "default"), meta);
     }
 
     /**
@@ -106,27 +114,48 @@ public class SearchPolicyEngine {
 
         int cap = clamp(d.maxFinalQueries(), 1, ABS_MAX_QUERIES);
         LinkedHashMap<String, String> out = new LinkedHashMap<>();
+        String creativeOptionsHash = creativeRequestedOptionsHash(d);
+        boolean creative = d.expansionEnabled()
+                && isCreativeProfile(d.rewriteTemperatureProfile())
+                && creativeOptionsHash.matches("hash:[0-9a-f]{12}");
+        int creativeExpansionBudget = creative
+                ? clamp((int) Math.round(d.maxExpansions() * d.rewriteExplorationRate()), 0, d.maxExpansions())
+                : 0;
+        List<String> creativeExpansions = creative
+                ? StochasticExpander.expandCreative(
+                        originalQuery, d.mode(), creativeExpansionBudget, creativeOptionsHash)
+                : List.of();
+        int preExpansionLimit = Math.max(0, cap - creativeExpansions.size());
+
+        if (creative) {
+            putDedup(out, originalQuery);
+            if (cap >= 2) {
+                putDedup(out, officialPrimarySourceAnchor(originalQuery));
+            }
+        }
 
         // 0) Base planned queries first
         if (basePlanned != null) {
             for (String q : basePlanned) {
                 putDedup(out, q);
-                if (out.size() >= cap) break;
+                if (out.size() >= (creative ? preExpansionLimit : cap)) break;
             }
         }
 
         // 1) Query slicing (only when multi-sentence)
-        if (d.slicingEnabled() && out.size() < cap) {
+        if (d.slicingEnabled() && out.size() < (creative ? preExpansionLimit : cap)) {
             List<String> slices = QuerySlicer.slice(originalQuery, d.sliceWindowSentences(), d.sliceOverlapSentences(), d.maxSlices());
             for (String s : slices) {
                 putDedup(out, s);
-                if (out.size() >= cap) break;
+                if (out.size() >= (creative ? preExpansionLimit : cap)) break;
             }
         }
 
         // 2) Deterministic stochastic expansion
         if (d.expansionEnabled() && d.maxExpansions() > 0 && out.size() < cap) {
-            List<String> ex = StochasticExpander.expand(originalQuery, d.mode(), d.maxExpansions());
+            List<String> ex = creative
+                    ? creativeExpansions
+                    : StochasticExpander.expand(originalQuery, d.mode(), d.maxExpansions());
             for (String e : ex) {
                 putDedup(out, e);
                 if (out.size() >= cap) break;
@@ -165,6 +194,14 @@ public class SearchPolicyEngine {
             meta.put("searchPolicy.reason", SafeRedactor.traceLabelOrFallback(d.reason(), ""));
             meta.put("searchPolicy.slicing", String.valueOf(d.slicingEnabled()));
             meta.put("searchPolicy.expansion", String.valueOf(d.expansionEnabled()));
+            String providerProfile = isCreativeProfile(d.rewriteTemperatureProfile())
+                    ? "exploratory"
+                    : d.rewriteTemperatureProfile();
+            meta.put("searchPolicy.rewriteTemperatureProfile",
+                    SafeRedactor.traceLabelOrFallback(providerProfile, "unknown"));
+            meta.put("searchPolicy.rewriteValidationTemperature", d.rewriteValidationTemperature());
+            meta.put("searchPolicy.rewriteExplorationTemperature", d.rewriteExplorationTemperature());
+            meta.put("searchPolicy.rewriteExplorationRate", d.rewriteExplorationRate());
         }
         return meta;
     }
@@ -238,6 +275,9 @@ public class SearchPolicyEngine {
         String s = Objects.toString(q, "").trim();
         if (s.isBlank()) return;
         String key = TextUtils.normalizeQueryKey(s);
+        if (key.isBlank()) {
+            key = s.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+        }
         if (key.isBlank()) return;
         // Keep the first occurrence to preserve stability.
         out.putIfAbsent(key, s);
@@ -261,6 +301,147 @@ public class SearchPolicyEngine {
             traceSuppressed("mode.parse", ignore);
             return null;
         }
+    }
+
+    private static SearchPolicyDecision withCreativeProfile(
+            SearchPolicyDecision base,
+            Map<String, Object> meta) {
+        TraceStore.putInternal(CREATIVE_OPTIONS_HASH_TRACE, null);
+        if (base == null || meta == null || !boolish(meta.get("creative.emergence.active"))) {
+            return base;
+        }
+        if (!base.expansionEnabled() || base.mode() == SearchPolicyMode.OFF) {
+            return base;
+        }
+        String intent = Objects.toString(meta.get("promptPose.application.intentSlot"), "").trim();
+        String requestedHash = Objects.toString(
+                meta.get("creative.emergence.requestedOptionsHash"), "").trim().toLowerCase(Locale.ROOT);
+        if (!"explore".equals(intent)
+                || boolish(meta.get("privacy.boundary.enforce"))
+                || !requestedHash.matches("hash:[0-9a-f]{12}")) {
+            return base;
+        }
+        String label = Objects.toString(meta.get("creative.emergence.profile"), "").trim().toUpperCase(Locale.ROOT);
+        double temperature = finiteDouble(meta.get("creative.emergence.search.temperature"), Double.NaN);
+        double rate = finiteDouble(meta.get("creative.emergence.search.rate"), Double.NaN);
+        double candidateTemperature = finiteDouble(
+                meta.get("creative.emergence.candidate.temperature"), Double.NaN);
+        double candidateTopP = finiteDouble(meta.get("creative.emergence.candidate.topP"), Double.NaN);
+        double finalTemperature = finiteDouble(meta.get("creative.emergence.final.temperature"), Double.NaN);
+        double finalTopP = finiteDouble(meta.get("creative.emergence.final.topP"), Double.NaN);
+        double selfAskTemperature = finiteDouble(
+                meta.get("creative.emergence.selfAsk.temperature"), Double.NaN);
+        if (!validCreativeProfile(
+                label,
+                temperature,
+                rate,
+                candidateTemperature,
+                candidateTopP,
+                finalTemperature,
+                finalTopP,
+                selfAskTemperature)) {
+            return base;
+        }
+        TraceStore.putInternal(CREATIVE_OPTIONS_HASH_TRACE, requestedHash);
+        return new SearchPolicyDecision(
+                base.mode(),
+                base.slicingEnabled(),
+                base.expansionEnabled(),
+                base.maxFinalQueries(),
+                base.sliceWindowSentences(),
+                base.sliceOverlapSentences(),
+                base.maxSlices(),
+                base.maxExpansions(),
+                base.webTopKMultiplier(),
+                base.vecTopKMultiplier(),
+                base.reason(),
+                base.rewriteValidationTemperature(),
+                temperature,
+                rate,
+                "creative:" + label);
+    }
+
+    private static boolean validCreativeProfile(
+            String label,
+            double searchTemperature,
+            double searchRate,
+            double candidateTemperature,
+            double candidateTopP,
+            double finalTemperature,
+            double finalTopP,
+            double selfAskTemperature) {
+        return switch (label) {
+            case "VIVID" -> inRange(searchTemperature, 0.85d, 0.90d)
+                    && inRange(searchRate, 0.70d, 0.76d)
+                    && inRange(candidateTemperature, 1.10d, 1.25d)
+                    && inRange(candidateTopP, 0.95d, 0.97d)
+                    && inRange(finalTemperature, 1.05d, 1.20d)
+                    && inRange(finalTopP, 0.95d, 0.97d)
+                    && inRange(selfAskTemperature, 0.80d, 0.88d);
+            case "WILD" -> inRange(searchTemperature, 0.91d, 0.97d)
+                    && inRange(searchRate, 0.77d, 0.83d)
+                    && inRange(candidateTemperature, 1.26d, 1.45d)
+                    && inRange(candidateTopP, 0.97d, 0.99d)
+                    && inRange(finalTemperature, 1.21d, 1.40d)
+                    && inRange(finalTopP, 0.97d, 0.99d)
+                    && inRange(selfAskTemperature, 0.89d, 0.97d);
+            case "FERAL" -> inRange(searchTemperature, 0.98d, 1.00d)
+                    && inRange(searchRate, 0.84d, 0.85d)
+                    && inRange(candidateTemperature, 1.46d, 1.50d)
+                    && inRange(candidateTopP, 0.99d, 1.00d)
+                    && inRange(finalTemperature, 1.41d, 1.50d)
+                    && inRange(finalTopP, 0.99d, 1.00d)
+                    && inRange(selfAskTemperature, 0.98d, 1.00d);
+            default -> false;
+        };
+    }
+
+    private static boolean isCreativeProfile(String value) {
+        return value != null && value.matches("creative:(VIVID|WILD|FERAL)");
+    }
+
+    private static boolean inRange(double value, double min, double max) {
+        return Double.isFinite(value) && value >= min && value <= max;
+    }
+
+    private static double finiteDouble(Object value, double fallback) {
+        if (value instanceof Number number && Double.isFinite(number.doubleValue())) {
+            return number.doubleValue();
+        }
+        try {
+            double parsed = Double.parseDouble(Objects.toString(value, ""));
+            return Double.isFinite(parsed) ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static String officialPrimarySourceAnchor(String originalQuery) {
+        String q = Objects.toString(originalQuery, "").trim();
+        if (q.isBlank()) {
+            return "";
+        }
+        boolean korean = q.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
+        return q + (korean ? " 공식 1차 자료" : " official primary source");
+    }
+
+    private static String creativeRequestedOptionsHash(SearchPolicyDecision decision) {
+        String safe = Objects.toString(TraceStore.get(CREATIVE_OPTIONS_HASH_TRACE), "").trim().toLowerCase(Locale.ROOT);
+        if (safe.matches("hash:[0-9a-f]{12}")) {
+            return safe;
+        }
+        return "";
+    }
+
+    private static SearchPolicyMode policyModeFromSearchMode(Object v) {
+        if (v == null) return null;
+        String s = String.valueOf(v).trim().toUpperCase(Locale.ROOT);
+        return switch (s) {
+            case "OFF" -> SearchPolicyMode.OFF;
+            case "FORCE_LIGHT" -> SearchPolicyMode.PRECISION;
+            case "FORCE_DEEP" -> SearchPolicyMode.RECALL;
+            default -> null;
+        };
     }
 
     private static int clamp(int v, int lo, int hi) {

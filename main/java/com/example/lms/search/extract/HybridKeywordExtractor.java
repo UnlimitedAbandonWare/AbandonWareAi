@@ -359,6 +359,14 @@ public class HybridKeywordExtractor {
         if (seed.isBlank() || UNSAFE_PROMPT_POSE_SEED.matcher(seed).find()) {
             return "";
         }
-        return seed.length() <= 128 ? seed : seed.substring(0, 128).trim();
+        if (seed.length() <= 128) {
+            return seed;
+        }
+        int cutoff = 128;
+        if (Character.isHighSurrogate(seed.charAt(cutoff - 1))
+                && Character.isLowSurrogate(seed.charAt(cutoff))) {
+            cutoff--;
+        }
+        return seed.substring(0, cutoff).trim();
     }
 }

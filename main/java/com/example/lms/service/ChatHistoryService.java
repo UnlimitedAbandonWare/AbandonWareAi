@@ -11,6 +11,11 @@ import com.example.lms.domain.enums.MemoryProfile;
 
 public interface ChatHistoryService {
 
+    int DEFAULT_SESSION_LIST_LIMIT = 50;
+    int MAX_SESSION_LIST_LIMIT = 100;
+    int DEFAULT_SESSION_DETAIL_LIMIT = 200;
+    int MAX_SESSION_DETAIL_LIMIT = 200;
+
     record ConversationMemorySnapshot(
             Long lastMessageId,
             String summary,
@@ -104,11 +109,52 @@ public interface ChatHistoryService {
      */
     void updateSessionAnswerModeAndTrace(Long sessionId, String answerMode, Long traceTurnId);
 
+    void updateSessionMeta(Long sessionId, java.util.Map<String, Object> meta);
+
     List<ChatSession> getAllSessionsForAdmin();
+
+    default List<ChatSession> getAllSessionsForAdmin(int requestedLimit) {
+        int limit = clampSessionListLimit(requestedLimit);
+        List<ChatSession> sessions = getAllSessionsForAdmin();
+        if (sessions == null || sessions.isEmpty()) {
+            return List.of();
+        }
+        return sessions.stream().limit(limit).toList();
+    }
 
     List<ChatSession> getSessionsForUser(String username);
 
+    default List<ChatSession> getSessionsForUser(String username, int requestedLimit) {
+        int limit = clampSessionListLimit(requestedLimit);
+        List<ChatSession> sessions = getSessionsForUser(username);
+        if (sessions == null || sessions.isEmpty()) {
+            return List.of();
+        }
+        return sessions.stream().limit(limit).toList();
+    }
+
+    default List<ChatSession> getSessionsForUser(
+            String username,
+            String clientIp,
+            int requestedLimit) {
+        return getSessionsForUser(username, requestedLimit);
+    }
+
     ChatSession getSessionWithMessages(Long id);
+
+    default ChatSession getSessionWithMessages(Long id, int requestedLimit) {
+        ChatSession session = getSessionWithMessages(id);
+        if (session == null || session.getMessages() == null) {
+            return session;
+        }
+        int limit = clampSessionDetailLimit(requestedLimit);
+        int size = session.getMessages().size();
+        if (size > limit) {
+            session.setMessages(new java.util.ArrayList<>(
+                    session.getMessages().subList(size - limit, size)));
+        }
+        return session;
+    }
 
     void deleteSession(Long id);
 
@@ -138,4 +184,18 @@ public interface ChatHistoryService {
 
     // [NEW] 가장 최근 assistant 메시지
     Optional<String> getLastAssistantMessage(Long sessionId);
+
+    static int clampSessionListLimit(int requestedLimit) {
+        return Math.max(1, Math.min(requestedLimit, MAX_SESSION_LIST_LIMIT));
+    }
+
+    static int clampSessionDetailLimit(int requestedLimit) {
+        return Math.max(1, Math.min(requestedLimit, MAX_SESSION_DETAIL_LIMIT));
+    }
+
+    final class SessionQuotaExceededException extends RuntimeException {
+        public SessionQuotaExceededException() {
+            super("session_quota_exceeded");
+        }
+    }
 }

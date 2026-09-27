@@ -1,14 +1,19 @@
 package com.example.lms.search.provider;
 
+import com.example.lms.search.policy.GrokPromotionDiscovery;
+
 import ai.abandonware.nova.orch.trace.OrchDigest;
 import ai.abandonware.nova.orch.trace.OrchEventEmitter;
 import ai.abandonware.nova.orch.web.RateLimitBackoffCoordinator;
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.debug.DebugEventLevel;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.DebugProbeType;
 import com.example.lms.service.NaverSearchService;
 import com.example.lms.service.web.BraveSearchResult;
 import com.example.lms.service.web.BraveSearchService;
+import com.example.lms.learning.gemini.GeminiGateway;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import com.example.lms.trace.LogCorrelation;
@@ -23,7 +28,6 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.ArrayList;
@@ -47,6 +51,9 @@ import org.springframework.http.HttpHeaders;
 import java.net.URI;
 
 import static com.example.lms.search.provider.HybridTraceSuppressions.traceSuppressed;
+import static com.example.lms.search.provider.HybridSearchQueryPolicy.containsHangul;
+import static com.example.lms.search.provider.HybridSearchQueryPolicy.extractKeywords;
+import static com.example.lms.search.provider.HybridSearchQueryPolicy.convertToEnglishSearchTerm;
 
 /**
  * [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
@@ -57,23 +64,14 @@ import static com.example.lms.search.provider.HybridTraceSuppressions.traceSuppr
 public class HybridWebSearchProvider implements WebSearchProvider {
     private static final Logger log = LoggerFactory.getLogger(HybridWebSearchProvider.class);
 
-    // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
-    private static final List<String> LOW_TRUST_URL_MARKERS = List.of(
-            "namu.wiki",
-            "tistory.com",
-            "blog.naver.com",
-            "cafe.naver.com",
-            "dcinside.com",
-            "ruliweb.com",
-            "fmkorea.com",
-            "theqoo.net",
-            "ppomppu.co.kr",
-            "youtube.com",
-            "x.com",
-            "twitter.com",
-            "instagram.com");
     private final NaverSearchService naverService;
     private final BraveSearchService braveService;
+
+    @Autowired(required = false)
+    private GeminiGateway geminiGateway;
+
+    @Value("${gpt-search.hybrid.bounded-fallback.enabled:true}")
+    private boolean boundedFallbackEnabled;
 
     
     @Autowired(required = false)
@@ -90,7 +88,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
      * Keep a conservative default to avoid hanging threads.
      */
     @Value("${gpt-search.hybrid.timeout-sec:3}")
-    private int timeoutSec;
+    private int timeoutSec = 3;
 
     /**
      * When the shared deadline is already exhausted (remainingMs<=0),
@@ -222,9 +220,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     @Value("${gpt-search.hybrid.korean.skip-naver-if-brave-min-results:6}")
     private int skipNaverIfBraveMinResults;
 
-    // Even if Brave returns enough results quickly, still call Naver
-    // opportunistically (KR source diversity).
-    @Value("${gpt-search.hybrid.korean.force-opportunistic-naver-even-if-brave-fast:true}")
+    // Extra KR source diversity is opt-in. The default chatbot path should not keep
+    // a live Naver call running after Brave already returned enough snippets.
+    @Value("${gpt-search.hybrid.korean.force-opportunistic-naver-even-if-brave-fast:false}")
     private boolean forceOpportunisticNaverEvenIfBraveFast;
 
     // Symmetric: If Naver returns enough results within hedge delay, skip starting
@@ -235,6 +233,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     @Autowired
     @Qualifier("searchIoExecutor")
     private ExecutorService searchIoExecutor;
+    private final ThreadLocal<HybridSearchExecution> activeExecution = new ThreadLocal<>();
 
     @Autowired(required = false)
     private NightmareBreaker nightmareBreaker;
@@ -259,7 +258,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
         try {
             braveUsable = braveService != null && braveService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "primary"))
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE))
                     && !braveService.isCoolingDown();
         } catch (Exception e) {
             String m = e.getMessage(), k = "webSearch.primary.brave.healthFailure";
@@ -268,7 +267,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
         try {
             naverUsable = naverService != null && naverService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "primary"));
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
         } catch (Exception e) {
             String m = e.getMessage(), k = "webSearch.primary.naver.healthFailure";
             TraceStore.put(k, true); TraceStore.put(k + ".kind", NightmareBreaker.classify(e).name().toLowerCase(Locale.ROOT)); TraceStore.put(k + ".errorType", SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown")); TraceStore.put(k + ".messageHash", SafeRedactor.hashValue(m)); TraceStore.put(k + ".messageLength", m == null ? 0 : m.length());
@@ -303,40 +302,23 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         return isBravePrimary();
     }
 
-    private static boolean containsHangul(String s) {
-        if (s == null) {
-            return false;
-        }
-        for (int i = 0; i < s.length(); i++) {
-            char ch = s.charAt(i);
-            Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
-            if (block == Character.UnicodeBlock.HANGUL_SYLLABLES
-                    || block == Character.UnicodeBlock.HANGUL_JAMO
-                    || block == Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String extractKeywords(String query) {
-        if (query == null) {
-            return null;
-        }
-        // Best-effort removal of question/filler terms before fallback query building.
-        String s = query;
-        s = s.replaceAll(
-                "(?:\uB204\uAD6C\uC57C|\uBB50\uC57C|\uBB34\uC5C7\uC774\uC57C|\uC54C\uB824\uC918|\uB9D0\uD574\uC918|\uAC80\uC0C9\uD574(?:\uC918)?|\uCC3E\uC544\uC918|\uC124\uBA85\uD574\uC918)",
-                "");
-        // Normalize common honorific forms.
-        s = s.replaceAll("\uAD50\uC218\uB2D8", "\uAD50\uC218")
-                .replaceAll("\uC120\uC0DD\uB2D8", "\uC120\uC0DD")
-                .replaceAll("\uC758\uC0AC\uC120\uC0DD\uB2D8", "\uC758\uC0AC");
-        return s.trim();
-    }
-
     @Override
     public List<String> search(String query, int topK) {
+        return withRequestBudget(() -> searchWithinBudget(query, topK));
+    }
+
+    private List<String> searchWithinBudget(String query, int topK) {
+
+        boolean singleCycle = Boolean.TRUE.equals(TraceStore.get("conversate.web.singleCycle"));
+        if (boundedFallbackEnabled || singleCycle) {
+            try {
+                TraceStore.put("web.boundedRoute.completed", false);
+                TraceStore.put("web.boundedRoute", true);
+                TraceStore.put("web.boundedRoute.mode", singleCycle ? "naver-selective-brave-once" : "brave-naver-gemini-once");
+            } catch (Exception suppressed) {
+                traceSuppressed("boundedRoute.startTrace", suppressed);
+            }
+        }
 
         var gctx = GuardContextHolder.get();
         boolean sensitive = gctx != null && gctx.isSensitiveTopic();
@@ -347,15 +329,28 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             try {
                 com.example.lms.search.TraceStore.put("privacy.web.blocked", true);
             } catch (Exception suppressed) { traceSuppressed("privacy.webBlocked.direct", suppressed); }
+            markBoundedTerminal("privacy-blocked", 0, 0, 0);
             return java.util.Collections.emptyList();
         }
 
         String safeQuery = query == null ? "" : query.trim();
         if (safeQuery.isBlank()) {
             logSkipOnce("SKIP_EMPTY_QUERY", "HybridWebSearchProvider skipped (blank query)");
+            markBoundedTerminal("blank-query", 0, 0, 0);
             return java.util.Collections.emptyList();
         }
         query = safeQuery;
+
+        if (singleCycle && Boolean.TRUE.equals(TraceStore.get("conversate.web.ragSupplement"))) {
+            return searchRagSupplement(query, topK);
+        }
+        if (boundedFallbackEnabled || singleCycle) {
+            return searchBoundedFallback(query, topK).snippets();
+        }
+
+        if (!canStartSearchAttempt()) {
+            return Collections.emptyList();
+        }
 
         boolean isKorean = containsHangul(query);
         TraceStore.putIfAbsent("query.lang", isKorean ? "ko" : "en");
@@ -364,21 +359,196 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             // 湲곗〈 ?숈옉 ?좎? (鍮꾪븳援?뼱 荑쇰━)
             java.util.List<String> out = isBravePrimary() ? searchBraveFirst(query, topK)
                     : searchNaverFirst(query, topK);
+            if (Thread.currentThread().isInterrupted()) {
+                return out == null ? Collections.emptyList() : out;
+            }
             return maybeBackupOnce(query, topK, out);
         }
 
         // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
         java.util.List<String> out = searchKoreanSmartMerge(query, topK);
+        if (Thread.currentThread().isInterrupted()) {
+            return out == null ? Collections.emptyList() : out;
+        }
         return maybeBackupOnce(query, topK, out);
+    }
+
+    private BoundedSearchResult searchBoundedFallback(String originalQuery, int topK) {
+        if (!canStartSearchAttempt()) {
+            return finishBounded(Collections.emptyList(), 0, 0, searchStopReason());
+        }
+        boolean singleCycle = Boolean.TRUE.equals(TraceStore.get("conversate.web.singleCycle"));
+        if (!singleCycle && GrokPromotionDiscovery.matches(originalQuery)) {
+            return searchBoundedPromotion(originalQuery, topK);
+        }
+        SearchCycle initialCycle = new SearchCycle();
+        List<String> initial = singleCycle ? searchNaverFirst(originalQuery, topK, initialCycle)
+                : searchBraveFirst(originalQuery, topK, initialCycle);
+        if (initial != null && !initial.isEmpty()) {
+            return finishBounded(initial, 1, 0, "initial-hit");
+        }
+        if (!canStartSearchAttempt()) {
+            return finishBounded(Collections.emptyList(), 1, 0, searchStopReason());
+        }
+        if (singleCycle || !"TRUE_ZERO".equals(initialCycle.reason())) {
+            return finishBounded(Collections.emptyList(), 1, 0, initialCycle.reason());
+        }
+
+        String locallyRewritten = originalQuery;
+        locallyRewritten = locallyRewritten.replaceAll("\\s+", " ").trim();
+        try {
+            TraceStore.put("web.boundedRoute.localRewrite.changed",
+                    !locallyRewritten.equalsIgnoreCase(originalQuery));
+            TraceStore.put("web.boundedRoute.localRewrite.queryHash", SafeRedactor.hashValue(locallyRewritten));
+            TraceStore.put("web.boundedRoute.localRewrite.queryLength", locallyRewritten.length());
+        } catch (Exception suppressed) {
+            traceSuppressed("boundedRoute.localRewriteTrace", suppressed);
+        }
+
+        if (geminiGateway == null) {
+            return finishBounded(Collections.emptyList(), 1, 0, "gemini-gateway-unavailable");
+        }
+
+        GeminiGateway.SearchExpansion expansion;
+        try {
+            long expansionWaitMs = capRequestWait(TimeUnit.SECONDS.toMillis(timeoutSec));
+            if (expansionWaitMs == 0L || !canStartSearchAttempt()) {
+                return finishBounded(Collections.emptyList(), 1, 0, searchStopReason());
+            }
+            expansion = geminiGateway.expandSearchQueryOnce(locallyRewritten)
+                    .block(java.time.Duration.ofMillis(expansionWaitMs));
+        } catch (RuntimeException failure) {
+            traceSuppressed("boundedRoute.geminiExpansion", failure);
+            return finishBounded(Collections.emptyList(), 1, 1, "gemini-expansion-failed");
+        }
+        int geminiAttempts = expansion == null || expansion.status() == null
+                ? 0
+                : Math.max(0, expansion.status().attemptCount());
+        if (expansion == null || !StringUtils.hasText(expansion.query())) {
+            String reason = expansion == null || expansion.status() == null
+                    || !StringUtils.hasText(expansion.status().fallbackReason())
+                            ? "gemini-expansion-empty"
+                            : expansion.status().fallbackReason();
+            return finishBounded(Collections.emptyList(), 1, geminiAttempts, reason);
+        }
+
+        if (!canStartSearchAttempt()) {
+            return finishBounded(Collections.emptyList(), 1, geminiAttempts, searchStopReason());
+        }
+        if (!preservesResearchQuery(originalQuery, expansion.query())) {
+            return finishBounded(Collections.emptyList(), 1, geminiAttempts, "query-constraints-changed");
+        }
+        SearchCycle researchCycle = new SearchCycle();
+        List<String> researched = searchBraveFirst(expansion.query(), topK, researchCycle);
+        return finishBounded(
+                researched == null ? Collections.emptyList() : researched,
+                2,
+                geminiAttempts,
+                researched != null && !researched.isEmpty() ? "research-hit"
+                        : "TRUE_ZERO".equals(researchCycle.reason()) ? "research-empty" : researchCycle.reason());
+    }
+
+    private static boolean preservesResearchQuery(String original, String candidate) {
+        if (!com.example.lms.search.SearchQueryConstraints.preserves(original, candidate)) return false;
+        // Keep the original subject terms as well as dates, source operators and exclusions.
+        java.util.Set<String> proposed = new java.util.HashSet<>(java.util.Arrays.asList(candidate.toLowerCase(Locale.ROOT).strip().split("\\s+")));
+        return java.util.Arrays.stream(original.toLowerCase(Locale.ROOT).strip().split("\\s+")).allMatch(proposed::contains);
+    }
+
+    private static final class SearchCycle {
+        private boolean trueZero;
+        private String failure;
+        void observe(String reason) {
+            if ("TRUE_ZERO".equals(reason)) trueZero = true;
+            else if (!"NONE".equals(reason) && failure == null) failure = reason == null ? "UNKNOWN" : reason;
+        }
+        String reason() { return failure != null ? failure : trueZero ? "TRUE_ZERO" : "UNKNOWN"; }
+    }
+
+    private static String braveOutcome(BraveSearchResult result) {
+        if (result == null || result.status() == null) return "UNKNOWN";
+        Integer status = result.httpStatus();
+        if (status != null && (status == 401 || status == 403)) return "AUTH_OR_CONFIG";
+        if (status != null && (status == 408 || status == 504)) return "TIMEOUT_OR_BUDGET";
+        return switch (result.status()) {
+            case OK -> result.snippets() == null ? "UNKNOWN" : result.snippets().isEmpty() ? "TRUE_ZERO" : "NONE";
+            case HTTP_429, RATE_LIMIT_LOCAL -> "RATE_LIMIT";
+            case DISABLED -> "AUTH_OR_CONFIG";
+            case COOLDOWN -> "BREAKER_OR_COOLDOWN";
+            case EXCEPTION -> "json-parse-error".equals(result.message()) ? "PARSE_ERROR"
+                    : "timeout".equals(result.message()) ? "TIMEOUT_OR_BUDGET"
+                    : "cancelled".equals(result.message()) ? "CLIENT_CANCELLED" : "PROVIDER_ERROR";
+            default -> "PROVIDER_ERROR";
+        };
+    }
+
+    private BoundedSearchResult searchBoundedPromotion(String originalQuery, int topK) {
+        // Reuse the two-cycle ceiling; the bounded marker still disables nested provider expansion.
+        TraceStore.put("web.promotionDiscovery.mode", "bounded-discovery-and-terms");
+        List<String> offers = searchBraveFirst(originalQuery + GrokPromotionDiscovery.DISCOVERY_SUFFIX, topK);
+        if (offers == null) offers = List.of();
+        TraceStore.put("web.promotionDiscovery.reason",
+                offers.isEmpty() ? "base_empty" : "base_results_not_exhaustive");
+        TraceStore.put("web.promotionDiscovery.discoveryCount", offers.size());
+        TraceStore.put("web.promotionDiscovery.eligibilityStatus", "evidence_needed");
+        if (!canStartSearchAttempt()) {
+            return finishBounded(offers, 1, 0, searchStopReason());
+        }
+        List<String> terms = searchBraveFirst(originalQuery + GrokPromotionDiscovery.VERIFICATION_SUFFIX, topK);
+        if (terms == null) terms = List.of();
+        TraceStore.put("web.promotionDiscovery.termsCount", terms.size());
+        List<String> evidence = GrokPromotionDiscovery.mergeEvidence(List.of(offers, terms), topK);
+        return finishBounded(evidence, 2, 0,
+                terms.isEmpty() ? "promotion-terms-evidence-needed" : "promotion-evidence-collected");
+    }
+
+    private BoundedSearchResult finishBounded(
+            List<String> snippets,
+            int providerCycles,
+            int geminiAttempts,
+            String terminalReason) {
+        List<String> safeSnippets = snippets == null ? Collections.emptyList() : List.copyOf(snippets);
+        markBoundedTerminal(terminalReason, providerCycles, geminiAttempts, safeSnippets.size());
+        return new BoundedSearchResult(safeSnippets, providerCycles, geminiAttempts, terminalReason);
+    }
+
+    private void markBoundedTerminal(
+            String terminalReason,
+            int providerCycles,
+            int geminiAttempts,
+            int outCount) {
+        if (!boundedFallbackEnabled && !Boolean.TRUE.equals(TraceStore.get("conversate.web.singleCycle"))) {
+            return;
+        }
+        try {
+            TraceStore.put("web.boundedRoute.providerCycles", Math.max(0, providerCycles));
+            TraceStore.put("web.boundedRoute.geminiAttempts", Math.max(0, geminiAttempts));
+            TraceStore.put("web.boundedRoute.outCount", Math.max(0, outCount));
+            TraceStore.put("web.boundedRoute.terminalReason",
+                    SafeRedactor.traceLabelOrFallback(terminalReason, "unknown"));
+            TraceStore.put("web.boundedRoute.completed", true);
+        } catch (Exception suppressed) {
+            traceSuppressed("boundedRoute.terminalTrace", suppressed);
+        }
+    }
+
+    record BoundedSearchResult(
+            List<String> snippets,
+            int providerCycles,
+            int geminiAttempts,
+            String terminalReason) {
     }
 
     private List<String> searchKoreanSmartMerge(String query, int topK) {
         // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
         GuardContext gctx = GuardContextHolder.get();
         boolean officialOnly = gctx != null && gctx.isOfficialOnly();
-        boolean preferNaver = officialOnly ||
-                (gctx != null && (gctx.planBool("search.web.preferNaver", false)
-                        || gctx.planBool("web.preferNaver", false)));
+        boolean bravePrimary = isBravePrimary();
+        boolean explicitPreferNaver = gctx != null && (gctx.planBool("search.web.preferNaver", false)
+                || gctx.planBool("web.preferNaver", false));
+        // officialOnly constrains evidence quality; it should not force an extra live
+        // Naver-first call when the active provider preference is BRAVE.
+        boolean preferNaver = explicitPreferNaver || (officialOnly && !bravePrimary);
 
         List<String> primary;
         if (preferNaver) {
@@ -386,9 +556,12 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 TraceStore.put("webSearch.providerPreference", "naver-first");
             } catch (Exception suppressed) { traceSuppressed("providerPreference.naverFirst", suppressed); }
             primary = searchKoreanNaverAndBrave(query, topK);
-        } else if (isBravePrimary()) {
+        } else if (bravePrimary) {
             try {
                 TraceStore.put("webSearch.providerPreference", "brave-first");
+                if (officialOnly && !explicitPreferNaver) {
+                    TraceStore.put("webSearch.providerPreference.reason", "official_only_brave_primary");
+                }
             } catch (Exception suppressed) { traceSuppressed("providerPreference.braveFirst", suppressed); }
             primary = searchKoreanBraveAndNaver(query, topK);
         } else {
@@ -396,6 +569,10 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 TraceStore.put("webSearch.providerPreference", "naver-first(config)");
             } catch (Exception suppressed) { traceSuppressed("providerPreference.naverFirstConfig", suppressed); }
             primary = searchKoreanNaverAndBrave(query, topK);
+        }
+
+        if (Thread.currentThread().isInterrupted()) {
+            return primary != null ? primary : Collections.emptyList();
         }
 
         if (primary != null && primary.size() >= 3) {
@@ -420,32 +597,28 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         List<String> keywordResults;
         if (preferNaver) {
             keywordResults = searchKoreanNaverAndBrave(extracted, topK);
-        } else if (isBravePrimary()) {
+        } else if (bravePrimary) {
             keywordResults = searchKoreanBraveAndNaver(extracted, topK);
         } else {
             keywordResults = searchKoreanNaverAndBrave(extracted, topK);
         }
 
-        LinkedHashSet<String> merged = new LinkedHashSet<>();
-        if (primary != null) {
-            merged.addAll(primary);
-        }
-        if (keywordResults != null) {
-            merged.addAll(keywordResults);
-        }
-
-        if (merged.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return merged.stream().limit(topK).toList();
+        return HybridSearchResultPolicy.mergeKeywordRetry(primary, keywordResults, topK);
     }
 
     private List<String> searchBraveFirst(String query, int topK) {
+        return searchBraveFirst(query, topK, null);
+    }
+
+    private List<String> searchBraveFirst(String query, int topK, SearchCycle cycle) {
+        if (!canStartSearchAttempt()) {
+            return Collections.emptyList();
+        }
 
         boolean braveUsable = false;
         try {
             braveUsable = braveService != null && braveService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "direct"))
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE))
                     && !braveService.isCoolingDown();
         } catch (Exception ignore) {
             traceSuppressed("braveUsable.direct", ignore);
@@ -455,13 +628,24 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if (braveUsable) {
             try {
                 // Use BraveSearchService.search() to benefit from cache/single-flight.
-                List<String> brave = braveService.search(query, topK);
+                if (!canStartSearchAttempt()) return Collections.emptyList();
+                List<String> brave;
+                if (cycle == null) brave = braveService.search(query, topK);
+                else {
+                    brave = braveService.searchCacheOnly(query, topK);
+                    if (brave == null || brave.isEmpty()) {
+                        BraveSearchResult result = braveService.searchWithMeta(query, topK);
+                        cycle.observe(braveOutcome(result));
+                        brave = result == null ? Collections.emptyList() : result.snippets();
+                    }
+                }
                 if (brave != null && !brave.isEmpty()) {
                     log.info("[Hybrid] Brave primary returned {} snippets", brave.size());
                     return brave;
                 }
                 log.info("[Hybrid] Brave primary returned empty list. Falling back to Naver.");
             } catch (Exception e) {
+                if (cycle != null) cycle.observe("PROVIDER_ERROR");
                 traceSuppressed("bravePrimary.search", e);
                 log.warn("[Hybrid] Brave primary failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
             }
@@ -473,7 +657,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         boolean naverUsable = false;
         try {
             naverUsable = naverService != null && naverService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "direct"));
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
         } catch (Exception ignore) {
             traceSuppressed("naverUsable.directFallback", ignore);
         }
@@ -481,12 +665,20 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         // 2. Fallback: Naver ?쒕룄
         if (naverUsable) {
             try {
-                List<String> naver = naverService.searchSnippetsSync(query, topK);
+                if (!canStartSearchAttempt()) return Collections.emptyList();
+                List<String> naver;
+                if (cycle == null) naver = naverService.searchSnippetsSync(query, topK);
+                else {
+                    NaverSearchService.SearchResult result = naverService.searchWithTraceSync(query, topK);
+                    cycle.observe(result == null || result.trace() == null ? "UNKNOWN" : result.trace().outcomeClass);
+                    naver = result == null ? Collections.emptyList() : result.snippets();
+                }
                 if (naver != null && !naver.isEmpty()) {
                     log.info("[Hybrid] Naver fallback returned {} snippets", naver.size());
                     return naver;
                 }
             } catch (Exception e) {
+                if (cycle != null) cycle.observe("PROVIDER_ERROR");
                 traceSuppressed("naverFallback.search", e);
                 log.warn("[Hybrid] Naver fallback failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
             }
@@ -508,12 +700,107 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         return Collections.emptyList();
     }
 
+    /** Conversate keeps one provider cycle: errors are terminal, low evidence may use Brave once. */
+    private List<String> searchNaverFirst(String query, int topK, SearchCycle cycle) {
+        TraceStore.put("conversate.web.queryHash", org.apache.commons.codec.digest.DigestUtils.sha256Hex(query));
+        List<String> naver = List.of();
+        String failure = "NONE";
+        int requests = 0;
+        long began = System.nanoTime();
+        try {
+            if (!canStartSearchAttempt()) failure = "TIMEOUT_OR_BUDGET";
+            else if (naverService == null || !naverService.isEnabled()) failure = "AUTH_OR_CONFIG";
+            else if (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER)) failure = "BREAKER_OR_COOLDOWN";
+            else {
+                requests = 1;
+                var result = naverService.searchWithTraceSync(query, topK);
+                failure = result == null || result.trace() == null ? "UNKNOWN" : result.trace().outcomeClass;
+                if (result != null && result.snippets() != null) naver = result.snippets();
+            }
+        } catch (RuntimeException unavailable) { failure = "PROVIDER_ERROR"; }
+        if (failure == null) failure = "UNKNOWN";
+        cycle.observe(failure);
+        recordConversateSearch("NAVER", requests, naver.size(), began, "none", failure);
+        // An error is not permission to spend on another provider or hide the failure.
+        if (!java.util.Set.of("NONE", "TRUE_ZERO", "FILTER_ZERO").contains(failure)) return naver;
+
+        boolean broad = query.matches("(?isu).*(?:최신|현재|오늘|해외|국외|외국|글로벌|교차\\s*검증|사실\\s*확인|여러\\s*출처|다양한\\s*출처|추가\\s*근거|latest|current|international|cross.check).*");
+        var terms = java.util.Arrays.stream(query.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
+                .filter(term -> term.length() >= 2).distinct().toList();
+        List<String> relevantNaver = naver.stream().filter(java.util.Objects::nonNull).filter(snippet -> {
+            String text = snippet.toLowerCase(Locale.ROOT);
+            return terms.stream().filter(text::contains).count() >= Math.min(2, terms.size());
+        }).toList();
+        String supplement = broad ? "wider_or_fresh_evidence" : naver.isEmpty() ? "insufficient_results"
+                : relevantNaver.size() < Math.min(2, Math.max(1, topK)) ? "low_relevance_or_coverage" : "none";
+        if ("none".equals(supplement)) return naver;
+        if (!canStartSearchAttempt()) return relevantNaver;
+
+        List<String> brave = searchConversateBrave(query, topK, cycle, supplement);
+        // Reserve a slot for independent evidence even when the Naver batch already fills topK.
+        int primaryLimit = brave.isEmpty() ? topK : Math.max(0, topK - 1);
+        var selected = new java.util.LinkedHashSet<String>(relevantNaver.stream().limit(primaryLimit).toList());
+        selected.addAll(brave);
+        selected.addAll(relevantNaver);
+        return selected.stream().limit(topK).toList();
+    }
+
+    /** A later RAG insufficiency decision reuses this request's reservation, never another Naver cycle. */
+    private List<String> searchRagSupplement(String query, int topK) {
+        if (!canStartSearchAttempt()
+                || !org.apache.commons.codec.digest.DigestUtils.sha256Hex(query).equals(TraceStore.get("conversate.web.queryHash"))
+                || TraceStore.get("conversate.search.BRAVE") != null
+                || !(TraceStore.get("conversate.search.NAVER") instanceof java.util.Map<?, ?> naver)
+                || !"NONE".equals(naver.get("failureReason"))
+                || !(naver.get("resultCount") instanceof Number count) || count.intValue() <= 0
+                || TraceStore.context().putIfAbsent("conversate.web.ragSupplement.started", true) != null) {
+            return List.of();
+        }
+        SearchCycle cycle = new SearchCycle();
+        List<String> result = searchConversateBrave(query, topK, cycle, "rag_evidence_insufficient");
+        return finishBounded(result, 1, 0, result.isEmpty() ? cycle.reason() : "initial-hit").snippets();
+    }
+
+    private List<String> searchConversateBrave(String query, int topK, SearchCycle cycle, String supplement) {
+        long began = System.nanoTime();int requests = 0;String failure = "NONE";
+        List<String> brave = List.of();
+        try {
+            if (!canStartSearchAttempt()) failure = "TIMEOUT_OR_BUDGET";
+            else if (braveService == null || !braveService.isEnabled()) failure = "AUTH_OR_CONFIG";
+            else if (braveService.isCoolingDown() || nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE)) failure = "BREAKER_OR_COOLDOWN";
+            else {
+                brave = braveService.searchCacheOnly(query, topK);
+                if (brave == null || brave.isEmpty()) {
+                    requests = 1;
+                    var result = braveService.searchWithMeta(query, topK);
+                    failure = braveOutcome(result);
+                    brave = result == null || result.snippets() == null ? List.of() : result.snippets();
+                }
+            }
+        } catch (RuntimeException unavailable) { failure = "PROVIDER_ERROR"; }
+        cycle.observe(failure);
+        recordConversateSearch("BRAVE", requests, brave.size(), began, supplement, failure);
+        return brave;
+    }
+
+    private void recordConversateSearch(String provider, int requests, int results, long began, String fallback, String failure) {
+        long latency = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began);
+        var receipt = java.util.Map.<String,Object>of("searchNeeded", true, "provider", provider,
+                "requestCount", requests, "requestCountScope", "provider_search_method", "resultCount", results, "latencyMs", latency,
+                "fallbackReason", fallback, "failureReason", failure == null ? "UNKNOWN" : failure);
+        TraceStore.put("conversate.search." + provider, receipt);
+        log.info("conversate.search {}", receipt);
+    }
+
     private List<String> searchNaverFirst(String query, int topK) {
+        if (!canStartSearchAttempt()) {
+            return Collections.emptyList();
+        }
 
         boolean naverUsable = false;
         try {
             naverUsable = naverService != null && naverService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "direct"));
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
         } catch (Exception ignore) {
             traceSuppressed("naverUsable.direct", ignore);
         }
@@ -521,6 +808,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
         if (naverUsable) {
             try {
+                if (!canStartSearchAttempt()) return Collections.emptyList();
                 List<String> naver = naverService.searchSnippetsSync(query, topK);
                 if (naver != null && !naver.isEmpty()) {
                     log.info("[Hybrid] Naver primary returned {} snippets", naver.size());
@@ -544,7 +832,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         boolean braveUsable = false;
         try {
             braveUsable = braveService != null && braveService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "direct"))
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE))
                     && !braveService.isCoolingDown();
         } catch (Exception ignore) {
             traceSuppressed("braveUsable.directFallback", ignore);
@@ -554,6 +842,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if (braveUsable) {
             try {
                 // Use BraveSearchService.search() to benefit from cache/single-flight.
+                if (!canStartSearchAttempt()) return Collections.emptyList();
                 List<String> brave = braveService.search(query, topK);
                 if (brave != null && !brave.isEmpty()) {
                     log.debug("[Hybrid] Brave fallback returned {} snippets", brave.size());
@@ -580,71 +869,69 @@ public class HybridWebSearchProvider implements WebSearchProvider {
      * Converts Korean tech queries to English for Brave Search.
      * Focuses on smartphone/tech leak queries where English sources dominate.
      */
-    private String convertToEnglishSearchTerm(String query) {
-        if (!StringUtils.hasText(query))
-            return query;
-        String normalized = query.toLowerCase().replaceAll("\\s+", "");
-
-        // Do not append a technical suffix for game/character intent queries.
-        boolean isGameIntent = normalized.contains("\uC6D0\uC2E0")
-                || normalized.contains("genshin")
-                || normalized.contains("\uCE90\uB9AD\uD130")
-                || normalized.contains("\uC870\uD569")
-                || normalized.contains("\uD2F0\uC5B4")
-                || normalized.contains("\uBE4C\uB4DC");
-        if (isGameIntent) {
-            return query; // ?먮낯 洹몃?濡?諛섑솚
-        }
-
-        // Detect tech-product markers; without them, avoid adding a tech suffix.
-        boolean hasTechMarker = normalized
-                .matches(".*(galaxy\\s*s\\d{2}|fold|flip|iphone|pixel|snapdragon|exynos|rtx|cpu|gpu|notebook|laptop|\uAC24\uB7ED\uC2DC|\uC544\uC774\uD3F0).*");
-
-        boolean rumor = hasRumorIntent(normalized);
-
-        // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
-        if (normalized.contains("\uD3F4\uB4DC7") || normalized.contains("zfold7") || normalized.contains("fold7")) {
-            return rumor
-                    ? "Galaxy Z Fold 7 leak rumors renders"
-                    : "Samsung Galaxy Z Fold7 official specs release date price";
-        }
-
-        // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
-        if (rumor) {
-            return query + " latest leaks rumors";
-        }
-
-        // Expand only when a tech marker and a specs/release/price/review intent are both present.
-        if (hasTechMarker
-                && normalized.matches(".*(spec|release|price|review|\uC2A4\uD399|\uC0AC\uC591|\uCD9C\uC2DC|\uAC00\uACA9|\uB9AC\uBDF0|\uBE44\uAD50).*")) {
-            return query + " official specs release date price review";
-        }
-
-        return query;
-    }
-
-    private static boolean hasRumorIntent(String normalized) {
-        if (normalized == null)
-            return false;
-        return normalized.contains("\uB8E8\uBA38")
-                || normalized.contains("\uC720\uCD9C")
-                || normalized.contains("\uB80C\uB354")
-                || normalized.contains("leak")
-                || normalized.contains("rumor")
-                || normalized.contains("renders");
-    }
-
     private static long remainingMs(long deadlineNs) {
-        long remainNs = deadlineNs - System.nanoTime();
-        if (remainNs <= 0) {
-            return 0L;
-        }
+        return TimeBudget.untilNanoDeadline(deadlineNs).remainingMillis();
+    }
 
-        // Precision guard: TimeUnit.NANOSECONDS.toMillis(..) truncates sub-millisecond
-        // remainders to 0. Keep a 1ms minimum so a positive remaining budget doesn't
-        // get misclassified as 'budget exhausted'.
-        long ms = TimeUnit.NANOSECONDS.toMillis(remainNs);
-        return (ms <= 0L) ? 1L : ms;
+    private <T> T withRequestBudget(java.util.function.Supplier<T> action) {
+        return TraceStore.withSearchContext("searchExecutionId", () -> withRequestBudgetObserved(action));
+    }
+
+    private <T> T withRequestBudgetObserved(java.util.function.Supplier<T> action) {
+        TimeBudget previousBudget = TimeBudgetContext.get();
+        TimeBudget traceBudget = com.example.lms.trace.TraceContext.current().timeBudget();
+        TimeBudget selectedBudget = previousBudget;
+        if (traceBudget != null && (selectedBudget == null
+                || traceBudget.remainingMillis() < selectedBudget.remainingMillis())) {
+            selectedBudget = traceBudget;
+        }
+        if (selectedBudget == null) {
+            selectedBudget = new TimeBudget(TimeUnit.SECONDS.toMillis(timeoutSec));
+        }
+        TimeBudgetContext.set(selectedBudget);
+        boolean executionOwner = activeExecution.get() == null;
+        if (executionOwner) {
+            activeExecution.set(new HybridSearchExecution(TimeBudgetContext.get()));
+        }
+        try {
+            return action.get();
+        } finally {
+            try {
+                if (executionOwner) activeExecution.get().close();
+            } finally {
+                if (executionOwner) activeExecution.remove();
+                if (previousBudget == null) TimeBudgetContext.clear();
+                else TimeBudgetContext.set(previousBudget);
+            }
+        }
+    }
+
+    private <T> Future<T> submitSearchAttempt(java.util.concurrent.Callable<T> work) {
+        HybridSearchExecution execution = activeExecution.get();
+        return execution == null ? searchIoExecutor.submit(work) : execution.submit(searchIoExecutor, work);
+    }
+
+    private long capRequestWait(long requestedMs) {
+        TimeBudget budget = TimeBudgetContext.get();
+        long capped = budget == null ? Math.max(0L, requestedMs) : budget.capWaitMillis(requestedMs);
+        return Math.min(capped, com.example.lms.trace.TraceContext.current().remainingMillis());
+    }
+
+    private long requestDeadline(long providerLimitMs) {
+        long now = System.nanoTime();
+        return now + TimeUnit.MILLISECONDS.toNanos(capRequestWait(providerLimitMs));
+    }
+
+    private boolean canStartSearchAttempt() {
+        if (Thread.currentThread().isInterrupted() || capRequestWait(Long.MAX_VALUE) == 0L) {
+            TraceStore.put("web.hybrid.execution.stopReason", searchStopReason());
+            return false;
+        }
+        return true;
+    }
+
+    private static String searchStopReason() {
+        return Thread.currentThread().isInterrupted() ? "cancelled" : "budget_exhausted";
     }
 
     private static boolean isTraceTag(String tag) {
@@ -705,7 +992,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             }
         }
 
-        effective = Math.max(250L, effective);
+        effective = Math.min(remaining, Math.max(250L, effective));
+        if (cap > 0L) effective = Math.min(cap, effective);
 
         try {
             TraceStore.put("web.naver.blockTimeout.capMs", cap);
@@ -753,8 +1041,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             recordAwaitEvent(stage, tag, step, (v != null ? "done" : "done_null"), 0L, waitedMs, null);
             return (v != null) ? v : fallback;
         } catch (InterruptedException ie) {
-            // Avoid poisoning pooled request threads.
-            Thread.interrupted();
+            Thread.currentThread().interrupt();
             long waitedMs = Math.max(0L, (System.nanoTime() - startNs) / 1_000_000L);
             recordAwaitEvent(stage, tag, step, "interrupted", 0L, waitedMs, ie);
             if (isTraceTag(tag)) {
@@ -1220,7 +1507,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             return safeGetNow(future, fallback, tag, "hard");
         }
 
-        final long rawTimeoutMs = remainingMs(deadlineNs);
+        final TimeBudget waitBudget = TimeBudget.untilNanoDeadline(deadlineNs);
+        final long rawTimeoutMs = waitBudget.remainingMillis();
         final long nearMs = Math.max(0L, awaitNearExhaustedThresholdMs);
 
         final boolean budgetExhausted = rawTimeoutMs <= 0L;
@@ -1248,14 +1536,13 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         final boolean nearExhausted = rawTimeoutMs > 0L && nearMs > 0L && rawTimeoutMs <= nearMs;
         final boolean tinyBudget = rawTimeoutMs > 0L && floorMs > 0L && rawTimeoutMs < floorMs;
 
-        final boolean floorApplied = floorMs > 0L
+        final boolean floorApplied = !budgetExhausted && floorMs > 0L
                 && (nearExhausted
-                        || (awaitFloorTinyBudget && tinyBudget)
-                        || (budgetExhausted && officialOnly && awaitFloorBudgetExhaustedOfficialOnly));
+                        || (awaitFloorTinyBudget && tinyBudget));
         final String floorCause = budgetExhausted ? "budget_exhausted"
                 : (nearExhausted ? "near_exhausted" : (tinyBudget ? "tiny_budget" : "none"));
 
-        long timeoutMs = floorApplied ? floorMs : rawTimeoutMs;
+        long timeoutMs = waitBudget.capWaitMillis(floorApplied ? floorMs : rawTimeoutMs);
         String stepLabel = floorApplied ? (step + ".minLiveBudget") : step;
 
         // Provider-specific clamp: prevent Naver from consuming the whole deadline and
@@ -1282,35 +1569,25 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
             TraceStore.inc("web.await.budgetExhausted");
 
-            if (floorApplied) {
-                try {
-                    TraceStore.put("web.await.minLiveBudget.budgetExhaustedFloorApplied", true);
-                } catch (Throwable ignore) {
-                    traceSuppressed("await.budgetExhaustedFloor.trace", ignore);
-                }
-            }
-
-            // Budget exhausted and no floor -> immediate fallback.
+            // An exhausted request cannot acquire another wait, including an official-only floor.
             // IMPORTANT: do NOT cancel here; cancellation can drop near-complete results
             // and amplifies starvation.
-            if (!floorApplied) {
-                TraceStore.inc("web.await.cancelSuppressed");
-                try {
-                    TraceStore.put("web.await.cancelSuppressed.reason", "budget_exhausted");
-                } catch (Exception ignore) {
-                    traceSuppressed("await.cancelSuppressed.budgetExhausted", ignore);
-                }
-                if (isTraceTag(tag)) {
-                    log.debug("[{}] Hard Timeout (budget exhausted) - no cancel{}", tag, LogCorrelation.suffix());
-                } else {
-                    log.warn("[{}] Hard Timeout (budget exhausted) - no cancel{}", tag, LogCorrelation.suffix());
-                }
-                recordAwaitEvent("hard", tag, step, "budget_exhausted", 0L, 0L, null);
-                return fallback;
+            TraceStore.inc("web.await.cancelSuppressed");
+            try {
+                TraceStore.put("web.await.cancelSuppressed.reason", "budget_exhausted");
+            } catch (Exception ignore) {
+                traceSuppressed("await.cancelSuppressed.budgetExhausted", ignore);
             }
+            if (isTraceTag(tag)) {
+                log.debug("[{}] Hard Timeout (budget exhausted) - no cancel{}", tag, LogCorrelation.suffix());
+            } else {
+                log.warn("[{}] Hard Timeout (budget exhausted) - no cancel{}", tag, LogCorrelation.suffix());
+            }
+            recordAwaitEvent("hard", tag, step, "budget_exhausted", 0L, 0L, null);
+            return fallback;
         } else if (nearExhausted) {
             // Budget is technically positive but too small to be meaningful.
-            // Treat it like (near) budget exhaustion and allow a grace window.
+            // Keep the existing floor diagnostics, but cap any wait at the request deadline.
             try {
                 TraceStore.inc("web.await.nearExhausted.count");
                 TraceStore.put("web.await.nearExhausted.ms", rawTimeoutMs);
@@ -1328,6 +1605,14 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             } catch (Exception ignore) {
                 traceSuppressed("await.tinyBudget.trace", ignore);
             }
+        }
+        timeoutMs = waitBudget.capWaitMillis(timeoutMs);
+        if (timeoutMs == 0L) {
+            if (future.isDone()) {
+                return safeGetNow(future, fallback, tag, "hard");
+            }
+            recordAwaitEvent("hard", tag, step, "budget_exhausted", 0L, 0L, null);
+            return fallback;
         }
         long startNs = System.nanoTime();
         try {
@@ -1408,8 +1693,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             recordAwaitEvent("hard", tag, stepLabel, floorApplied ? floorCause : "await_timeout", timeoutMs, waitedMs, te);
             return fallback;
         } catch (InterruptedException ie) {
-            // Avoid poisoning pooled request threads.
-            Thread.interrupted();
+            Thread.currentThread().interrupt();
             long waitedMs = Math.max(0L, (System.nanoTime() - startNs) / 1_000_000L);
 
             if (floorApplied && awaitCancelSuppressedWhenFloor) {
@@ -1609,6 +1893,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
     private <T> T awaitSoft(Future<T> future, long softTimeoutMs, T fallback, String tag) {
         final String step = "awaitSoft";
+        softTimeoutMs = capRequestWait(softTimeoutMs);
 
         if (future == null) {
             recordAwaitEvent("soft", tag, step, "missing_future", softTimeoutMs, 0L, null);
@@ -1618,6 +1903,10 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         // Small optimization: if already completed, don't pay soft-timeout overhead.
         if (future.isDone()) {
             return safeGetNow(future, fallback, tag, "soft");
+        }
+        if (softTimeoutMs == 0L) {
+            recordAwaitEvent("soft", tag, step, "budget_exhausted", 0L, 0L, null);
+            return fallback;
         }
 
         long startNs = System.nanoTime();
@@ -1635,8 +1924,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             recordAwaitEvent("soft", tag, step, "timeout", softTimeoutMs, waitedMs, te);
             return fallback;
         } catch (InterruptedException ie) {
-            // 源⑤걮??interrupt hygiene
-            Thread.interrupted();
+            Thread.currentThread().interrupt();
             long waitedMs = Math.max(0L, (System.nanoTime() - startNs) / 1_000_000L);
             if (isTraceTag(tag)) {
                 log.debug("[{}] Soft Interrupted", tag);
@@ -1658,11 +1946,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
         final String braveQuery = convertToEnglishSearchTerm(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
-        final long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        final long deadlineNs = requestDeadline(timeoutMs);
 
         // Breaker: skip engines when OPEN
-        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "korean.braveFirst"));
-        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "korean.braveFirst"));
+        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE));
+        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
 
         // --- Brave-first hedged strategy ---
         Future<BraveSearchResult> braveFuture = null;
@@ -1681,7 +1969,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             braveSkipReason = "breaker_open";
             try {
                 braveSkipExtraMs = nightmareBreaker == null ? 0L
-                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_BRAVE, "korean.braveFirst");
+                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_BRAVE);
             } catch (Throwable ignore) {
                 traceSuppressed("korean.braveFirst.remainingOpenMs", ignore);
             }
@@ -1692,7 +1980,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             log.warn("[Hybrid] Brave is cooling down ({}ms remaining), skipping Brave call", braveSkipExtraMs);
         } else {
             try {
-                braveFuture = searchIoExecutor.submit(() -> braveService.searchWithMeta(braveQuery, braveK));
+                braveFuture = submitSearchAttempt(() -> braveService.searchWithMeta(braveQuery, braveK));
                 braveLiveCall = true;
             } catch (Exception submitEx) {
                 braveSkipReason = "submit_failed";
@@ -1739,9 +2027,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 } catch (TimeoutException ignore) {
                     traceSuppressed("korean.braveFirst.earlyTimeout", ignore);
                 } catch (InterruptedException ie) {
-                    // Avoid poisoning pooled request threads.
-                    Thread.interrupted();
+                    Thread.currentThread().interrupt();
                     traceSuppressed("korean.braveFirst.earlyInterrupted", ie);
+                    return Collections.emptyList();
                 } catch (Exception ignore) {
                     traceSuppressed("korean.braveFirst.earlyFailure", ignore);
                 }
@@ -1754,7 +2042,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if (skipNaver) {
             naverSkipReason = "breaker_open";
             naverSkipExtraMs = nightmareBreaker == null ? 0L
-                    : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER, "korean.braveFirst");
+                    : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
             log.warn("[Hybrid] NightmareBreaker OPEN for Naver, skipping Naver call");
         } else if (naverService == null || !naverService.isEnabled()) {
             naverSkipReason = "disabled";
@@ -1771,27 +2059,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             }
             final java.time.Duration naverBlockTimeout = java.time.Duration.ofMillis(
                     resolveNaverBlockTimeoutMs(deadlineNs, 0L, "korean.brave-first"));
-            naverFuture = searchIoExecutor.submit(() -> {
+            naverFuture = submitSearchAttempt(() -> {
                 try {
                     return naverService.searchSnippetsSync(query, callK, naverBlockTimeout);
                 } catch (Exception e) {
                     traceSuppressed("korean.braveFirst.naverSearchFailure", e);
-                    // Wire Naver signals to breaker
-                    if (nightmareBreaker != null) {
-                        if (e instanceof WebClientResponseException w && w.getStatusCode().value() == 429) {
-                            Long retryAfterMs = parseRetryAfterMs(w.getHeaders());
-                            nightmareBreaker.recordRateLimit(NightmareKeys.WEBSEARCH_NAVER, query, w, "HTTP 429",
-                                    retryAfterMs);
-                        } else if (e instanceof WebClientResponseException w && w.getStatusCode().value() == 403) {
-                            // Some providers return 403 for bot detection.
-                            nightmareBreaker.recordRejected(NightmareKeys.WEBSEARCH_NAVER, query, "HTTP 403");
-                        } else if (e.getCause() instanceof java.util.concurrent.TimeoutException) {
-                            nightmareBreaker.recordTimeout(NightmareKeys.WEBSEARCH_NAVER, query, "timeout");
-                        } else {
-                            nightmareBreaker.recordFailure(NightmareKeys.WEBSEARCH_NAVER,
-                                    NightmareBreaker.FailureKind.UNKNOWN, e, query);
-                        }
-                    }
                     log.warn("[Hybrid] Naver korean search failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
                     return Collections.emptyList();
                 }
@@ -1799,6 +2071,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             naverLiveCall = true;
         } else {
             naverSkippedByHedge = true;
+            recordNaverSkipped("brave_sufficient", "korean.braveFirst.hedge", 0L);
             if (log.isDebugEnabled()) {
                 int braveSz = (braveMetaEarly == null || braveMetaEarly.snippets() == null) ? 0
                         : braveMetaEarly.snippets().size();
@@ -1821,15 +2094,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                         deadlineNs,
                         BraveSearchResult.ok(Collections.emptyList(), 0L),
                         "Brave");
-        if (nightmareBreaker != null && braveLiveCall && braveMeta != null) {
-            switch (braveMeta.status()) {
-                case HTTP_429, HTTP_503, RATE_LIMIT_LOCAL, COOLDOWN ->
-                    nightmareBreaker.recordRateLimit(NightmareKeys.WEBSEARCH_BRAVE, query, braveMeta.message(),
-                            braveMeta.cooldownMs());
-                case OK -> nightmareBreaker.recordSuccess(NightmareKeys.WEBSEARCH_BRAVE, braveMeta.elapsedMs());
-                default -> {
-                }
-            }
+        if (Thread.currentThread().isInterrupted()) {
+            return Collections.emptyList();
         }
         List<String> brave = (braveMeta == null) ? Collections.emptyList() : braveMeta.snippets();
         boolean braveEnough = skipNaverIfBraveSufficient && brave != null && brave.size() >= topK;
@@ -1838,6 +2104,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 : (braveEnough
                         ? awaitSoft(naverFuture, naverOpportunisticMs, Collections.emptyList(), "Naver")
                         : awaitWithDeadline(naverFuture, deadlineNs, Collections.emptyList(), "Naver"));
+        if (Thread.currentThread().isInterrupted()) {
+            return mergeAndLimit(brave, naver, topK);
+        }
 
         if (braveMeta != null && braveMeta.status() != BraveSearchResult.Status.OK) {
             log.info("[Hybrid] Brave meta: status={} httpStatus={} cooldownMs={} msg={} elapsedMs={}",
@@ -1859,13 +2128,13 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if ((naver == null || naver.isEmpty()) && (brave == null || brave.isEmpty())
                 && naverFuture != null && !naverFuture.isDone()) {
             try {
-                naver = naverFuture.get(200L, TimeUnit.MILLISECONDS);
+                naver = naverFuture.get(capRequestWait(200L), TimeUnit.MILLISECONDS);
             } catch (TimeoutException ignore) {
                 traceSuppressed("korean.naverLateJoin.timeout", ignore);
             } catch (InterruptedException ie) {
-                // Avoid poisoning pooled request threads.
-                Thread.interrupted();
+                Thread.currentThread().interrupt();
                 traceSuppressed("korean.naverLateJoin.interrupted", ie);
+                return mergeAndLimit(brave, naver, topK);
             } catch (Exception ignore) {
                 traceSuppressed("korean.naverLateJoin.failure", ignore);
             }
@@ -1882,6 +2151,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             final long joinMs = Math.min(200L, Math.max(50L, naverOpportunisticMs));
             if (!naverFuture.isDone()) {
                 List<String> late = awaitSoft(naverFuture, joinMs, Collections.emptyList(), "Naver.lateJoinDeficit");
+                if (Thread.currentThread().isInterrupted()) {
+                    return mergeAndLimit(brave, naver, topK);
+                }
                 if (late != null && !late.isEmpty()) {
                     naver = late;
                     try {
@@ -1940,7 +2212,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     private List<String> searchKoreanNaverAndBrave(String query, int topK) {
         final String braveQuery = convertToEnglishSearchTerm(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
-        final long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        final long deadlineNs = requestDeadline(timeoutMs);
 
         // Official-only mode prefers to keep OFFICIAL/DOCS diversity; do not hedge-skip
         // Brave
@@ -1955,8 +2227,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         }
 
         // Breaker: skip engines when OPEN
-        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "korean.naverFirst"));
-        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "korean.naverFirst"));
+        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE));
+        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
 
         // --- Naver-first hedged strategy ---
         Future<List<String>> naverFuture = null;
@@ -1973,7 +2245,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             naverSkipReason = "breaker_open";
             try {
                 naverSkipExtraMs = nightmareBreaker == null ? 0L
-                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER, "korean.naverFirst");
+                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
             } catch (Throwable ignore) {
                 traceSuppressed("korean.naverFirst.remainingOpenMs", ignore);
             }
@@ -1994,26 +2266,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             final java.time.Duration naverBlockTimeout = java.time.Duration.ofMillis(
                     resolveNaverBlockTimeoutMs(deadlineNs, naverReserveMs, "korean.naver-first"));
             try {
-                naverFuture = searchIoExecutor.submit(() -> {
+                naverFuture = submitSearchAttempt(() -> {
                     try {
                         return naverService.searchSnippetsSync(query, topK, naverBlockTimeout);
                     } catch (Exception e) {
                         traceSuppressed("korean.naverFirst.naverSearchFailure", e);
-                        // Wire Naver signals to breaker
-                        if (nightmareBreaker != null) {
-                            if (e instanceof WebClientResponseException w && w.getStatusCode().value() == 429) {
-                                Long retryAfterMs = parseRetryAfterMs(w.getHeaders());
-                                nightmareBreaker.recordRateLimit(NightmareKeys.WEBSEARCH_NAVER, query, w, "HTTP 429",
-                                        retryAfterMs);
-                            } else if (e instanceof WebClientResponseException w && w.getStatusCode().value() == 403) {
-                                nightmareBreaker.recordRejected(NightmareKeys.WEBSEARCH_NAVER, query, "HTTP 403");
-                            } else if (e.getCause() instanceof java.util.concurrent.TimeoutException) {
-                                nightmareBreaker.recordTimeout(NightmareKeys.WEBSEARCH_NAVER, query, "timeout");
-                            } else {
-                                nightmareBreaker.recordFailure(NightmareKeys.WEBSEARCH_NAVER,
-                                        NightmareBreaker.FailureKind.UNKNOWN, e, query);
-                            }
-                        }
                         log.warn("[Hybrid] Naver korean search failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
                         return Collections.emptyList();
                     }
@@ -2059,9 +2316,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 } catch (TimeoutException ignore) {
                     traceSuppressed("korean.naverFirst.earlyTimeout", ignore);
                 } catch (InterruptedException ie) {
-                    // Avoid poisoning pooled request threads.
-                    Thread.interrupted();
+                    Thread.currentThread().interrupt();
                     traceSuppressed("korean.naverFirst.earlyInterrupted", ie);
+                    return Collections.emptyList();
                 } catch (Exception ignore) {
                     traceSuppressed("korean.naverFirst.earlyFailure", ignore);
                 }
@@ -2084,7 +2341,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             braveSkipReason = "breaker_open";
             try {
                 braveSkipExtraMs = nightmareBreaker == null ? 0L
-                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_BRAVE, "korean.naverFirst");
+                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_BRAVE);
             } catch (Throwable ignore) {
                 traceSuppressed("korean.naverFirst.braveRemainingOpenMs", ignore);
             }
@@ -2116,7 +2373,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 }
             }
             try {
-                braveFuture = searchIoExecutor.submit(() -> braveService.searchWithMeta(braveQuery, braveK));
+                braveFuture = submitSearchAttempt(() -> braveService.searchWithMeta(braveQuery, braveK));
                 braveLiveCall = true;
             } catch (Exception submitEx) {
                 braveSkipReason = "submit_failed";
@@ -2148,6 +2405,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         List<String> naver = (naverEarly != null)
                 ? naverEarly
                 : awaitWithDeadline(naverFuture, deadlineNs, Collections.emptyList(), "Naver");
+        if (Thread.currentThread().isInterrupted()) {
+            return naver == null ? Collections.emptyList() : naver;
+        }
 
         boolean naverEnough = skipNaverIfBraveSufficient && naver != null && naver.size() >= topK;
 
@@ -2193,17 +2453,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                         "Brave")
                 : awaitWithDeadline(braveFuture, braveJoinDeadlineNs,
                         BraveSearchResult.ok(Collections.emptyList(), 0L), "Brave");
-
-        // Wire Brave rate-limit signals to breaker (only if we actually called Brave)
-        if (nightmareBreaker != null && braveLiveCall && braveMeta != null) {
-            switch (braveMeta.status()) {
-                case HTTP_429, HTTP_503, RATE_LIMIT_LOCAL, COOLDOWN ->
-                    nightmareBreaker.recordRateLimit(NightmareKeys.WEBSEARCH_BRAVE, query, braveMeta.message(),
-                            braveMeta.cooldownMs());
-                case OK -> nightmareBreaker.recordSuccess(NightmareKeys.WEBSEARCH_BRAVE, braveMeta.elapsedMs());
-                default -> {
-                }
-            }
+        if (Thread.currentThread().isInterrupted()) {
+            List<String> braveInterrupted = braveMeta == null || braveMeta.snippets() == null
+                    ? Collections.emptyList()
+                    : braveMeta.snippets();
+            return mergeAndLimit(naver, braveInterrupted, topK);
         }
 
         List<String> brave = (braveMeta == null) ? Collections.emptyList() : braveMeta.snippets();
@@ -2237,13 +2491,13 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if ((naver == null || naver.isEmpty()) && (brave == null || brave.isEmpty())
                 && naverFuture != null && !naverFuture.isDone()) {
             try {
-                naver = naverFuture.get(200L, TimeUnit.MILLISECONDS);
+                naver = naverFuture.get(capRequestWait(200L), TimeUnit.MILLISECONDS);
             } catch (TimeoutException ignore) {
                 traceSuppressed("korean.naverFirst.lateJoin.timeout", ignore);
             } catch (InterruptedException ie) {
-                // Avoid poisoning pooled request threads.
-                Thread.interrupted();
+                Thread.currentThread().interrupt();
                 traceSuppressed("korean.naverFirst.lateJoin.interrupted", ie);
+                return mergeAndLimit(naver, brave, topK);
             } catch (Exception ignore) {
                 traceSuppressed("korean.naverFirst.lateJoin.failure", ignore);
             }
@@ -2310,6 +2564,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             data.put("brave.count", braveSafe.size());
             data.put("naver.count", naverSafe.size());
             data.put("merged.count", mergedSafe.size());
+            data.putAll(TraceStore.searchCorrelation(TraceStore.context()));
+            data.put("naver.retainedAfterDedup", countFromList(mergedSafe, naverSafe));
 
             // Digests (order-sensitive + order-insensitive) help detect merge ordering
             // issues.
@@ -2337,7 +2593,26 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                     data,
                     error);
 
-            boolean afterFilterStarvation = mergedSafe.isEmpty() && (!braveSafe.isEmpty() || !naverSafe.isEmpty()); TraceStore.put("hybrid.web.outCount", mergedSafe.size()); TraceStore.put("hybrid.web.starvation", afterFilterStarvation); TraceStore.put("outCount", mergedSafe.size()); TraceStore.put("stageCountsSelectedFromOut", Map.of("brave", braveSafe.size(), "naver", naverSafe.size(), "merged", mergedSafe.size())); TraceStore.put("starvationFallback.poolSafeEmpty", mergedSafe.isEmpty()); TraceStore.put("poolSafeEmpty", mergedSafe.isEmpty()); if (mergedSafe.isEmpty()) { TraceStore.put("starvationFallback.trigger", "all_providers_empty_or_down"); TraceStore.put("rescueMerge.used", false); } TraceStore.put("tracePool.size", TraceStore.getPoolItems().size());
+            boolean afterFilterStarvation = mergedSafe.isEmpty() && (!braveSafe.isEmpty() || !naverSafe.isEmpty());
+            TraceStore.put("hybrid.web.outCount", mergedSafe.size());
+            TraceStore.put("hybrid.web.starvation", afterFilterStarvation);
+            TraceStore.put("outCount", mergedSafe.size());
+            TraceStore.put("stageCountsSelectedFromOut", Map.of("brave", braveSafe.size(), "naver", naverSafe.size(), "merged", mergedSafe.size()));
+            TraceStore.put("starvationFallback.poolSafeEmpty", mergedSafe.isEmpty());
+            TraceStore.put("poolSafeEmpty", mergedSafe.isEmpty());
+            TraceStore.put("web.fusion.selectedCount", mergedSafe.size());
+            TraceStore.put("web.provider.resultCount", braveSafe.size() + naverSafe.size());
+            if (qKey != null) {
+                TraceStore.put("web.query.hash", SafeRedactor.hashValue(qKey));
+                TraceStore.put("web.query.length", qKey.length());
+            }
+            if (afterFilterStarvation) {
+                TraceStore.put("web.filter.starvationReason", "after-filter-starvation");
+                TraceStore.put("web.failsoft.reason", "after-filter-starvation");
+            } else {
+                TraceStore.put("web.filter.starvationReason", null);
+            }
+            if (mergedSafe.isEmpty()) { TraceStore.put("starvationFallback.trigger", "all_providers_empty_or_down"); TraceStore.put("rescueMerge.used", false); } TraceStore.put("tracePool.size", TraceStore.getPoolItems().size());
             Map<String, Object> input = new LinkedHashMap<>();
             input.put("queryHash", qKey == null ? "" : SafeRedactor.hash12(qKey));
             input.put("queryLen", query == null ? 0 : query.length());
@@ -2348,6 +2623,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             output.put("returnedCount", returnedCount);
             output.put("afterFilterCount", mergedSafe.size());
             output.put("selectedCount", mergedSafe.size());
+            output.put("naverRetainedCount", countFromList(mergedSafe, naverSafe));
             Map<String, Object> failure = new LinkedHashMap<>();
             if (afterFilterStarvation) {
                 failure.put("reasonCode", "after_filter_starvation");
@@ -2492,80 +2768,58 @@ public class HybridWebSearchProvider implements WebSearchProvider {
      * we always keep at least 3 snippets when available.
      */
     private static List<String> mergeAndLimit(List<String> primary, List<String> secondary, int topK) {
-        if (primary == null) {
-            primary = Collections.emptyList();
-        }
-        if (secondary == null) {
-            secondary = Collections.emptyList();
-        }
-
-        // Preserve insertion order while dropping duplicate/blank snippets.
-        LinkedHashSet<String> merged = new LinkedHashSet<>();
-
-        for (String s : primary) {
-            if (s != null && !s.isBlank()) {
-                merged.add(s);
-            }
-        }
-        for (String s : secondary) {
-            if (s != null && !s.isBlank()) {
-                merged.add(s);
-            }
-        }
-
+        GuardContext ctx = GuardContextHolder.get();
+        boolean officialOnly = ctx != null && ctx.isOfficialOnly();
+        boolean restrictTrust = officialOnly || (ctx != null && ctx.isStrikeMode());
+        List<String> merged = HybridSearchResultPolicy.mergeProviders(
+                primary, secondary, topK, restrictTrust, officialOnly);
         if (merged.isEmpty()) {
             log.warn("[Hybrid] No merged results after filtering, returning empty list");
         }
-
-        int effectiveTopK = topK <= 0 ? 3 : Math.max(3, topK);
-
-        List<String> out = merged.stream()
-                .limit(effectiveTopK)
-                .toList();
-
-        // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
-        return applyStrikeFilterIfNeeded(out);
-    }
-
-    private static List<String> applyStrikeFilterIfNeeded(List<String> in) {
-        if (in == null || in.isEmpty()) {
-            return in;
-        }
-        GuardContext ctx = GuardContextHolder.get();
-        if (ctx == null) {
-            return in;
-        }
-        if (!(ctx.isStrikeMode() || ctx.isOfficialOnly())) {
-            return in;
-        }
-        ArrayList<String> out = new ArrayList<>();
-        for (String s : in) {
-            if (s == null || s.isBlank()) {
-                continue;
-            }
-            if (isLowTrustUrl(s)) {
-                continue;
-            }
-            out.add(s);
-        }
-        return out.isEmpty() ? in : out;
+        return merged;
     }
 
     public static boolean isLowTrustUrl(String lowerUrl) {
-        if (lowerUrl == null || lowerUrl.isBlank()) {
-            return false;
-        }
-        String lower = lowerUrl.toLowerCase(Locale.ROOT);
-        for (String marker : LOW_TRUST_URL_MARKERS) {
-            if (lower.contains(marker)) {
-                return true;
-            }
-        }
-        return false;
+        return HybridSearchResultPolicy.isLowTrustUrl(lowerUrl);
     }
 
     @Override
     public NaverSearchService.SearchResult searchWithTrace(String query, int topK) {
+        return withRequestBudget(() -> searchWithTraceWithinBudget(query, topK));
+    }
+
+    private NaverSearchService.SearchResult searchWithTraceWithinBudget(String query, int topK) {
+
+        if (Thread.currentThread().isInterrupted()) {
+            try {
+                TraceStore.inc("web.interruptHygiene.preserved.traceEntry.count");
+                TraceStore.put("web.interruptHygiene.preserved.traceEntry.where",
+                        "HybridWebSearchProvider.searchWithTrace");
+                TraceStore.put("interrupt.preserved", true);
+            } catch (Exception suppressed) {
+                traceSuppressed("traceEntry.interruptPreserved", suppressed);
+            }
+            return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+        }
+
+        if (boundedFallbackEnabled || Boolean.TRUE.equals(TraceStore.get("conversate.web.singleCycle"))) {
+            long startedNanos = System.nanoTime();
+            List<String> snippets = search(query, topK);
+            NaverSearchService.SearchTrace trace = new NaverSearchService.SearchTrace();
+            trace.query = "[redacted]";
+            trace.queryHash = SafeRedactor.hashValue(query);
+            trace.queryLength = query == null ? 0 : query.length();
+            trace.provider = getName() + ":BOUNDED";
+            trace.totalMs = Math.max(0L,
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos));
+            if (Boolean.TRUE.equals(TraceStore.get("web.boundedRoute.completed"))) {
+                String terminalReason = SafeRedactor.traceLabelOrFallback(
+                        TraceStore.get("web.boundedRoute.terminalReason"), "unknown");
+                trace.steps.add(new NaverSearchService.SearchStep(
+                        "BOUNDED:" + terminalReason, snippets.size(), snippets.size(), trace.totalMs));
+            }
+            return new NaverSearchService.SearchResult(snippets, trace);
+        }
 
         var gctx = GuardContextHolder.get();
         boolean sensitive = gctx != null && gctx.isSensitiveTopic();
@@ -2601,6 +2855,12 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             r = searchWithTraceKoreanSmartMerge(query, topK);
         }
 
+        if (Thread.currentThread().isInterrupted()) {
+            return r != null
+                    ? r
+                    : new NaverSearchService.SearchResult(Collections.emptyList(), null);
+        }
+
         long totalMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0Ns);
 
         List<String> snippets = (r != null && r.snippets() != null) ? r.snippets() : Collections.emptyList();
@@ -2634,6 +2894,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         NaverSearchService.SearchResult primary = bravePrimary
                 ? searchWithTraceKoreanBraveAndNaver(query, topK)
                 : searchWithTraceKoreanNaverAndBrave(query, topK);
+        if (Thread.currentThread().isInterrupted()) {
+            return primary != null
+                    ? primary
+                    : new NaverSearchService.SearchResult(Collections.emptyList(), null);
+        }
         if (!soakEnabled || primary == null || primary.snippets() == null || primary.snippets().size() >= 3) {
             return primary;
         }
@@ -2680,11 +2945,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
         final String braveQuery = convertToEnglishSearchTerm(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
-        final long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        final long deadlineNs = requestDeadline(timeoutMs);
 
         // Breaker: skip engines when OPEN
-        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "koreanTrace.braveFirst"));
-        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "koreanTrace.braveFirst"));
+        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE));
+        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
 
         // --- Brave-first hedged strategy: start Brave first; start Naver only if
         // needed ---
@@ -2698,7 +2963,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             log.warn("[Hybrid] Brave is cooling down ({}ms remaining), skipping Brave trace call",
                     braveService.cooldownRemainingMs());
         } else {
-            braveFuture = searchIoExecutor.submit(() -> {
+            braveFuture = submitSearchAttempt(() -> {
                 int braveK = Math.min(Math.max(topK, 5), 20);
                 return braveService.searchWithMeta(braveQuery, braveK);
             });
@@ -2726,9 +2991,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 } catch (TimeoutException ignore) {
                     traceSuppressed("trace.braveFirst.earlyTimeout", ignore);
                 } catch (InterruptedException ie) {
-                    // Avoid poisoning pooled request threads.
-                    Thread.interrupted();
+                    Thread.currentThread().interrupt();
                     traceSuppressed("trace.braveFirst.earlyInterrupted", ie);
+                    return new NaverSearchService.SearchResult(Collections.emptyList(), null);
                 } catch (Exception ignore) {
                     traceSuppressed("trace.braveFirst.earlyFailure", ignore);
                 }
@@ -2759,7 +3024,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             final java.time.Duration naverBlockTimeout = java.time.Duration.ofMillis(
                     resolveNaverBlockTimeoutMs(deadlineNs, 0L, "korean-trace.brave-first"));
 
-            naverFuture = searchIoExecutor.submit(() -> {
+            naverFuture = submitSearchAttempt(() -> {
                 try {
                     NaverSearchService.SearchResult result = naverService.searchWithTraceSync(query, callK,
                             naverBlockTimeout);
@@ -2773,6 +3038,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             });
         } else {
             naverSkippedByHedge = true;
+            recordNaverSkipped("brave_sufficient", "korean.braveFirst.trace.hedge", 0L);
         }
 
         BraveSearchResult braveMeta = (braveMetaEarly != null)
@@ -2782,17 +3048,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                         deadlineNs,
                         BraveSearchResult.ok(Collections.emptyList(), 0L),
                         "Brave-Trace");
-
-        // Wire Brave rate-limit signals to breaker (only if we actually called Brave)
-        if (nightmareBreaker != null && braveLiveCall && braveMeta != null) {
-            switch (braveMeta.status()) {
-                case HTTP_429, HTTP_503, RATE_LIMIT_LOCAL, COOLDOWN ->
-                    nightmareBreaker.recordRateLimit(NightmareKeys.WEBSEARCH_BRAVE, query, braveMeta.message(),
-                            braveMeta.cooldownMs());
-                case OK -> nightmareBreaker.recordSuccess(NightmareKeys.WEBSEARCH_BRAVE, braveMeta.elapsedMs());
-                default -> {
-                }
-            }
+        if (Thread.currentThread().isInterrupted()) {
+            return new NaverSearchService.SearchResult(Collections.emptyList(), null);
         }
 
         List<String> brave = (braveMeta == null) ? Collections.emptyList() : braveMeta.snippets();
@@ -2819,6 +3076,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                             deadlineNs,
                             new NaverSearchService.SearchResult(Collections.emptyList(), null),
                             "Naver-Trace");
+        }
+        if (Thread.currentThread().isInterrupted()) {
+            return new NaverSearchService.SearchResult(
+                    mergeAndLimit(brave, Collections.emptyList(), topK),
+                    null);
         }
 
         // Basic parsing sanity check (debug aid)
@@ -2854,15 +3116,23 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                     int expandedK = Math.min(topK * 2, 20); // Brave 理쒕? 20
                     // Retry budget is intentionally small. Fail-fast.
                     long retryBudgetMs = Math.min(timeoutMs, 1200L);
-                    long retryDeadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryBudgetMs);
+                    long retryDeadlineNs = requestDeadline(retryBudgetMs);
 
-                    Future<BraveSearchResult> retry = searchIoExecutor
-                            .submit(() -> braveService.searchWithMeta(braveQuery, expandedK));
+                    Future<BraveSearchResult> retry = submitSearchAttempt(
+                            () -> braveService.searchWithMeta(braveQuery, expandedK));
                     BraveSearchResult retryMeta = awaitWithDeadline(
                             retry,
                             retryDeadlineNs,
                             BraveSearchResult.ok(Collections.emptyList(), 0L),
                             "Brave-Expanded");
+                    if (Thread.currentThread().isInterrupted()) {
+                        return new NaverSearchService.SearchResult(
+                                mergeAndLimit(
+                                        brave,
+                                        naver.snippets() == null ? Collections.emptyList() : naver.snippets(),
+                                        topK),
+                                naver.trace());
+                    }
                     if (retryMeta != null) {
                         braveMeta = retryMeta;
                     }
@@ -2915,11 +3185,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
         final String braveQuery = convertToEnglishSearchTerm(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
-        final long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        final long deadlineNs = requestDeadline(timeoutMs);
 
         // Breaker: skip engines when OPEN
-        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "koreanTrace.naverFirst"));
-        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "koreanTrace.naverFirst"));
+        boolean skipBrave = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE));
+        boolean skipNaver = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
 
         // --- Naver-first hedged strategy ---
         Future<NaverSearchService.SearchResult> naverFuture = null;
@@ -2936,7 +3206,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             naverSkipReason = "breaker_open";
             try {
                 naverSkipExtraMs = nightmareBreaker == null ? 0L
-                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER, "koreanTrace.naverFirst");
+                        : nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
             } catch (Throwable ignore) {
                 traceSuppressed("koreanTrace.naverFirst.remainingOpenMs", ignore);
             }
@@ -2945,7 +3215,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             final java.time.Duration naverBlockTimeout = java.time.Duration.ofMillis(
                     resolveNaverBlockTimeoutMs(deadlineNs, 0L, "korean-trace.naver-first"));
             try {
-                naverFuture = searchIoExecutor.submit(() -> {
+                naverFuture = submitSearchAttempt(() -> {
                     try {
                         NaverSearchService.SearchResult result = naverService.searchWithTraceSync(query, topK,
                                 naverBlockTimeout);
@@ -3000,9 +3270,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 } catch (TimeoutException ignore) {
                     traceSuppressed("koreanTrace.naverFirst.earlyTimeout", ignore);
                 } catch (InterruptedException ie) {
-                    // Avoid poisoning pooled request threads.
-                    Thread.interrupted();
+                    Thread.currentThread().interrupt();
                     traceSuppressed("koreanTrace.naverFirst.earlyInterrupted", ie);
+                    return new NaverSearchService.SearchResult(Collections.emptyList(), null);
                 } catch (Exception ignore) {
                     traceSuppressed("koreanTrace.naverFirst.earlyFailure", ignore);
                 }
@@ -3020,7 +3290,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             log.warn("[Hybrid] Brave is cooling down ({}ms remaining), skipping Brave trace call",
                     braveService.cooldownRemainingMs());
         } else if (!naverEarlyEnoughToSkipBrave) {
-            braveFuture = searchIoExecutor.submit(() -> {
+            braveFuture = submitSearchAttempt(() -> {
                 int braveK = Math.min(Math.max(topK, 5), 20);
                 return braveService.searchWithMeta(braveQuery, braveK);
             });
@@ -3036,6 +3306,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                         deadlineNs,
                         new NaverSearchService.SearchResult(Collections.emptyList(), null),
                         "Naver-Trace");
+        if (Thread.currentThread().isInterrupted()) {
+            return naver != null
+                    ? naver
+                    : new NaverSearchService.SearchResult(Collections.emptyList(), null);
+        }
 
         int naverCount = (naver != null && naver.snippets() != null) ? naver.snippets().size() : 0;
         boolean naverEnough = skipNaverIfBraveSufficient && naverCount >= topK;
@@ -3091,17 +3366,11 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                     : awaitWithDeadline(braveFuture, braveJoinDeadlineNs,
                             BraveSearchResult.ok(Collections.emptyList(), 0L), "Brave-Trace");
         }
-
-        // Wire Brave rate-limit signals to breaker (only if we actually called Brave)
-        if (nightmareBreaker != null && braveLiveCall && braveMeta != null) {
-            switch (braveMeta.status()) {
-                case HTTP_429, HTTP_503, RATE_LIMIT_LOCAL, COOLDOWN ->
-                    nightmareBreaker.recordRateLimit(NightmareKeys.WEBSEARCH_BRAVE, query, braveMeta.message(),
-                            braveMeta.cooldownMs());
-                case OK -> nightmareBreaker.recordSuccess(NightmareKeys.WEBSEARCH_BRAVE, braveMeta.elapsedMs());
-                default -> {
-                }
-            }
+        if (Thread.currentThread().isInterrupted()) {
+            List<String> naverSnippets = naver == null || naver.snippets() == null
+                    ? Collections.emptyList()
+                    : naver.snippets();
+            return new NaverSearchService.SearchResult(naverSnippets, naver == null ? null : naver.trace());
         }
 
         List<String> brave = (braveMeta == null) ? Collections.emptyList() : braveMeta.snippets();
@@ -3118,7 +3387,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
         if (braveCount == 0 && naverCount == 0 && naverFuture != null && !naverFuture.isDone()) {
             try {
-                NaverSearchService.SearchResult late = naverFuture.get(200L, TimeUnit.MILLISECONDS);
+                NaverSearchService.SearchResult late = naverFuture.get(capRequestWait(200L), TimeUnit.MILLISECONDS);
                 if (late != null) {
                     naver = late;
                     naverCount = (naver.snippets() != null) ? naver.snippets().size() : 0;
@@ -3126,9 +3395,16 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             } catch (TimeoutException ignore) {
                 traceSuppressed("koreanTrace.naverFirst.lateJoin.timeout", ignore);
             } catch (InterruptedException ie) {
-                // Avoid poisoning pooled request threads.
-                Thread.interrupted();
+                Thread.currentThread().interrupt();
                 traceSuppressed("koreanTrace.naverFirst.lateJoin.interrupted", ie);
+                return new NaverSearchService.SearchResult(
+                        mergeAndLimit(
+                                naver == null || naver.snippets() == null
+                                        ? Collections.emptyList()
+                                        : naver.snippets(),
+                                brave,
+                                topK),
+                        naver == null ? null : naver.trace());
             } catch (Exception ignore) {
                 traceSuppressed("koreanTrace.naverFirst.lateJoin.failure", ignore);
             }
@@ -3140,15 +3416,23 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 if (braveService != null && braveService.isEnabled()) {
                     int expandedK = Math.min(topK * 2, 20);
                     long retryBudgetMs = Math.min(timeoutMs, 1200L);
-                    long retryDeadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryBudgetMs);
+                    long retryDeadlineNs = requestDeadline(retryBudgetMs);
 
-                    Future<BraveSearchResult> retry = searchIoExecutor
-                            .submit(() -> braveService.searchWithMeta(braveQuery, expandedK));
+                    Future<BraveSearchResult> retry = submitSearchAttempt(
+                            () -> braveService.searchWithMeta(braveQuery, expandedK));
                     BraveSearchResult retryMeta = awaitWithDeadline(
                             retry,
                             retryDeadlineNs,
                             BraveSearchResult.ok(Collections.emptyList(), 0L),
                             "Brave-Expanded");
+                    if (Thread.currentThread().isInterrupted()) {
+                        return new NaverSearchService.SearchResult(
+                                mergeAndLimit(
+                                        naver.snippets() == null ? Collections.emptyList() : naver.snippets(),
+                                        brave,
+                                        topK),
+                                naver.trace());
+                    }
                     if (retryMeta != null) {
                         braveMeta = retryMeta;
                     }
@@ -3202,11 +3486,14 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     }
 
     private NaverSearchService.SearchResult searchWithTraceBraveFirst(String query, int topK) {
+        if (!canStartSearchAttempt()) {
+            return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+        }
 
         boolean braveUsable = false;
         try {
             braveUsable = braveService != null && braveService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "trace.braveFirst"))
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE))
                     && !braveService.isCoolingDown();
         } catch (Exception ignore) {
             traceSuppressed("trace.braveUsable.primary", ignore);
@@ -3216,6 +3503,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if (braveUsable) {
             try {
                 // Use BraveSearchService.search() to benefit from cache/single-flight.
+                if (!canStartSearchAttempt()) {
+                    return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+                }
                 List<String> brave = braveService.search(query, topK);
                 if (brave != null && !brave.isEmpty()) {
                     NaverSearchService.SearchTrace trace = new NaverSearchService.SearchTrace();
@@ -3240,7 +3530,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         boolean naverUsable = false;
         try {
             naverUsable = naverService != null && naverService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "trace.braveFirst"));
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
         } catch (Exception ignore) {
             traceSuppressed("trace.naverUsable.fallback", ignore);
         }
@@ -3248,6 +3538,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         // 2. Fallback: Naver (Trace ?ы븿)
         if (naverUsable) {
             try {
+                if (!canStartSearchAttempt()) {
+                    return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+                }
                 NaverSearchService.SearchResult result = naverService.searchWithTraceSync(query, topK);
                 if (result != null && result.snippets() != null && !result.snippets().isEmpty()) {
                     return result;
@@ -3270,11 +3563,14 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     }
 
     private NaverSearchService.SearchResult searchWithTraceNaverFirst(String query, int topK) {
+        if (!canStartSearchAttempt()) {
+            return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+        }
 
         boolean naverUsable = false;
         try {
             naverUsable = naverService != null && naverService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "trace.naverFirst"));
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
         } catch (Exception ignore) {
             traceSuppressed("trace.naverUsable.primary", ignore);
         }
@@ -3282,6 +3578,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         // [KO] Legacy Korean comment was mojibake; behavior is defined by the code below.
         if (naverUsable) {
             try {
+                if (!canStartSearchAttempt()) {
+                    return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+                }
                 NaverSearchService.SearchResult result = naverService.searchWithTraceSync(query, topK);
                 if (result != null && result.snippets() != null && !result.snippets().isEmpty()) {
                     log.info("[Hybrid] Naver primary (trace) returned {} snippets", result.snippets().size());
@@ -3305,7 +3604,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         boolean braveUsable = false;
         try {
             braveUsable = braveService != null && braveService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "trace.naverFirst"))
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE))
                     && !braveService.isCoolingDown();
         } catch (Exception ignore) {
             traceSuppressed("trace.braveUsable.fallback", ignore);
@@ -3315,6 +3614,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if (braveUsable) {
             try {
                 // Use BraveSearchService.search() to benefit from cache/single-flight.
+                if (!canStartSearchAttempt()) {
+                    return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+                }
                 List<String> brave = braveService.search(query, topK);
                 if (brave != null && !brave.isEmpty()) {
                     NaverSearchService.SearchTrace trace = new NaverSearchService.SearchTrace();
@@ -3350,6 +3652,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     }
 
     private List<String> maybeBackupOnce(String originalQuery, int topK, List<String> primary) {
+        if (!canStartSearchAttempt()) {
+            return primary == null ? Collections.emptyList() : primary;
+        }
         if (primary != null && !primary.isEmpty()) {
             return primary;
         }
@@ -3362,6 +3667,16 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         List<String> remerged = maybeRemergeOnceCacheOnly(originalQuery, topK);
         if (remerged != null && !remerged.isEmpty()) {
             return remerged;
+        }
+
+        if (isCheapSearchModeActive()) {
+            try {
+                TraceStore.put("websearch.backup.skipped", true);
+                TraceStore.put("websearch.backup.skipReason", "cheap-search-mode");
+            } catch (Exception suppressed) {
+                traceSuppressed("backup.cheapSearchModeTrace", suppressed);
+            }
+            return primary == null ? Collections.emptyList() : primary;
         }
 
         try {
@@ -3385,10 +3700,10 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         boolean braveOpen = false;
         boolean naverOpen = false;
         try {
-            braveOpen = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "backupQuery"));
+            braveOpen = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE));
         } catch (Exception suppressed) { traceSuppressed("backup.braveBreakerRead", suppressed); }
         try {
-            naverOpen = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "backupQuery"));
+            naverOpen = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
         } catch (Exception suppressed) { traceSuppressed("backup.naverBreakerRead", suppressed); }
 
         log.warn("[WEBSEARCH_BACKUP_QUERY] merged=0 -> backupHash={} backupLength={} originalQueryHash={} originalQueryLength={} braveOpen={} naverOpen={}{}",
@@ -3416,6 +3731,15 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             return Collections.emptyList();
         }
         if (originalQuery == null || originalQuery.isBlank()) {
+            return Collections.emptyList();
+        }
+        if (isCheapSearchModeActive()) {
+            try {
+                TraceStore.put("web.failsoft.remergeOnce.skipped", true);
+                TraceStore.put("web.failsoft.remergeOnce.skipReason", "cheap-search-mode");
+            } catch (Exception suppressed) {
+                HybridTraceSuppressions.trace("remergeOnce.cheapSearchModeTrace", suppressed);
+            }
             return Collections.emptyList();
         }
 
@@ -3477,8 +3801,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         TraceStore.put("web.failsoft.remergeOnce.config.initialDelayMs", delayMs);
         TraceStore.put("web.failsoft.remergeOnce.config.maxPolls", polls);
 
-        boolean braveOpen = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "remergeOnce"));
-        boolean naverOpen = (nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "remergeOnce"));
+        boolean braveOpen = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE));
+        boolean naverOpen = (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
 
         TraceStore.put("websearch.remergeOnce.used", true);
         TraceStore.put("web.failsoft.remergeOnce.used", true);
@@ -3524,17 +3848,17 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         List<String> merged = Collections.emptyList();
 
         for (int i = 0; i < polls; i++) {
+            if (!canStartSearchAttempt()) break;
             long sleptMs = 0L;
             long delayMsUsed = delayMs;
 
             if (delayMs > 0 && waitedMs < maxTotalWaitMs) {
-                long sleepMs = Math.min(delayMs, maxTotalWaitMs - waitedMs);
+                long sleepMs = capRequestWait(Math.min(delayMs, maxTotalWaitMs - waitedMs));
                 if (sleepMs > 0) {
                     try {
                         Thread.sleep(sleepMs);
                     } catch (InterruptedException ie) {
-                        // Don't leak interruption/cancellation into the rest of the request.
-                        Thread.interrupted();
+                        Thread.currentThread().interrupt();
                         TraceStore.put("web.failsoft.remergeOnce.interrupted", true);
                         break;
                     }
@@ -3666,149 +3990,21 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         return s.equals("true") || s.equals("1") || s.equals("yes") || s.equals("y");
     }
 
-    // Preserve advanced search operators (site:/inurl:/intitle:/filetype:/ext:) in
-    // backup queries.
-    // Normalisation like latinOnly must not destroy these operators.
-    private static boolean containsAdvancedSearchOperators(String q) {
-        if (q == null || q.isBlank()) {
+    private static boolean isCheapSearchModeActive() {
+        try {
+            GuardContext ctx = GuardContextHolder.get();
+            if (ctx != null && ctx.isCheapSearchMode()) {
+                return true;
+            }
+        } catch (Exception suppressed) {
+            traceSuppressed("cheapSearchMode.contextRead", suppressed);
+        }
+        try {
+            return truthy(TraceStore.get("search.mode.lightAuxBypass"));
+        } catch (Exception suppressed) {
+            traceSuppressed("cheapSearchMode.traceRead", suppressed);
             return false;
         }
-        String s = q.toLowerCase(Locale.ROOT);
-        return s.contains("site:")
-                || s.contains("inurl:")
-                || s.contains("intitle:")
-                || s.contains("filetype:")
-                || s.contains("ext:");
-    }
-
-    private static boolean isAdvancedSearchOperatorToken(String token) {
-        if (token == null) {
-            return false;
-        }
-        String t = token.trim();
-        if (t.isEmpty()) {
-            return false;
-        }
-        int idx = t.indexOf(':');
-        if (idx <= 0 || idx >= t.length() - 1) {
-            return false;
-        }
-        String op = t.substring(0, idx).toLowerCase(Locale.ROOT);
-        return op.equals("site")
-                || op.equals("inurl")
-                || op.equals("intitle")
-                || op.equals("filetype")
-                || op.equals("ext");
-    }
-
-    private static String trimEdgePunct(String token) {
-        if (token == null) {
-            return "";
-        }
-        String t = token.trim();
-        // Strip wrapping quotes/brackets often attached in user input.
-        while (!t.isEmpty()) {
-            char c = t.charAt(0);
-            if (c == '"' || c == '`' || c == '(' || c == '[' || c == '{' || c == '<') {
-                t = t.substring(1).trim();
-                continue;
-            }
-            break;
-        }
-        while (!t.isEmpty()) {
-            char c = t.charAt(t.length() - 1);
-            if (c == '"' || c == '`' || c == ')' || c == ']' || c == '}' || c == '>'
-                    || c == ',' || c == ';' || c == '.') {
-                t = t.substring(0, t.length() - 1).trim();
-                continue;
-            }
-            break;
-        }
-        return t;
-    }
-
-    private String buildOperatorPreservedBackupQuery(String q) {
-        if (q == null) {
-            return "";
-        }
-        String s = q.trim();
-        if (s.isBlank()) {
-            return "";
-        }
-
-        String[] toks = s.split("\\s+");
-        LinkedHashSet<String> ops = new LinkedHashSet<>();
-        List<String> rest = new ArrayList<>();
-
-        for (String tok : toks) {
-            if (tok == null) {
-                continue;
-            }
-            String cleaned = trimEdgePunct(tok);
-            if (isAdvancedSearchOperatorToken(cleaned)) {
-                ops.add(cleaned);
-            } else {
-                rest.add(tok);
-            }
-        }
-
-        if (ops.isEmpty()) {
-            return "";
-        }
-
-        // Keep the operator tokens verbatim, but dedupe and shorten the rest.
-        String restJoined = String.join(" ", rest).trim();
-        String restKeywords = extractKeywords(restJoined);
-        if (restKeywords == null) {
-            restKeywords = "";
-        }
-        restKeywords = restKeywords.replaceAll("\\s+", " ").trim();
-
-        LinkedHashSet<String> restUniq = new LinkedHashSet<>();
-        LinkedHashSet<String> seenLower = new LinkedHashSet<>();
-        if (!restKeywords.isBlank()) {
-            for (String tok : restKeywords.split("\\s+")) {
-                if (tok == null) {
-                    continue;
-                }
-                String t = tok.trim();
-                if (t.isBlank()) {
-                    continue;
-                }
-                String key = t.toLowerCase(Locale.ROOT);
-                if (seenLower.contains(key)) {
-                    continue;
-                }
-                seenLower.add(key);
-                restUniq.add(t);
-            }
-        }
-
-        StringBuilder sb = new StringBuilder();
-        for (String op : ops) {
-            if (op == null || op.isBlank()) {
-                continue;
-            }
-            if (sb.length() > 0) {
-                sb.append(' ');
-            }
-            sb.append(op.trim());
-        }
-
-        int restLimit = 4;
-        int used = 0;
-        for (String t : restUniq) {
-            if (used >= restLimit) {
-                break;
-            }
-            if (t == null || t.isBlank()) {
-                continue;
-            }
-            sb.append(' ').append(t.trim());
-            used++;
-        }
-
-        return sb.toString().trim();
     }
 
     private String buildBackupQuery(String originalQuery) {
@@ -3818,74 +4014,19 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         if (q.isBlank())
             return "";
 
-        final boolean hasOps = containsAdvancedSearchOperators(q);
-        final String operatorPreserved = hasOps ? buildOperatorPreservedBackupQuery(q) : "";
-
         boolean braveUsable = false;
         boolean naverUsable = false;
         try {
             braveUsable = braveService != null && braveService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, "backupQuery"));
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE));
         } catch (Exception suppressed) { traceSuppressed("backupQuery.braveUsable", suppressed); }
         try {
             naverUsable = naverService != null && naverService.isEnabled()
-                    && !(nightmareBreaker != null && nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, "backupQuery"));
+                    && !(nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER));
         } catch (Exception suppressed) { traceSuppressed("backupQuery.naverUsable", suppressed); }
         boolean wantBraveFriendly = braveUsable && !naverUsable;
 
-        String keywords = extractKeywords(q);
-        String english = convertToEnglishSearchTerm(q);
-
-        String latinOnly = hasOps ? "" : q.replaceAll("[^A-Za-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
-
-        // Avoid degenerate backup queries (e.g., year-only like "2026") that tend to
-        // produce spammy or irrelevant results.
-        if (keywords != null && keywords.trim().matches("^\\d+$")) {
-            keywords = "";
-        }
-        if (english != null && english.trim().matches("^\\d+$")) {
-            english = "";
-        }
-        if (!latinOnly.isBlank() && latinOnly.trim().matches("^\\d+$")) {
-            latinOnly = "";
-        }
-
-        if (hasOps && StringUtils.hasText(operatorPreserved)
-                && !operatorPreserved.equalsIgnoreCase(q)) {
-            return operatorPreserved;
-        }
-        if (wantBraveFriendly) {
-            if (!latinOnly.isBlank() && !latinOnly.equalsIgnoreCase(q))
-                return latinOnly;
-            if (english != null && !english.isBlank() && !english.equalsIgnoreCase(q))
-                return english;
-            if (keywords != null && !keywords.isBlank() && !keywords.equalsIgnoreCase(q))
-                return keywords;
-        } else {
-            if (keywords != null && !keywords.isBlank() && !keywords.equalsIgnoreCase(q))
-                return keywords;
-            if (english != null && !english.isBlank() && !english.equalsIgnoreCase(q))
-                return english;
-            if (!latinOnly.isBlank() && !latinOnly.equalsIgnoreCase(q))
-                return latinOnly;
-        }
-
-        // Last resort: shorten overly long queries.
-        String[] toks = q.replaceAll("\\s+", " ").trim().split(" ");
-        if (toks.length > 6) {
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < 6; i++) {
-                if (i > 0)
-                    sb.append(' ');
-                sb.append(toks[i]);
-            }
-            String shortened = sb.toString().trim();
-            if (shortened.matches("^\\d+$")) {
-                return "";
-            }
-            return shortened;
-        }
-        return "";
+        return HybridSearchQueryPolicy.buildBackupQuery(q, wantBraveFriendly);
     }
 
     @Override

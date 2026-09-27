@@ -35,8 +35,9 @@ public class ChatOpenSecurityConfig {
             "/api/assist/display/focus/memory/read", "/api/assist/display/focus/memory/save", "/api/assist/display/focus/memory/delete", "/api/assist/display/focus/memory/search",
             "/api/assist/display/focus/open", "/api/assist/display/focus/input", "/api/assist/display/focus/input/status",
             "/api/assist/display/focus/close", "/api/assist/display/focus/rendered",
+            "/api/assist/display/focus/snapshot/claim", "/api/assist/display/focus/snapshot/result",
             "/api/assist/display/link/approve", "/api/assist/display/link/unlink", "/api/assist/display/hints", "/api/assist/display/ack", "/api/assist/display/lens", "/api/assist/display/lens/ack", "/api/assist/display/relay/poll", "/api/assist/display/relay/ack", "/api/assist/display/relay/settings", "/api/assist/display/relay/lens-settings", "/api/assist/display/relay/test", "/api/assist/display/relay/diagnostics");
-    private static final List<String> DISPLAY_AUDIO = List.of("/api/assist/display/audio/start", "/api/assist/display/audio/chunk", "/api/assist/display/audio/stop");
+    private static final List<String> DISPLAY_AUDIO = List.of("/api/assist/display/audio/start", "/api/assist/display/audio/chunk", "/api/assist/display/audio/chunk-batch", "/api/assist/display/audio/stop");
 
     @Value("${demo.interview.enabled:false}")
     private boolean interviewDemo;
@@ -46,6 +47,13 @@ public class ChatOpenSecurityConfig {
 
     @Value("${conversate.display.audio.enabled:${CONVERSATE_DISPLAY_AUDIO_ENABLED:false}}")
     private boolean displayAudio;
+
+    /**
+     * Prototype-open mode (docs/PROTOTYPE_AUTH.md): installs the admin-token
+     * guard filter on this chain so every request carries ROLE_ADMIN.
+     */
+    @Value("${demo.auth.proto-open:${DEMO_AUTH_PROTO_OPEN:false}}")
+    private boolean protoOpen;
 
     private boolean displayRequest(jakarta.servlet.http.HttpServletRequest request) {
         String path = request.getRequestURI().substring(request.getContextPath().length());
@@ -139,7 +147,8 @@ public class ChatOpenSecurityConfig {
     @Bean
     @Order(1)
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    SecurityFilterChain chatOpenChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain chatOpenChain(HttpSecurity http,
+                                      org.springframework.beans.factory.ObjectProvider<AdminTokenGuardFilter> protoOpenGuardFilter) throws Exception {
         http
             .securityMatcher(new OrRequestMatcher(
                 this::displayRequest,
@@ -206,6 +215,14 @@ public class ChatOpenSecurityConfig {
             .requestCache(cache -> cache.requestCache(new NullRequestCache()))
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.ALWAYS))
             .anonymous(Customizer.withDefaults());
+
+        if (protoOpen) {
+            AdminTokenGuardFilter guard = protoOpenGuardFilter.getIfAvailable();
+            if (guard != null) {
+                http.addFilterBefore(guard,
+                        org.springframework.security.web.access.intercept.AuthorizationFilter.class);
+            }
+        }
 
         if (forceHttps && !interviewDemo) {
             if (httpPort > 0 && httpsPort > 0 && httpPort != httpsPort) {

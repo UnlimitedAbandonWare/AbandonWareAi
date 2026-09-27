@@ -27,15 +27,23 @@ public class AdminTokenGuardFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        // Prototype-open mode (docs/PROTOTYPE_AUTH.md): cover every path so the
+        // admin authentication below is installed for all requests on this chain.
+        if (interceptor.isProtoOpen()) {
+            return false;
+        }
         String path = normalizedPath(request);
         return !(path.equals("/api/settings")
                 || path.startsWith("/api/settings/")
                 || path.equals("/admin")
                 || path.startsWith("/admin/")
-                || path.equals("/api/admin/graph")
-                || path.startsWith("/api/admin/graph/")
+                || path.equals("/api/admin")
+                || path.startsWith("/api/admin/")
+                || isAdminGraphPath(path)
                 || path.equals("/api/admin/fine-tuning")
                 || path.startsWith("/api/admin/fine-tuning/")
+                || path.equals("/dashboard")
+                || path.startsWith("/dashboard/")
                 || path.equals("/api/agent/report")
                 || path.startsWith("/api/agent/report/")
                 || path.equals("/api/router")
@@ -57,8 +65,10 @@ public class AdminTokenGuardFilter extends OncePerRequestFilter {
                 || path.equals("/api/learning/gemini")
                 || path.startsWith("/api/learning/gemini/")
                 || path.equals("/api/integrations/check")
+                || isDiagnosticRequest(path)
+                || path.equals("/v1/tasks") || path.startsWith("/v1/tasks/")
                 || isOperationalWriteRequest(request, path)
-                || isDiagnosticWriteRequest(request, path));
+                );
     }
 
     @Override
@@ -74,9 +84,9 @@ public class AdminTokenGuardFilter extends OncePerRequestFilter {
         } catch (Exception ex) {
             throw new ServletException(ex);
         }
-        if (interceptor.isPresentedTokenAuthorized(request)) {
+        if (interceptor.isProtoOpen() || interceptor.isPresentedTokenAuthorized(request)) {
             var auth = new UsernamePasswordAuthenticationToken(
-                    "admin-token",
+                    interceptor.isProtoOpen() ? "proto-open" : "admin-token",
                     null,
                     List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
             SecurityContextHolder.getContext().setAuthentication(auth);
@@ -99,15 +109,16 @@ public class AdminTokenGuardFilter extends OncePerRequestFilter {
         return uri.toLowerCase(Locale.ROOT);
     }
 
-    private static boolean isDiagnosticWriteRequest(HttpServletRequest request, String path) {
-        if (request == null || path == null) {
-            return false;
-        }
-        String method = request.getMethod();
-        if (!"POST".equalsIgnoreCase(method)) {
+    private static boolean isDiagnosticRequest(String path) {
+        if (path == null) {
             return false;
         }
         return path.equals("/api/diagnostics") || path.startsWith("/api/diagnostics/");
+    }
+
+    static boolean isAdminGraphPath(String path) {
+        return path != null
+                && (path.equals("/api/admin/graph") || path.startsWith("/api/admin/graph/"));
     }
 
     private static boolean isOperationalWriteRequest(HttpServletRequest request, String path) {
