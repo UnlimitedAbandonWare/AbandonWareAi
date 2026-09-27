@@ -112,7 +112,7 @@ dependencies {
 plugins { java }
 
 sourceSets {
-    main {
+    val main by getting {
         java.setSrcDirs(listOf("src/main/java_clean"))
     }
 }
@@ -125,6 +125,319 @@ sourceSets {
     Assert-Contains 'desktop harness records git evidence_needed' $result.Output 'git metadata unavailable at root'
     Assert-NotContains 'desktop harness suppresses git usage banner' $result.Output 'These are common Git commands'
     Assert-NotContains 'desktop harness suppresses raw git usage line' $result.Output 'usage: git'
+    Assert-True 'desktop harness accepts app val-main java_clean static declaration' `
+        (-not $result.Output.Contains('[WARN] wrong-sourceset app/build.gradle.kts')) `
+        'valid app val-main java_clean declaration was rejected'
+
+    Set-TestFile (Join-Path $FakeRoot 'app\build.gradle.kts') @'
+plugins { java }
+
+// sourceSets { val main by getting {
+//     java.setSrcDirs(listOf("src/main/java_clean"))
+// } }
+'@
+
+    $appCommentOnlyResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness blocks comment-only app java_clean declaration' `
+        ($appCommentOnlyResult.Output.Contains('[BLOCK] wrong-sourceset app/build.gradle.kts') -and `
+            -not $appCommentOnlyResult.Output.Contains('[WARN] wrong-sourceset app/build.gradle.kts')) `
+        'comment-only app java_clean declaration did not produce the ownership BLOCK'
+
+    Set-TestFile (Join-Path $FakeRoot 'app\build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    val test by getting {
+        java.setSrcDirs(listOf("src/main/java_clean"))
+    }
+}
+'@
+
+    $appTestOnlyResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness blocks test-only app java_clean declaration' `
+        ($appTestOnlyResult.Output.Contains('[BLOCK] wrong-sourceset app/build.gradle.kts') -and `
+            -not $appTestOnlyResult.Output.Contains('[WARN] wrong-sourceset app/build.gradle.kts')) `
+        'app test sourceSet declaration did not produce the ownership BLOCK'
+
+    Set-TestFile (Join-Path $FakeRoot 'app\build.gradle.kts') @'
+plugins { java }
+
+val quoteForJson = '"'
+val title = "it's harmless"
+
+sourceSets {
+    val main by getting {
+        java.setSrcDirs(listOf("src/main/java_clean"))
+    }
+}
+val ordinaryCharacter = 'x'
+'@
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+// sourceSets { main {
+//     java.srcDirs("main/java")
+//     resources.srcDirs("main/resources")
+// } }
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $commentOnlySourceSetResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects comment-only root Java sourceSet proof' `
+        ($commentOnlySourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'comment-only Java declaration suppressed the wrong-sourceset BLOCK'
+    Assert-True 'desktop harness rejects comment-only root resources sourceSet proof' `
+        ($commentOnlySourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'comment-only resources declaration suppressed the wrong-sourceset BLOCK'
+    Assert-True 'desktop harness accepts app sourceSet after Kotlin quote character literal' `
+        (-not $commentOnlySourceSetResult.Output.Contains('[WARN] wrong-sourceset app/build.gradle.kts')) `
+        'Kotlin quote character literal caused the valid app main sourceSet declaration to be rejected'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+/* outer documentation
+   /* nested documentation */
+   sourceSets { main {
+       java.srcDirs("main/java")
+       resources.srcDirs("main/resources")
+   } }
+*/
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $nestedCommentSourceSetResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects nested-comment root Java sourceSet proof' `
+        ($nestedCommentSourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'nested-comment Java declaration suppressed the wrong-sourceset BLOCK'
+    Assert-True 'desktop harness rejects nested-comment root resources sourceSet proof' `
+        ($nestedCommentSourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'nested-comment resources declaration suppressed the wrong-sourceset BLOCK'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    main {
+        java.srcDirs(__AWX_MAIN_JAVA__)
+        resources.srcDirs(__AWX_MAIN_RESOURCES__)
+    }
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $placeholderIdentifierResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects internal-marker Java identifier' `
+        ($placeholderIdentifierResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'raw Java placeholder identifier was accepted as a path literal'
+    Assert-True 'desktop harness rejects internal-marker resources identifier' `
+        ($placeholderIdentifierResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'raw resources placeholder identifier was accepted as a path literal'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    main {
+        fakeJava.srcDirs("main/java")
+        fakeResources.srcDirs("main/resources")
+        java.srcDirs("main/resources")
+        resources.srcDirs("main/java")
+    }
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $wrongReceiverResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects wrong-receiver root Java proof' `
+        ($wrongReceiverResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'wrong receiver or swapped kind certified root Java ownership'
+    Assert-True 'desktop harness rejects wrong-receiver root resources proof' `
+        ($wrongReceiverResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'wrong receiver or swapped kind certified root resources ownership'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    main {
+        decoy {
+            java { srcDirs("main/java") }
+            resources { srcDirs("main/resources") }
+        }
+    }
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $nestedReceiverResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects nested-decoy root Java proof' `
+        ($nestedReceiverResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'non-direct Java block certified root Java ownership'
+    Assert-True 'desktop harness rejects nested-decoy root resources proof' `
+        ($nestedReceiverResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'non-direct resources block certified root resources ownership'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    main {
+        java {
+            fake.srcDirs("main/java")
+        }
+        resources {
+            fake.srcDirs("main/resources")
+        }
+    }
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $nestedWrongReceiverResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects nested wrong-receiver Java proof' `
+        ($nestedWrongReceiverResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'qualified fake call inside Java block certified ownership'
+    Assert-True 'desktop harness rejects nested wrong-receiver resources proof' `
+        ($nestedWrongReceiverResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'qualified fake call inside resources block certified ownership'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    main {
+        val java = object { fun srcDirs(path: String) {} }
+        val resources = object { fun srcDirs(path: String) {} }
+        java.srcDirs("main/java")
+        resources.srcDirs("main/resources")
+    }
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $semanticShadowResult = Invoke-Harness -Root $FakeRoot
+    $runtimeSourceSetEvidenceNeeded = 'Gradle runtime source-set ownership was not observed; verify with .\gradlew.bat sourceSets --console=plain and the focused test command before applying a source change.'
+
+    Assert-True 'desktop harness labels sourceSet evidence as static structural' `
+        ($semanticShadowResult.Output.Contains('- sourceSetEvidenceKind: static-structural')) `
+        'lexical sourceSet result lacked a static-only evidence label'
+    Assert-True 'desktop harness reports runtime sourceSet resolution not observed' `
+        ($semanticShadowResult.Output.Contains('- runtimeSourceSetResolution: not_observed')) `
+        'lexical sourceSet result was not bounded from runtime resolution'
+    Assert-True 'desktop harness requires Gradle sourceSet verification' `
+        ($semanticShadowResult.Output.Contains($runtimeSourceSetEvidenceNeeded)) `
+        'semantic sourceSet ownership verification was not requested'
+    Assert-True 'desktop harness emits no runtime ownership success claim' `
+        (-not $semanticShadowResult.Output.Contains('runtimeSourceSetResolution: verified') -and `
+         -not $semanticShadowResult.Output.Contains('runtime ownership proven')) `
+        'static match was promoted to a runtime ownership success claim'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    main {
+        java {
+            srcDirs("main/java")
+        }
+        resources {
+            srcDirs("main/resources")
+        }
+    }
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $nestedMainResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness accepts nested Java main sourceSet proof' `
+        (-not $nestedMainResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'valid nested Java main block was rejected'
+    Assert-True 'desktop harness accepts nested resources main sourceSet proof' `
+        (-not $nestedMainResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'valid nested resources main block was rejected'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+val documentedExample = """
+sourceSets { main {
+    java.srcDirs("main/java")
+    resources.srcDirs("main/resources")
+} }
+"""
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $stringOnlySourceSetResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects string-only root Java sourceSet proof' `
+        ($stringOnlySourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'string-only Java declaration suppressed the wrong-sourceset BLOCK'
+    Assert-True 'desktop harness rejects string-only root resources sourceSet proof' `
+        ($stringOnlySourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'string-only resources declaration suppressed the wrong-sourceset BLOCK'
+
+    Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
+plugins { java }
+
+sourceSets {
+    test {
+        java.srcDirs("main/java")
+        resources.srcDirs("main/resources")
+    }
+}
+
+dependencies {
+    implementation("dev.langchain4j:langchain4j:1.0.1")
+}
+'@
+
+    $testOnlySourceSetResult = Invoke-Harness -Root $FakeRoot
+
+    Assert-True 'desktop harness rejects test-only root Java sourceSet proof' `
+        ($testOnlySourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'test sourceSet Java declaration suppressed the main wrong-sourceset BLOCK'
+    Assert-True 'desktop harness rejects test-only root resources sourceSet proof' `
+        ($testOnlySourceSetResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'test sourceSet resources declaration suppressed the main wrong-sourceset BLOCK'
 
     Set-TestFile (Join-Path $FakeRoot 'build.gradle.kts') @'
 plugins { java }
@@ -133,8 +446,8 @@ val langchain4jVersion = "1.0.1"
 
 sourceSets {
     main {
-        java.srcDirs("main/java")
-        resources.srcDirs("main/resources")
+        java.srcDirs(listOf("main/java"))
+        resources.srcDirs(listOf("main/resources"))
     }
 }
 
@@ -149,6 +462,12 @@ dependencies {
     Assert-True 'desktop harness exits zero for langchain variable version fixture' ($variableVersionResult.ExitCode -eq 0) "expected zero exit; output=$($variableVersionResult.Output)"
     Assert-Contains 'desktop harness resolves langchain variable versions' $variableVersionResult.Output '- version 1.0.1: 2'
     Assert-NotContains 'desktop harness does not block resolved langchain variable version' $variableVersionResult.Output '[BLOCK] langchain4j-version-purity'
+    Assert-True 'desktop harness accepts listOf root Java main sourceSet proof' `
+        (-not $variableVersionResult.Output.Contains('[BLOCK] wrong-sourceset main/java')) `
+        'valid listOf Java main declaration was rejected'
+    Assert-True 'desktop harness accepts listOf root resources main sourceSet proof' `
+        (-not $variableVersionResult.Output.Contains('[BLOCK] wrong-sourceset main/resources')) `
+        'valid listOf resources main declaration was rejected'
 
     Set-TestFile (Join-Path $FakeRoot 'main\java\com\example\HeaderExamples.java') @'
 package com.example;

@@ -16,6 +16,8 @@ param(
 
     [switch]$NoRequireProducerBundles,
 
+    [switch]$OrchestratedByGoalNext,
+
     [switch]$Help
 )
 
@@ -26,6 +28,10 @@ if ($Help) {
 [AWX][external][apply-collected] usage:
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\external_apply_collected_evidence.ps1
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\external_apply_collected_evidence.ps1 -Root <repo-root> -Topic mcp-control-loop
+
+Internal orchestration:
+  -OrchestratedByGoalNext keeps evidence intake/audit and PatchDrop safety here, then defers the completion audit to goal_next_auto.
+  Omit this switch for standalone/manual verification.
 
 Required external evidence before this can close:
   macmini-node-smoke.json and macmini-producer-handoff.json
@@ -214,13 +220,27 @@ Write-JsonFile -Path $auditPath -Value $audit
 $completionAuditScript = Join-Path $Root 'scripts\awx_mcp_completion_audit.py'
 $completionAuditLog = Join-Path $OutputDir 'awx-mcp-completion-audit.log'
 $completionAuditPath = Join-Path $OutputDir 'awx-mcp-completion-audit.result.json'
-$completionAudit = Invoke-PythonCapture -ProjectRoot $Root -ScriptPath $completionAuditScript -Arguments @('--root', $Root, '--output', $completionAuditPath) -LogPath $completionAuditLog
-if (-not [string]::IsNullOrWhiteSpace($completionAudit.Output)) {
-    Set-Content -LiteralPath $completionAuditPath -Value $completionAudit.Output -Encoding UTF8
+$derivedGateOwner = if ($OrchestratedByGoalNext.IsPresent) { 'goal_next_auto' } else { 'external_apply_collected_evidence' }
+$completionAuditStatus = if ($OrchestratedByGoalNext.IsPresent) { 'deferred_to_goal_next' } else { 'executed' }
+$completionAuditExit = $null
+if ($OrchestratedByGoalNext.IsPresent) {
+    foreach ($staleDerivedArtifact in @($completionAuditLog, $completionAuditPath)) {
+        Remove-Item -LiteralPath $staleDerivedArtifact -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    $completionAudit = Invoke-PythonCapture -ProjectRoot $Root -ScriptPath $completionAuditScript -Arguments @('--root', $Root, '--output', $completionAuditPath) -LogPath $completionAuditLog
+    $completionAuditExit = [int]$completionAudit.ExitCode
+    if (-not [string]::IsNullOrWhiteSpace($completionAudit.Output)) {
+        Set-Content -LiteralPath $completionAuditPath -Value $completionAudit.Output -Encoding UTF8
+    }
 }
 
 $combined = @()
-foreach ($p in @($intakePath, $auditPath, $completionAuditLog, $completionAuditPath)) {
+$combinedPaths = @($intakePath, $auditPath)
+if (-not $OrchestratedByGoalNext.IsPresent) {
+    $combinedPaths += @($completionAuditLog, $completionAuditPath)
+}
+foreach ($p in $combinedPaths) {
     if (Test-Path -LiteralPath $p) {
         $combined += Get-Content -Raw -LiteralPath $p
     }
@@ -248,7 +268,10 @@ if ($null -ne $intakeSummary -and $null -ne $intakeSummary.rawSecretPatternHits)
 }
 $sourceEvidenceDirPresent = Test-Path -LiteralPath $SourceEvidenceDir
 $evidenceDirPresent = Test-Path -LiteralPath $EvidenceDir
-$completionAuditFailed = $completionAudit.ExitCode -ne 0
+$completionAuditIncomplete = (-not $OrchestratedByGoalNext.IsPresent) -and ($completionAuditExit -ne 0)
+if ($completionAuditIncomplete) {
+    $safeEvidenceNeeded = Add-SafeEvidenceNeededItem -Items $safeEvidenceNeeded -Text 'completion_audit_incomplete'
+}
 $externalEvidenceIncomplete = -not $intakeComplete -or -not $auditComplete -or $intakeEvidenceNeededCount -gt 0 -or $auditEvidenceNeededCount -gt 0
 $requiredPatchDropSidecars = @(
     'pendingNotice',
@@ -275,6 +298,10 @@ $recommendedNextActions += @(
     'run_desktop_external_apply_collected_evidence',
     'run_desktop_external_evidence_audit'
 )
+$producerBundlesRequired = -not $NoRequireProducerBundles.IsPresent
+$externalEvidenceMode = if ($producerBundlesRequired) { 'required' } else { 'optional' }
+$promotedNextActions = if ($producerBundlesRequired) { @($recommendedNextActions) } else { @() }
+$supportingEvidenceNextActions = @($recommendedNextActions)
 $applyCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\external_apply_collected_evidence.ps1 -Root .'
 if (-not [string]::IsNullOrWhiteSpace($Topic)) {
     if ($Topic -match '^[A-Za-z0-9_.:-]+$') {
@@ -283,18 +310,23 @@ if (-not [string]::IsNullOrWhiteSpace($Topic)) {
         $applyCommand = "$applyCommand -Topic <safe-topic>"
     }
 }
+if (-not $producerBundlesRequired) {
+    $applyCommand = "$applyCommand -NoRequireProducerBundles"
+}
 $decision = 'ok'
 if ($secretHits -gt 0 -or $rawSecretHits -gt 0) {
     $decision = 'secret-leak-risk'
-} elseif ($completionAuditFailed -or $externalEvidenceIncomplete) {
-    $decision = 'evidence_needed'
+} elseif ($completionAuditIncomplete -or $externalEvidenceIncomplete) {
+    $decision = if ($producerBundlesRequired) { 'evidence_needed' } else { 'supporting_evidence_missing' }
 }
 $summaryPath = Join-Path $OutputDir 'external-apply-collected.summary.json'
 Write-JsonFile -Path $summaryPath -Value ([ordered]@{
     schemaVersion = 'awx.external.apply_collected_evidence.summary.v1'
-    ok = ($decision -eq 'ok')
+    ok = ($decision -eq 'ok' -or $decision -eq 'supporting_evidence_missing')
     decision = $decision
     topic = $Topic
+    producerBundlesRequired = $producerBundlesRequired
+    externalEvidenceMode = $externalEvidenceMode
     intakeDecision = $intakeDecision
     auditDecision = $auditDecision
     requiredRoles = @($roles)
@@ -307,7 +339,8 @@ Write-JsonFile -Path $summaryPath -Value ([ordered]@{
         desktopFinalProof = 'evidence_needed'
         rawSecretPatternHits = 0
     }
-    nextActions = @($recommendedNextActions)
+    nextActions = @($promotedNextActions)
+    supportingEvidenceNextActions = @($supportingEvidenceNextActions)
     applyCollectedEvidenceCommand = $applyCommand
     patchDropRootRecommendation = '__patch_drop__'
     sourceEvidenceDirRecommendation = '__patch_drop__\external-node-proof'
@@ -319,8 +352,12 @@ Write-JsonFile -Path $summaryPath -Value ([ordered]@{
     outputCount = $audit.outputCount
     intakeEvidenceNeededCount = $intakeEvidenceNeededCount
     auditEvidenceNeededCount = $auditEvidenceNeededCount
-    evidenceNeeded = @($safeEvidenceNeeded)
-    completionAuditExit = $completionAudit.ExitCode
+    evidenceNeeded = if ($producerBundlesRequired) { @($safeEvidenceNeeded) } else { @() }
+    supportingEvidenceNeeded = if ($producerBundlesRequired) { @() } else { @($safeEvidenceNeeded) }
+    orchestratedByGoalNext = [bool]$OrchestratedByGoalNext
+    derivedGateOwner = $derivedGateOwner
+    completionAuditStatus = $completionAuditStatus
+    completionAuditExit = $completionAuditExit
     secretHits = $secretHits
     rawSecretPatternHits = $rawSecretHits
     sourceEvidenceDirPresent = $sourceEvidenceDirPresent
@@ -329,20 +366,25 @@ Write-JsonFile -Path $summaryPath -Value ([ordered]@{
 
 Write-Host "[AWX][external][apply-collected] intakeDecision=$intakeDecision externalEvidenceComplete=$intakeComplete copiedEvidenceCount=$($intakeSummary.copiedEvidenceCount) copiedHandoffCount=$($intakeSummary.copiedHandoffCount) evidenceNeededCount=$intakeEvidenceNeededCount"
 Write-Host "[AWX][external][apply-collected] auditDecision=$auditDecision externalEvidenceComplete=$auditComplete outputCount=$($audit.outputCount) evidenceNeededCount=$auditEvidenceNeededCount"
-Write-Host "[AWX][external][apply-collected] completionAuditExit=$($completionAudit.ExitCode) secretHits=$secretHits rawSecretPatternHits=$rawSecretHits"
+$completionAuditExitText = if ($null -eq $completionAuditExit) { 'n/a' } else { [string]$completionAuditExit }
+Write-Host "[AWX][external][apply-collected] completionAuditStatus=$completionAuditStatus completionAuditExit=$completionAuditExitText secretHits=$secretHits rawSecretPatternHits=$rawSecretHits"
 Write-Host "[AWX][external][apply-collected] sourceEvidenceDirPresent=$sourceEvidenceDirPresent evidenceDirPresent=$evidenceDirPresent"
 
 if ($secretHits -gt 0 -or $rawSecretHits -gt 0) {
     Write-Host '[AWX][external][apply-collected] secret-leak-risk'
     exit 4
 }
-if ($completionAuditFailed) {
-    Write-Host '[AWX][external][apply-collected] evidence_needed: completion audit failed'
-    exit 3
+if ($completionAuditIncomplete) {
+    Write-Host '[AWX][external][apply-collected] evidence_needed: completion audit incomplete'
+    exit 2
 }
-if ($externalEvidenceIncomplete) {
+if ($externalEvidenceIncomplete -and $producerBundlesRequired) {
     Write-Host '[AWX][external][apply-collected] evidence_needed: external producer evidence is incomplete'
     exit 2
+}
+if ($externalEvidenceIncomplete) {
+    Write-Host '[AWX][external][apply-collected] supporting_evidence_missing: external producer evidence is incomplete'
+    exit 0
 }
 
 Write-Host '[AWX][external][apply-collected] ok=true'

@@ -72,7 +72,7 @@ $payload = $InputJson | ConvertFrom-Json
 $payload | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath (Join-Path $Root ("toolbox-" + $Tool + "-input.json")) -Encoding UTF8
 $mode = Get-Content -Raw -LiteralPath (Join-Path $Root "mode.txt")
 if ($Tool -eq "external_evidence_intake") {
-    if ($mode.Trim() -eq "complete") {
+    if ($mode.Trim() -eq "complete" -or $mode.Trim() -eq "audit-incomplete") {
         [ordered]@{
             ok = $true
             externalEvidenceComplete = $true
@@ -115,7 +115,7 @@ if ($Tool -eq "external_evidence_intake") {
     exit 0
 }
 if ($Tool -eq "external_evidence_audit") {
-    if ($mode.Trim() -eq "complete") {
+    if ($mode.Trim() -eq "complete" -or $mode.Trim() -eq "audit-incomplete") {
         [ordered]@{
             ok = $true
             externalEvidenceComplete = $true
@@ -155,9 +155,17 @@ throw "unexpected tool $Tool"
 '@
     Set-TestFile (Join-Path $root 'scripts\awx_mcp_completion_audit.py') @'
 import json
+from pathlib import Path
+root = Path(__file__).resolve().parents[1]
+if (root / "completion-audit-incomplete.flag").exists():
+    print(json.dumps({"ok": False, "status": "local_control_tower_incomplete", "externalEvidenceComplete": True, "rawSecretPatternHits": 0, "evidence_needed": ["goal-next.command-packet missing external proof evidence"]}))
+    raise SystemExit(1)
 print(json.dumps({"ok": True, "status": "local_control_tower_ready", "externalEvidenceComplete": True, "rawSecretPatternHits": 0, "evidence_needed": []}))
 '@
     Set-TestFile (Join-Path $root 'mode.txt') $Mode
+    if ($Mode -eq 'audit-incomplete') {
+        Set-TestFile (Join-Path $root 'completion-audit-incomplete.flag') '1'
+    }
     return $root
 }
 
@@ -173,6 +181,7 @@ try {
     Assert-Contains 'external apply help names node smoke artifact' $help.Output 'macmini-node-smoke.json'
     Assert-Contains 'external apply help names sidecar manifest' $help.Output '.manifest.json'
     Assert-Contains 'external apply help names audit command' $help.Output 'external_evidence_audit'
+    Assert-Contains 'external apply help names internal goal-next ownership mode' $help.Output 'OrchestratedByGoalNext'
     Assert-True 'external apply help prints no raw auth header' (-not ($help.Output -match 'Bearer\s+[A-Za-z0-9._~+/-]+=*')) "output=$($help.Output)"
 
     $partialRoot = New-FakeRepo -Mode 'partial' -OmitSourceEvidenceDir
@@ -205,6 +214,53 @@ try {
         Assert-True 'partial summary evidence list is secret safe' (-not ($partialSummaryText -match 'Bearer\s+|jdbc:|sb_(?:secret|publishable)_|sbp_|sk-[A-Za-z0-9_-]{20,}')) "summary=$partialSummaryText"
     }
 
+    $optionalRoot = New-FakeRepo -Mode 'partial' -OmitSourceEvidenceDir
+    $optional = Invoke-Captured -Arguments @('-File', $script, '-Root', $optionalRoot, '-Topic', 'mcp-control-loop', '-NoRequireProducerBundles')
+    Assert-True 'optional producer import exits zero' ($optional.ExitCode -eq 0) "expected exit 0; output=$($optional.Output)"
+    Assert-Contains 'optional output names supporting evidence' $optional.Output 'supporting_evidence_missing'
+    $optionalSummaryPath = Join-Path $optionalRoot 'var\codex-smoke\external-apply-collected-evidence\external-apply-collected.summary.json'
+    Assert-True 'optional import writes summary artifact' (Test-Path $optionalSummaryPath) 'missing optional summary artifact'
+    if (Test-Path $optionalSummaryPath) {
+        $optionalSummary = Get-Content -Raw -LiteralPath $optionalSummaryPath | ConvertFrom-Json
+        $optionalSummaryText = $optionalSummary | ConvertTo-Json -Depth 20 -Compress
+        Assert-True 'optional summary reports ok' ($optionalSummary.ok -eq $true) "summary=$optionalSummaryText"
+        Assert-True 'optional summary reports supporting evidence missing' ($optionalSummary.decision -eq 'supporting_evidence_missing') "summary=$optionalSummaryText"
+        Assert-True 'optional summary marks producer bundles optional' ($optionalSummary.producerBundlesRequired -eq $false -and $optionalSummary.externalEvidenceMode -eq 'optional') "summary=$optionalSummaryText"
+        Assert-True 'optional summary does not promote external next actions' (@($optionalSummary.nextActions).Count -eq 0) "summary=$optionalSummaryText"
+        Assert-Contains 'optional summary keeps supporting action' $optionalSummaryText 'run_macmini_external_node_smoke'
+        Assert-Contains 'optional summary keeps sidecar contract' $optionalSummaryText '.manifest.json'
+    }
+
+    $orchestratedRoot = New-FakeRepo -Mode 'partial' -OmitSourceEvidenceDir
+    $orchestratedOutput = Join-Path $orchestratedRoot 'var\codex-smoke\external-apply-collected-evidence'
+    $staleNestedSecret = 'Bearer ' + ('y' * 30)
+    Set-TestFile (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.log') "stale-audit-log $staleNestedSecret"
+    Set-TestFile (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.result.json') "{`"stale`":true,`"payload`":`"$staleNestedSecret`"}"
+    $orchestrated = Invoke-Captured -Arguments @('-File', $script, '-Root', $orchestratedRoot, '-Topic', 'mcp-control-loop', '-NoRequireProducerBundles', '-OrchestratedByGoalNext')
+    Assert-True 'goal-next orchestrated external apply keeps optional evidence nonblocking' ($orchestrated.ExitCode -eq 0) "expected exit 0; output=$($orchestrated.Output)"
+    Assert-Contains 'goal-next orchestrated external apply defers completion audit explicitly' $orchestrated.Output 'completionAuditStatus=deferred_to_goal_next completionAuditExit=n/a'
+    Assert-True 'goal-next orchestrated external apply removes stale audit log' (-not (Test-Path (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.log'))) 'unexpected nested completion audit log'
+    Assert-True 'goal-next orchestrated external apply removes stale audit artifact' (-not (Test-Path (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.result.json'))) 'unexpected nested completion audit artifact'
+    Assert-True 'goal-next orchestrated external apply does not expose stale nested secret' (-not $orchestrated.Output.Contains($staleNestedSecret)) "output=$($orchestrated.Output)"
+    $orchestratedSummaryPath = Join-Path $orchestratedOutput 'external-apply-collected.summary.json'
+    Assert-True 'goal-next orchestrated external apply writes summary artifact' (Test-Path $orchestratedSummaryPath) 'missing orchestrated external summary'
+    if (Test-Path $orchestratedSummaryPath) {
+        $orchestratedSummary = Get-Content -Raw -LiteralPath $orchestratedSummaryPath | ConvertFrom-Json
+        $orchestratedSummaryText = $orchestratedSummary | ConvertTo-Json -Depth 20 -Compress
+        Assert-True 'goal-next orchestrated external summary records single owner' (
+            $orchestratedSummary.orchestratedByGoalNext -eq $true -and
+            [string]$orchestratedSummary.derivedGateOwner -eq 'goal_next_auto'
+        ) "summary=$orchestratedSummaryText"
+        Assert-True 'goal-next orchestrated external summary records deferred audit without fake success' (
+            [string]$orchestratedSummary.completionAuditStatus -eq 'deferred_to_goal_next' -and
+            $null -eq $orchestratedSummary.completionAuditExit
+        ) "summary=$orchestratedSummaryText"
+        Assert-True 'goal-next orchestrated external summary preserves optional producer evidence' (
+            [string]$orchestratedSummary.decision -eq 'supporting_evidence_missing' -and
+            $orchestratedSummary.producerBundlesRequired -eq $false
+        ) "summary=$orchestratedSummaryText"
+    }
+
     $completeRoot = New-FakeRepo -Mode 'complete'
     $complete = Invoke-Captured -Arguments @('-File', $script, '-Root', $completeRoot, '-Topic', 'mcp-control-loop')
     Assert-True 'complete import exits zero' ($complete.ExitCode -eq 0) "expected exit 0; output=$($complete.Output)"
@@ -222,6 +278,21 @@ try {
         Assert-True "$tool uses absolute patchdrop path" ([System.IO.Path]::IsPathRooted([string]$payload.patchdrop_root)) "patchdrop_root=$($payload.patchdrop_root)"
         Assert-True "$tool uses absolute evidence dir" ([System.IO.Path]::IsPathRooted([string]$payload.evidence_dir)) "evidence_dir=$($payload.evidence_dir)"
         Assert-True "$tool uses absolute source evidence dir" ([System.IO.Path]::IsPathRooted([string]$payload.source_evidence_dir)) "source_evidence_dir=$($payload.source_evidence_dir)"
+    }
+
+    $auditIncompleteRoot = New-FakeRepo -Mode 'audit-incomplete'
+    $auditIncomplete = Invoke-Captured -Arguments @('-File', $script, '-Root', $auditIncompleteRoot, '-Topic', 'mcp-control-loop')
+    Assert-True 'completion audit incomplete exits evidence_needed not verifier failure' ($auditIncomplete.ExitCode -eq 2) "expected exit 2; output=$($auditIncomplete.Output)"
+    Assert-Contains 'audit incomplete output names completion audit exit' $auditIncomplete.Output 'completionAuditExit=1'
+    Assert-Contains 'audit incomplete output names evidence_needed' $auditIncomplete.Output 'completion audit incomplete'
+    $auditIncompleteSummaryPath = Join-Path $auditIncompleteRoot 'var\codex-smoke\external-apply-collected-evidence\external-apply-collected.summary.json'
+    Assert-True 'audit incomplete writes summary artifact' (Test-Path $auditIncompleteSummaryPath) 'missing audit incomplete summary'
+    if (Test-Path $auditIncompleteSummaryPath) {
+        $auditIncompleteSummary = Get-Content -Raw -LiteralPath $auditIncompleteSummaryPath | ConvertFrom-Json
+        $auditIncompleteSummaryText = $auditIncompleteSummary | ConvertTo-Json -Depth 20 -Compress
+        Assert-True 'audit incomplete summary records evidence_needed' ($auditIncompleteSummary.decision -eq 'evidence_needed') "summary=$auditIncompleteSummaryText"
+        Assert-True 'audit incomplete summary records completion audit exit' ([int]$auditIncompleteSummary.completionAuditExit -eq 1) "summary=$auditIncompleteSummaryText"
+        Assert-Contains 'audit incomplete summary records safe completion audit gap' $auditIncompleteSummaryText 'completion_audit_incomplete'
     }
 
     $secretRoot = New-FakeRepo -Mode 'secret'

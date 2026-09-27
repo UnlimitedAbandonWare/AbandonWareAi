@@ -8,6 +8,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot '..\__patch_drop__\source_edit_lease_contract.ps1')
 
 $SecretPattern = "sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}|-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY-----"
 $LangChainPattern = "dev\.langchain4j:[^:`"'\s]+:([^`"'\s)]+)"
@@ -51,6 +52,138 @@ function Read-Text {
     } catch {
         return ""
     }
+}
+
+function Convert-ToGradleStructuralText {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) {
+        return ""
+    }
+
+    $masked = [regex]::Replace($Text, '(?s)"""(?:.*?"""|.*\z)', ' ')
+    $masked = [regex]::Replace($masked, "'(?:\\u[0-9A-Fa-f]{4}|\\.|[^'\\])'", ' ')
+    $masked = [regex]::Replace($masked, '"(?:\\.|[^"\\])*"', {
+        param($match)
+        if ($match.Value -ceq '"main/java"' -or
+            $match.Value -ceq '"main/resources"' -or
+            $match.Value -ceq '"src/main/java_clean"') {
+            return $match.Value
+        }
+        return ' '
+    })
+    while ($true) {
+        $withoutInnermostComment = [regex]::Replace(
+            $masked,
+            '(?s)/\*(?:(?!/\*|\*/).)*\*/',
+            ' '
+        )
+        if ($withoutInnermostComment -ceq $masked) {
+            break
+        }
+        $masked = $withoutInnermostComment
+    }
+    $masked = [regex]::Replace($masked, '(?s)/\*.*\z', ' ')
+    $masked = [regex]::Replace($masked, '(?m)//[^\r\n]*', ' ')
+    return $masked
+}
+
+function Get-BracedBody {
+    param(
+        [string]$Text,
+        [int]$OpenBraceIndex
+    )
+    if ($OpenBraceIndex -lt 0 -or $OpenBraceIndex -ge $Text.Length -or $Text[$OpenBraceIndex] -ne '{') {
+        return $null
+    }
+
+    $depth = 0
+    for ($i = $OpenBraceIndex; $i -lt $Text.Length; $i++) {
+        if ($Text[$i] -eq '{') {
+            $depth++
+        } elseif ($Text[$i] -eq '}') {
+            $depth--
+            if ($depth -eq 0) {
+                return $Text.Substring($OpenBraceIndex + 1, $i - $OpenBraceIndex - 1)
+            }
+        }
+    }
+    return $null
+}
+
+function Get-BraceDepthBefore {
+    param(
+        [string]$Text,
+        [int]$Position
+    )
+    $depth = 0
+    for ($i = 0; $i -lt $Position; $i++) {
+        if ($Text[$i] -eq '{') {
+            $depth++
+        } elseif ($Text[$i] -eq '}') {
+            $depth--
+        }
+    }
+    return $depth
+}
+
+function Test-PatternAtBraceDepthZero {
+    param(
+        [string]$Text,
+        [string]$Pattern
+    )
+    foreach ($match in [regex]::Matches($Text, $Pattern)) {
+        if ((Get-BraceDepthBefore $Text $match.Index) -eq 0) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-GradleMainSourceDeclaration {
+    param(
+        [string]$StructuralText,
+        [string]$PathMarker,
+        [ValidateSet('java', 'resources')][string]$SourceKind,
+        [ValidateSet('srcDirs', 'setSrcDirs')][string]$MethodName = 'srcDirs'
+    )
+    $escapedMarker = [regex]::Escape($PathMarker)
+    $escapedKind = [regex]::Escape($SourceKind)
+    $escapedMethod = [regex]::Escape($MethodName)
+    $srcDirsCallPattern = $escapedMethod + '\s*\(\s*(?:' + $escapedMarker + '|listOf\s*\(\s*' + $escapedMarker + '\s*\))\s*\)'
+    $unqualifiedCallPattern = '(?<![\w.])' + $srcDirsCallPattern
+    $directReceiverPattern = '(?<![\w.])' + $escapedKind + '\s*\.\s*' + $srcDirsCallPattern
+    $kindBlockPattern = '(?<![\w.])' + $escapedKind + '\s*\{'
+    foreach ($sourceSetsMatch in [regex]::Matches($StructuralText, '(?<![\w.])sourceSets\s*\{')) {
+        $sourceSetsOpen = $StructuralText.IndexOf('{', $sourceSetsMatch.Index)
+        $sourceSetsBody = Get-BracedBody $StructuralText $sourceSetsOpen
+        if ($null -eq $sourceSetsBody) {
+            continue
+        }
+        foreach ($mainMatch in [regex]::Matches($sourceSetsBody, '(?<![\w.])(?:val\s+)?main(?:\s+by\s+getting)?\s*\{')) {
+            if ((Get-BraceDepthBefore $sourceSetsBody $mainMatch.Index) -ne 0) {
+                continue
+            }
+            $mainOpen = $sourceSetsBody.IndexOf('{', $mainMatch.Index)
+            $mainBody = Get-BracedBody $sourceSetsBody $mainOpen
+            if ($null -eq $mainBody) {
+                continue
+            }
+            if (Test-PatternAtBraceDepthZero $mainBody $directReceiverPattern) {
+                return $true
+            }
+            foreach ($kindBlockMatch in [regex]::Matches($mainBody, $kindBlockPattern)) {
+                if ((Get-BraceDepthBefore $mainBody $kindBlockMatch.Index) -ne 0) {
+                    continue
+                }
+                $kindOpen = $mainBody.IndexOf('{', $kindBlockMatch.Index)
+                $kindBody = Get-BracedBody $mainBody $kindOpen
+                if ($null -ne $kindBody -and (Test-PatternAtBraceDepthZero $kindBody $unqualifiedCallPattern)) {
+                    return $true
+                }
+            }
+        }
+    }
+    return $false
 }
 
 function Convert-ToRel {
@@ -301,7 +434,7 @@ function Invoke-GitRead {
     param([string]$Base, [string[]]$GitArgs)
     Push-Location $Base
     try {
-        $output = & git @GitArgs 2>&1
+        $output = & git --no-optional-locks @GitArgs 2>&1
         $exitCode = $LASTEXITCODE
         return [pscustomobject]@{
             exitCode = $exitCode
@@ -366,8 +499,11 @@ if ($git) {
     Add-EvidenceNeeded $evidenceNeeded "git executable/PATH unavailable / verify from Desktop with git status --short"
 }
 
-if (Test-Path -LiteralPath (Join-Root $rootPath ".git/index.lock") -PathType Leaf) {
-    Add-Finding $findings "index-lock-conflict" "BLOCK" ".git/index.lock" "Git index lock is present"
+$gitOperationEvidence = Get-AwxGitOperationEvidence -ProjectRoot $rootPath
+$observations['operationDecision'] = Get-AwxScopedOperationDecision -Operation read-only -GitEvidence $gitOperationEvidence
+$observations['repositoryWideHold'] = $false
+if ($gitOperationEvidence.indexLockPresent) {
+    Add-Finding $findings "index-lock-conflict" "INFO" "git-index" "Index writes remain held; this read-only audit proceeds. Source edits require the scoped owner/lease/preimage guard."
 }
 
 $settings = Join-Root $rootPath "settings.gradle"
@@ -377,6 +513,8 @@ $gradlewBat = Join-Root $rootPath "gradlew.bat"
 $rootBuildText = Read-Text $rootBuild
 $appBuildText = Read-Text $appBuild
 $combinedBuildText = $rootBuildText + "`n" + $appBuildText
+$rootBuildStructuralText = Convert-ToGradleStructuralText $rootBuildText
+$appBuildStructuralText = Convert-ToGradleStructuralText $appBuildText
 
 $observations["files"] = [ordered]@{
     settingsGradle = (Test-Path -LiteralPath $settings -PathType Leaf)
@@ -394,24 +532,27 @@ if (-not $observations["files"].gradlewBat) {
 }
 
 $sourceSetProof = [ordered]@{
+    sourceSetEvidenceKind = "static-structural"
+    runtimeSourceSetResolution = "not_observed"
     rootMainJavaDir = (Test-Path -LiteralPath (Join-Root $rootPath "main/java") -PathType Container)
     rootMainResourcesDir = (Test-Path -LiteralPath (Join-Root $rootPath "main/resources") -PathType Container)
-    rootBuildDeclaresMainJava = [regex]::IsMatch($rootBuildText, 'srcDirs\("main/java"\)|srcDirs\(\s*listOf\("main/java"\)\s*\)')
-    rootBuildDeclaresMainResources = [regex]::IsMatch($rootBuildText, 'srcDirs\("main/resources"\)|srcDirs\(\s*listOf\("main/resources"\)\s*\)')
+    rootBuildDeclaresMainJava = Test-GradleMainSourceDeclaration $rootBuildStructuralText '"main/java"' 'java'
+    rootBuildDeclaresMainResources = Test-GradleMainSourceDeclaration $rootBuildStructuralText '"main/resources"' 'resources'
     appJavaCleanDir = (Test-Path -LiteralPath (Join-Root $rootPath "app/src/main/java_clean") -PathType Container)
     appResourcesDir = (Test-Path -LiteralPath (Join-Root $rootPath "app/src/main/resources") -PathType Container)
-    appBuildDeclaresJavaClean = [regex]::IsMatch($appBuildText, 'java\.setSrcDirs\(listOf\("src/main/java_clean"\)\)')
+    appBuildDeclaresJavaClean = Test-GradleMainSourceDeclaration $appBuildStructuralText '"src/main/java_clean"' 'java' 'setSrcDirs'
 }
 $observations["sourceSetProof"] = $sourceSetProof
+Add-EvidenceNeeded $evidenceNeeded "Gradle runtime source-set ownership was not observed; verify with .\gradlew.bat sourceSets --console=plain and the focused test command before applying a source change."
 
 if (-not ($sourceSetProof.rootMainJavaDir -and $sourceSetProof.rootBuildDeclaresMainJava)) {
-    Add-Finding $findings "wrong-sourceset" "BLOCK" "main/java" "root main Java sourceSet proof incomplete"
+    Add-Finding $findings "wrong-sourceset" "BLOCK" "main/java" "root main Java static declaration proof incomplete"
 }
 if (-not ($sourceSetProof.rootMainResourcesDir -and $sourceSetProof.rootBuildDeclaresMainResources)) {
-    Add-Finding $findings "wrong-sourceset" "BLOCK" "main/resources" "root main resources sourceSet proof incomplete"
+    Add-Finding $findings "wrong-sourceset" "BLOCK" "main/resources" "root main resources static declaration proof incomplete"
 }
 if ($sourceSetProof.appJavaCleanDir -and -not $sourceSetProof.appBuildDeclaresJavaClean) {
-    Add-Finding $findings "wrong-sourceset" "WARN" "app/build.gradle.kts" "app java_clean directory exists but declaration was not matched"
+    Add-Finding $findings "wrong-sourceset" "BLOCK" "app/build.gradle.kts" "app java_clean directory exists but its static main declaration was not matched"
 }
 
 $langchainVersions = New-Object System.Collections.Generic.List[object]
@@ -615,7 +756,7 @@ $lines.Add("- warnFindings: $warnCount") | Out-Null
 $lines.Add("- infoFindings: $infoCount") | Out-Null
 $lines.Add("- secretPatternHits: $($observations["secretPatternHits"])") | Out-Null
 $lines.Add("") | Out-Null
-$lines.Add("## SourceSet Proof") | Out-Null
+$lines.Add("## SourceSet Static Evidence") | Out-Null
 foreach ($key in $sourceSetProof.Keys) {
     $lines.Add("- ${key}: $($sourceSetProof[$key])") | Out-Null
 }
