@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -21,6 +22,24 @@ class AutoEvolveDebugStoreRedactionTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void rotationListingHasAnExplicitResourceOwner() throws Exception {
+        String source = Files.readString(Path.of(
+                "main/java/com/example/lms/scheduler/AutoEvolveDebugStore.java"));
+        String method = methodBody(source, "private void cleanupOldRotations", "private void writeIndexFile");
+
+        assertTrue(hasTryWithResourcesFilesList(method), method);
+    }
+
+    @Test
+    void startupListingHasAnExplicitResourceOwner() throws Exception {
+        String source = Files.readString(Path.of(
+                "main/java/com/example/lms/scheduler/AutoEvolveDebugStore.java"));
+        String method = methodBody(source, "private List<AutoEvolveRunDebug> loadRecentNdjson", "private static String stripExt");
+
+        assertTrue(hasTryWithResourcesFilesList(method), method);
+    }
 
     @Test
     void persistedNdjsonDoesNotExposeRawRunDebugStrings() throws Exception {
@@ -204,5 +223,20 @@ class AutoEvolveDebugStoreRedactionTest {
         assertTrue(source.contains("traceSuppressed(\"tail.randomAccess\", e);"));
         assertTrue(source.contains("traceSuppressed(\"tail.readAllLines\", ignore);"));
         assertTrue(source.contains("TraceStore.put(\"autoevolve.debug.suppressed.\" + safeStage, true);"));
+    }
+
+    private static String methodBody(String source, String startMarker, String endMarker) {
+        int start = source.indexOf(startMarker);
+        int end = source.indexOf(endMarker, start);
+        assertTrue(start >= 0, startMarker);
+        assertTrue(end > start, endMarker);
+        return source.substring(start, end);
+    }
+
+    private static boolean hasTryWithResourcesFilesList(String methodBody) {
+        return Pattern.compile(
+                        "try\\s*\\(\\s*var\\s+\\w+\\s*=\\s*Files\\.list\\(persistDir\\)\\s*\\)")
+                .matcher(methodBody)
+                .find();
     }
 }

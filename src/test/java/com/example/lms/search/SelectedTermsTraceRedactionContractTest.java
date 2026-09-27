@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -159,6 +160,28 @@ class SelectedTermsTraceRedactionContractTest {
     }
 
     @Test
+    void diagnosticSmokeScopeSkipsKeywordSelectionLlm() {
+        CountingJsonModel model = new CountingJsonModel();
+        KeywordSelectionService service = new KeywordSelectionService(
+                model,
+                new com.example.lms.prompt.QueryKeywordPromptBuilder());
+        TraceStore.put("aux.queryTransformer.diagnosticSmokeScope", true);
+
+        Optional<SelectedTerms> selected = service.select(
+                "USER: 랜덤 UI 스모크: 현재 RAG/AUTO 설정으로 한 문장 답변하고, 사용한 경로를 짧게 말해줘.",
+                "general",
+                3);
+
+        assertTrue(selected.isPresent());
+        assertEquals(0, model.calls.get());
+        assertEquals(Boolean.TRUE, TraceStore.get("aux.keywordSelection.skipped"));
+        assertEquals("diagnostic_smoke", TraceStore.get("aux.keywordSelection.skipReason"));
+        assertEquals("fallback_diagnostic_smoke", TraceStore.get("keywordSelection.mode"));
+        String trace = String.valueOf(TraceStore.getAll());
+        assertFalse(trace.contains("called-llm"), trace);
+    }
+
+    @Test
     void fallbackSelectedTermsDoNotReturnSecretLikeConversationTokens() {
         String rawKey = "sk-" + "abcdefghijklmnopqrstuvwxyz123456";
         String rawOwnerToken = "raw-owner-token";
@@ -208,6 +231,18 @@ class SelectedTermsTraceRedactionContractTest {
         public ChatResponse chat(List<ChatMessage> messages) {
             return ChatResponse.builder()
                     .aiMessage(AiMessage.from(""))
+                    .build();
+        }
+    }
+
+    private static final class CountingJsonModel implements ChatModel {
+        final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        public ChatResponse chat(List<ChatMessage> messages) {
+            calls.incrementAndGet();
+            return ChatResponse.builder()
+                    .aiMessage(AiMessage.from("{\"must\":[\"called-llm\"],\"domainProfile\":\"general\"}"))
                     .build();
         }
     }

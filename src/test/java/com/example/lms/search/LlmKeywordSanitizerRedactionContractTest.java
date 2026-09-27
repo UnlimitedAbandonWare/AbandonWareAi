@@ -1,5 +1,6 @@
 package com.example.lms.search;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -62,12 +63,48 @@ class LlmKeywordSanitizerRedactionContractTest {
         assertFalse(prompt.contains("1234567890abcdef1234"), prompt);
     }
 
+    @Test
+    void judgeCanApproveCandidateFromCanonicalResponse() {
+        LlmKeywordSanitizer sanitizer = new LlmKeywordSanitizer(new FixedResponseModel(
+                "[{\"kw\":\"allowed-term\",\"ok\":true},{\"kw\":\"rejected-term\",\"ok\":false}]"));
+
+        List<String> filtered = sanitizer.filter(
+                "question",
+                List.of("evidence one", "evidence two"),
+                List.of("allowed-term", "rejected-term"));
+
+        assertEquals(List.of("allowed-term"), filtered);
+    }
+
+    @Test
+    void judgeCannotIntroduceKeywordOutsideCandidateSet() {
+        List<String> candidates = List.of("allowed-term");
+        LlmKeywordSanitizer sanitizer = new LlmKeywordSanitizer(new FixedResponseModel(
+                "[{\"kw\":\"invented-term\",\"ok\":true}]"));
+
+        List<String> filtered = sanitizer.filter(
+                "question",
+                List.of("evidence one", "evidence two"),
+                candidates);
+
+        assertEquals(candidates, filtered);
+    }
+
     private record CapturingModel(AtomicReference<String> promptRef) implements ChatModel {
         @Override
         public ChatResponse chat(List<ChatMessage> messages) {
             promptRef.set(messages == null || messages.isEmpty() ? "" : String.valueOf(messages.get(0)));
             return ChatResponse.builder()
                     .aiMessage(AiMessage.from("[]"))
+                    .build();
+        }
+    }
+
+    private record FixedResponseModel(String response) implements ChatModel {
+        @Override
+        public ChatResponse chat(List<ChatMessage> messages) {
+            return ChatResponse.builder()
+                    .aiMessage(AiMessage.from(response))
                     .build();
         }
     }

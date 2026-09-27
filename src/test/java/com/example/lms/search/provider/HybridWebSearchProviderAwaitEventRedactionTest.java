@@ -2,8 +2,11 @@ package com.example.lms.search.provider;
 
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.NaverSearchService;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.service.web.BraveSearchResult;
 import com.example.lms.service.web.BraveSearchService;
+import org.springframework.beans.factory.annotation.Value;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
@@ -21,17 +24,25 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class HybridWebSearchProviderAwaitEventRedactionTest {
@@ -42,6 +53,7 @@ class HybridWebSearchProviderAwaitEventRedactionTest {
     @AfterEach
     void tearDown() {
         MDC.remove("dbgSearch");
+        GuardContextHolder.clear();
         TraceStore.clear();
     }
 
@@ -177,6 +189,181 @@ class HybridWebSearchProviderAwaitEventRedactionTest {
     }
 
     @Test
+    void safeGetNowRestoresCallerInterruptAndReturnsExactFallback() throws Exception {
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(
+                mock(NaverSearchService.class), mock(BraveSearchService.class));
+        Future<String> future = interruptingFuture();
+        Method method = HybridWebSearchProvider.class.getDeclaredMethod(
+                "safeGetNow", Future.class, Object.class, String.class, String.class);
+        method.setAccessible(true);
+
+        try {
+            Object out = method.invoke(provider, future, "safe-fallback", "Brave-Trace", "hard");
+
+            assertEquals("safe-fallback", out);
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertTrue(String.valueOf(TraceStore.get("web.await.last")).contains("interrupted"));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void awaitWithDeadlineRestoresCallerInterruptAndKeepsCancelFalse() throws Exception {
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(
+                mock(NaverSearchService.class), mock(BraveSearchService.class));
+        Future<String> future = interruptingFuture();
+        Method method = HybridWebSearchProvider.class.getDeclaredMethod(
+                "awaitWithDeadline", Future.class, long.class, Object.class, String.class);
+        method.setAccessible(true);
+
+        try {
+            Object out = method.invoke(
+                    provider,
+                    future,
+                    System.nanoTime() + TimeUnit.SECONDS.toNanos(1),
+                    "hard-fallback",
+                    "Brave");
+
+            assertEquals("hard-fallback", out);
+            assertTrue(Thread.currentThread().isInterrupted());
+            verify(future).cancel(false);
+            verify(future, never()).cancel(true);
+            assertTrue(String.valueOf(TraceStore.get("web.await.last")).contains("interrupted"));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void awaitWithDeadlineRestoresInterruptWhileKeepingFloorCancellationSuppressed() throws Exception {
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(
+                mock(NaverSearchService.class), mock(BraveSearchService.class));
+        setField(provider, "awaitMinLiveBudgetMs", 1_200L);
+        setField(provider, "awaitNearExhaustedThresholdMs", 2_000L);
+        setField(provider, "awaitFloorTinyBudget", true);
+        setField(provider, "awaitCancelSuppressedWhenFloor", true);
+        Future<String> future = interruptingFuture();
+        Method method = HybridWebSearchProvider.class.getDeclaredMethod(
+                "awaitWithDeadline", Future.class, long.class, Object.class, String.class);
+        method.setAccessible(true);
+
+        try {
+            Object out = method.invoke(
+                    provider,
+                    future,
+                    System.nanoTime() + TimeUnit.SECONDS.toNanos(1),
+                    "floor-fallback",
+                    "Brave");
+
+            assertEquals("floor-fallback", out);
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertEquals(1L, TraceStore.getLong("web.await.cancelSuppressed"));
+            assertEquals("near_exhausted", TraceStore.get("web.await.cancelSuppressed.reason"));
+            verify(future, never()).cancel(false);
+            verify(future, never()).cancel(true);
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void awaitSoftRestoresCallerInterruptAndReturnsExactFallback() throws Exception {
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(
+                mock(NaverSearchService.class), mock(BraveSearchService.class));
+        Future<String> future = interruptingFuture();
+        Method method = HybridWebSearchProvider.class.getDeclaredMethod(
+                "awaitSoft", Future.class, long.class, Object.class, String.class);
+        method.setAccessible(true);
+
+        try {
+            Object out = method.invoke(provider, future, 100L, "soft-fallback", "Naver-Trace");
+
+            assertEquals("soft-fallback", out);
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertTrue(String.valueOf(TraceStore.get("web.await.last")).contains("interrupted"));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void preInterruptedTraceEntrySkipsEveryProviderCacheAndExecutorOperation() throws Exception {
+        BraveSearchService brave = mock(BraveSearchService.class);
+        NaverSearchService naver = mock(NaverSearchService.class);
+        ExecutorService executor = mock(ExecutorService.class);
+        when(brave.isEnabled()).thenReturn(true);
+        when(brave.isCoolingDown()).thenReturn(false);
+        when(naver.isEnabled()).thenReturn(true);
+
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(naver, brave);
+        setField(provider, "searchIoExecutor", executor);
+        setField(provider, "primary", "BRAVE");
+        setField(provider, "timeoutSec", 1);
+        setField(provider, "koreanHedgeDelayMs", 50L);
+        setField(provider, "soakEnabled", false);
+        setField(provider, "remergeOnEmptyEnabled", false);
+
+        Thread.currentThread().interrupt();
+        try {
+            NaverSearchService.SearchResult out = provider.searchWithTrace("사전 취소 요청", 3);
+
+            assertEquals(List.of(), out.snippets());
+            assertNull(out.trace());
+            assertTrue(Thread.currentThread().isInterrupted());
+            verify(brave, never()).isEnabled();
+            verify(brave, never()).searchWithMeta(anyString(), anyInt());
+            verify(brave, never()).searchCacheOnly(anyString(), anyInt());
+            verify(naver, never()).isEnabled();
+            verify(naver, never()).searchWithTraceSync(anyString(), anyInt(), any());
+            verify(naver, never()).searchSnippetsCacheOnly(anyString(), anyInt(), any());
+            verify(executor, never()).submit(any(Callable.class));
+            verify(executor, never()).execute(any(Runnable.class));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void interruptedTraceHedgeDoesNotSubmitLaterOptionalProvider() throws Exception {
+        BraveSearchService brave = mock(BraveSearchService.class);
+        NaverSearchService naver = mock(NaverSearchService.class);
+        ExecutorService executor = mock(ExecutorService.class);
+        when(brave.isEnabled()).thenReturn(true);
+        when(brave.isCoolingDown()).thenReturn(false);
+        when(naver.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.doAnswer(call -> {
+            // The production scope now owns its FutureTask; interrupt the real waiting thread.
+            Thread.currentThread().interrupt();
+            return null;
+        }).when(executor).execute(any(Runnable.class));
+
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(naver, brave);
+        setField(provider, "searchIoExecutor", executor);
+        setField(provider, "primary", "BRAVE");
+        setField(provider, "timeoutSec", 1);
+        setField(provider, "koreanHedgeDelayMs", 50L);
+        setField(provider, "skipNaverIfBraveMinResults", 6);
+        setField(provider, "skipNaverIfBraveSufficient", true);
+        setField(provider, "forceOpportunisticNaverEvenIfBraveFast", false);
+        setField(provider, "soakEnabled", false);
+        setField(provider, "remergeOnEmptyEnabled", false);
+
+        try {
+            NaverSearchService.SearchResult out = provider.searchWithTrace("인터럽트 후속 검색 금지", 5);
+
+            assertEquals(List.of(), out.snippets());
+            assertTrue(Thread.currentThread().isInterrupted());
+            verify(executor, times(1)).execute(any(Runnable.class));
+            verify(naver, never()).searchWithTraceSync(anyString(), anyInt(), any());
+            verify(naver, never()).searchSnippetsSync(anyString(), anyInt(), any());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
     void koreanBraveFirstUsesNaverCacheOnlyWhenNaverProviderDisabled() throws Exception {
         BraveSearchService brave = mock(BraveSearchService.class);
         NaverSearchService naver = mock(NaverSearchService.class);
@@ -208,16 +395,155 @@ class HybridWebSearchProviderAwaitEventRedactionTest {
     }
 
     @Test
-    void koreanFoldRumorConversionUsesReadableMarkersInsteadOfMojibakeLiterals() throws Exception {
-        HybridWebSearchProvider provider = new HybridWebSearchProvider(mock(NaverSearchService.class), mock(BraveSearchService.class));
-        Method method = HybridWebSearchProvider.class.getDeclaredMethod("convertToEnglishSearchTerm", String.class);
+    void koreanOpportunisticNaverAfterFastBraveIsOptInByDefault() throws Exception {
+        Field field = HybridWebSearchProvider.class.getDeclaredField("forceOpportunisticNaverEvenIfBraveFast");
+        Value value = field.getAnnotation(Value.class);
+
+        assertEquals("${gpt-search.hybrid.korean.force-opportunistic-naver-even-if-brave-fast:false}",
+                value.value());
+    }
+
+    @Test
+    void koreanTraceBraveFirstRecordsNaverHedgeSkipWhenFastBraveIsEnough() throws Exception {
+        BraveSearchService brave = mock(BraveSearchService.class);
+        NaverSearchService naver = mock(NaverSearchService.class);
+        when(brave.isEnabled()).thenReturn(true);
+        when(brave.isCoolingDown()).thenReturn(false);
+        when(brave.searchWithMeta(anyString(), anyInt())).thenReturn(BraveSearchResult.ok(
+                List.of("b1", "b2", "b3", "b4", "b5", "b6"), 12L));
+        when(naver.isEnabled()).thenReturn(true);
+
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(naver, brave);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            setField(provider, "searchIoExecutor", executor);
+            setField(provider, "primary", "BRAVE");
+            setField(provider, "timeoutSec", 1);
+            setField(provider, "koreanHedgeDelayMs", 50L);
+            setField(provider, "skipNaverIfBraveMinResults", 6);
+            setField(provider, "skipNaverIfBraveSufficient", true);
+            setField(provider, "forceOpportunisticNaverEvenIfBraveFast", false);
+            setField(provider, "soakEnabled", false);
+            setField(provider, "remergeOnEmptyEnabled", false);
+
+            NaverSearchService.SearchResult out = provider.searchWithTrace("브라우저 검색 상태 확인", 5);
+
+            assertEquals(5, out.snippets().size());
+            verify(naver, never()).searchWithTraceSync(anyString(), anyInt(), any());
+            assertEquals("brave_sufficient", TraceStore.get("web.naver.skipped.reason"));
+            assertEquals("korean.braveFirst.trace.hedge", TraceStore.get("web.naver.skipped.stage"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void cheapSearchModeSkipsBackupQueryAfterEmptyPrimary() throws Exception {
+        BraveSearchService brave = mock(BraveSearchService.class);
+        NaverSearchService naver = mock(NaverSearchService.class);
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(naver, brave);
+        GuardContext ctx = new GuardContext();
+        ctx.setCheapSearchMode(true);
+        GuardContextHolder.set(ctx);
+        setField(provider, "remergeOnEmptyEnabled", false);
+
+        Method method = HybridWebSearchProvider.class.getDeclaredMethod(
+                "maybeBackupOnce",
+                String.class,
+                int.class,
+                List.class);
         method.setAccessible(true);
 
+        Object out = method.invoke(
+                provider,
+                "qwen api pricing quota latest details official check extra",
+                3,
+                List.of());
+
+        assertEquals(List.of(), out);
+        assertNull(TraceStore.get("websearch.backup.used"));
+        assertEquals(Boolean.TRUE, TraceStore.get("websearch.backup.skipped"));
+        assertEquals("cheap-search-mode", TraceStore.get("websearch.backup.skipReason"));
+    }
+
+    @Test
+    void cheapSearchModeSkipsCacheOnlyRemergePollsAfterEmptyPrimary() throws Exception {
+        BraveSearchService brave = mock(BraveSearchService.class);
+        NaverSearchService naver = mock(NaverSearchService.class);
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(naver, brave);
+        GuardContext ctx = new GuardContext();
+        ctx.setCheapSearchMode(true);
+        GuardContextHolder.set(ctx);
+        setField(provider, "remergeOnEmptyEnabled", true);
+        setField(provider, "braveCacheOnlyEscape", true);
+        setField(provider, "naverCacheOnlyEscape", true);
+        TraceStore.put("web.await.events.timeout.count", 1L);
+
+        Method method = HybridWebSearchProvider.class.getDeclaredMethod(
+                "maybeRemergeOnceCacheOnly",
+                String.class,
+                int.class);
+        method.setAccessible(true);
+
+        Object out = method.invoke(
+                provider,
+                "qwen local light search mode proof",
+                3);
+
+        assertEquals(List.of(), out);
+        assertNull(TraceStore.get("websearch.remergeOnce.used"));
+        assertEquals(Boolean.TRUE, TraceStore.get("web.failsoft.remergeOnce.skipped"));
+        assertEquals("cheap-search-mode", TraceStore.get("web.failsoft.remergeOnce.skipReason"));
+        verify(brave, never()).searchCacheOnly(anyString(), anyInt());
+        verify(naver, never()).searchSnippetsCacheOnly(anyString(), anyInt(), any());
+    }
+
+    @Test
+    void koreanOfficialOnlyDoesNotForceNaverFirstWhenBraveIsPrimaryAndFastEnough() throws Exception {
+        BraveSearchService brave = mock(BraveSearchService.class);
+        NaverSearchService naver = mock(NaverSearchService.class);
+        when(brave.isEnabled()).thenReturn(true);
+        when(brave.isCoolingDown()).thenReturn(false);
+        when(brave.searchWithMeta(anyString(), anyInt())).thenReturn(BraveSearchResult.ok(
+                List.of("b1", "b2", "b3", "b4", "b5", "b6"), 8L));
+        when(naver.isEnabled()).thenReturn(true);
+
+        GuardContext ctx = new GuardContext();
+        ctx.setOfficialOnly(true);
+        GuardContextHolder.set(ctx);
+
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(naver, brave);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            setField(provider, "searchIoExecutor", executor);
+            setField(provider, "primary", "BRAVE");
+            setField(provider, "timeoutSec", 1);
+            setField(provider, "koreanHedgeDelayMs", 50L);
+            setField(provider, "skipNaverIfBraveMinResults", 6);
+            setField(provider, "skipNaverIfBraveSufficient", true);
+            setField(provider, "forceOpportunisticNaverEvenIfBraveFast", false);
+            setField(provider, "soakEnabled", false);
+            setField(provider, "remergeOnEmptyEnabled", false);
+
+            List<String> out = provider.search("\uBE0C\uB77C\uC6B0\uC800 \uACF5\uC2DD \uBB38\uC11C \uC0C1\uD0DC", 5);
+
+            assertEquals(5, out.size());
+            verify(naver, never()).searchSnippetsSync(anyString(), anyInt(), any());
+            assertEquals("brave-first", TraceStore.get("webSearch.providerPreference"));
+            assertEquals("brave_sufficient", TraceStore.get("web.naver.skipped.reason"));
+        } finally {
+            GuardContextHolder.clear();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void koreanFoldRumorConversionUsesReadableMarkersInsteadOfMojibakeLiterals() throws Exception {
         assertEquals("Galaxy Z Fold 7 leak rumors renders",
-                method.invoke(provider, "갤럭시 폴드7 루머 렌더"));
+                HybridSearchQueryPolicy.convertToEnglishSearchTerm("갤럭시 폴드7 루머 렌더"));
 
         String source = Files.readString(
-                Path.of("main/java/com/example/lms/search/provider/HybridWebSearchProvider.java"),
+                Path.of("main/java/com/example/lms/search/provider/HybridSearchQueryPolicy.java"),
                 StandardCharsets.UTF_8);
         assertFalse(source.contains("normalized.contains(\"?"),
                 "runtime Korean marker checks should not use mojibake literals");
@@ -245,6 +571,26 @@ class HybridWebSearchProviderAwaitEventRedactionTest {
                 .count();
 
         assertEquals(0L, exactEmptyCatchBlocks);
+    }
+
+    @Test
+    void hybridProviderAndBoundaryNeverClearRequestInterrupts() throws Exception {
+        String provider = Files.readString(
+                Path.of("main/java/com/example/lms/search/provider/HybridWebSearchProvider.java"),
+                StandardCharsets.UTF_8);
+        String aspect = Files.readString(
+                Path.of("main/java/ai/abandonware/nova/orch/aop/HybridWebSearchInterruptHygieneAspect.java"),
+                StandardCharsets.UTF_8);
+
+        assertEquals(0L, Pattern.compile("Thread\\.interrupted\\s*\\(")
+                .matcher(provider + aspect)
+                .results()
+                .count());
+        assertEquals(3L, Pattern.compile("\\.cancel\\(false\\)")
+                .matcher(provider)
+                .results()
+                .count());
+        assertFalse(provider.contains(".cancel(true)"));
     }
 
     @Test
@@ -579,19 +925,19 @@ class HybridWebSearchProviderAwaitEventRedactionTest {
     }
 
     @Test
-    void providerBreakerChecksUseStageScopedKeys() throws Exception {
+    void providerBreakerChecksUseBaseKeysAndDoNotOwnProviderTerminals() throws Exception {
         String source = Files.readString(
                 Path.of("main/java/com/example/lms/search/provider/HybridWebSearchProvider.java"),
                 StandardCharsets.UTF_8);
 
-        assertFalse(source.contains("nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE)"));
-        assertFalse(source.contains("nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER)"));
+        assertTrue(source.contains("nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_BRAVE)"));
+        assertTrue(source.contains("nightmareBreaker.isOpen(NightmareKeys.WEBSEARCH_NAVER)"));
         assertFalse(source.contains("nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE)"));
         assertFalse(source.contains("nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER)"));
-        assertTrue(source.contains("nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, \"direct\")"));
-        assertTrue(source.contains("nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, \"direct\")"));
-        assertTrue(source.contains("nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_BRAVE, \"korean.braveFirst\")"));
-        assertTrue(source.contains("nightmareBreaker.isOpenOrHalfOpen(NightmareKeys.WEBSEARCH_NAVER, \"korean.naverFirst\")"));
+        assertFalse(source.contains("nightmareBreaker.isOpenOrHalfOpen("));
+        assertFalse(source.contains("nightmareBreaker.recordSuccess("));
+        assertFalse(source.contains("nightmareBreaker.recordFailure("));
+        assertFalse(source.contains("nightmareBreaker.recordRateLimit("));
     }
 
     @Test
@@ -662,7 +1008,8 @@ class HybridWebSearchProviderAwaitEventRedactionTest {
         assertTrue(source.contains("traceSuppressed(\"await.officialOnly.context\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"await.minLiveBudget.officialOnly\", suppressed);"));
         assertTrue(source.contains("traceSuppressed(\"await.naverCap.trace\", ignore);"));
-        assertTrue(source.contains("traceSuppressed(\"await.budgetExhaustedFloor.trace\", ignore);"));
+        assertFalse(source.contains("web.await.minLiveBudget.budgetExhaustedFloorApplied"),
+                "an exhausted request must not acquire another floor budget");
         assertTrue(source.contains("traceSuppressed(\"await.cancelSuppressed.budgetExhausted\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"await.nearExhausted.trace\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"await.tinyBudget.trace\", ignore);"));
@@ -759,5 +1106,15 @@ class HybridWebSearchProviderAwaitEventRedactionTest {
         Field field = HybridWebSearchProvider.class.getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> Future<T> interruptingFuture() throws Exception {
+        Future<T> future = mock(Future.class);
+        when(future.isDone()).thenReturn(false);
+        when(future.get()).thenThrow(new InterruptedException("private interrupt detail"));
+        when(future.get(anyLong(), any(TimeUnit.class)))
+                .thenThrow(new InterruptedException("private timed interrupt detail"));
+        return future;
     }
 }

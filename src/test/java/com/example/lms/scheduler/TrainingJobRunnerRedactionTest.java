@@ -77,10 +77,53 @@ class TrainingJobRunnerRedactionTest {
         verify(resourceProbe).markBlueCalled();
     }
 
+    @Test
+    void greenExpansionLineTruncationPreservesSupplementaryBoundary() throws Exception {
+        String raw = "x".repeat(199) + "\uD83D\uDE00" + "tail";
+
+        List<String> lines = invokeSplitLines(raw, 1);
+
+        assertEquals(List.of("x".repeat(199)), lines);
+        assertFalse(hasUnpairedSurrogate(lines.get(0)), lines.get(0));
+    }
+
+    @Test
+    void greenExpansionLineTruncationKeepsBmpLimitContract() throws Exception {
+        assertEquals(List.of("y".repeat(200)), invokeSplitLines("y".repeat(201), 1));
+        assertEquals(List.of("z".repeat(200)), invokeSplitLines("z".repeat(200), 1));
+        String completePair = "q".repeat(198) + "\uD83D\uDE00";
+        assertEquals(List.of(completePair), invokeSplitLines(completePair + "tail", 1));
+    }
+
     private static void assertRedacted(String value) {
         assertNotNull(value);
         assertFalse(value.contains("" + com.example.lms.test.SecretFixtures.openAiKey() + ""), value);
         assertFalse(value.contains("raw-owner-token"), value);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char current = value.charAt(i);
+            if (Character.isHighSurrogate(current)) {
+                if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) {
+                    return true;
+                }
+                i++;
+            } else if (Character.isLowSurrogate(current)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> invokeSplitLines(String raw, int cap) throws Exception {
+        return (List<String>) invoke(
+                null,
+                "splitLines",
+                new Class<?>[]{String.class, int.class},
+                raw,
+                cap);
     }
 
     private static String invokeString(String methodName, Class<?>[] parameterTypes, Object... args) throws Exception {

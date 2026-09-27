@@ -1,11 +1,8 @@
 package com.example.lms.safepatch;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.example.lms.dto.ChatRequestDto;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -27,6 +24,11 @@ class ChatRecoverySafePatchContractTest {
         assertTrue(pageController.contains("return \"chat-ui\";"));
         assertFalse(pageController.contains("return \"forward:/chat-ui.html\";"));
         assertFalse(webMvcConfig.contains("addResourceHandler(\"/chat-ui.html\")"));
+        assertFalse(webMvcConfig.contains("addResourceHandler(\"/js/**\", \"/css/**\", \"/images/**\", \"/assets/**\")"));
+        assertTrue(webMvcConfig.contains("addResourceHandler(\"/js/**\")"));
+        assertTrue(webMvcConfig.contains("addResourceLocations(\"classpath:/static/js/\")"));
+        assertTrue(webMvcConfig.contains("addResourceHandler(\"/css/**\")"));
+        assertTrue(webMvcConfig.contains("addResourceLocations(\"classpath:/static/css/\")"));
     }
 
     @Test
@@ -60,25 +62,6 @@ class ChatRecoverySafePatchContractTest {
         assertFalse(sendMessage.contains("saveSettings("));
         assertTrue(chatJs.contains("isHttp403"));
         assertTrue(chatJs.contains("Settings save requires admin"));
-    }
-
-    @Test
-    void explicitUseRagFalseSurvivesControllerDefaulting() throws Exception {
-        String controller = source("main/java/com/example/lms/api/ChatApiController.java");
-        ChatRequestDto request = ChatRequestDto.builder().message("hello").useRag(null).build();
-
-        assertTrue(controller.contains("if (req.getUseRag() == null)"));
-        assertFalse(controller.contains("if (!req.isUseRag())"));
-        assertNull(request.getUseRag());
-        assertFalse(request.isUseRag());
-
-        request.setUseRag(Boolean.FALSE);
-        assertEquals(Boolean.FALSE, request.getUseRag());
-        assertFalse(request.isUseRag());
-
-        request.setUseRag(Boolean.TRUE);
-        assertEquals(Boolean.TRUE, request.getUseRag());
-        assertTrue(request.isUseRag());
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.example.lms.debug.DebugEvent;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.resilience.RagFailureBlackboxService;
 import com.example.lms.search.TraceStore;
+import com.example.lms.trace.SafeRedactor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -13,6 +14,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,7 +46,8 @@ class CausalProbeTriggerServiceTest {
                 "private goal value must not leak",
                 "unit-test",
                 blackbox,
-                List.of());
+                List.of(),
+                CausalProbeTriggerService.ProbeConstraints.allowOnly("anchor_compression_topup"));
 
         assertTrue(decision.evidenceReady());
         assertEquals("after_filter_starvation", decision.dominantFailure());
@@ -52,6 +55,7 @@ class CausalProbeTriggerServiceTest {
         assertTrue(decision.confidence() >= 0.65d);
         assertEquals("anchor_compression_topup", decision.patchCandidate());
         assertEquals("source_patch_candidate", decision.action());
+        assertEquals("allowed", decision.policyDecision());
         assertEquals(Boolean.TRUE, TraceStore.get("causalProbe.evidenceReady"));
         assertEquals(3L, TraceStore.get("causalProbe.sampleCount"));
         assertEquals("after_filter_starvation", TraceStore.get("causalProbe.dominantFailure"));
@@ -64,7 +68,41 @@ class CausalProbeTriggerServiceTest {
         assertFalse(publicPayload.contains("private goal value must not leak"), publicPayload);
         assertTrue(debugStore.list(10).stream()
                 .map(DebugEvent::fingerprint)
-                .anyMatch("causal_probe:after_filter_starvation:source_patch_candidate"::equals));
+                .anyMatch(SafeRedactor.hashValue(
+                        "causal_probe:after_filter_starvation:source_patch_candidate")::equals));
+    }
+
+    @Test
+    void causalEvidenceReadyRemainsProbeOnlyAndNeverPassesVerificationGate() {
+        DebugEventStore debugStore = new DebugEventStore();
+        CausalProbeTriggerService service = new CausalProbeTriggerService(
+                provider(debugStore), provider(null), provider(null));
+        TraceStore.put("probe.sampleCount", 3);
+        TraceStore.put("web.brave.returnedCount", 4);
+        TraceStore.put("web.brave.afterFilterCount", 0);
+        RagFailureBlackboxService.Snapshot blackbox =
+                RagFailureBlackboxService.analyze(TraceStore.getAll());
+
+        CausalProbeTriggerService.Decision decision = service.projectCurrentTrace(
+                "goal",
+                "probe-authority-test",
+                blackbox,
+                List.of(),
+                CausalProbeTriggerService.ProbeConstraints.allowOnly("anchor_compression_topup"));
+
+        assertTrue(decision.evidenceReady());
+        assertEquals("probe_only", TraceStore.get("causalProbe.decisionAuthority"));
+        assertEquals(Boolean.FALSE, TraceStore.get("causalProbe.verificationGatePassed"));
+        assertTrue(TraceStore.getByPrefix("counterEvidence.").isEmpty());
+        String expectedFingerprint = SafeRedactor.hashValue(
+                "causal_probe:" + decision.dominantFailure() + ":" + decision.action());
+        DebugEvent event = debugStore.list(10).stream()
+                .filter(item -> expectedFingerprint.equals(item.fingerprint()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("probe_only", event.data().get("decisionAuthority"));
+        assertEquals(Boolean.FALSE, event.data().get("verificationGatePassed"));
+        assertEquals(decision.constraintHash(), event.data().get("constraintHash"));
     }
 
     @Test
@@ -104,8 +142,67 @@ class CausalProbeTriggerServiceTest {
 
         assertEquals(Boolean.TRUE, TraceStore.get("causalProbe.evidenceReady"));
         assertEquals("after_filter_starvation", TraceStore.get("causalProbe.dominantFailure"));
-        assertEquals("source_patch_candidate", TraceStore.get("causalProbe.action"));
+        assertEquals("observe_only", TraceStore.get("causalProbe.action"));
+        assertEquals("observe_only", TraceStore.get("causalProbe.patchCandidate"));
+        assertEquals("constraints_missing", TraceStore.get("causalProbe.policyDecision"));
         assertEquals("needleoutcomerewarder.recordoutcome", TraceStore.get("causalProbe.where"));
+    }
+
+    @Test
+    void operatorStopOverridesReadyEvidenceWithoutLeakingReason() {
+        DebugEventStore debugStore = new DebugEventStore();
+        CausalProbeTriggerService service = new CausalProbeTriggerService(
+                provider(debugStore), provider(null), provider(null));
+        TraceStore.put("probe.sampleCount", 3);
+        TraceStore.put("web.brave.returnedCount", 4);
+        TraceStore.put("web.brave.afterFilterCount", 0);
+        RagFailureBlackboxService.Snapshot blackbox =
+                RagFailureBlackboxService.analyze(TraceStore.getAll());
+
+        CausalProbeTriggerService.Decision decision = service.projectCurrentTrace(
+                "goal",
+                "operator-stop-test",
+                blackbox,
+                List.of(),
+                CausalProbeTriggerService.ProbeConstraints.stop("private operator stop reason"));
+
+        assertTrue(decision.evidenceReady());
+        assertEquals("observe_only", decision.patchCandidate());
+        assertEquals("observe_only", decision.action());
+        assertEquals("operator_stop", decision.policyDecision());
+        assertFalse((TraceStore.getByPrefix("causalProbe.") + debugStore.list(10).toString())
+                .contains("private operator stop reason"));
+    }
+
+    @Test
+    void outOfScopeOrForbiddenCandidateFailsClosed() {
+        Map<String, Object> trace = Map.of(
+                "probe.sampleCount", 3,
+                "web.brave.returnedCount", 4,
+                "web.brave.afterFilterCount", 0);
+        RagFailureBlackboxService.Snapshot blackbox = RagFailureBlackboxService.analyze(trace);
+
+        CausalProbeTriggerService.Decision outOfScope = CausalProbeTriggerService.evaluate(
+                "goal",
+                trace,
+                blackbox,
+                List.of(),
+                CausalProbeTriggerService.ProbeConstraints.allowOnly("cooldown_reorder"));
+        CausalProbeTriggerService.Decision forbidden = CausalProbeTriggerService.evaluate(
+                "goal",
+                trace,
+                blackbox,
+                List.of(),
+                new CausalProbeTriggerService.ProbeConstraints(
+                        Set.of("anchor_compression_topup"),
+                        Set.of("source_patch_candidate"),
+                        false,
+                        "none"));
+
+        assertEquals("candidate_out_of_scope", outOfScope.policyDecision());
+        assertEquals("observe_only", outOfScope.action());
+        assertEquals("action_forbidden", forbidden.policyDecision());
+        assertEquals("observe_only", forbidden.action());
     }
 
     @Test

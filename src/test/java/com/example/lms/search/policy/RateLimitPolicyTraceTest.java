@@ -42,6 +42,17 @@ class RateLimitPolicyTraceTest {
     }
 
     @Test
+    void retryAfterSecondsCapAppliesBeforeMultiplicationOverflow() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("Retry-After", Long.toString(Long.MAX_VALUE));
+        RateLimitPolicy policy = new RateLimitPolicy();
+
+        policy.updateFromHeaders(headers);
+
+        assertEquals(60_000L, policy.retryAfterMs());
+    }
+
+    @Test
     void parseFallbackCatchesUseScannerVisibleSuppressionHelper() throws Exception {
         String source = Files.readString(
                 Path.of("main/java/com/example/lms/search/RateLimitPolicy.java"),

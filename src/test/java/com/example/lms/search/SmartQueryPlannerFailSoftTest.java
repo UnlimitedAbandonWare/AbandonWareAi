@@ -1,24 +1,28 @@
 package com.example.lms.search;
 
 import com.example.lms.search.extract.HybridKeywordExtractor;
+import com.example.lms.search.terms.SelectedTerms;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.service.subject.SubjectResolver;
 import com.example.lms.trace.SafeRedactor;
 import com.example.lms.transform.QueryTransformer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -73,6 +77,29 @@ class SmartQueryPlannerFailSoftTest {
         assertEquals("breaker_open", TraceStore.get("queryTransformer.reason"));
         assertEquals(Boolean.TRUE, TraceStore.get("aux.queryTransformer.degraded"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("ownerToken=secret"));
+    }
+
+    @Test
+    void selectedTermsDoNotDuplicateAnExistingSubjectUnderTurkishLocale() {
+        QueryTransformer transformer = mock(QueryTransformer.class);
+        KeywordSelectionService selector = mock(KeywordSelectionService.class);
+        when(selector.select(anyString(), anyString(), anyInt())).thenReturn(Optional.of(
+                SelectedTerms.builder()
+                        .must(List.of("IBM", "earnings"))
+                        .build()));
+        SmartQueryPlanner planner = planner(transformer, "FINANCE", Optional.of("ibm"));
+        ReflectionTestUtils.setField(planner, "selector", selector);
+
+        Locale previous = Locale.getDefault();
+        List<String> planned;
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            planned = planner.plan("IBM earnings", null, 4);
+        } finally {
+            Locale.setDefault(previous);
+        }
+
+        assertEquals(List.of("IBM earnings"), planned);
     }
 
     @Test
