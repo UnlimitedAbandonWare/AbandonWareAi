@@ -1,0 +1,4 @@
+interface:
+  display_name: "Self-Ask Query Rewrite Safe Patch"
+  short_description: "Detailed I/O for vague safe patches."
+  default_prompt: "Use $self-ask-query-rewrite-safe-patch to turn this vague source patch request into a detailed input packet, rewrite options, and verification brief."

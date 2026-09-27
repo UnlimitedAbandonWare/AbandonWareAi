@@ -1,6 +1,6 @@
 ---
 name: run_pipeline
-description: Use when probing run_pipeline, verify_boot, and build_error_miner script availability through the demo-1 MCP control tower and returning exact commands or evidence_needed for missing scripts.
+description: Use when probing run_pipeline, verify_boot, build_error_miner via demo-1 MCP tower
 ---
 
 # Run Pipeline

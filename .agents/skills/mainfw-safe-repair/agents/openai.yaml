@@ -1,0 +1,4 @@
+interface:
+  display_name: "mainfw Safe Repair"
+  short_description: "Repair mainfw Java/Spring contracts from live evidence"
+  default_prompt: "Use $mainfw-safe-repair to probe and repair one verified mainfw Java/Spring contract safely."

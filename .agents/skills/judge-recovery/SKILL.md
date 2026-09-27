@@ -1,6 +1,6 @@
 ---
 name: judge-recovery
-description: Diagnose and recover failures in the Spring Boot agent orchestrator. Triggers on Verdict != ACCEPT, tool exceptions, citation gate misses, schema violations, budget exhaustion, and consent denials. Routes to BACKOFF / DEGRADE / FALLBACK / ESCALATE per recovery-policy.yaml. Required reading before modifying CriticNode, Orchestrator, NovaFallbackCoordinator, or any class under com.abandonware.ai.agent.orchestrator.recovery.
+description: Diagnose and recover failures in the Spring Boot agent orchestrator
 license: project-internal
 metadata:
   version: "1.0.0"

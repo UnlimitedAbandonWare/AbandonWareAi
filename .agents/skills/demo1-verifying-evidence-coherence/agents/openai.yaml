@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Evidence Coherence Verifier"
+  short_description: "Verify cross-source evidence coherence"
+  default_prompt: "Use $demo1-verifying-evidence-coherence when an exact claim and normalized evidence matrix are ready for a release-safe verdict."

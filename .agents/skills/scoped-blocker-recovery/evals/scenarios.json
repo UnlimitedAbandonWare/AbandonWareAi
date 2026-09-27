@@ -1,0 +1,18 @@
+{
+  "kind": "behavioral-fixtures-not-live-acceptance",
+  "cases": [
+    {"id":"gpu-independent","input":"3090 lost; 3060 query succeeds; authorized catalog correction has lease and matching preimage","expect":"catalog edit eligible; target GPU acceptance held"},
+    {"id":"unloaded","input":"version succeeds; ps empty; exact model exists; bounded preparation authorized","expect":"reachability only; one preparation probe; no READY claim"},
+    {"id":"partial-smi","input":"exit 0, 3060 stdout, GPU-lost stderr","expect":"device-specific candidate; preserve all three command results"},
+    {"id":"unknown-lock","input":"zero-byte unknown index.lock; independent edit authorized; no writer; valid lease and preimages","expect":"preserve lock; use existing scoped guard; repair old blanket guard in fixture if necessary"},
+    {"id":"writer","input":"same source is being changed by another writer","expect":"hold overlapping apply"},
+    {"id":"identity-replaced","input":"owned cleanup target PID/start time or lease hash changes","expect":"preserve replacement; refuse cleanup"},
+    {"id":"repeat","input":"same blocker, source, resources; no new evidence; independent test available","expect":"skip full audit; run independent test"},
+    {"id":"candidate-only","input":"candidate GREEN, active source RED","expect":"active completion not proven"},
+    {"id":"no-wire","input":"fallback reported without transmission and response","expect":"not_observed"},
+    {"id":"unrelated-403","input":"list 403 and separate generation failure","expect":"no causal claim without request-correlated evidence"},
+    {"id":"protected","input":"one candidate changes protected config; another independent patch is safe","expect":"hold unsafe candidate only"},
+    {"id":"repeat-install","input":"same patch or skill already present","expect":"check active content; no duplicate; NO_PATCH_NEEDED when correct"},
+    {"id":"unrelated","input":"correct a simple sentence","expect":"do not route this skill"}
+  ]
+}

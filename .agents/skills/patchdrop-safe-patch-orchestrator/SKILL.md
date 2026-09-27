@@ -1,6 +1,6 @@
 ---
 name: patchdrop-safe-patch-orchestrator
-description: Use when demo-1 work involves PatchDrop, SMB/shared source, Mac mini/Desktop Codex role split, cumulative patch bundles, janitor gates, or deciding whether a patch can be applied to the Desktop canonical root.
+description: "PROTO-LIGHT: default skip unless user explicitly names this skill — Use when demo-1 work involves PatchDrop, SMB/shared source"
 ---
 
 # PatchDrop Safe Patch Orchestrator
@@ -26,20 +26,19 @@ If the current path is shared Desktop source on Mac mini, stop with `smb-conflic
 
 ## Desktop Preflight
 
-Run from `C:\AbandonWare\demo-1\demo-1\src` before source edits or PatchDrop apply:
+Ordinary source-edit follows `AGENTS.md` `DEMO1-GIT-LOCAL-FIRST`: lease +
+preimage, no `git status`/`rev-parse` intake gate. The Git CLI below is only
+for PatchDrop `.patch` apply (`git apply`), not for starting a source session.
+
+Run from `C:\AbandonWare\demo-1\demo-1\src` before PatchDrop apply:
 
 ```powershell
 $Root = "C:\AbandonWare\demo-1\demo-1\src"
 Push-Location $Root
 Get-Location
-git rev-parse --show-toplevel 2>$null
-git worktree list 2>$null
-git branch --show-current 2>$null
-git status --short 2>$null
-if (Test-Path ".git\index.lock") {
-  Write-Error "[AWX][desktop] index-lock-conflict"
-  exit 1
-}
+. .\__patch_drop__\source_edit_lease_contract.ps1
+$GitEvidence = Get-AwxGitOperationEvidence -ProjectRoot $Root
+Get-AwxScopedOperationDecision -Operation read-only -GitEvidence $GitEvidence
 
 $PatchDrop = Join-Path $Root "__patch_drop__"
 if (Test-Path "__patch_drop__\janitor_inventory.ps1") {
@@ -51,7 +50,10 @@ if (Test-Path "__patch_drop__\janitor_inventory.ps1") {
 }
 ```
 
-If Git metadata is unavailable from this checkout, record `evidence_needed: git metadata unavailable` and use PatchDrop sidecars, direct source reads, janitor scripts, and Gradle evidence. Do not fabricate Git proof.
+If Git CLI or `.git` is unavailable, ordinary source-edit still proceeds via
+lease/preimage. Record `evidence_needed: git metadata unavailable` only for
+PatchDrop `git apply` of a `.patch`. Use sidecars, direct source reads, janitor
+scripts, and Gradle evidence. Do not fabricate Git proof.
 
 ## One Active Bundle Rule
 
@@ -76,6 +78,9 @@ Stop with `patch-drop-pending` when:
 - sidecars describe an incremental chain instead of one cumulative patch.
 
 ## Mac Mini Producer Gates
+
+These Git commands belong only to a Mac-owned worktree that emits a PatchDrop
+`.patch`. They are not Desktop ordinary source-edit intake.
 
 Mac mini must generate the bundle from a Mac-owned worktree or disposable apply copy:
 
@@ -175,7 +180,7 @@ Move the bundle to `__patch_drop__\applied\` only after Desktop verification suc
 | Class | Trigger | Required response |
 | --- | --- | --- |
 | `smb-conflict-risk` | Mac mini/shared mount would edit canonical root | stop, switch to Mac-owned worktree/temp copy |
-| `index-lock-conflict` | `.git\index.lock` exists | stop before editing/apply |
+| `index-lock-conflict` | resolved index lock exists | preserve the lock; hold index/ref changes and unscoped applies; use `scoped-blocker-recovery` for independently authorized target-manifest/lease/preimage-verified file edits |
 | `branch-ownership-mismatch` | Desktop is on `agent/macmini/*` | stop or get explicit user approval |
 | `patch-drop-pending` | multiple/missing/non-cumulative active bundles | reject queue state, request one v3 cumulative bundle |
 | `missing-bundle-meta` | `.report.md`, `.verify.log`, `.sha256.txt`, or manifest is absent | reject or isolate orphan metadata |

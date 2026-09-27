@@ -1,6 +1,6 @@
 ---
 name: nextjs-rag-bff
-description: Design or implement a Next.js App Router frontend/BFF for the Dynamic RAG Orchestration Platform. Use when connecting an existing or new Next.js 14-style project to the demo-1 Spring Boot server, proxying /api/chat or /api/rag, handling SSE streaming, preserving sessionId and x-request-id, hiding server secrets, using installed Next.js setup when present, or migrating Thymeleaf chat UI concepts into React.
+description: Design or implement a Next.js App Router frontend/BFF for the Dynamic RAG
 ---
 
 # Next.js RAG BFF

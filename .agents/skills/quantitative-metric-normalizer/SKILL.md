@@ -1,6 +1,6 @@
 ---
 name: quantitative-metric-normalizer
-description: Use when demo-1 work involves attached design claims, quantitative scorecards, KPI normalization, source-vs-design gap audits, Antigravity handoff prompts, or finding broken subsystem combinations before patching.
+description: Use when demo-1 work involves attached design claims, quantitative scorecards
 ---
 
 # Quantitative Metric Normalizer
@@ -140,7 +140,8 @@ Use only available commands.
 $Root = "C:\AbandonWare\demo-1\demo-1\src"
 Push-Location $Root
 Get-Location
-if (Test-Path ".git\index.lock") { Write-Error "[AWX][desktop] index-lock-conflict"; exit 1 }
+$indexOp = (Test-Path ".git\MERGE_HEAD") -or (Test-Path ".git\CHERRY_PICK_HEAD") -or (Test-Path ".git\rebase-merge") -or (Test-Path ".git\rebase-apply")
+if ($indexOp) { Write-Error "[AWX][desktop] index-operation-active"; exit 1 }
 rg --files -g "build.gradle*" -g "settings.gradle*" -g "gradlew*" -g "AGENTS.md" -g "agent-prompts/**" -g ".agents/skills/**/SKILL.md"
 .\gradlew.bat sourceScoreReport --no-daemon --project-cache-dir "$env:USERPROFILE\.awx-gradle-project-cache\desktop"
 .\gradlew.bat checkLangchain4jVersionPurity checkSourceSetHygiene --no-daemon --project-cache-dir "$env:USERPROFILE\.awx-gradle-project-cache\desktop"

@@ -46,10 +46,13 @@ grants no new authority over them.
   BLOCKED.
 - **Existing conditional-Git policy** (AGENTS `DEMO1-GIT-LOCAL-FIRST`,
   `.grok`/`.windsurf` rules): reuse, never overwrite; sync wording in place
-  keeping BEGIN/END markers. A foreign lease on a target → one
-  `request-release` (see `$agent-scope-lease` / `lease_conflict_autoflow.py
-  plan`), then work the unblocked files and defer the rest — never
-  force-unlock, never ask.
+  keeping BEGIN/END markers. A foreign lease on a target → classify first
+  (`lease_conflict_autoflow.py scan`): **stale** (TTL/heartbeat expired,
+  owner not proven alive) is auto-reclaimed via `reclaim` /
+  `plan --execute` — journal `AUTO:lease-reclaimed=<owner|reason>`, no
+  card; **live** gets one `request-release`, then work the unblocked files
+  and defer the rest — never force-unlock a live lease, never ask the
+  user to relay.
 
 ## Do not
 
@@ -78,5 +81,5 @@ grants no new authority over them.
   plugs into.
 - `$demo1-git-doctor` — read-only block/ownership diagnosis; when the
   answer is unclear, diagnose first, then apply the soft branches here.
-- `$agent-scope-lease` — lease check/claim/release and the once-per-
-  fingerprint `request-release` flow.
+- `$agent-scope-lease` — lease check/claim/release, stale `reclaim`, and
+  the once-per-fingerprint `request-release` flow.

@@ -1,6 +1,6 @@
 ---
 name: macmini-safe-patch-assistant
-description: Use when Mac mini agents produce PatchDrop bundles for the demo-1 Desktop canonical root, especially when dirty worktrees, v1/v2/v3 patch chains, SMB edits, SHA manifests, dry-runs, reverse-apply checks, or PatchDrop safety gates are involved.
+description: "PROTO-LIGHT: default skip unless user explicitly names this skill — Use when Mac mini agents produce PatchDrop bundles for the demo-1 Desktop canonical"
 ---
 
 # MacMini Safe Patch Assistant
@@ -64,6 +64,10 @@ Rules:
 - If Desktop sees multiple active candidates for the same slug, it stops with `patch-drop-pending` and requests one cumulative v3 resubmission.
 
 ## Producer Workflow
+
+Git CLI here is only for a Mac-owned worktree that **emits** a PatchDrop
+`.patch`. It is not Desktop ordinary source-edit intake (`AGENTS.md`
+`DEMO1-GIT-LOCAL-FIRST`).
 
 ### 1. Establish a clean producer surface
 
@@ -262,18 +266,19 @@ Run from `C:\AbandonWare\demo-1\demo-1\src` in PowerShell.
 $Root = "C:\AbandonWare\demo-1\demo-1\src"
 Push-Location $Root
 Get-Location
-git rev-parse --show-toplevel 2>$null
-git branch --show-current 2>$null
-git worktree list 2>$null
-git status --short 2>$null
-if (Test-Path ".git\index.lock") {
-  Write-Error "[AWX][desktop] index-lock-present"
+. .\__patch_drop__\source_edit_lease_contract.ps1
+$GitEvidence = Get-AwxGitOperationEvidence -ProjectRoot $Root
+if ($GitEvidence.activeOperation) {
+  Write-Error "[AWX][desktop] git-operation-active"
   exit 1
 }
 powershell -NoProfile -ExecutionPolicy Bypass -File "__patch_drop__\janitor_inventory.ps1"
 ```
 
-If Git metadata is unavailable, report `evidence_needed: git metadata unavailable`; do not claim apply safety from memory.
+Desktop intake does not run `git status`. Git-absent is not a source-edit hold.
+Report `evidence_needed: git metadata unavailable` only when this pass must
+`git apply` a PatchDrop `.patch` and Git CLI is missing. Do not claim apply
+safety from memory.
 
 ### 2. Pin one active cumulative bundle
 
