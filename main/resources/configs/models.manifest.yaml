@@ -5,17 +5,17 @@ bindings:
   moe: "gemma4:26b"
 
 aliases:
-  cheap: "qwen3:8b"
-  fast: "qwen3:8b"
-  light: "qwen3:8b"
-  rewrite: "qwen3:8b"
-  explore: "qwen3:8b"
+  cheap: "qwen3.5:9b"
+  fast: "qwen3.5:9b"
+  light: "qwen3.5:9b"
+  rewrite: "qwen3.5:9b"
+  explore: "qwen3.5:9b"
   vision: "qwen3-vl:8b"
   vl: "qwen3-vl:8b"
-  judge: "qwen3:30b"
-  critic: "qwen3:30b"
-  coder: "qwen3-coder:30b"
-  code: "qwen3-coder:30b"
+  judge: "smtek/Qwen3.8-27B:Q3_K_XL"
+  critic: "smtek/Qwen3.8-27B:Q3_K_XL"
+  coder: "smtek/Qwen3.8-27B:Q3_K_XL"
+  code: "smtek/Qwen3.8-27B:Q3_K_XL"
   "gemma4-26b": "gemma4:26b"
 
 models:
@@ -29,7 +29,7 @@ models:
     ctx: 8192
     price: {}
     tags: [default, moe, high, local, 3090]
-  - id: "qwen3:8b"
+  - id: "qwen3.5:9b"
     provider: "local"
     endpoint:
       type: "openai_compat"
@@ -39,7 +39,7 @@ models:
     ctx: 8192
     price: {}
     tags: [cheap, fast, light, rewrite, explore, local, 3060]
-  - id: "qwen3:30b"
+  - id: "smtek/Qwen3.8-27B:Q3_K_XL"
     provider: "local"
     endpoint:
       type: "openai_compat"
@@ -49,7 +49,7 @@ models:
     ctx: 8192
     price: {}
     tags: [judge, critic, local, 3090]
-  - id: "qwen3-coder:30b"
+  - id: "smtek/Qwen3.8-27B:Q3_K_XL"
     provider: "local"
     endpoint:
       type: "openai_compat"

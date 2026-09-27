@@ -1,6 +1,12 @@
+# AWX model-defaults remapped 2026-09-17: legacy ollama names -> installed (3090 chat/judge/coder, 3060 fast/vision).
 # --- application-llm.yaml (patched by GPT-5 Pro) ---
 # Local OpenAI-compatible endpoints (Ollama/vLLM): 3090-class chat on 11434,
-# 3060-class fast/vision/embedding lanes on 11435.
+# Fast/vision lanes use 11435 only when explicit; embedding keeps its dedicated 11435 default.
+awx:
+  gpu-hardware:
+    telemetry:
+      enabled: ${DESKTOP_GPU_TELEMETRY_ENABLED:true}
+      timeout-ms: ${DESKTOP_GPU_TELEMETRY_TIMEOUT_MS:1000}
 llm:
   provider: local
   # Mac mini-safe default; heavier local models should be enabled only by env override.
@@ -15,11 +21,24 @@ llm:
     require-auth-for-remote: ${LLM_PROVIDER_GUARD_REQUIRE_AUTH_FOR_REMOTE:true}
   gateway:
     enabled: ${LLM_GATEWAY_ENABLED:true}
-    enforcement: ${LLM_GATEWAY_ENFORCEMENT:observe}
+    enforcement: ${LLM_GATEWAY_ENFORCEMENT:enforce}
     min-route-score: ${LLM_GATEWAY_MIN_ROUTE_SCORE:55}
     throw-on-empty-failure: ${LLM_GATEWAY_THROW_ON_EMPTY_FAILURE:false}
+    local-device-failover:
+      enabled: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_ENABLED:true}
+      enforcement: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_ENFORCEMENT:ENFORCE}
+      hard-cooldown-ms: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_HARD_COOLDOWN_MS:600000}
+      runner-failure-window-ms: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_RUNNER_WINDOW_MS:60000}
+      runner-failure-threshold: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_RUNNER_THRESHOLD:2}
+      recovery-successes: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_RECOVERY_SUCCESSES:2}
+      max-endpoints: ${LLM_GATEWAY_LOCAL_DEVICE_FAILOVER_MAX_ENDPOINTS:16}
+      transient-failure-threshold: ${LLM_GATEWAY_LOCAL_TRANSIENT_FAILURE_THRESHOLD:3}
+      transient-cooldown-ms: ${LLM_GATEWAY_LOCAL_TRANSIENT_COOLDOWN_MS:60000}
+      recovery-stable-ms: ${LLM_GATEWAY_LOCAL_RECOVERY_STABLE_MS:30000}
+      probe-timeout-ms: ${LLM_GATEWAY_LOCAL_PROBE_TIMEOUT_MS:60000}
+      health-sample-interval-ms: ${LLM_GATEWAY_LOCAL_HEALTH_SAMPLE_INTERVAL_MS:10000}
     cloud:
-      enabled: ${LLM_GATEWAY_CLOUD_ENABLED:false}
+      enabled: ${LLM_GATEWAY_CLOUD_ENABLED:true}
       route-key: ${LLM_GATEWAY_CLOUD_ROUTE_KEY:api3}
     probe:
       enabled: ${LLM_GATEWAY_PROBE_ENABLED:true}
@@ -29,8 +48,8 @@ llm:
       enabled: ${LLM_GATEWAY_SPEC_REGISTRY_ENABLED:true}
       path: ${LLM_GATEWAY_SPEC_REGISTRY_PATH:./data/model-spec-registry.json}
   fast:
-    base-url: ${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}
-    model: ${LLM_FAST_MODEL:qwen3:8b}
+    base-url: ${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}
+    model: ${LLM_FAST_MODEL:qwen3.5:9b}
     temperature: 0.0
     timeout-seconds: 5
     max-retries: 0
@@ -51,13 +70,13 @@ llm:
     max-tokens: 512
   judge:
     base-url: ${LLM_JUDGE_BASE_URL:${llm.high.base-url}}
-    model: ${LLM_JUDGE_MODEL:qwen3:30b}
+    model: ${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
     timeout-seconds: 6
     max-retries: 0
     max-tokens: 512
   coder:
     base-url: ${LLM_CODER_BASE_URL:${llm.high.base-url}}
-    model: ${LLM_CODER_MODEL:qwen3-coder:30b}
+    model: ${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
     temperature: 0.1
     timeout-seconds: 45
     max-retries: 0
@@ -122,25 +141,30 @@ llm:
     chat-model: ${llm.chat-model:gemma4:26b}
     embed-model: ${embedding.model:qwen3-embedding:4b}
     timeout-ms: ${LLM_OLLAMA_TIMEOUT_MS:12000}
+  ollama-native:
+    num-gpu: ${LLM_OLLAMA_NATIVE_NUM_GPU:}
 
   # MERGED_DUP llm.base-url :: base-url: http://127.0.0.1:11435/v1
   # MERGED_DUP llm.provider :: provider: local
 
 local-llm:
-  enabled: ${LOCAL_LLM_ENABLED:false}
-  autostart: ${LOCAL_LLM_AUTOSTART:false}
+  enabled: ${LOCAL_LLM_ENABLED:true}
+  autostart: ${LOCAL_LLM_AUTOSTART:true}
   ollama-host: ${OLLAMA_HOST:127.0.0.1:11434}
-  health-check-url: ${LOCAL_LLM_HEALTH_CHECK_URL:}
+  health-check-url: ${LOCAL_LLM_HEALTH_CHECK_URL:http://127.0.0.1:11434/api/version}
   health-check-timeout: ${LOCAL_LLM_HEALTH_CHECK_TIMEOUT:20s}
   health-check-interval: ${LOCAL_LLM_HEALTH_CHECK_INTERVAL:1s}
   health-check-attempt-timeout: ${LOCAL_LLM_HEALTH_CHECK_ATTEMPT_TIMEOUT:2s}
-  fail-fast: ${LOCAL_LLM_FAIL_FAST:false}
+  fail-fast: ${LOCAL_LLM_FAIL_FAST:true}
+  cuda-auto-discover: ${LOCAL_LLM_CUDA_AUTO_DISCOVER:true}
+  log-dir: ${LOCAL_LLM_LOG_DIR:var/codex-runtime}
   warmup:
     enabled: ${LOCAL_LLM_WARMUP_ENABLED:true}
-    pull: ${LOCAL_LLM_WARMUP_PULL:true}
+    pull: ${LOCAL_LLM_WARMUP_PULL:false}
     show: ${LOCAL_LLM_WARMUP_SHOW:true}
     embed: ${LOCAL_LLM_WARMUP_EMBED:true}
-    model: ${LOCAL_LLM_WARMUP_MODEL:${embedding.model:qwen3-embedding:4b}}
+    model: ${LOCAL_LLM_WARMUP_MODEL:${llm.chat-model:gemma4:26b}}
+    embed-model: ${LOCAL_LLM_WARMUP_EMBED_MODEL:${embedding.model:qwen3-embedding:4b}}
     dimensions: ${LOCAL_LLM_WARMUP_DIMENSIONS:${embedding.dimensions:1536}}
     keep-alive: ${LOCAL_LLM_WARMUP_KEEP_ALIVE:5m}
     timeout-ms: ${LOCAL_LLM_WARMUP_TIMEOUT_MS:120000}
@@ -340,15 +364,14 @@ nova:
       mode: ${NOVA_MODEL_GUARD_MODE:SUBSTITUTE_CHAT}
       open-ai-base-only: true
       substitute-chat-model: ${NOVA_MODEL_GUARD_SUBSTITUTE_CHAT_MODEL:${llm.chat-model}}
-      # Default list is already present in code; override only if needed.
+      # Exact Responses-only IDs; Spring list binding replaces the Java defaults.
       responses-only-prefixes:
-        - gpt-4.1
-        - gpt-4o
-        - gpt-4.5
-        - o1
-        - o3
-        - o4
-        - gpt-5
+        - gpt-5.5-pro
+        - gpt-5-pro
+        - gpt-5.1-codex
+        - gpt-5-codex
+        - o3-deep-research
+        - o4-mini-deep-research
 
     # ?????????????????????????????????????????????????????????????????????
     # Web retrieval fail-soft ladder (selection-stage), starvation/quality caps
@@ -454,25 +477,27 @@ nova:
 # ?????????????????????????????????????????????????????????????????????
 llmrouter:
   enabled: true
-  fallback-when-openai-missing: true
+  fallback-when-openai-missing: ${LLMROUTER_FALLBACK_WHEN_OPENAI_MISSING:true}
   cooldown-ms: 20000
 
   # Model aliases: keep role lanes distinct; do not collapse qwen/vision/coder into the chat model.
   aliases:
     gemma4-26b: ${LLM_CHAT_MODEL:gemma4:26b}
-    fast: ${LLM_FAST_MODEL:qwen3:8b}
-    cheap: ${LLM_FAST_MODEL:qwen3:8b}
-    judge: ${LLM_JUDGE_MODEL:qwen3:30b}
-    critic: ${LLM_JUDGE_MODEL:qwen3:30b}
-    coder: ${LLM_CODER_MODEL:qwen3-coder:30b}
+    fast: ${LLM_FAST_MODEL:qwen3.5:9b}
+    cheap: ${LLM_FAST_MODEL:qwen3.5:9b}
+    judge: ${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
+    critic: ${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
+    coder: ${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}
     vision: ${LLM_VISION_MODEL:qwen3-vl:8b}
   models:
     light:
       enabled: ${LLMROUTER_LIGHT_ENABLED:true}
       provider: local
       stage: chat
-      name: ${LLMROUTER_LIGHT_NAME:${LLM_FAST_MODEL:qwen3:8b}}
+      name: ${LLMROUTER_LIGHT_NAME:${LLM_FAST_MODEL:qwen3.5:9b}}
       base-url: ${LLMROUTER_LIGHT_BASE_URL:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url:http://127.0.0.1:11435/v1}}}}
+      device-role: ${LLMROUTER_LIGHT_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_LIGHT_DEVICE_FALLBACK_KEY:}
       weight: 0.45
     gemma:
       enabled: ${LLMROUTER_GEMMA_ENABLED:true}
@@ -480,15 +505,60 @@ llmrouter:
       stage: chat
       name: ${LLMROUTER_GEMMA_NAME:${llm.chat-model:gemma4:26b}}
       base-url: ${LLMROUTER_GEMMA_BASE_URL:${LLM_3090_BASE_URL:${llm.base-url:http://127.0.0.1:11434/v1}}}
+      device-role: ${LLMROUTER_GEMMA_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_GEMMA_DEVICE_FALLBACK_KEY:}
       weight: 0.55
     api3:
       enabled: ${LLMROUTER_API3_ENABLED:true}
       provider: groq
       stage: chat
       fallback-only: ${LLMROUTER_API3_FALLBACK_ONLY:true}
-      name: ${LLMROUTER_API3_NAME:qwen/qwen3-32b}
+      response-model-verification-required: true
+      name: ${LLMROUTER_API3_NAME:openai/gpt-oss-120b}
       base-url: ${LLMROUTER_API3_BASE_URL:https://api.groq.com/openai/v1}
       weight: 0.0
+    openai-premium:
+      enabled: ${LLMROUTER_OPENAI_PREMIUM_ENABLED:false}
+      provider: openai
+      stage: chat
+      fallback-only: true
+      response-model-verification-required: true
+      name: ${LLMROUTER_OPENAI_PREMIUM_NAME:gpt-5.5}
+      base-url: ${LLMROUTER_OPENAI_PREMIUM_BASE_URL:https://api.openai.com/v1}
+      credential-env: OPENAI_API_KEY
+      min-context-tokens: ${LLMROUTER_OPENAI_PREMIUM_MIN_CONTEXT_TOKENS:1048576}
+      weight: ${LLMROUTER_OPENAI_PREMIUM_WEIGHT:0.0}
+    openai-balanced:
+      enabled: ${LLMROUTER_OPENAI_BALANCED_ENABLED:false}
+      provider: openai
+      stage: chat
+      fallback-only: true
+      name: ${LLMROUTER_OPENAI_BALANCED_NAME:gpt-5.4-mini}
+      base-url: ${LLMROUTER_OPENAI_BALANCED_BASE_URL:https://api.openai.com/v1}
+      credential-env: OPENAI_API_KEY
+      min-context-tokens: ${LLMROUTER_OPENAI_BALANCED_MIN_CONTEXT_TOKENS:400000}
+      weight: ${LLMROUTER_OPENAI_BALANCED_WEIGHT:0.0}
+    gemini-pro:
+      enabled: ${LLMROUTER_GEMINI_PRO_ENABLED:false}
+      provider: gemini
+      stage: chat
+      fallback-only: true
+      response-model-verification-required: true
+      name: ${LLMROUTER_GEMINI_PRO_NAME:gemini-2.5-pro}
+      base-url: ${LLMROUTER_GEMINI_PRO_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai}
+      credential-env: GEMINI_API_KEY
+      min-context-tokens: ${LLMROUTER_GEMINI_PRO_MIN_CONTEXT_TOKENS:1048576}
+      weight: ${LLMROUTER_GEMINI_PRO_WEIGHT:0.0}
+    mistral-medium:
+      enabled: ${LLMROUTER_MISTRAL_MEDIUM_ENABLED:false}
+      provider: mistral
+      stage: chat
+      fallback-only: true
+      name: ${LLMROUTER_MISTRAL_MEDIUM_NAME:mistral-medium-3-5}
+      base-url: ${LLMROUTER_MISTRAL_MEDIUM_BASE_URL:https://api.mistral.ai/v1}
+      credential-env: MISTRAL_API_KEY
+      min-context-tokens: ${LLMROUTER_MISTRAL_MEDIUM_MIN_CONTEXT_TOKENS:262144}
+      weight: ${LLMROUTER_MISTRAL_MEDIUM_WEIGHT:0.0}
     macmini:
       enabled: ${LLMROUTER_MACMINI_ENABLED:false}
       provider: local
@@ -511,15 +581,19 @@ llmrouter:
       enabled: ${LLMROUTER_JUDGE_ENABLED:true}
       provider: local
       stage: judge
-      name: ${LLMROUTER_JUDGE_NAME:${LLM_JUDGE_MODEL:qwen3:30b}}
+      name: ${LLMROUTER_JUDGE_NAME:${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}}
       base-url: ${LLMROUTER_JUDGE_BASE_URL:${LLM_JUDGE_BASE_URL:${llm.high.base-url:http://127.0.0.1:11434/v1}}}
+      device-role: ${LLMROUTER_JUDGE_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_JUDGE_DEVICE_FALLBACK_KEY:}
       weight: 0.0
     coder:
       enabled: ${LLMROUTER_CODER_ENABLED:true}
       provider: local
       stage: coder
-      name: ${LLMROUTER_CODER_NAME:${LLM_CODER_MODEL:qwen3-coder:30b}}
+      name: ${LLMROUTER_CODER_NAME:${LLM_CODER_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}}
       base-url: ${LLMROUTER_CODER_BASE_URL:${LLM_CODER_BASE_URL:${llm.high.base-url:http://127.0.0.1:11434/v1}}}
+      device-role: ${LLMROUTER_CODER_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_CODER_DEVICE_FALLBACK_KEY:}
       weight: 0.0
     vision:
       enabled: ${LLMROUTER_VISION_ENABLED:true}
@@ -527,6 +601,8 @@ llmrouter:
       stage: vision
       name: ${LLMROUTER_VISION_NAME:${LLM_VISION_MODEL:qwen3-vl:8b}}
       base-url: ${LLMROUTER_VISION_BASE_URL:${LLM_VISION_BASE_URL:${llm.fast.base-url:http://127.0.0.1:11435/v1}}}
+      device-role: ${LLMROUTER_VISION_DEVICE_ROLE:}
+      device-fallback-key: ${LLMROUTER_VISION_DEVICE_FALLBACK_KEY:}
       weight: 0.0
 
 prompt-pose:
@@ -727,6 +803,16 @@ uaw:
     # 媛믪씠 鍮꾩뼱?덉? ?딆쑝硫??붿껌 ?ㅻ뜑 X-Internal-Key? ?쇱튂?댁빞 ??
     key: ""
 
+ensemble:
+  sampling:
+    enabled: ${ENSEMBLE_SAMPLING_ENABLED:false}
+    alternative-support:
+      enabled: ${ENSEMBLE_ALTERNATIVE_SUPPORT_ENABLED:false}
+    api-triad:
+      support-primary-route: ${ENSEMBLE_API_TRIAD_SUPPORT_PRIMARY_ROUTE:llmrouter.openai-premium}
+      support-alternative-route: ${ENSEMBLE_API_TRIAD_SUPPORT_ALTERNATIVE_ROUTE:llmrouter.api3}
+      falsify-route: ${ENSEMBLE_API_TRIAD_FALSIFY_ROUTE:llmrouter.gemini-pro}
+
 # (Optional) expose actuator metrics endpoints locally
 management:
   endpoints:
@@ -752,3 +838,9 @@ privacy:
     block-web-search: false
 
 # Nova Orch Guards block added
+
+# Imported LLM policy supersedes the base request cap; explicit env still wins.
+# Allows the selected 180s transport timeout plus a bounded fallback window.
+public:
+  request-budget:
+    max-time-budget-ms: ${PUBLIC_REQUEST_MAX_TIME_BUDGET_MS:240000}

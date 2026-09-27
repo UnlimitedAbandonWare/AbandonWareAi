@@ -1,6 +1,49 @@
 {
   "schemaVersion": "awx.mcp.tools.v1",
   "description": "MCP-style external tool contract for Desktop/Mac mini/Notebook safe patch orchestration.",
+  "runtimeToolkit": {
+    "profile": "local-toolkit",
+    "services": [
+      {
+        "serviceId": "spring-app",
+        "role": "RUNTIME_REQUIRED",
+        "transport": "HTTP",
+        "requiredAtBoot": true,
+        "startupOwner": "existing-chat-ui-listener",
+        "healthCheck": "/api/chat/ui-heartbeat",
+        "dependencies": []
+      },
+      {
+        "serviceId": "ollama-local",
+        "role": "RUNTIME_REQUIRED",
+        "transport": "HTTP",
+        "requiredWhen": "local-llm.enabled",
+        "requiredAtBoot": true,
+        "startupOwner": "LocalLlmProcessManager",
+        "healthCheck": "/api/version",
+        "dependencies": [
+          "spring-app"
+        ]
+      },
+      {
+        "serviceId": "awx-stdio",
+        "role": "ON_DEMAND",
+        "transport": "STDIO",
+        "requiredForProfile": [
+          "local-toolkit"
+        ],
+        "requiredAtBoot": false,
+        "startupOwner": "client-owned-pipe",
+        "protocolFamily": "MCP_STYLE",
+        "protocolVersion": "2024-11-05",
+        "dependencies": [
+          "spring-app"
+        ]
+      }
+    ],
+    "evidencePath": "var/codex-runtime/toolkit-current.json",
+    "evidenceMaxAgeSeconds": 60
+  },
   "nodeRoles": {
     "desktop": "canonical source owner and final verifier for C:\\AbandonWare\\demo-1\\demo-1\\src",
     "macmini": "read-only investigator and PatchDrop patch producer from a separate worktree",
@@ -34,6 +77,961 @@
   },
   "tools": [
     {
+      "name": "device_work",
+      "aliases": [],
+      "command": "python scripts/awx_mcp_toolbox.py device_work",
+      "readOnly": false,
+      "nodeRoles": ["desktop", "notebook", "macmini"],
+      "description": "On-demand shared task queue and measured device routing. status/route are read-only; probe/enqueue/claim/next/start/complete update task artifacts only. Returns hashed directive references and the existing source-guard manifest; never executes commands or writes source. Claims bind to this host. Unknown locks and interrupted tasks are retained, completed IDs cannot replay, and Mac automatic offload requires measured evidence. Shared-read MCP stays restricted; use the explicit local CLI for authorized handoff artifacts.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {
+          "action": {"type": "string", "enum": ["status", "probe", "enqueue", "route", "claim", "next", "start", "complete"]},
+          "root": {"type": "string"},
+          "role": {"type": "string", "enum": ["desktop", "notebook", "macmini"]},
+          "taskId": {"type": "string"},
+          "preferredDevice": {"type": "string"},
+          "lease": {"type": "string"},
+          "outcome": {"type": "string", "enum": ["succeeded", "failed", "cancelled"]},
+          "transferSeconds": {"type": "number", "minimum": 0, "maximum": 86400},
+          "requestId": {"type": "string"},
+          "sessionId": {"type": "string"},
+          "nodeRole": {"type": "string"},
+          "task": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["taskId", "kind", "workloadKey", "targets"],
+            "properties": {
+              "taskId": {"type": "string"},
+              "kind": {"type": "string", "enum": ["directive", "design", "research", "light-edit", "verify", "build", "test", "integration", "rag", "orchestration", "arm-native", "server", "embedding", "preprocess", "automation"]},
+              "workloadKey": {"type": "string"},
+              "targets": {"type": "array", "items": {"type": "string"}},
+              "context": {"type": "array", "items": {"type": "string"}},
+              "outputs": {"type": "array", "items": {"type": "string"}},
+              "dependsOn": {"type": "array", "items": {"type": "string"}},
+              "resources": {"type": "array", "items": {"type": "string"}},
+              "timeoutSeconds": {"type": "number", "minimum": 1, "maximum": 14400},
+              "requirements": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                  "cpuCount": {"type": "integer", "minimum": 1},
+                  "memoryMb": {"type": "number", "minimum": 1},
+                  "gpuBackend": {"type": "string", "enum": ["cuda", "metal", "rocm"]},
+                  "gpuMemoryMb": {"type": "number", "minimum": 1},
+                  "system": {"type": "string", "enum": ["Windows", "Darwin", "Linux"]},
+                  "arch": {"type": "string", "enum": ["x86_64", "arm64"]}
+                }
+              }
+            }
+          },
+          "audit_log": { "type": "string" }
+        }
+      },
+      "output_schema": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ok", "schemaVersion", "sourceMutation"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "schemaVersion": {"type": "string"},
+          "sourceMutation": {"type": "boolean", "enum": [false]},
+          "action": {"type": "string"},
+          "result": {"type": "object"},
+          "reasonCode": {"type": "string"},
+          "repositoryWideHold": {"type": "boolean"}
+        }
+      }
+    },
+    {
+      "name": "grok_review_change",
+      "aliases": [],
+      "command": "python scripts/awx_mcp_toolbox.py grok_review_change",
+      "readOnly": true,
+      "nodeRoles": [
+        "desktop"
+      ],
+      "description": "Bounded public/synthetic Grok Build review through the official subscription CLI and AWX owned worker. status never generates. review requires an unchanged isolated profile and a fresh account/billing-bound acceptance window (maximum three attempts, expires within 15 minutes); missing proof fails closed. No API/BYOK/credit fallback, repository tools or unattended billing guarantee. Paths are labels.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "status",
+              "review"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "reviewReason": {
+            "type": "string"
+          },
+          "changeSummary": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "evidenceId": {
+                  "type": "string"
+                },
+                "relativePath": {
+                  "type": "string"
+                },
+                "excerpt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "evidenceId",
+                "relativePath",
+                "excerpt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 90000
+          },
+          "audit_log": { "type": "string" }
+        },
+        "required": [
+          "mode",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "blocked",
+              "ready",
+              "completed"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "cli-unavailable",
+              "cli-capability-missing",
+              "isolation-unproven",
+              "invalid-input",
+              "secret-input-blocked",
+              "recursive-invocation-blocked",
+              "auth-required",
+              "account-mismatch",
+              "subscription-entitlement-unverified",
+              "api-auth-blocked",
+              "extra-usage-unverified",
+              "quota-exhausted",
+              "review-busy",
+              "timeout",
+              "cancelled",
+              "output-limit-exceeded",
+              "malformed-output",
+              "empty-response",
+              "model-unverified",
+              "child-cleanup-failed",
+              "worker-ownership-required",
+              "ready",
+              "completed"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "authMode": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "subscription-session"
+            ]
+          },
+          "accountMatch": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "confirmed"
+            ]
+          },
+          "accountMatchSource": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "user-attestation"
+            ]
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "SuperGrok",
+              "SuperGrok Heavy"
+            ]
+          },
+          "subscriptionOnly": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "requestedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "grok-4.6",
+              null
+            ]
+          },
+          "observedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "grok-4.6",
+              "grok-4.6-build",
+              null
+            ]
+          },
+          "observedModelSource": {
+            "type": "string",
+            "enum": [
+              "not_observed",
+              "cli_model_usage"
+            ]
+          },
+          "generationCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cleanupOk": {
+            "type": "boolean"
+          },
+          "canaryVerified": {
+            "type": "boolean"
+          },
+          "usage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "input": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reasoning": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheRead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheCreation": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "providerAttemptEvidence": {
+            "type": "string",
+            "enum": [
+              "not_observed"
+            ]
+          },
+          "generationEnabled": {
+            "type": "boolean"
+          },
+          "cliVerified": {
+            "type": "boolean"
+          },
+          "cliVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "evidenceIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "claim": {
+                  "type": "string"
+                },
+                "counterexample": {
+                  "type": "string"
+                },
+                "suggestedChange": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "required": [
+                "evidenceIds",
+                "claim",
+                "counterexample",
+                "suggestedChange",
+                "confidence"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "status",
+          "reason",
+          "requestId",
+          "authMode",
+          "accountMatch",
+          "accountMatchSource",
+          "plan",
+          "subscriptionOnly",
+          "requestedModel",
+          "observedModel",
+          "observedModelSource",
+          "generationCount",
+          "durationMs",
+          "cleanupOk",
+          "canaryVerified",
+          "usage",
+          "providerAttemptEvidence",
+          "generationEnabled",
+          "cliVerified",
+          "cliVersion",
+          "blockers",
+          "findings"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "kimi_review_change",
+      "aliases": [],
+      "command": "python scripts/awx_mcp_toolbox.py kimi_review_change",
+      "readOnly": true,
+      "nodeRoles": [
+        "desktop"
+      ],
+      "description": "Registration seam for a future bounded Kimi Code CLI review. status reports pin/install readiness only; every mode fails closed until the official CLI is installed and a verified binary pin plus account/billing acceptance model are added. No API/BYOK/credit fallback, repository tools or unattended billing guarantee. Paths are labels.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "status",
+              "review"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "reviewReason": {
+            "type": "string"
+          },
+          "changeSummary": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "evidenceId": {
+                  "type": "string"
+                },
+                "relativePath": {
+                  "type": "string"
+                },
+                "excerpt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "evidenceId",
+                "relativePath",
+                "excerpt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 90000
+          },
+          "audit_log": { "type": "string" }
+        },
+        "required": [
+          "mode",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "blocked",
+              "ready",
+              "completed"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "cli-unavailable",
+              "cli-capability-missing",
+              "isolation-unproven",
+              "invalid-input",
+              "secret-input-blocked",
+              "recursive-invocation-blocked",
+              "auth-required",
+              "account-mismatch",
+              "subscription-entitlement-unverified",
+              "api-auth-blocked",
+              "extra-usage-unverified",
+              "quota-exhausted",
+              "review-busy",
+              "timeout",
+              "cancelled",
+              "output-limit-exceeded",
+              "malformed-output",
+              "empty-response",
+              "model-unverified",
+              "child-cleanup-failed",
+              "worker-ownership-required",
+              "ready",
+              "completed"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "authMode": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "subscription-session"
+            ]
+          },
+          "accountMatch": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "confirmed"
+            ]
+          },
+          "accountMatchSource": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "user-attestation"
+            ]
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "unknown"
+            ]
+          },
+          "subscriptionOnly": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "requestedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              null
+            ]
+          },
+          "observedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              null
+            ]
+          },
+          "observedModelSource": {
+            "type": "string",
+            "enum": [
+              "not_observed",
+              "cli_model_usage"
+            ]
+          },
+          "generationCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cleanupOk": {
+            "type": "boolean"
+          },
+          "canaryVerified": {
+            "type": "boolean"
+          },
+          "usage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "input": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reasoning": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheRead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheCreation": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "providerAttemptEvidence": {
+            "type": "string",
+            "enum": [
+              "not_observed"
+            ]
+          },
+          "generationEnabled": {
+            "type": "boolean"
+          },
+          "cliVerified": {
+            "type": "boolean"
+          },
+          "cliVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "evidenceIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "claim": {
+                  "type": "string"
+                },
+                "counterexample": {
+                  "type": "string"
+                },
+                "suggestedChange": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "required": [
+                "evidenceIds",
+                "claim",
+                "counterexample",
+                "suggestedChange",
+                "confidence"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "status",
+          "reason",
+          "requestId",
+          "authMode",
+          "accountMatch",
+          "accountMatchSource",
+          "plan",
+          "subscriptionOnly",
+          "requestedModel",
+          "observedModel",
+          "observedModelSource",
+          "generationCount",
+          "durationMs",
+          "cleanupOk",
+          "canaryVerified",
+          "usage",
+          "providerAttemptEvidence",
+          "generationEnabled",
+          "cliVerified",
+          "cliVersion",
+          "blockers",
+          "findings"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "codex_review_change",
+      "aliases": [],
+      "command": "python scripts/awx_mcp_toolbox.py codex_review_change",
+      "readOnly": true,
+      "nodeRoles": [
+        "desktop"
+      ],
+      "description": "Personal independent review through official Codex ChatGPT sign-in. reviewProfile=quality (default) uses gpt-5.5; economy uses gpt-5.3-codex-spark with the Pro preview's separate usage limit. Prefer economy for short bounded reviews after checking availability; preserve quality for deeper checks. status generates nothing; review uses one attempt through owned stdio, with no model/provider fallback. Bounds: input32KiB, evidence8/24KiB, findings5, timeout5-90s; paths are labels only.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "reviewProfile": {
+            "type": "string",
+            "enum": ["quality", "economy"],
+            "default": "quality"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "status",
+              "review"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "reviewReason": {
+            "type": "string"
+          },
+          "changeSummary": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "evidenceId": {
+                  "type": "string"
+                },
+                "relativePath": {
+                  "type": "string"
+                },
+                "excerpt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "evidenceId",
+                "relativePath",
+                "excerpt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 90000
+          },
+          "audit_log": { "type": "string" }
+        },
+        "required": [
+          "mode",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "completed",
+              "blocked",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "completed",
+              "invalid-input",
+              "secret-input-blocked",
+              "cli-unavailable",
+              "cli-capability-missing",
+              "unsupported-child-isolation",
+              "auth-unavailable",
+              "auth-mode-mismatch",
+              "recursive-invocation-blocked",
+              "worker-ownership-required",
+              "review-busy",
+              "budget-exceeded",
+              "output-limit-exceeded",
+              "malformed-event",
+              "final-schema-invalid",
+              "turn-failed",
+              "cancelled",
+              "timeout",
+              "child-cleanup-failed",
+              "unexpected-tool-event",
+              "unexpected-tool-request",
+              "adapter-failed"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "authMode": {
+            "type": "string",
+            "enum": [
+              "chatgpt",
+              "unavailable",
+              "mismatch"
+            ]
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "needs_changes",
+              "insufficient_evidence",
+              "not_run"
+            ]
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "medium",
+                    "low"
+                  ]
+                },
+                "claim": {
+                  "type": "string"
+                },
+                "evidenceIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "suggestedCheck": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "claim",
+                "evidenceIds",
+                "suggestedCheck"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "inputHash": {
+            "type": "string"
+          },
+          "optionsHash": {
+            "type": "string"
+          },
+          "attemptCount": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "usage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "input": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "input",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          "usageReason": {
+            "type": "string",
+            "enum": [
+              "observed",
+              "not_observed"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lineage": {
+            "type": "object",
+            "properties": {
+              "cliAttemptObserved": {
+                "type": "boolean"
+              },
+              "terminalEventObserved": {
+                "type": "boolean"
+              },
+              "finalSchemaValid": {
+                "type": "boolean"
+              },
+              "remoteProviderProofAvailable": {
+                "type": "boolean"
+              },
+              "childCleanupConfirmed": {
+                "type": "boolean"
+              },
+              "runtimeLineageVerdict": {
+                "type": "string",
+                "enum": [
+                  "HOLD"
+                ]
+              }
+            },
+            "required": [
+              "cliAttemptObserved",
+              "terminalEventObserved",
+              "finalSchemaValid",
+              "remoteProviderProofAvailable",
+              "childCleanupConfirmed",
+              "runtimeLineageVerdict"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "status",
+          "reason",
+          "requestId",
+          "authMode",
+          "verdict",
+          "findings",
+          "inputHash",
+          "optionsHash",
+          "attemptCount",
+          "durationMs",
+          "usage",
+          "usageReason",
+          "model",
+          "lineage"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "source_scan",
       "aliases": ["source.scan"],
       "command": "python scripts/awx_mcp_toolbox.py source_scan",
@@ -61,6 +1059,220 @@
           "apikeyEnvRefs": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["activeSourceSets", "secretPatternHits"]
+      }
+    },
+    {
+      "name": "guard_status",
+      "aliases": ["guard.status", "agent.preflight"],
+      "command": "python scripts/awx_mcp_toolbox.py guard_status",
+      "readOnly": true,
+      "nodeRoles": ["desktop", "macmini", "notebook"],
+      "description": "Shared task-entry preflight (awx.agent-preflight.v1): device-bus observation, active work journals, source-edit lease state, installed agent adapters, PROJECT_STATUS.md hash, and common-guard tool presence. Observation only; a missing adapter or failed probe is a degraded field, not an exception.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "nodeRole": { "type": "string", "enum": ["desktop", "macmini", "notebook", "read-only"] },
+          "root": { "type": "string" },
+          "audit_log": { "type": "string" }
+        },
+        "required": ["nodeRole"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": { "type": "string" },
+          "root": { "type": "string" },
+          "deviceBus": { "type": "object" },
+          "journals": { "type": "object" },
+          "leases": { "type": "object" },
+          "protections": { "type": "object" },
+          "statusDoc": { "type": "object" },
+          "tools": { "type": "object" }
+        },
+        "required": ["schemaVersion", "protections"]
+      }
+    },
+    {
+      "name": "session_evidence",
+      "aliases": ["session.evidence", "session.search"],
+      "command": "python scripts/awx_mcp_toolbox.py session_evidence",
+      "readOnly": false,
+      "nodeRoles": ["desktop", "macmini", "notebook"],
+      "description": "Session-evidence search over Codex session metadata and rollout files. action=index imports thread/spawn metadata (read-only source DBs; writes only the derived index under data/agent-handoff/session-evidence/). action=parents walks spawn edges upward. action=search scans bounded rollout files and records byte-offset hits plus <=160-char snippets. action=sessions lists by metadata. Never returns raw conversation beyond bounded snippets; never executes old session instructions.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "nodeRole": { "type": "string", "enum": ["desktop", "macmini", "notebook", "read-only"] },
+          "root": { "type": "string" },
+          "action": { "type": "string", "enum": ["index", "parents", "search", "sessions"] },
+          "codexHome": { "type": "string" },
+          "session": { "type": "string" },
+          "term": { "type": "string" },
+          "source": { "type": "string" },
+          "childrenOf": { "type": "string" },
+          "staleDays": { "type": "number" },
+          "sinceMs": { "type": "integer" },
+          "maxFiles": { "type": "integer" },
+          "maxFileMb": { "type": "integer" },
+          "limit": { "type": "integer" },
+          "audit_log": { "type": "string" }
+        },
+        "required": ["nodeRole", "action"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "action": { "type": "string" },
+          "result": { "type": "object" },
+          "failReason": { "type": "string" }
+        },
+        "required": ["ok"]
+      }
+    },
+    {
+      "name": "smb_decommission_debug_probe",
+      "aliases": ["debug.smb_decommission_probe", "smb.decommission_debug_probe", "smb.debug_probe"],
+      "command": "python scripts/awx_mcp_toolbox.py smb_decommission_debug_probe",
+      "readOnly": true,
+      "nodeRoles": ["desktop"],
+      "description": "Run the Desktop-only SMB decommission debug probe through Control Tower. It calls scripts/smb_decommission_debug_probe.ps1, leaves summary/events/viewer artifacts under var/codex-smoke, keeps dispatch and producer-kit writes disabled, and returns hashes/counts plus a redacted summary instead of raw stdout, raw paths, prompts, or secrets.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "nodeRole": { "type": "string", "enum": ["desktop"] },
+          "root": { "type": "string" },
+          "output_dir": { "type": "string" },
+          "topic": { "type": "string" },
+          "attachmentPath": { "type": "string" },
+          "browserProofPath": { "type": "string" },
+          "computerProofPath": { "type": "string" },
+          "attachmentSampleCount": { "type": "integer" },
+          "sourceProbeSampleCount": { "type": "integer" },
+          "timeoutSeconds": { "type": "integer" },
+          "audit_log": { "type": "string" }
+        },
+        "required": ["nodeRole"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "decision": { "type": "string" },
+          "mode": { "type": "string" },
+          "mutationAllowed": { "type": "boolean" },
+          "writeDispatch": { "type": "boolean" },
+          "writeProducerKit": { "type": "boolean" },
+          "outputDir": { "type": "string" },
+          "summary": { "type": "object" },
+          "summaryArtifact": { "type": "string" },
+          "eventsArtifact": { "type": "string" },
+          "viewerArtifact": { "type": "string" },
+          "summaryArtifactHash": { "type": "string" },
+          "eventsArtifactHash": { "type": "string" },
+          "viewerArtifactHash": { "type": "string" },
+          "stdoutStored": { "type": "boolean" },
+          "stderrStored": { "type": "boolean" },
+          "rawSecretPatternHits": { "type": "integer" },
+          "artifactSecretPatternHits": { "type": "integer" },
+          "scriptOutputSecretPatternHits": { "type": "integer" },
+          "evidence_needed": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["ok", "decision", "mutationAllowed", "writeDispatch", "writeProducerKit", "summaryArtifact", "eventsArtifact", "viewerArtifact", "rawSecretPatternHits"]
+      }
+    },
+    {
+      "name": "peer_evidence_bus",
+      "aliases": ["peer.evidence_bus", "peer.evidence"],
+      "command": "python scripts/awx_mcp_toolbox.py peer_evidence_bus",
+      "readOnly": true,
+      "nodeRoles": ["desktop", "macmini", "notebook"],
+      "description": "Summarize the claude-peers-style Peer Evidence Bus for the harmony target: Desktop owner, producer peers, Supabase, Browser, Computer Use, Superpowers, PatchDrop, and existing Control Tower seams without returning raw paths or secrets.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "nodeRole": { "type": "string", "enum": ["desktop", "macmini", "notebook", "read-only"] },
+          "root": { "type": "string" },
+          "targetMetric": { "type": "string" },
+          "audit_log": { "type": "string" }
+        },
+        "required": ["nodeRole"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "targetMetric": { "type": "string" },
+          "promptPack": { "type": "object" },
+          "patchDrop": { "type": "object" },
+          "claudePeersMapping": { "type": "object" },
+          "claudePeersProtocol": { "type": "object" },
+          "safePeerIdentityContract": { "type": "object" },
+          "peerIdentitySummary": { "type": "object" },
+          "webProbeLedger": { "type": "object" },
+          "webProbeRefreshPacket": { "type": "object" },
+          "triPerspectiveQueryPacket": { "type": "object" },
+          "sourceIntegration": { "type": "object" },
+          "evidenceLanes": { "type": "array", "items": { "type": "object" } },
+          "nextActions": { "type": "array", "items": { "type": "string" } },
+          "evidence_needed": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["targetMetric", "promptPack", "claudePeersProtocol", "safePeerIdentityContract", "peerIdentitySummary", "webProbeLedger", "webProbeRefreshPacket", "triPerspectiveQueryPacket", "evidenceLanes", "nextActions"]
+      }
+    },
+    {
+      "name": "web_probe_refresh",
+      "aliases": ["web.probe_refresh", "web.probe.refresh"],
+      "command": "python scripts/awx_mcp_toolbox.py web_probe_refresh",
+      "readOnly": true,
+      "nodeRoles": ["desktop", "macmini", "notebook"],
+      "description": "Fetch the Peer Evidence Bus webProbeRefreshPacket official sources and write a sanitized evidence artifact containing only status, hashes, lengths, required signal counts, and redacted failure reasons.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "nodeRole": { "type": "string", "enum": ["desktop", "macmini", "notebook", "read-only"] },
+          "root": { "type": "string" },
+          "targetMetric": { "type": "string" },
+          "refreshPacket": { "type": "object" },
+          "output_path": { "type": "string" },
+          "maxBytes": { "type": "integer" },
+          "timeoutSeconds": { "type": "integer" },
+          "audit_log": { "type": "string" }
+        },
+        "required": ["nodeRole"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "decision": { "type": "string" },
+          "mode": { "type": "string" },
+          "targetMetric": { "type": "string" },
+          "artifactPath": { "type": "string" },
+          "sourceCount": { "type": "integer" },
+          "fetchedCount": { "type": "integer" },
+          "failedCount": { "type": "integer" },
+          "skippedCount": { "type": "integer" },
+          "missingSignalCount": { "type": "integer" },
+          "rawSecretPatternHits": { "type": "integer" },
+          "sources": { "type": "array", "items": { "type": "object" } },
+          "rawContentStored": { "type": "boolean" },
+          "rawQueryStored": { "type": "boolean" },
+          "mutationAllowed": { "type": "boolean" },
+          "evidence_needed": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["schemaVersion", "ok", "decision", "mode", "sourceCount", "fetchedCount", "failedCount", "sources", "rawContentStored", "rawQueryStored", "mutationAllowed"]
       }
     },
     {
@@ -432,6 +1644,9 @@
           "bundle": { "type": "object" },
           "secretPatternHits": { "type": "integer" },
           "filemodeLineCount": { "type": "integer" },
+          "allowedNewFileCount": { "type": "integer" },
+          "filemodeViolationCount": { "type": "integer" },
+          "binaryPatchMarkerCount": { "type": "integer" },
           "diffHeaderCount": { "type": "integer" },
           "forbiddenPathCount": { "type": "integer" },
           "forbiddenPathReasons": { "type": "array", "items": { "type": "string" } },
@@ -740,6 +1955,9 @@
                 "shaVerified": { "type": "boolean" },
                 "rawSecretPatternHits": { "type": "integer" },
                 "filemodeLineCount": { "type": "integer" },
+                "allowedNewFileCount": { "type": "integer" },
+                "filemodeViolationCount": { "type": "integer" },
+                "binaryPatchMarkerCount": { "type": "integer" },
                 "diffHeaderCount": { "type": "integer" },
                 "forbiddenPathCount": { "type": "integer" },
                 "desktopFinalProof": { "type": "string" },
@@ -907,6 +2125,9 @@
                 "shaVerified": { "type": "boolean" },
                 "rawSecretPatternHits": { "type": "integer" },
                 "filemodeLineCount": { "type": "integer" },
+                "allowedNewFileCount": { "type": "integer" },
+                "filemodeViolationCount": { "type": "integer" },
+                "binaryPatchMarkerCount": { "type": "integer" },
                 "diffHeaderCount": { "type": "integer" },
                 "forbiddenPathCount": { "type": "integer" },
                 "desktopFinalProof": { "type": "string" },
@@ -1144,7 +2365,7 @@
       "command": "python scripts/awx_mcp_toolbox.py desktop_control_loop",
       "readOnly": false,
       "nodeRoles": ["desktop"],
-      "description": "Run the Desktop-side control loop by combining source_scan, optional dispatch artifact refresh, and external_evidence_audit while keeping Desktop final proof pending until producer smoke, PatchDrop v3 sidecars, and project-scoped Supabase live proof arrive. nextActions may include run-cross-subsystem-contract-tests with focusedTests and requiredTraceKeys, collect-supabase-live-proof with requiredEnv, requiredMcpTools, artifactPaths, and requiredResultNames; completionAuditNextActions may include role-specific proof steps: run_macmini_external_node_smoke, collect_macmini_producer_handoff_json, submit_macmini_patchdrop_v3_bundle_sidecars, run_notebook_external_node_smoke, collect_notebook_producer_handoff_json, submit_notebook_patchdrop_v3_bundle_sidecars.",
+      "description": "Run the Desktop-side control loop by combining source_scan, optional dispatch artifact refresh, and external_evidence_audit. The default is Desktop-only: require_producer_bundles=false keeps Mac mini/Notebook producer pathspecs and PatchDrop sidecars as optional supporting evidence, and require_supabase_live_proof=false keeps project-scoped Supabase proof as an optional read-only evidence lane; set these booleans true for explicit multi-node producer or DB-proof work. run_completion_audit defaults true for standalone calls; set it false only when a caller such as goal_next_auto guarantees a later post-packet completion audit, avoiding a redundant nested repository audit without claiming final proof. Desktop final proof remains pending until producer smoke, PatchDrop v3 sidecars, and project-scoped Supabase live proof arrive. nextActions may include run-cross-subsystem-contract-tests with focusedTests and requiredTraceKeys, collect-supabase-live-proof with requiredEnv, requiredMcpTools, artifactPaths, and requiredResultNames; completionAuditNextActions may include role-specific proof steps: run_macmini_external_node_smoke, collect_macmini_producer_handoff_json, submit_macmini_patchdrop_v3_bundle_sidecars, run_notebook_external_node_smoke, collect_notebook_producer_handoff_json, submit_notebook_patchdrop_v3_bundle_sidecars.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -1166,6 +2387,8 @@
           "write_producer_kit": { "type": "boolean" },
           "producer_kit_dir": { "type": "string" },
           "require_producer_bundles": { "type": "boolean" },
+          "require_supabase_live_proof": { "type": "boolean" },
+          "run_completion_audit": { "type": "boolean", "description": "Defaults true. Set false only when the caller guarantees a later post-packet completion audit." },
           "archive_index": { "type": "string" },
           "audit_log": { "type": "string" }
         },
@@ -1178,8 +2401,14 @@
           "completionReady": { "type": "boolean" },
           "desktopFinalProof": { "type": "string" },
           "externalEvidenceComplete": { "type": "boolean" },
+          "supabaseLiveProofRequired": { "type": "boolean" },
+          "completionAuditRunRequested": { "type": "boolean" },
+          "completionAuditExecuted": { "type": "boolean" },
+          "completionAuditEvidenceSource": { "type": "string" },
+          "completionAuditFailureClass": { "type": "string" },
           "sourceScan": { "type": "object" },
           "harmonyScan": { "type": "object" },
+          "peerEvidenceBus": { "type": "object" },
           "dispatch": { "type": "object" },
           "dispatchIntegrity": {
             "type": "object",
@@ -1241,11 +2470,13 @@
             "description": "Completion audit recovery actions. Role-specific external proof actions include run_macmini_external_node_smoke, collect_macmini_producer_handoff_json, submit_macmini_patchdrop_v3_bundle_sidecars, run_notebook_external_node_smoke, collect_notebook_producer_handoff_json, and submit_notebook_patchdrop_v3_bundle_sidecars."
           },
           "harmonyScanNextActions": { "type": "array", "items": { "type": "string" } },
+          "peerEvidenceBusNextActions": { "type": "array", "items": { "type": "string" } },
           "allowedEnvRefs": { "type": "array", "items": { "type": "string" } },
           "outputCount": { "type": "integer" },
-          "evidence_needed": { "type": "array", "items": { "type": "string" } }
+          "evidence_needed": { "type": "array", "items": { "type": "string" } },
+          "supportingEvidenceNeeded": { "type": "array", "items": { "type": "string" } }
         },
-        "required": ["localReady", "completionReady", "desktopFinalProof", "externalEvidenceComplete", "sourceScan", "harmonyScan", "dispatch", "dispatchIntegrity", "externalEvidence", "unrelatedPatchDropEvidence", "nextActions"]
+        "required": ["localReady", "completionReady", "desktopFinalProof", "externalEvidenceComplete", "sourceScan", "harmonyScan", "peerEvidenceBus", "dispatch", "dispatchIntegrity", "externalEvidence", "unrelatedPatchDropEvidence", "nextActions"]
       }
     }
   ],
@@ -1322,13 +2553,34 @@
       "name": "desktop_final_verifier",
       "flow": [
         "source_scan",
-        "harmony_scan",
         "patch_plan",
-        "desktop_dispatch_packet",
-        "boot_verify",
-        "build_error_mine",
-        "external_evidence_intake",
-        "external_evidence_audit"
+        "boot_verify"
+      ],
+      "optionalFlows": [
+        {
+          "name": "build_failure_diagnostics",
+          "when": "verification_failed_with_log_path",
+          "flow": [
+            "build_error_mine"
+          ]
+        },
+        {
+          "name": "deep_analysis",
+          "when": "cross_subsystem_or_harmony_evidence_needed",
+          "flow": [
+            "harmony_scan",
+            "peer_evidence_bus"
+          ]
+        },
+        {
+          "name": "external_producer_handoff",
+          "when": "explicit_external_producer_handoff",
+          "flow": [
+            "desktop_dispatch_packet",
+            "external_evidence_intake",
+            "external_evidence_audit"
+          ]
+        }
       ]
     },
     {

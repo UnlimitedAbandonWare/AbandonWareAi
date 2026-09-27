@@ -1,22 +1,48 @@
+﻿# AWX model-defaults remapped 2026-09-17: legacy ollama names -> installed (3090 chat/judge/coder, 3060 fast/vision).
 # [PATCH] Port 443 baseline moved to SERVER_PORT / SERVER_SSL_* env inputs.
 spring:
   profiles:
     default: ${SPRING_PROFILES_DEFAULT:local}
   config:
-    import: ${APP_CONFIG_IMPORT:optional:application-proj-override.yml,optional:openai-model-param-matrix.yaml,optional:orchestration-stage-policy.yml,optional:classpath:application-llm.yaml}
+    import: ${APP_CONFIG_IMPORT:optional:application-proj-override.yml,optional:openai-model-param-matrix.yaml,optional:orchestration-stage-policy.yml,optional:classpath:application-llm.yaml,optional:classpath:application-deepgram-local.yml}
+
+deepgram:
+  api-key: ${DEEPGRAM_API_KEY:}
+  api-key-secondary: ${DEEPGRAM_API_KEY_SECONDARY:}
 
 server:
   port: ${SERVER_PORT:8080}
+  https-port: ${SERVER_HTTPS_PORT:443}
+  http-port: ${SERVER_HTTP_PORT:80}
+  forward-headers-strategy: ${SERVER_FORWARD_HEADERS_STRATEGY:framework}
   ssl:
     enabled: ${SERVER_SSL_ENABLED:false}
     key-store: ${SERVER_SSL_KEY_STORE:}
     key-store-password: ${SERVER_SSL_KEY_STORE_PASSWORD:}
     key-store-type: ${SERVER_SSL_KEY_STORE_TYPE:PKCS12}
-    key-alias: ${SERVER_SSL_KEY_ALIAS:}
     key-password: ${SERVER_SSL_KEY_PASSWORD:}
+
+public:
+  request-budget:
+    max-time-budget-ms: ${PUBLIC_REQUEST_MAX_TIME_BUDGET_MS:120000}
+    body-read:
+      workers: ${PUBLIC_REQUEST_BODY_READ_WORKERS:4}
+      queue-capacity: ${PUBLIC_REQUEST_BODY_READ_QUEUE_CAPACITY:32}
+
+hybrid:
+  relatedness-filter:
+    fail-soft: ${HYBRID_RELATEDNESS_FILTER_FAIL_SOFT:false}
+
+app:
+  public-base-url: ${APP_PUBLIC_BASE_URL:https://abandonwareai.kro.kr}
 
 sse:
   replay-limit: ${SSE_REPLAY_LIMIT:200}
+
+prompt:
+  context:
+    refiner:
+      enabled: ${PROMPT_CONTEXT_REFINER_ENABLED:false}
 
 artplate:
   sse:
@@ -58,6 +84,7 @@ domain:
     "admin-token.allow-query": ${DOMAIN_ALLOWLIST_ADMIN_TOKEN_ALLOW_QUERY:false}
 
 security:
+  force-https: ${SECURITY_FORCE_HTTPS:${SERVER_SSL_ENABLED:false}}
   admin-secret: ${SECURITY_ADMIN_SECRET:}
   remember-me-key: ${SECURITY_REMEMBER_ME_KEY:}
   bootstrap-admin:
@@ -217,9 +244,9 @@ llm:
   provider-guard:
     fail-fast: ${LLM_PROVIDER_GUARD_FAIL_FAST:true}
   fast:
-    # Fast/local utility LLM route used by auxiliary rewrite and scoring paths.
-    base-url: ${LLM_FAST_BASE_URL:${llm.base-url}}
-    model: ${LLM_FAST_MODEL:qwen3:8b}
+    # Keep the active primary loopback unless a dedicated fast/3060 endpoint is explicit.
+    base-url: ${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:${llm.base-url}}}
+    model: ${LLM_FAST_MODEL:qwen3.5:9b}
     # NOTE: Aux LLM timeouts should be classified softly so raw-query fallback remains available.
     timeout-seconds: 6
     max-retries: 0
@@ -326,11 +353,12 @@ train_idle:
 autolearn:
   enabled: ${AUTOLEARN_ENABLED:false}
 local-llm:
-  autostart: false
-  health-check-url: http://localhost:8000/health
+  autostart: ${LOCAL_LLM_AUTOSTART:true}
+  ollama-host: ${OLLAMA_HOST:127.0.0.1:11435}
+  health-check-url: ${LOCAL_LLM_HEALTH_CHECK_URL:http://127.0.0.1:11435/api/version}
   health-check-timeout: 30s
-  start-command: docker-compose -f vllm-compose.yml up -d
-  enabled: ${LOCAL_LLM_ENABLED:false}
+  start-command: ${LOCAL_LLM_START_COMMAND:}
+  enabled: ${LOCAL_LLM_ENABLED:true}
   base-url: http://localhost:11434/v1
 gpt-search:
   # Bing is not available in ops environments; keep it disabled by default.
@@ -384,6 +412,45 @@ gpt-search:
       force-opportunistic-naver-even-if-brave-fast: true
   soak:
     enabled: ${GPT_SEARCH_SOAK_ENABLED:false}
+
+# Single Gemini wire-policy owner. Initial verification intentionally enables only
+# the zero-result web-search expansion purpose; all other Gemini purposes fail soft.
+gemini:
+  gateway:
+    enabled: ${GEMINI_GATEWAY_ENABLED:true}
+    base-url: ${GEMINI_GATEWAY_BASE_URL:https://generativelanguage.googleapis.com}
+    openai-compatible-base-url: ${GEMINI_GATEWAY_OPENAI_COMPATIBLE_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai}
+    timeout-ms: ${GEMINI_GATEWAY_TIMEOUT_MS:5000}
+    max-attempts: ${GEMINI_GATEWAY_MAX_ATTEMPTS:2}
+    preflight:
+      enabled: ${GEMINI_GATEWAY_PREFLIGHT_ENABLED:true}
+    circuit-breaker:
+      sliding-window-size: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_WINDOW:10}
+      minimum-calls: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_MINIMUM_CALLS:5}
+      failure-rate-threshold: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_FAILURE_RATE:50}
+      wait-open-ms: ${GEMINI_GATEWAY_CIRCUIT_BREAKER_WAIT_OPEN_MS:30000}
+    models:
+      default: ${GEMINI_GATEWAY_DEFAULT_MODEL:gemini-2.5-flash}
+      search-expansion: ${GEMINI_GATEWAY_SEARCH_EXPANSION_MODEL:gemini-2.5-flash}
+      translation: ${GEMINI_GATEWAY_TRANSLATION_MODEL:gemini-2.5-flash}
+      understanding: ${GEMINI_GATEWAY_UNDERSTANDING_MODEL:gemini-2.5-flash}
+      keyword-training: ${GEMINI_GATEWAY_KEYWORD_TRAINING_MODEL:gemini-2.5-flash}
+      curation: ${GEMINI_GATEWAY_CURATION_MODEL:gemini-2.5-pro}
+      router: ${GEMINI_GATEWAY_ROUTER_MODEL:gemini-2.5-pro}
+      long-input: ${GEMINI_GATEWAY_LONG_INPUT_MODEL:gemini-2.5-flash}
+    purpose:
+      search-expansion:
+        enabled: ${GEMINI_GATEWAY_SEARCH_EXPANSION_ENABLED:true}
+      translation:
+        enabled: ${GEMINI_GATEWAY_TRANSLATION_ENABLED:false}
+      understanding:
+        enabled: ${GEMINI_GATEWAY_UNDERSTANDING_ENABLED:false}
+      keyword-training:
+        enabled: ${GEMINI_GATEWAY_KEYWORD_TRAINING_ENABLED:false}
+      curation:
+        enabled: ${GEMINI_GATEWAY_CURATION_ENABLED:false}
+      router:
+        enabled: ${GEMINI_GATEWAY_ROUTER_ENABLED:false}
 web:
   trace:
     expose: ${WEB_TRACE_EXPOSE:false}
@@ -480,25 +547,6 @@ memory:
     shadow-vector-enabled: ${MEMORY_SUMMARY_SHADOW_VECTOR_ENABLED:true}
     shadow-vector-score: ${MEMORY_SUMMARY_SHADOW_VECTOR_SCORE:0.72}
 
-kakao:
-  friends:
-    page-size: 10
-    deep-research: true
-    mode-default: BALANCED
-  guard:
-    mode: aggressive
-    profile: PROFILE_MEMORY
-    evidence:
-      mode: RELAXED
-      min-coverage: 0.35
-      allow-no-citation-for:
-        - GAME
-        - SUBCULTURE
-        - LONGTAIL_PERSON
-  memory:
-    enabled: true
-    low-guardrail: true
-    progressive: true
 
 verifier:
   coverage:
@@ -799,8 +847,8 @@ uaw:
 ensemble:
   sampling:
     enabled: false
-    model: ${llm.fast.model:gemma4:26b}
-    judge-model: ${llm.chat-model:gemma4:26b}
+    model: ${llm.fast.model:${llm.chat-model:qwen3.5:9b}}
+    judge-model: ${llm.judge.model:${LLM_JUDGE_MODEL:smtek/Qwen3.8-27B:Q3_K_XL}}
     timeout-seconds: 30
     citation-gate:
       min-score: 0.5
@@ -810,6 +858,8 @@ ensemble:
     temperature: 0.3
     top-p: 0.5
     max-tokens: 2000
+    timeout-seconds: ${ENSEMBLE_JUDGE_TIMEOUT_SECONDS:6}
+    require-support-eligible: ${ENSEMBLE_JUDGE_REQUIRE_SUPPORT_ELIGIBLE:false}
 
 
 # ---------------------------------------------------------------------------

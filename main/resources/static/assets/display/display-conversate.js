@@ -40,9 +40,11 @@
     function canSubmit() { return !flight && !voice && !voiceStopping && now() >= reconnectAt && state.message.trim().length > 0 && state.message.length <= 2000 && revision !== submittedRevision; }
     function finish() { if (flight) { clearTimer(flight.timer); flight.resolve(true); flight = null; } }
     function fail(code, message) { state.phase = 'ERROR'; state.error = { code, message }; finish(); notify(); }
-    async function post(route, body) {
+    async function post(route, body, opts) {
       if(options.lens===true)route=route==='ack'?'lens/ack':['transcription','poll'].includes(route)?'lens':route;
       const controller = new AbortController(); let timeout;
+      // snapshot 업로드 같은 외부 작업 취소 신호를 이 요청의 abort로 연결한다.
+      if(opts?.signal){if(opts.signal.aborted)controller.abort();else opts.signal.addEventListener('abort',()=>controller.abort(),{once:true});}
       // Keep the bounded server-stop request alive when pagehide disposes the client.
       if (route !== 'audio/stop') requests.add(controller);
       try {
@@ -58,7 +60,7 @@
             let detail;try{detail=await response.json();}catch{}
             const error = new Error(/^[a-z_]{1,64}$/.test(detail?.reason||'')?detail.reason:'display_http'); error.status = response.status;if(response.status===429&&Number.isFinite(seconds)&&seconds>0)error.retryAfterMs=Math.min(seconds,3600)*1000;throw error;
           }
-          const view = await response.json();
+          const payload = await response.json(), view=route==='audio/chunk-batch'?payload?.view:payload;
           if(route==='link/code'||route==='link/join'||route==='lens/link'||route==='lens/text'||route.startsWith('focus/'))return view;
           if (!view || !/^[a-f0-9-]{36}$/.test(view.assistId) || !Number.isSafeInteger(view.epoch) || view.epoch < 1 || typeof view.ready !== 'boolean') throw Error('display-contract');
           view.roundTripMs=Math.max(0,Math.round(now()-began));
@@ -67,9 +69,13 @@
             if(c!=null&&(!/^[A-Za-z0-9._:-]{1,80}$/.test(c.utteranceId||'')||!Number.isSafeInteger(c.revision)||c.revision<0||typeof c.text!=='string'||c.text.length>(c.rolling===true?16385:2048)||typeof c.isFinal!=='boolean'))throw Error('display-contract');
             if(!Number.isSafeInteger(view.version)||view.version<1||!Number.isFinite(view.captionTtlMs)||!Number.isFinite(view.cardTtlMs))throw Error('display-contract');
           }
+          if(route==='audio/chunk-batch'){
+            if(payload.acceptedCount!==body.frames.length||payload.acceptedThrough!==body.frames.at(-1).sequence)throw Error('display-contract');
+            return {view,acceptedCount:payload.acceptedCount,acceptedThrough:payload.acceptedThrough};
+          }
           return view;
         })();
-        return await Promise.race([work, new Promise((_, reject) => { timeout = setTimer(() => { controller.abort(); reject(Error('display-timeout')); }, route === 'audio/start' ? 35000 : route === 'audio/stop' && body.finish === true ? 6500 : options.requestTimeoutMs || 4000); })]);
+        return await Promise.race([work, new Promise((_, reject) => { timeout = setTimer(() => { controller.abort(); reject(Error('display-timeout')); }, route === 'audio/start' ? 35000 : route === 'audio/chunk-batch' ? 20000 : route === 'audio/stop' && body.finish === true ? 6500 : opts?.timeoutMs || (['bootstrap','transcription','phone-test'].includes(route)?10000:options.requestTimeoutMs || 4000)); })]);
       } finally { clearTimer(timeout); requests.delete(controller); }
     }
     function connection() { return { assistId: session?.assistId || null, epoch: session?.epoch || 0, clientId }; }
@@ -87,6 +93,8 @@
       state.audioFinished = view.audioFinished === true;state.audioRenewAfterMs=view.audioRenewAfterMs;
       state.testStatus = view.testStatus || null;
       state.focusProducer = view.focusProducer === true;
+      // 생산자 폴링 응답에만 담기는 단발 촬영 명령 — 비생산자/구독자에게는 서버가 null을 돌려준다.
+      state.focusControl = view.focusControl || null;
       applyFocus(view.focus||null);
       if(transcription){
         errors=0;state.reason=view.reason;state.role=view.role;state.linked=view.linked;state.linkPending=view.linkPending;state.confirmation=view.confirmation;
@@ -141,7 +149,7 @@
         apply(view); schedule(1000);
       } catch (error) {
         if (!active || stamp !== generation || pollStamp !== pollGeneration) return;
-        if (error.status === 404 || error.status === 409) session = null;
+        if (error.status === 404 || (error.status === 409 && voice == null && !voiceStopping)) session = null;
         if(transcription){
           state.error={code:error.message};recordEvent('transcript_preserved');
           if(error.message==='link_pending'){state.linkPending=true;state.connection='PAIRING';notify();schedule(4000);return;}
@@ -182,31 +190,58 @@
       return completed;
     }
     function cancel() { if (!flight) return; generation++; for (const request of requests) request.abort(); fail('outcome-unknown','대기를 끝냈습니다. 같은 질문은 다시 보내지 않았습니다.'); schedule(1000); }
-    async function beginVoice({continuation=false}={}) {
+    async function beginVoice({continuation=false,sttPolicy=null}={}) {
       if (flight || voice || voiceStopping) throw Error('display-busy');
+      const policy=sttPolicy?{...sttPolicy,allowedFallbacks:[...(sttPolicy.allowedFallbacks||[])]}:null;
       const mode = { ready: false }; voice = mode; state.voiceActive = true; restored = false; notify();
-      const ready = await connect(); if (voice !== mode) throw Error('voice-cancelled');
-      if(transcription&&!(options.standalone===true&&ready.role==='STANDALONE')&&(ready.role!=='PHONE'||!ready.linked))throw Error('paired_phone_required');
-      session = { assistId: ready.assistId, epoch: ready.epoch }; mode.epoch = ready.epoch; mode.baseline = ready.requestId;
-      if (!ready.audioAvailable || !ready.ready) throw Error('audio-unavailable');
-      // A lost first request leaves the server OFF; no segment exists to renew.
-      const view = await post('audio/start', {...connection(),continuation:continuation&&ready.audioState!=='OFF'});
-      if (voice !== mode) throw Error('voice-cancelled');
-      if (!view.ready || !['READY','STREAMING'].includes(view.audioState)) throw Error('audio-not-ready');
-      mode.epoch = view.epoch; mode.ready = true; apply(view); schedule(1000);
+      try{
+        const ready = await connect(); if (voice !== mode) throw Error('voice-cancelled');
+        if(transcription&&!(options.standalone===true&&ready.role==='STANDALONE')&&(ready.role!=='PHONE'||!ready.linked))throw Error('paired_phone_required');
+        session = { assistId: ready.assistId, epoch: ready.epoch }; mode.epoch = ready.epoch; mode.baseline = ready.requestId;
+        if (!ready.audioAvailable || !ready.ready) throw Error('audio-unavailable');
+        // A lost first request leaves the server OFF; no segment exists to renew.
+        mode.bound=connection();
+        const view = await post('audio/start', {...mode.bound,continuation:continuation&&ready.audioState!=='OFF',...(policy?{sttPolicy:policy}:{})});
+        if (voice !== mode) throw Error('voice-cancelled');
+        mode.bound={assistId:view.assistId,epoch:view.epoch,clientId};
+        if (!view.ready || !['READY','STREAMING'].includes(view.audioState)) throw Error('audio-not-ready');
+        mode.epoch = view.epoch; mode.ready = true; apply(view); schedule(1000);
+      }catch(error){
+        // Roll back only this attempt. A late failure must never clear its successor.
+        if(voice===mode){
+          if(mode.bound)await post('audio/stop',{...mode.bound,finish:true}).catch(()=>{});
+          if(voice===mode){voice=null;state.voiceActive=false;notify();}
+        }
+        throw error;
+      }
     }
     async function voiceChunk(sequence, pcm) {
       const mode = voice;if (!mode?.ready) throw Error('audio-not-ready');
       const view = await post('audio/chunk', { ...connection(), epoch: mode.epoch, sequence, pcm });
       if (voice !== mode) return;
-      if (view.epoch !== mode.epoch || !view.ready) throw Error('audio-stopped');
       apply(view);
+      if (view.epoch !== mode.epoch || !view.ready) throw Error('audio-stopped');
+    }
+    async function voiceBatch(frames){
+      const mode=voice;if(!mode?.ready)throw Error('audio-not-ready');
+      if(!Array.isArray(frames)||frames.length<1||frames.length>8||frames.some((f,i)=>
+        !Number.isSafeInteger(f?.sequence)||f.sequence<0||f.sequence!==frames[0].sequence+i||typeof f.pcm!=='string'||f.pcm.length>10240))throw Error('invalid_audio_batch');
+      const ack=await post('audio/chunk-batch',{...connection(),epoch:mode.epoch,frames});
+      if(voice!==mode)return;apply(ack.view);
+      if(ack.view.epoch!==mode.epoch||!ack.view.ready)throw Error('audio-stopped');
+      return ack;
     }
     async function endVoice({finish:drain=false}={}) {
       if (!voice) return; const bound = connection(); voice = null; voiceStopping = true; state.voiceActive = false;
       const stamp = ++generation; pollGeneration++; notify();
       try { const view = await post('audio/stop', drain ? {...bound,finish:true} : bound); if (stamp === generation) apply(view); return view; }
-      catch (error) { state.connection = 'RECONNECTING'; throw error; }
+      catch (error) {
+        if (['stale_epoch','assist_paused'].includes(error.message)) {
+          try { const ready = await connect(); session = { assistId: ready.assistId, epoch: ready.epoch };
+            const view = await post('audio/stop', drain ? {...connection(),finish:true} : connection());
+            if (stamp === generation) apply(view); return view; } catch {}
+        }
+        state.connection = 'RECONNECTING'; throw error; }
       finally { voiceStopping = false; notify(); schedule(1000); }
     }
     async function action(route,extra={}){const view=await post(route,{...connection(),...extra});apply(view);return view;}
@@ -255,19 +290,19 @@
       if(value&&state.focus?.serverInstanceId===value.serverInstanceId&&value.stateVersion<state.focus.stateVersion)return;
       state.focus=value;
     }
-    async function focusRequest(route,body={}){
+    async function focusRequest(route,body={},opts){
       if(!session)throw Error('focus_session_stale');
-      if(!['settings/read','settings','history','open','input','input/status','close','memory/read','memory/save','memory/delete','memory/search'].includes(route))throw Error('invalid_focus_action');
-      const view=await post('focus/'+route,{...connection(),...body});
+      if(!['settings/read','settings','history','open','input','input/status','snapshot/claim','snapshot/result','close','memory/read','memory/save','memory/delete','memory/search'].includes(route))throw Error('invalid_focus_action');
+      const view=await post('focus/'+route,{...connection(),...body},opts);
       if(['open','input','close'].includes(route)){applyFocus(view);notify();}
       return view;
     }
-    function reconnect(){pause();claimPending=options.standalone===true;session=null;start();}
+    async function reconnect({preserveSession=true}={}){pause();if(!preserveSession){claimPending=options.standalone===true;session=null;}try{const view=await connect();apply(view);return view;}finally{start();}}
     function acknowledge(version,phase){return post('ack',{...connection(),version,phase});}
     async function stopAudio(){apply(await connect());return action('audio/stop');}
     function clearDraft() { if (flight) cancel(); generation++; restored = false; revision++; submittedRevision = -1; state.message = ''; state.phase = 'IDLE'; state.result = null; state.error = null; notify(); schedule(0); }
     function dispose() { pause();clearTimer(captionTimer);clearTimer(hintTimer);clearTimer(resultTimer);if (flight) cancel(); for (const request of requests) request.abort(); }
-return { state, setMessage, canSubmit, submit, cancel, clearDraft, recordEvent, start, pause, dispose, beginVoice, voiceChunk, endVoice,pairingCode,lensLink,storedLensLink,join,approve,unlink,hints,contextReset,background,relaySettings,lensSettings,relayTest,reconnect,acknowledge,stopAudio,focusRequest };
+return { state, setMessage, canSubmit, submit, cancel, clearDraft, recordEvent, start, pause, dispose, beginVoice, voiceChunk, voiceBatch, endVoice,pairingCode,lensLink,storedLensLink,join,approve,unlink,hints,contextReset,background,relaySettings,lensSettings,relayTest,reconnect,acknowledge,stopAudio,focusRequest };
   }
   return { createClient, createCommitter };
 });

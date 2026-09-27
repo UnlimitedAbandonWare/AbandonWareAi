@@ -1,0 +1,6 @@
+# Local credential files never participate in production or isolated verification.
+spring:
+  config:
+    activate:
+      on-profile: "(local | dev) & !prod & !production & !verification"
+    import: optional:file:.env[.properties]

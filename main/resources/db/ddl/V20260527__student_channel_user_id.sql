@@ -1,0 +1,1 @@
+-- DEPRECATED: legacy LMS students table was removed from the chatbot runtime.

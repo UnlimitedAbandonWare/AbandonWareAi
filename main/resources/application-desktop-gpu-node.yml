@@ -34,9 +34,9 @@ awx:
     enabled: true
     target-role: desktop-gpu-executor
     target-execution-node: desktop-rtx3090-rtx3060
-    primary-chat-base-url: ${LLM_3090_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}
-    fast-base-url: ${LLM_3060_BASE_URL:${LLM_FAST_BASE_URL:http://127.0.0.1:11435/v1}}
-    embedding-base-url: ${EMBED_3060_BASE_URL:${EMBED_BASE_URL:http://127.0.0.1:11435/api/embed}}
+    primary-chat-base-url: ${llm.base-url:${LLM_BASE_URL:${LLM_3090_BASE_URL:http://127.0.0.1:11434/v1}}}
+    fast-base-url: ${llm.fast.base-url:${LLM_FAST_BASE_URL:${LLM_3060_BASE_URL:http://127.0.0.1:11435/v1}}}
+    embedding-base-url: ${embedding.base-url:${EMBED_BASE_URL:${EMBED_3060_BASE_URL:http://127.0.0.1:11435/api/embed}}}
     allowed-hosts: ${LLM_PROVIDER_GUARD_ALLOWED_HOSTS:}
     require-auth-for-remote: ${LLM_PROVIDER_GUARD_REQUIRE_AUTH_FOR_REMOTE:true}
     owner-token: ${LLM_OWNER_TOKEN:}
@@ -57,9 +57,11 @@ awx:
 
 local-llm:
   enabled: true
-  autostart: ${LOCAL_LLM_AUTOSTART:false}
+  autostart: ${LOCAL_LLM_AUTOSTART:true}
+  cuda-visible-device: ${LOCAL_LLM_CUDA_VISIBLE_DEVICE:}
+  cuda-auto-discover: ${LOCAL_LLM_CUDA_AUTO_DISCOVER:true}
   warmup:
-    enabled: ${LOCAL_LLM_WARMUP_ENABLED:false}
+    enabled: ${LOCAL_LLM_WARMUP_ENABLED:true}
 
 llm:
   provider: local

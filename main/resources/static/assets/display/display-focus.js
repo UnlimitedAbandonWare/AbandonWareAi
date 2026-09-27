@@ -1,7 +1,7 @@
 (function(root,factory){if(typeof module==='object'&&module.exports)module.exports=factory(require('./display-focus-flow.js'));else root.NovaFocus=factory(root.NovaFocusFlow);})(typeof globalThis!=='undefined'?globalThis:this,function(Flow){
   'use strict';
-  const PHASES=new Set(['OFF','ARMED','WAKE_PREVIEW','LISTENING','THINKING','ANSWER_READY','PRESENTING','WAITING','SUSPENDED']);
-  const LABELS={WAKE_PREVIEW:'호출 확인 중',LISTENING:'듣는 중',THINKING:'응답 준비 중',ANSWER_READY:'답변 표시 중',PRESENTING:'답변 표시 중',WAITING:'후속 질문 대기',SUSPENDED:'연결 확인 필요'};
+  const PHASES=new Set(['OFF','ARMED','WAKE_PREVIEW','LISTENING','SNAPSHOT','THINKING','ANSWER_READY','PRESENTING','WAITING','SUSPENDED']);
+  const LABELS={WAKE_PREVIEW:'호출 확인 중',LISTENING:'듣는 중',SNAPSHOT:'사진 촬영 중',THINKING:'응답 준비 중',ANSWER_READY:'답변 표시 중',PRESENTING:'답변 표시 중',WAITING:'후속 질문 대기',SUSPENDED:'연결 확인 필요'};
   function decode(raw){
     if(raw==null)return null;
     if(typeof raw!=='object'||typeof raw.active!=='boolean'||!PHASES.has(raw.phase)||!Number.isSafeInteger(raw.stateVersion)||raw.stateVersion<0)throw Error('invalid_focus');

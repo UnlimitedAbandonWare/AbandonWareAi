@@ -1,0 +1,6 @@
+ai.abandonware.nova.autoconfig.NovaDebugPortAutoConfiguration
+ai.abandonware.nova.autoconfig.NovaFailurePatternAutoConfiguration
+ai.abandonware.nova.autoconfig.NovaOrchestrationAutoConfiguration
+ai.abandonware.nova.autoconfig.NovaOpsStabilizationAutoConfiguration
+ai.abandonware.nova.autoconfig.NovaZero100AutoConfiguration
+com.example.lms.agent.context.AgentDbContextAutoConfiguration

@@ -6,7 +6,7 @@ spring:
     password:
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: ${LEARNING_JPA_DDL_AUTO:validate}
     properties:
       hibernate:
         jdbc.batch_size: 50
