@@ -14,8 +14,9 @@ ACTIVE_MAIN_ROOTS = (
     Path("main/java"),
     Path("app/src/main/java_clean"),
 )
-TEST_ROOTS = (
+TEST_ROOT_CANDIDATES = (
     Path("src/test/java"),
+    Path("app/src/test/java"),
 )
 REPO_IMPORT_PREFIXES = (
     "ai.abandonware.",
@@ -78,9 +79,33 @@ def active_class_index(root: Path) -> set[str]:
     return classes
 
 
-def test_class_index(root: Path) -> set[str]:
+def app_legacy_tests_quarantined(root: Path) -> bool:
+    app_build = root / "app" / "build.gradle.kts"
+    if not app_build.is_file():
+        return False
+    text = read_text(app_build)
+    return (
+        "val test by getting" in text
+        and "java.setSrcDirs(emptyList<String>())" in text
+        and "resources.setSrcDirs(emptyList<String>())" in text
+    )
+
+
+def effective_test_roots(root: Path) -> tuple[list[Path], list[Path]]:
+    active: list[Path] = []
+    quarantined: list[Path] = []
+    app_tests_quarantined = app_legacy_tests_quarantined(root)
+    for test_root in TEST_ROOT_CANDIDATES:
+        if test_root == Path("app/src/test/java") and app_tests_quarantined:
+            quarantined.append(test_root)
+        else:
+            active.append(test_root)
+    return active, quarantined
+
+
+def test_class_index(root: Path, test_roots: Iterable[Path]) -> set[str]:
     classes: set[str] = set()
-    for path in iter_java_files(root, TEST_ROOTS):
+    for path in iter_java_files(root, test_roots):
         classes.update(java_fqcns(path))
     return classes
 
@@ -116,14 +141,15 @@ def namespace(import_name: str) -> str:
 
 def build_report(root: Path) -> dict:
     root = root.resolve()
+    test_roots, quarantined_test_roots = effective_test_roots(root)
     active_classes = active_class_index(root)
-    test_classes = test_class_index(root)
+    test_classes = test_class_index(root, test_roots)
     missing_by_file: dict[str, list[str]] = defaultdict(list)
     missing_by_namespace: Counter[str] = Counter()
     checked_import_count = 0
     test_support_import_count = 0
 
-    test_files = list(iter_java_files(root, TEST_ROOTS))
+    test_files = list(iter_java_files(root, test_roots))
     for path in test_files:
         source = read_text(path)
         for match in IMPORT_RE.finditer(source):
@@ -161,7 +187,8 @@ def build_report(root: Path) -> dict:
         "generatedAt": datetime.now().replace(microsecond=0).isoformat(),
         "decision": "test_tree_contamination_report",
         "activeRoots": [p.as_posix() for p in ACTIVE_MAIN_ROOTS],
-        "testRoots": [p.as_posix() for p in TEST_ROOTS],
+        "testRoots": [p.as_posix() for p in test_roots],
+        "quarantinedTestRoots": [p.as_posix() for p in quarantined_test_roots],
         "activeClassCount": len(active_classes),
         "testSupportClassCount": len(test_classes),
         "testJavaFileCount": len(test_files),

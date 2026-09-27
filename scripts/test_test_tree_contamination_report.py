@@ -131,6 +131,100 @@ class TestTreeContaminationReportTest(unittest.TestCase):
         self.assertEqual(data["missingImportCount"], 0)
         self.assertEqual(data["affectedTestFileCount"], 0)
 
+    def test_reports_app_test_tree_imports_that_broad_gradle_test_compiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main/java/com/example/live").mkdir(parents=True)
+            (root / "app/src/main/java_clean/com/example/app").mkdir(parents=True)
+            (root / "app/src/test/java/com/example/app").mkdir(parents=True)
+
+            (root / "main/java/com/example/live/AliveService.java").write_text(
+                "package com.example.live;\npublic class AliveService {}\n",
+                encoding="utf-8",
+            )
+            (root / "app/src/main/java_clean/com/example/app/AppBridge.java").write_text(
+                "package com.example.app;\npublic class AppBridge {}\n",
+                encoding="utf-8",
+            )
+            (root / "app/src/test/java/com/example/app/AppLegacyTest.java").write_text(
+                "\n".join(
+                    [
+                        "package com.example.app;",
+                        "import com.example.app.AppBridge;",
+                        "import com.abandonware.ai.agent.consent.ConsentCardRenderer;",
+                        "class AppLegacyTest {}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            data = report.build_report(root)
+
+        self.assertIn("app/src/test/java", data["testRoots"])
+        self.assertEqual(data["testJavaFileCount"], 1)
+        self.assertEqual(data["missingImportCount"], 1)
+        self.assertEqual(data["affectedTestFileCount"], 1)
+        self.assertEqual(
+            "app/src/test/java/com/example/app/AppLegacyTest.java",
+            data["topAffectedTestFiles"][0]["file"],
+        )
+        self.assertIn(
+            "com.abandonware.ai.agent.consent.ConsentCardRenderer",
+            data["topAffectedTestFiles"][0]["missingImports"],
+        )
+
+    def test_skips_app_test_tree_when_build_quarantines_legacy_tests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main/java/com/example/live").mkdir(parents=True)
+            (root / "app/src/main/java_clean/com/example/app").mkdir(parents=True)
+            (root / "app/src/test/java/com/example/app").mkdir(parents=True)
+            (root / "app").mkdir(exist_ok=True)
+
+            (root / "app/build.gradle.kts").write_text(
+                "\n".join(
+                    [
+                        "sourceSets {",
+                        "  val main by getting {",
+                        '    java.setSrcDirs(listOf("src/main/java_clean"))',
+                        '    resources.setSrcDirs(listOf("src/main/resources"))',
+                        "  }",
+                        "  val test by getting {",
+                        "    java.setSrcDirs(emptyList<String>())",
+                        "    resources.setSrcDirs(emptyList<String>())",
+                        "  }",
+                        "}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (root / "main/java/com/example/live/AliveService.java").write_text(
+                "package com.example.live;\npublic class AliveService {}\n",
+                encoding="utf-8",
+            )
+            (root / "app/src/main/java_clean/com/example/app/AppBridge.java").write_text(
+                "package com.example.app;\npublic class AppBridge {}\n",
+                encoding="utf-8",
+            )
+            (root / "app/src/test/java/com/example/app/AppLegacyTest.java").write_text(
+                "\n".join(
+                    [
+                        "package com.example.app;",
+                        "import com.abandonware.ai.agent.consent.ConsentCardRenderer;",
+                        "class AppLegacyTest {}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            data = report.build_report(root)
+
+        self.assertNotIn("app/src/test/java", data["testRoots"])
+        self.assertIn("app/src/test/java", data["quarantinedTestRoots"])
+        self.assertEqual(data["testJavaFileCount"], 0)
+        self.assertEqual(data["missingImportCount"], 0)
+        self.assertEqual(data["affectedTestFileCount"], 0)
+
     def test_gradle_task_is_registered_for_repo_owned_refresh(self):
         root = Path(__file__).resolve().parents[1]
         build = (root / "build.gradle.kts").read_text(encoding="utf-8", errors="ignore")
