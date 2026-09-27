@@ -1,7 +1,7 @@
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import re, sys, json, os, datetime, pathlib
+import re, sys, json, os, datetime, pathlib, hashlib
 
 PATTERN_FILE = os.path.join(os.path.dirname(__file__), "build_error_patterns.json")
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".build", "error_history.json")
@@ -17,14 +17,19 @@ def scan_log(log_text, patterns):
         if "regex" in p:
             for m in re.finditer(p["regex"], log_text, re.IGNORECASE|re.MULTILINE):
                 group = m.group(1) if m.lastindex else None
-                hits.append({
+                hit = {
                     "id": p.get("id", "unknown"),
                     "pos": m.start(),
-                    "group": group,
                     "severity": p.get("severity","info"),
                     "msg": p.get("explain") or p.get("description") or "",
                     "hint": p.get("fix_hint") or ""
-                })
+                }
+                if group is not None:
+                    hit["groupHash"] = "hash:" + hashlib.sha256(
+                        group.encode("utf-8", errors="replace")
+                    ).hexdigest()[:12]
+                    hit["groupLength"] = len(group)
+                hits.append(hit)
             continue
 
         # 2) Contains-based patterns (compat: match.contains / match.contains_all / match.contains_any)
@@ -42,7 +47,6 @@ def scan_log(log_text, patterns):
             hits.append({
                 "id": p.get("id", "unknown"),
                 "pos": -1,
-                "group": None,
                 "severity": p.get("severity","info"),
                 "msg": p.get("explain") or p.get("description") or "",
                 "hint": p.get("fix_hint") or p.get("hint") or ""
