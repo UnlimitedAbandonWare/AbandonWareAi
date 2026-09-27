@@ -51,7 +51,7 @@ public class SnippetPruner {
     // [HARDENING] Prompt injection pattern; drop snippets containing these triggers
     private static final java.util.regex.Pattern BLOCK =
             java.util.regex.Pattern.compile(
-                    "(?i)\\b(ignore\\s+previous|system\\s*:|##\\s*시스템|do\\s*not\\s*follow\\s*above)\\b");
+                    "(?i)(?:\\b(?:ignore\\s+previous|system\\s*:|do\\s*not\\s*follow\\s*above)\\b|(?<!\\S)##\\s*시스템\\b)");
 
 
     /**

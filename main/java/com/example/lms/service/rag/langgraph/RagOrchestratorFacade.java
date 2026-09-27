@@ -54,6 +54,7 @@ public class RagOrchestratorFacade {
     }
 
     public QueryResponse query(QueryRequest request) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         long startedNanos = System.nanoTime();
         QueryRequest safeRequest = request == null ? new QueryRequest() : request;
         if (properties.isOff()) {
@@ -88,6 +89,12 @@ public class RagOrchestratorFacade {
                 recordOpsLedger(safeRequest, response, startedNanos);
                 return response;
             } catch (Exception e) {
+                // A caller interrupt is terminal; stage-only cancellation remains fail-soft.
+                if (e instanceof CancellationException cancelled
+                        && Thread.currentThread().isInterrupted()) {
+                    throw cancelled;
+                }
+                com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
                 QueryResponse fallback = legacyOrchestrator.query(safeRequest);
                 Map<String, Object> debug = ensureDebug(fallback);
                 debug.put("langgraph.mode", "primary-fallback");

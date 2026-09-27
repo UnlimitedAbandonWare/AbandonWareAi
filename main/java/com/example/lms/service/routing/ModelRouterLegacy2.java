@@ -5,6 +5,9 @@ import com.example.lms.llm.DynamicChatModelFactory;
 import dev.langchain4j.model.chat.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 
@@ -23,8 +26,13 @@ import org.springframework.stereotype.Component;
 @Profile("legacy-router")
 public class ModelRouterLegacy2 implements ModelRouter {
 
+    private static final Logger log = LoggerFactory.getLogger(ModelRouterLegacy2.class);
+
     private final ModelProperties modelProps;
     private final DynamicChatModelFactory factory;
+
+    @Value("${llm.chat.temperature:0.3}")
+    private double defaultTemperature;
 
     public ModelRouterLegacy2(ModelProperties modelProps,
                               @Qualifier("dynamicChatModelFactory") DynamicChatModelFactory factory) {
@@ -54,13 +62,21 @@ public class ModelRouterLegacy2 implements ModelRouter {
 
     private ChatModel createModel(String modelName) {
         try {
-            return factory.lc(modelName, 0.7, 1.0, null);
+            return factory.lc(modelName, defaultTemperature, 1.0, null);
         } catch (Exception e) {
+            logFailSoft("createModel", e);
             return (ChatModel) java.lang.reflect.Proxy.newProxyInstance(
                     ChatModel.class.getClassLoader(),
                     new Class[]{ChatModel.class},
                     (proxy, method, args) -> null
             );
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][llm][legacy-router] failSoft stage={} errorType={}", stage, errorType);
         }
     }
 }

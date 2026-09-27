@@ -3,6 +3,8 @@ package com.example.lms.service.rag.learn;
 import ai.abandonware.nova.orch.failpattern.FailurePatternMatch;
 import ai.abandonware.nova.orch.failpattern.FailurePatternOrchestrator;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.trace.SafeRedactor;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
@@ -49,6 +51,11 @@ public class CfvmKallocLearningAspect {
     @Around("execution(* com.example.lms.service.rag.handler.DynamicRetrievalHandlerChain.handle(..))")
     public Object aroundHandle(ProceedingJoinPoint pjp) throws Throwable {
         if (props == null || !props.isEnabled()) {
+            return pjp.proceed();
+        }
+        GuardContext context = GuardContextHolder.get();
+        if (context != null && context.isInteractionMemoryWriteSuppressed()) {
+            TraceStore.put("cfvm.kalloc.learning.skipped", "interaction_policy");
             return pjp.proceed();
         }
 

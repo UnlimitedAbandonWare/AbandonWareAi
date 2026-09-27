@@ -43,14 +43,14 @@ public final class SelfAskRewriteRiskScorer {
             double maxSearchRangeDelta) {
 
         public EmergentConfig {
-            maxRiskDelta = clamp(maxRiskDelta, 0.0d, 0.25d);
-            maxTemperatureDelta = clamp(maxTemperatureDelta, 0.0d, 0.20d);
-            maxLaneWeightDelta = clamp(maxLaneWeightDelta, 0.0d, 1.0d);
-            maxSearchRangeDelta = clamp(maxSearchRangeDelta, 0.0d, 0.50d);
+            maxRiskDelta = clamp(maxRiskDelta, 0.0d, 0.12d);
+            maxTemperatureDelta = clamp(maxTemperatureDelta, 0.0d, 0.08d);
+            maxLaneWeightDelta = clamp(maxLaneWeightDelta, 0.0d, 0.30d);
+            maxSearchRangeDelta = clamp(maxSearchRangeDelta, 0.0d, 0.08d);
         }
 
         public static EmergentConfig defaults() {
-            return new EmergentConfig(true, 0.08d, 0.04d, 0.20d, 0.20d);
+            return new EmergentConfig(true, 0.06d, 0.03d, 0.12d, 0.08d);
         }
 
         public static EmergentConfig disabled() {
@@ -93,6 +93,8 @@ public final class SelfAskRewriteRiskScorer {
             String rewriteRiskBand,
             String primaryFactor,
             double rewriteTemperatureWeighted,
+            double validationTemperature,
+            double explorationTemperature,
             double softmaxTemperature,
             double spikePenalty,
             double rewriteOverreachScore,
@@ -198,7 +200,7 @@ public final class SelfAskRewriteRiskScorer {
         double baseTemp = clamp(baseRewriteTemperature, minTemp, maxTemp);
         if (!enabled) {
             return new Score(false, "disabled", 0.0d, 0.0d, false, 0.0d, 0.0d,
-                    0.0d, "LOW", "disabled", baseTemp, 0.35d, 0.0d,
+                    0.0d, "LOW", "disabled", baseTemp, baseTemp, baseTemp, 0.35d, 0.0d,
                     0.0d, "CLEAN", "none", SafeRedactor.hash12(query),
                     Map.of(), uniformLaneWeights(), EmergentAdjustment.disabled());
         }
@@ -253,7 +255,8 @@ public final class SelfAskRewriteRiskScorer {
         String primaryFactor = primaryFactor(value, optimism, uncertainty, modeRisk, historyPenalty,
                 rewriteOverreach,
                 scarcity, providerFailure, afterFilterStarvation, contradiction, latencyPressure, evidenceAvailable);
-        double weightedTemp = clamp(baseTemp + 0.18d * accumulatedRisk - 0.12d * value, minTemp, maxTemp);
+        double weightedTemp = clamp(baseTemp - 0.14d * accumulatedRisk - 0.04d * latencyPressure
+                - 0.04d * rewriteOverreach, minTemp, maxTemp);
         double softmaxTemperature = clamp(0.35d + 0.40d * accumulatedRisk, 0.35d, 0.75d);
         Map<String, Double> laneWeights = laneWeights(query, metadata, uncertainty, scarcity,
                 providerFailure, contradiction, optimism, softmaxTemperature);
@@ -275,8 +278,14 @@ public final class SelfAskRewriteRiskScorer {
         double adjustedCurrentRisk = clamp01(currentRisk + emergent.riskDelta());
         double adjustedAccumulatedRisk = clamp01(accumulatedRisk + emergent.riskDelta());
         double adjustedTemperature = clamp(weightedTemp + emergent.temperatureDelta(), minTemp, maxTemp);
+        double validationTemperature = validationTemperature(adjustedTemperature, adjustedAccumulatedRisk,
+                minTemp, maxTemp);
+        double explorationTemperature = explorationTemperature(adjustedTemperature, validationTemperature,
+                emergent, minTemp, maxTemp);
         Map<String, Double> adjustedLaneWeights = adjustLaneWeights(laneWeights, emergent);
         components = new LinkedHashMap<>(components);
+        components.put("validationTemperature", round4(validationTemperature));
+        components.put("explorationTemperature", round4(explorationTemperature));
         if (emergent.enabled()) {
             components.put("emergentRiskDelta", round4(emergent.riskDelta()));
             components.put("emergentSearchRangeDelta", round4(emergent.searchRangeDelta()));
@@ -286,9 +295,28 @@ public final class SelfAskRewriteRiskScorer {
         return new Score(true, policy, round4(preRisk), round4(evidenceRisk), evidenceAvailable,
                 round4(adjustedCurrentRisk), round4(adjustedAccumulatedRisk), round4(adjustedAccumulatedRisk),
                 band(adjustedAccumulatedRisk), primaryFactor, round4(adjustedTemperature),
+                round4(validationTemperature), round4(explorationTemperature),
                 round4(softmaxTemperature), round4(spikePenalty), round4(rewriteOverreach),
                 rewriteHonesty.honestyStatus(), rewriteHonesty.overreachType(), rewriteHonesty.sourceHash12(),
                 components, adjustedLaneWeights, emergent);
+    }
+
+    private static double validationTemperature(double temperature, double accumulatedRisk,
+            double minTemp, double maxTemp) {
+        double coolDown = 0.03d * clamp01(accumulatedRisk);
+        return clamp(temperature - coolDown, minTemp, maxTemp);
+    }
+
+    private static double explorationTemperature(double temperature,
+            double validationTemperature,
+            EmergentAdjustment emergent,
+            double minTemp,
+            double maxTemp) {
+        double trustedLift = emergent != null && emergent.enabled() && emergent.riskDelta() < 0.0d
+                ? clamp(-emergent.riskDelta() * 0.50d, 0.0d, 0.04d)
+                : 0.0d;
+        double candidate = clamp(temperature + trustedLift, minTemp, maxTemp);
+        return Math.max(validationTemperature, candidate);
     }
 
     private static EmergentAdjustment emergentAdjustment(EmergentConfig config,
@@ -330,8 +358,9 @@ public final class SelfAskRewriteRiskScorer {
             riskDelta = 0.0d;
         }
 
-        double temperatureDelta = clamp(net * cfg.maxTemperatureDelta(),
-                -cfg.maxTemperatureDelta(), cfg.maxTemperatureDelta());
+        double temperatureDelta = net > 0.0d
+                ? -clamp(recoveryPressure * cfg.maxTemperatureDelta(), 0.0d, cfg.maxTemperatureDelta())
+                : 0.0d;
         double searchRangeDelta = net > 0.0d
                 ? clamp(recoveryPressure * cfg.maxSearchRangeDelta(), 0.0d, cfg.maxSearchRangeDelta())
                 : 0.0d;

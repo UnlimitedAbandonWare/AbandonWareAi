@@ -39,7 +39,13 @@ public class SoakQuickJsonlExporter {
                         SafeRedactor.hashValue(path), path == null ? 0 : path.length());
                 return;
             }
-            File f = new File(d, fileName);
+            File exportRoot = d.getCanonicalFile();
+            File f = new File(exportRoot, fileName).getCanonicalFile();
+            if (!f.toPath().startsWith(exportRoot.toPath())) {
+                log.debug("[SOAK] export path rejected fileNameHash={} fileNameLength={}",
+                        SafeRedactor.hashValue(fileName), fileName == null ? 0 : fileName.length());
+                return;
+            }
             String line = om.writeValueAsString(rep);
             try (FileWriter w = new FileWriter(f, true)) {
                 w.write(line);

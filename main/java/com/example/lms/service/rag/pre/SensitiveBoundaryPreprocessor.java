@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class SensitiveBoundaryPreprocessor implements MetaAwareQueryContextPreprocessor {
 
-    private static final Pattern EMAIL = Pattern.compile("\\b[\\w.%-]+@[\\w.-]+\\.[A-Za-z]{2,}\\b");
+    private static final Pattern EMAIL = Pattern.compile("\\b[\\w.%-]+@[\\w.-]+\\.[A-Za-z]{2,}(?![A-Za-z0-9_])");
     private static final Pattern PHONE = Pattern.compile("(?:\\+?82\\s*-?)?0?1\\d[-.\\s]?\\d{3,4}[-.\\s]?\\d{4}");
 
     @Value("${privacy.boundary.mask-web-query:true}")

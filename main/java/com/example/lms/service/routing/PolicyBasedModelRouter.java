@@ -279,6 +279,9 @@ public class PolicyBasedModelRouter implements ModelRouter {
             String verbosityHint,
             Integer targetMaxTokens,
             String requestedModel) {
+        if (com.example.lms.llm.RequestedModelSelection.matches(requestedModel)) {
+            return exactRequestedModel(requestedModel, targetMaxTokens);
+        }
         ChatModel base = route(intent, riskLevel, verbosityHint, targetMaxTokens);
 
         String req = (requestedModel == null) ? null : requestedModel.trim();
@@ -483,6 +486,28 @@ public class PolicyBasedModelRouter implements ModelRouter {
         }
     }
 
+    private ChatModel exactRequestedModel(String requested, Integer maxTokens) {
+        if (isDisallowedChatModel(requested) || looksLikeWrapperLabel(requested)) {
+            throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
+        }
+        // Logical cloud IDs were already resolved against the server catalog in ChatWorkflow.
+        if (factory == null || (!requested.startsWith("llmrouter.") && !factory.canServe(requested))) {
+            throw new com.example.lms.llm.ModelSelectionException("provider_not_configured");
+        }
+        try {
+            int timeout = RequestedModelTimeoutPolicy.timeoutSeconds(
+                    requested, requested, timeoutSeconds, requestedModelTimeoutSeconds);
+            ChatModel selected = factory.lcWithTimeout(requested, defaultTemperature, null, null, null,
+                    maxTokens == null || maxTokens <= 0 ? 1024 : maxTokens, timeout, 0);
+            if (selected == null) throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
+            TraceStore.put("ml.router.requestedModel.applied", true);
+            TraceStore.put("ml.router.requestedModelHash", SafeRedactor.hashValue(requested));
+            return selected;
+        } catch (RuntimeException failure) {
+            throw com.example.lms.llm.ModelSelectionException.failure(failure);
+        }
+    }
+
     private enum Tier {
         FAST, DEFAULT, HIGH
     }
@@ -640,6 +665,18 @@ public class PolicyBasedModelRouter implements ModelRouter {
             return "unknown";
         }
 
+        String dynamic = DynamicChatModelFactory.configuredModelId(model);
+        if (dynamic != null && !dynamic.isBlank()) {
+            return dynamic;
+        }
+        // 설계: 명명 래퍼(NamedChatModel)가 선언한 실제 모델 ID를 우선한다 —
+        // 익명 프록시는 simpleName이 ""로 붕괴해 브레이커 키가 합쳐지는 것을 막는다.
+        if (model instanceof com.example.lms.llm.NamedChatModel named) {
+            String declared = named.resolvedModelName();
+            if (declared != null && !declared.isBlank()) {
+                return declared.trim();
+            }
+        }
         String configured = configuredModelName(model);
         if (configured != null && looksLikeModelId(configured)) {
             return configured.trim();

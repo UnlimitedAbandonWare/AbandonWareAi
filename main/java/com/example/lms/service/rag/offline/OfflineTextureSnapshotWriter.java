@@ -8,9 +8,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -20,12 +25,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 @Component
 public class OfflineTextureSnapshotWriter {
     private static final Logger log = LoggerFactory.getLogger(OfflineTextureSnapshotWriter.class);
     private final OfflineTextureProperties properties;
     private final ObjectMapper objectMapper;
+    private final Object writeLock = new Object();
 
     public OfflineTextureSnapshotWriter(OfflineTextureProperties properties, ObjectMapper objectMapper) {
         this.properties = properties == null ? new OfflineTextureProperties() : properties;
@@ -37,12 +44,22 @@ public class OfflineTextureSnapshotWriter {
             traceWriteStatus("write_disabled");
             return;
         }
+        synchronized (writeLock) {
+            writeEnabledSnapshot(queryHash, anchorResult, trace);
+        }
+    }
+
+    private void writeEnabledSnapshot(
+            String queryHash,
+            AnchorNarrowingResult anchorResult,
+            Map<String, Object> trace) {
         String safeQueryHash = safeSnapshotQueryToken(queryHash);
         if (safeQueryHash.isBlank()) {
             safeQueryHash = "noquery";
         }
         Instant now = Instant.now();
-        String snapshotId = "ot-" + safeQueryHash + "-" + Long.toUnsignedString(now.toEpochMilli(), 36);
+        String snapshotId = "ot-" + safeQueryHash + "-" + Long.toUnsignedString(now.toEpochMilli(), 36)
+                + "-" + UUID.randomUUID().toString().replace("-", "");
         Instant expires = now.plusSeconds(Math.max(1, properties.getTtlHours()) * 3600L);
         Map<String, Object> safeTrace = trace == null ? Map.of() : trace;
 
@@ -60,9 +77,12 @@ public class OfflineTextureSnapshotWriter {
                 safeMap(safeTrace.get("rag.eval.kgAxis")),
                 fusionStats(safeTrace),
                 failureSignatures(safeTrace));
+        Path snapshotPath = null;
+        boolean snapshotCreated = false;
+        boolean manifestPublished = false;
         try {
             Path snapshotDir = Path.of(properties.getSnapshotDir());
-            Path snapshotPath = snapshotDir.resolve(snapshotId + ".json");
+            snapshotPath = snapshotDir.resolve(snapshotId + ".json");
             Path manifest = Path.of(properties.getManifestPath());
             String relativeSnapshotPath = relativeSnapshotPath(manifest, snapshotPath);
             if (relativeSnapshotPath.isBlank()) {
@@ -71,8 +91,16 @@ public class OfflineTextureSnapshotWriter {
             }
 
             Files.createDirectories(snapshotDir);
-            Files.writeString(snapshotPath, objectMapper.writeValueAsString(snapshot), StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE_NEW);
+            String snapshotJson = objectMapper.writeValueAsString(snapshot);
+            try {
+                Files.writeString(snapshotPath, snapshotJson, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
+                snapshotCreated = true;
+            } catch (FileAlreadyExistsException collision) {
+                throw collision;
+            } catch (Exception snapshotWriteFailure) {
+                deleteOwnedSnapshotBestEffort(snapshotPath);
+                throw snapshotWriteFailure;
+            }
 
             if (manifest.getParent() != null) {
                 Files.createDirectories(manifest.getParent());
@@ -85,30 +113,97 @@ public class OfflineTextureSnapshotWriter {
             row.put("snapshotPath", relativeSnapshotPath);
             row.put("anchorCount", snapshot.anchors().size());
             row.put("failureSignatureCount", snapshot.failureSignatures().size());
-            Files.writeString(manifest, objectMapper.writeValueAsString(row) + System.lineSeparator(),
-                    StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            trimManifest(manifest);
+            List<String> removed = publishManifest(manifest, objectMapper.writeValueAsString(row));
+            manifestPublished = true;
+            cleanupRemovedSnapshots(manifest, removed);
             traceWrite("ok", snapshot);
         } catch (Exception e) {
             log.debug("[OfflineTexture] fail-soft stage=write.snapshot err=write-failure");
             traceWrite("write_error:offline_texture_write_failed", snapshot);
+        } finally {
+            if (snapshotCreated && !manifestPublished) {
+                deleteOwnedSnapshotBestEffort(snapshotPath);
+            }
         }
     }
 
-    private void trimManifest(Path manifest) throws Exception {
+    private List<String> publishManifest(Path manifest, String rowJson) throws IOException {
         int max = Math.max(1, properties.getMaxSnapshots());
-        if (!Files.exists(manifest)) {
+        List<String> lines = new ArrayList<>();
+        if (Files.exists(manifest)) {
+            for (String line : Files.readAllLines(manifest, StandardCharsets.UTF_8)) {
+                if (line != null && !line.isBlank()) {
+                    lines.add(line);
+                }
+            }
+        }
+        lines.add(rowJson);
+        int keepFrom = Math.max(0, lines.size() - max);
+        List<String> removed = List.copyOf(lines.subList(0, keepFrom));
+        List<String> keep = List.copyOf(lines.subList(keepFrom, lines.size()));
+        writeManifestAtomically(manifest, keep);
+        return removed;
+    }
+
+    private static void writeManifestAtomically(Path manifest, List<String> lines) throws IOException {
+        Path target = manifest.toAbsolutePath().normalize();
+        Path parent = target.getParent();
+        if (parent == null) {
+            throw new IOException("offline-texture-manifest-parent-unavailable");
+        }
+        Files.createDirectories(parent);
+        Path temporary = null;
+        try {
+            temporary = Files.createTempFile(parent, temporaryPrefix(target), ".tmp");
+            Files.write(
+                    temporary,
+                    lines,
+                    StandardCharsets.UTF_8,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING);
+            try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                channel.force(true);
+            }
+            moveIntoPlace(temporary, target);
+            temporary = null;
+        } finally {
+            if (temporary != null) {
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (Exception cleanupError) {
+                    log.debug("[OfflineTexture] fail-soft stage=manifest.temp.cleanup err=cleanup-failure");
+                }
+            }
+        }
+    }
+
+    private static String temporaryPrefix(Path target) {
+        Path fileName = target.getFileName();
+        String prefix = "." + (fileName == null ? "offline-texture-manifest" : fileName) + ".";
+        return prefix.length() >= 3 ? prefix : "manifest.";
+    }
+
+    private static void moveIntoPlace(Path temporary, Path target) throws IOException {
+        try {
+            Files.move(
+                    temporary,
+                    target,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException unsupported) {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static void deleteOwnedSnapshotBestEffort(Path snapshotPath) {
+        if (snapshotPath == null) {
             return;
         }
-        List<String> lines = Files.readAllLines(manifest, StandardCharsets.UTF_8);
-        if (lines.size() <= max) {
-            return;
+        try {
+            Files.deleteIfExists(snapshotPath);
+        } catch (Exception cleanupError) {
+            log.debug("[OfflineTexture] fail-soft stage=snapshot.cleanup err=cleanup-failure");
         }
-        List<String> removed = List.copyOf(lines.subList(0, lines.size() - max));
-        List<String> keep = List.copyOf(lines.subList(lines.size() - max, lines.size()));
-        cleanupRemovedSnapshots(manifest, removed);
-        Files.write(manifest, keep, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
-        Files.writeString(manifest, System.lineSeparator(), StandardCharsets.UTF_8, StandardOpenOption.APPEND);
     }
 
     private static void traceWrite(String status, OfflineTextureSnapshot snapshot) {

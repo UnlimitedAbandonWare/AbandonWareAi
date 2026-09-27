@@ -19,7 +19,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -136,10 +136,10 @@ public class QueryAnalysisService {
             return createHeuristicResult(userQuery, quickExploration, quickFresh);
         }
 
-        Future<QueryAnalysisResult> future = null;
+        FutureTask<QueryAnalysisResult> future = null;
         try {
             // LLM 분석 수행 (Hard timeout 적용)
-            future = llmFastExecutor.submit(() -> {
+            future = new FutureTask<>(() -> {
                 try {
                     String queryAnalysisPrompt = String.format(ANALYSIS_PROMPT, userQuery);
                     String response = "";
@@ -163,6 +163,7 @@ public class QueryAnalysisService {
                     return null;
                 }
             });
+            llmFastExecutor.execute(future);
 
             QueryAnalysisResult result = future.get(timeoutMs, TimeUnit.MILLISECONDS);
             if (result != null) {
@@ -174,15 +175,13 @@ public class QueryAnalysisService {
             }
 
         } catch (TimeoutException e) {
-            // Interrupt Hygiene: never interrupt worker threads on timeout.
-            // Best-effort cancel(false) only (do not propagate cancellation toxicity).
-            if (future != null) future.cancel(false);
-            log.warn("[QueryAnalysis] Analysis timed out ({}ms), task cancelled (no interrupt)", timeoutMs);
+            if (future != null) future.cancel(true);
+            log.warn("[QueryAnalysis] Analysis timed out ({}ms), owned task cancellation requested", timeoutMs);
         } catch (InterruptedException ie) {
-            // Interrupt Hygiene: consume the interrupt flag (parry) and fail-soft.
-            if (future != null) future.cancel(false);
-            Thread.interrupted();
-            log.warn("[QueryAnalysis] Interrupted while analyzing query (interrupt consumed)");
+            if (future != null) future.cancel(true);
+            Thread.currentThread().interrupt();
+            log.warn("[QueryAnalysis] Interrupted while analyzing query; owned task cancellation requested");
+            return QueryAnalysisResult.empty(userQuery);
         } catch (Exception e) {
             log.warn("[AWX][query-analysis] analysis failed failureReason={} errorType={} queryHash12={} queryLength={}",
                     "analysis-error", safeErrorType(e), SafeRedactor.hash12(userQuery), userQuery == null ? 0 : userQuery.length());

@@ -3,15 +3,16 @@ package com.example.lms.service.rag.langgraph;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator.QueryRequest;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator.QueryResponse;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator.QueryTrace;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
 import org.bsc.langgraph4j.state.AgentState;
 import org.bsc.langgraph4j.state.Channel;
 import org.bsc.langgraph4j.state.Channels;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-
 public class RagGraphState extends AgentState {
-
     public static final String QUERY = "query";
     public static final String PLAN_ID = "planId";
     public static final String REQUEST = "request";
@@ -26,22 +27,22 @@ public class RagGraphState extends AgentState {
     public static final String TRANSITION_TRACE = "transitionTrace";
 
     public static final Map<String, Channel<?>> SCHEMA = Map.ofEntries(
-            Map.entry(QUERY, baseChannel()),
-            Map.entry(PLAN_ID, baseChannel()),
-            Map.entry(REQUEST, baseChannel()),
-            Map.entry(TRACE, baseChannel()),
-            Map.entry(RESPONSE, baseChannel()),
-            Map.entry(DEBUG, baseChannel()),
-            Map.entry(FAILURE_REASON, baseChannel()),
-            Map.entry(CONTROL_DECISION, baseChannel()),
-            Map.entry(SAFETY_MODE, baseChannel()),
-            Map.entry(RETRIEVAL_POSTURE, baseChannel()),
-            Map.entry(FAILURE_ACTION, baseChannel()),
-            Map.entry(TRANSITION_TRACE, baseChannel())
+            Map.entry(QUERY, Channels.base(() -> "")),
+            Map.entry(PLAN_ID, Channels.base(() -> null)),
+            Map.entry(REQUEST, Channels.base(() -> null)),
+            Map.entry(TRACE, Channels.base(() -> null)),
+            Map.entry(RESPONSE, Channels.base(() -> null)),
+            Map.entry(DEBUG, Channels.base((Supplier<Map<String, Object>>) LinkedHashMap::new)),
+            Map.entry(FAILURE_REASON, Channels.base(() -> "")),
+            Map.entry(CONTROL_DECISION, Channels.base(() -> null)),
+            Map.entry(SAFETY_MODE, Channels.base(() -> "")),
+            Map.entry(RETRIEVAL_POSTURE, Channels.base(() -> "")),
+            Map.entry(FAILURE_ACTION, Channels.base(() -> "")),
+            Map.entry(TRANSITION_TRACE, Channels.appender(ArrayList::new))
     );
 
     public RagGraphState(Map<String, Object> initData) {
-        super(initData);
+        super(initData == null ? Map.of() : new LinkedHashMap<>(initData));
     }
 
     public String query() {
@@ -53,15 +54,15 @@ public class RagGraphState extends AgentState {
     }
 
     public QueryRequest request() {
-        return value(REQUEST).map(QueryRequest.class::cast).orElse(null);
+        return value(REQUEST).filter(QueryRequest.class::isInstance).map(QueryRequest.class::cast).orElse(null);
     }
 
     public QueryTrace trace() {
-        return value(TRACE).map(QueryTrace.class::cast).orElse(null);
+        return value(TRACE).filter(QueryTrace.class::isInstance).map(QueryTrace.class::cast).orElse(null);
     }
 
     public QueryResponse response() {
-        return value(RESPONSE).map(QueryResponse.class::cast).orElse(null);
+        return value(RESPONSE).filter(QueryResponse.class::isInstance).map(QueryResponse.class::cast).orElse(null);
     }
 
     @SuppressWarnings("unchecked")
@@ -97,16 +98,11 @@ public class RagGraphState extends AgentState {
     }
 
     @SuppressWarnings("unchecked")
-    public java.util.List<Map<String, Object>> transitionTrace() {
+    public List<Map<String, Object>> transitionTrace() {
         return value(TRANSITION_TRACE)
-                .filter(java.util.List.class::isInstance)
-                .map(java.util.List.class::cast)
-                .map(rows -> new java.util.ArrayList<Map<String, Object>>(
-                        (java.util.List<Map<String, Object>>) rows))
-                .orElseGet(java.util.ArrayList::new);
-    }
-
-    private static Channel<?> baseChannel() {
-        return Channels.<Object>base(() -> null);
+                .filter(List.class::isInstance)
+                .map(List.class::cast)
+                .map(rows -> new ArrayList<Map<String, Object>>((List<Map<String, Object>>) rows))
+                .orElseGet(ArrayList::new);
     }
 }

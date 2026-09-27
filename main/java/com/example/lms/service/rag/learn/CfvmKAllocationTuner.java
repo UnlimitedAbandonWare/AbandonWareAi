@@ -370,6 +370,7 @@ public class CfvmKAllocationTuner {
 
         // epsilon exploration
         double eps = clamp(props.getEpsilon(), 0.0, 1.0);
+        traceSelectionKnobs(eps);
         if (ThreadLocalRandom.current().nextDouble() < eps) {
             return new ArmSelection(randomArm(candidates), "cfvm_ucb1", "epsilon");
         }
@@ -496,8 +497,17 @@ public class CfvmKAllocationTuner {
         TraceStore.put("cfvm.kalloc.boltzmann.temperature", temperature);
         TraceStore.put("cfvm.kalloc.boltzmann.bestArm", best == null ? Arm.BASE.name() : best.name());
         TraceStore.put("cfvm.kalloc.boltzmann.chosenArm", chosen == null ? Arm.BASE.name() : chosen.name());
+        TraceStore.put("cfvm.kalloc.chosenArm", chosen == null ? Arm.BASE.name() : chosen.name());
         TraceStore.put("cfvm.kalloc.boltzmann.chosenProbability", chosenProbability);
         TraceStore.put("cfvm.kalloc.boltzmann.entropy", entropy);
+    }
+
+    private static void traceSelectionKnobs(double epsilon) {
+        try {
+            TraceStore.put("cfvm.kalloc.epsilon", epsilon);
+        } catch (RuntimeException ignore) {
+            log.debug("[CFVM-KAlloc] fail-soft stage=selection-knobs.trace err=trace-failure");
+        }
     }
 
     private Arm randomArm(EnumMap<Arm, KAllocator.KPlan> candidates) {
@@ -555,6 +565,7 @@ public class CfvmKAllocationTuner {
             TraceStore.put("cfvm.kalloc.tile", decision.tile());
             TraceStore.put("cfvm.kalloc.key", decision.key());
             TraceStore.put("cfvm.kalloc.arm", decision.arm());
+            TraceStore.put("cfvm.kalloc.chosenArm", decision.arm());
             TraceStore.put("cfvm.kalloc.ctxHash", SafeRedactor.hashValue(decision.ctx()));
             TraceStore.put("cfvm.kalloc.ctxLength", decision.ctx() == null ? 0 : decision.ctx().length());
             TraceStore.put("cfvm.kalloc.valueScore", decision.valueScore());

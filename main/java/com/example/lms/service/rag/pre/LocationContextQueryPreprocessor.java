@@ -9,6 +9,8 @@ import com.example.lms.trace.SafeRedactor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Locale;
 import java.util.Map;
@@ -30,6 +32,7 @@ import java.util.Map;
 @Order(5)
 @RequiredArgsConstructor
 public class LocationContextQueryPreprocessor implements MetaAwareQueryContextPreprocessor {
+    private static final Logger log = LoggerFactory.getLogger(LocationContextQueryPreprocessor.class);
 
     private final LocationService locationService;
 
@@ -89,6 +92,8 @@ public class LocationContextQueryPreprocessor implements MetaAwareQueryContextPr
             TraceStore.put("query.location.rewriteSkipped.queryHash", SafeRedactor.hash12(query));
             TraceStore.put("query.location.rewriteSkipped.queryLength", query == null ? 0 : query.length());
         } catch (RuntimeException ignored) {
+            log.warn("[AWX][query-location] traceRewriteSkippedSuppressed errorType={}",
+                    ignored.getClass().getSimpleName());
             // Best-effort breadcrumb only; never block the privacy-preserving skip.
         }
     }

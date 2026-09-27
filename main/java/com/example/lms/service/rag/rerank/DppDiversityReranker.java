@@ -1,7 +1,9 @@
 package com.example.lms.service.rag.rerank;
 
 import com.example.lms.search.TraceStore;
+import org.apache.commons.codec.digest.DigestUtils;
 
+import java.text.Normalizer;
 import java.util.*;
 import java.util.function.Function;
 import java.util.function.ToDoubleFunction;
@@ -53,7 +55,17 @@ public class DppDiversityReranker {
                               int k,
                               Function<? super T, String> textOf,
                               ToDoubleFunction<? super T> relevanceOf) {
-        return rerankInternal(callConfig, in, query, k, textOf, relevanceOf);
+        return rerankInternal(callConfig, in, query, k, textOf, relevanceOf, null);
+    }
+
+    public <T> List<T> rerank(Config callConfig,
+                              List<T> in,
+                              String query,
+                              int k,
+                              Function<? super T, String> textOf,
+                              ToDoubleFunction<? super T> relevanceOf,
+                              Function<? super T, String> stableKeyOf) {
+        return rerankInternal(callConfig, in, query, k, textOf, relevanceOf, stableKeyOf);
     }
 
     /** Generic rerank with typed extractors for hot runtime paths. */
@@ -62,7 +74,7 @@ public class DppDiversityReranker {
                               int k,
                               Function<? super T, String> textOf,
                               ToDoubleFunction<? super T> relevanceOf) {
-        return rerankInternal(cfg, in, query, k, textOf, relevanceOf);
+        return rerankInternal(cfg, in, query, k, textOf, relevanceOf, null);
     }
 
     private <T> List<T> rerankInternal(Config effectiveConfig,
@@ -70,32 +82,51 @@ public class DppDiversityReranker {
                                        String query,
                                        int k,
                                        Function<? super T, String> textOf,
-                                       ToDoubleFunction<? super T> relevanceOf) {
+                                       ToDoubleFunction<? super T> relevanceOf,
+                                       Function<? super T, String> stableKeyOf) {
         if (in == null || in.isEmpty()) {
             traceRerank(0, 0, Math.max(0, k), 0.0d, true, "empty_input");
             return Collections.emptyList();
         }
-        k = Math.min(Math.max(1, k), in.size());
         double lambda = effectiveConfig != null ? effectiveConfig.lambda : 0.7;
         Function<? super T, String> extractor =
                 textOf != null ? textOf : Objects::toString;
         Map<T, String> textCache = new IdentityHashMap<>();
         Function<T, String> cachedText = item ->
                 textCache.computeIfAbsent(item, it -> safeText(extractor, it));
+        Map<T, String> stableKeys = new IdentityHashMap<>();
+        List<T> eligible = new ArrayList<>(in.size());
+        for (T item : in) {
+            String stableKey = stableKeyOf == null
+                    ? defaultStableKey(cachedText.apply(item))
+                    : explicitStableKey(stableKeyOf, item);
+            if (stableKey == null || stableKey.isBlank()) {
+                continue;
+            }
+            stableKeys.put(item, stableKey);
+            eligible.add(item);
+        }
+        if (eligible.isEmpty()) {
+            traceRerank(in.size(), 0, Math.max(0, k), 0.0d, true, "stable_key_missing");
+            return Collections.emptyList();
+        }
+        eligible.sort(Comparator.comparing(stableKeys::get));
+        k = Math.min(Math.max(1, k), eligible.size());
         Map<T, Set<String>> shingleCache = new IdentityHashMap<>();
         Function<T, Set<String>> cachedShingles = item ->
                 shingleCache.computeIfAbsent(item, it -> shingles(cachedText.apply(it), 3));
 
         // Relevance: basic position prior (higher = better) with light query overlap bonus
         Map<T, Double> rel = new IdentityHashMap<>();
-        for (int i=0;i<in.size();i++) {
-            T t = in.get(i);
-            double base = 1.0 - (i * 1.0 / Math.max(1, in.size()-1)); // 1..0
+        for (int i=0;i<eligible.size();i++) {
+            T t = eligible.get(i);
+            double base = 1.0 - (i * 1.0 / Math.max(1, eligible.size()-1)); // 1..0
             double bonus = overlapScore(cachedText.apply(t), query);
             rel.put(t, relevance(relevanceOf, t, clamp01(0.85*base + 0.15*bonus)));
         }
 
-        List<T> out = greedyDeterminantalSelect(in, k, lambda, rel, cachedShingles);
+        List<T> out = greedyDeterminantalSelect(
+                eligible, k, lambda, rel, cachedShingles, stableKeys);
         traceRerank(in.size(), out.size(), k, diversityScore(out, cachedShingles), false, "");
         return out;
     }
@@ -105,14 +136,15 @@ public class DppDiversityReranker {
         return rerank(in, "", k);
     }
     public <T> List<T> select(List<T> in, int k, Function<T,String> textOf, double lambda) {
-        return rerankInternal(new Config(lambda, k), in, "", k, textOf, null);
+        return rerankInternal(new Config(lambda, k), in, "", k, textOf, null, null);
     }
 
     private static <T> List<T> greedyDeterminantalSelect(List<T> in,
                                                          int k,
                                                          double lambda,
                                                          Map<T, Double> relevance,
-                                                         Function<T, Set<String>> shinglesOf) {
+                                                         Function<T, Set<String>> shinglesOf,
+                                                         Map<T, String> stableKeys) {
         List<T> chosen = new ArrayList<>();
         Set<T> chosenSet = Collections.newSetFromMap(new IdentityHashMap<>());
         while (chosen.size() < k) {
@@ -123,7 +155,11 @@ public class DppDiversityReranker {
                     continue;
                 }
                 double score = determinantScore(chosen, cand, lambda, relevance, shinglesOf);
-                if (score > bestScore + 1.0e-12d) {
+                double scoreTolerance = 1.0e-12d * Math.max(Math.abs(score), Math.abs(bestScore));
+                if (score > bestScore + scoreTolerance
+                        || (best != null
+                        && Math.abs(score - bestScore) <= scoreTolerance
+                        && stableKeys.get(cand).compareTo(stableKeys.get(best)) < 0)) {
                     bestScore = score;
                     best = cand;
                 }
@@ -270,6 +306,34 @@ public class DppDiversityReranker {
             TraceStore.put("dpp.extractor.errorType", safeExceptionName(ex));
         }
         return String.valueOf(item);
+    }
+
+    private static String defaultStableKey(String text) {
+        String normalized = normalizeStableText(text);
+        return DigestUtils.sha256Hex(normalized);
+    }
+
+    private static <T> String explicitStableKey(
+            Function<? super T, String> stableKeyOf,
+            T item) {
+        try {
+            String key = stableKeyOf.apply(item);
+            return key == null ? null : key.trim();
+        } catch (RuntimeException ex) {
+            TraceStore.put("dpp.stableKey.excluded", true);
+            TraceStore.put("dpp.stableKey.errorType", safeExceptionName(ex));
+            return null;
+        }
+    }
+
+    private static String normalizeStableText(String text) {
+        if (text == null) {
+            return "";
+        }
+        return Normalizer.normalize(text, Normalizer.Form.NFKC)
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase(Locale.ROOT);
     }
 
     private static <T> double relevance(ToDoubleFunction<? super T> relevanceOf, T item, double fallback) {

@@ -2,6 +2,7 @@ package com.example.lms.service.redis;
 
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import redis.clients.jedis.Jedis;
@@ -21,9 +22,9 @@ import java.util.concurrent.ThreadLocalRandom;
  * locks.
  *
  * <p>This service is intentionally lightweight and does not support
- * connection pooling or Redis clusters.  For production use cases consider
- * injecting a preconfigured {@link Jedis} instance or using Spring Data
- * Redis abstractions.</p>
+ * connection pooling or Redis clusters. Access to the single connection is
+ * serialized; higher-throughput deployments should use a managed pool or
+ * Spring Data Redis abstractions.</p>
  */
 @Service
 public class RedisCooldownService {
@@ -49,7 +50,7 @@ public class RedisCooldownService {
      * @param ttlSecs  the time-to-live in seconds
      * @return {@code true} if the key was set, {@code false} otherwise
      */
-    public boolean setNxEx(String key, String value, long ttlSecs) {
+    public synchronized boolean setNxEx(String key, String value, long ttlSecs) {
         SetParams params = SetParams.setParams().nx().ex(Math.toIntExact(ttlSecs));
         String result = jedis.set(key, value, params);
         return "OK".equalsIgnoreCase(result);
@@ -93,11 +94,12 @@ public class RedisCooldownService {
 
     /**
      * Close the underlying Jedis connection.  This should be invoked
-     * gracefully on shutdown to release network resources.  Note that
-     * {@link Jedis} is not thread safe; for multi-threaded scenarios use
-     * {@code JedisPool} instead.
+     * gracefully on shutdown to release network resources. Access is serialized
+     * because {@link Jedis} is not thread safe; use a pool when higher parallel
+     * throughput is required.
      */
-    public void close() {
+    @PreDestroy
+    public synchronized void close() {
         try {
             jedis.close();
         } catch (Exception e) {

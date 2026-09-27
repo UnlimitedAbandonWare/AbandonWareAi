@@ -1,7 +1,12 @@
 package com.example.lms.service.rag.langgraph;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.infra.exec.ContextPropagation;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.VectorMetaKeys;
+import com.example.lms.service.rag.QueryUtils;
+import com.example.lms.service.rag.auth.DomainWhitelist;
 import com.example.lms.service.rag.handler.EvidenceRepairHandler;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator.Doc;
@@ -24,19 +29,26 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.bsc.langgraph4j.GraphDefinition.END;
 import static org.bsc.langgraph4j.GraphDefinition.START;
@@ -85,6 +97,9 @@ public class RagGraphExecutor {
     private final ObjectProvider<EvidenceRepairHandler> repairHandlerProvider;
     private final RagGraphProperties properties;
     private final ObjectProvider<LangGraphNodeSnapshotRecorder> snapshotRecorderProvider;
+    private final ExecutorService graphExecutor;
+    @Autowired(required = false)
+    private DomainWhitelist domainWhitelist;
     private volatile CompiledGraph<RagGraphState> compiledGraph;
     private volatile CheckpointStatus checkpointStatus = CheckpointStatus.memory();
 
@@ -92,55 +107,157 @@ public class RagGraphExecutor {
     public RagGraphExecutor(UnifiedRagOrchestrator orchestrator,
                             ObjectProvider<EvidenceRepairHandler> repairHandlerProvider,
                             RagGraphProperties properties,
-                            ObjectProvider<LangGraphNodeSnapshotRecorder> snapshotRecorderProvider) {
+                            ObjectProvider<LangGraphNodeSnapshotRecorder> snapshotRecorderProvider,
+                            @Qualifier("ragGraphWorkerExecutor") ExecutorService graphExecutor) {
         this.orchestrator = orchestrator;
         this.repairHandlerProvider = repairHandlerProvider;
         this.properties = properties;
         this.snapshotRecorderProvider = snapshotRecorderProvider;
+        this.graphExecutor = graphExecutor;
+    }
+
+    public RagGraphExecutor(UnifiedRagOrchestrator orchestrator,
+                            ObjectProvider<EvidenceRepairHandler> repairHandlerProvider,
+                            RagGraphProperties properties,
+                            ObjectProvider<LangGraphNodeSnapshotRecorder> snapshotRecorderProvider) {
+        this(orchestrator, repairHandlerProvider, properties, snapshotRecorderProvider, null);
     }
 
     public RagGraphExecutor(UnifiedRagOrchestrator orchestrator,
                             ObjectProvider<EvidenceRepairHandler> repairHandlerProvider,
                             RagGraphProperties properties) {
-        this(orchestrator, repairHandlerProvider, properties, null);
+        this(orchestrator, repairHandlerProvider, properties, null, null);
     }
 
     public QueryResponse execute(QueryRequest request) {
-        long timeoutMs = properties.getTimeoutMs();
-        if (timeoutMs <= 0L) {
+        long configuredTimeoutMs = Math.max(0L, properties.getTimeoutMs());
+        TimeBudget requestBudget = TimeBudgetContext.get();
+        if (configuredTimeoutMs <= 0L && (requestBudget == null || graphExecutor == null)) {
             return executeInternal(request);
         }
-        CompletableFuture<QueryResponse> future =
-                CompletableFuture.supplyAsync(ContextPropagation.wrapSupplier(() -> executeInternal(request)));
+
+        long timeoutMs = effectiveTimeoutMs(configuredTimeoutMs, requestBudget);
+        if (timeoutMs <= 0L) {
+            recordTimeoutCancellation(0L, false, false, false, false);
+            throw new IllegalStateException("LangGraph RAG execution timed out after 0ms");
+        }
+        if (graphExecutor == null) {
+            return executorFailSoft(request, "graph_executor_unavailable");
+        }
+
+        AtomicBoolean workerStarted = new AtomicBoolean(false);
+        AtomicBoolean workerFinished = new AtomicBoolean(false);
+        CompletableFuture<QueryResponse> future;
+        try {
+            future = CompletableFuture.supplyAsync(
+                    ContextPropagation.wrapSupplier(() -> {
+                        workerStarted.set(true);
+                        try {
+                            return executeInternal(request);
+                        } finally {
+                            workerFinished.set(true);
+                        }
+                    }),
+                    graphExecutor);
+        } catch (RejectedExecutionException e) {
+            return executorFailSoft(request, "graph_executor_saturated");
+        }
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            recordTimeoutCancellation(timeoutMs);
-            future.cancel(false);
+            boolean cancelAccepted = future.cancel(false);
+            WorkerObservation observation = snapshotWorkerObservation(workerStarted, workerFinished);
+            recordTimeoutCancellation(timeoutMs, true, cancelAccepted,
+                    observation.started(), observation.finished());
             throw new IllegalStateException("LangGraph RAG execution timed out after " + timeoutMs + "ms", e);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("LangGraph RAG execution interrupted", e);
+            boolean cancelAccepted = future.cancel(false);
+            WorkerObservation observation = snapshotWorkerObservation(workerStarted, workerFinished);
+            recordWorkerCancellation(true, cancelAccepted, observation.started(), observation.finished());
+            throw terminalInterruption(e);
         } catch (Exception e) {
+            propagateTerminalCancellation(e);
             throw new IllegalStateException("LangGraph RAG execution failed", e);
         }
     }
 
-    private static void recordTimeoutCancellation(long timeoutMs) {
+    private static long effectiveTimeoutMs(long configuredTimeoutMs, TimeBudget requestBudget) {
+        if (requestBudget == null) {
+            return Math.max(0L, configuredTimeoutMs);
+        }
+        long remainingMs = Math.max(0L, requestBudget.remainingMillis());
+        if (configuredTimeoutMs <= 0L) {
+            return remainingMs;
+        }
+        return Math.min(configuredTimeoutMs, remainingMs);
+    }
+
+    private static WorkerObservation snapshotWorkerObservation(AtomicBoolean workerStarted,
+                                                               AtomicBoolean workerFinished) {
+        boolean finished = workerFinished.get();
+        boolean started = finished || workerStarted.get();
+        return new WorkerObservation(started, finished);
+    }
+
+    private static QueryResponse executorFailSoft(QueryRequest request, String reason) {
+        String safeReason = safeFailureReason(reason);
+        QueryResponse response = emptyResponse(request, safeReason);
+        ensureDebug(response).put("langgraph.failureClass", safeReason);
+        try {
+            TraceStore.put("langgraph.executor.reason", safeReason);
+            TraceStore.inc("langgraph.executor.rejected.count");
+        } catch (Throwable ignore) {
+            log.debug("[LangGraph] fail-soft stage=executor.trace err=trace-failure");
+        }
+        return response;
+    }
+
+    private static void recordTimeoutCancellation(long timeoutMs,
+                                                  boolean cancelRequested,
+                                                  boolean cancelAccepted,
+                                                  boolean workerStarted,
+                                                  boolean workerFinished) {
         try {
             long safeTimeoutMs = Math.max(0L, timeoutMs);
             TraceStore.put("langgraph.timeout", true);
             TraceStore.put("langgraph.failureClass", "timeout");
             TraceStore.put("langgraph.timeoutMs", safeTimeoutMs);
             TraceStore.put("langgraph.cancelMode", "no_interrupt");
+            recordWorkerCancellation(cancelRequested, cancelAccepted, workerStarted, workerFinished);
             TraceStore.inc("langgraph.timeout.count");
             TraceStore.append("langgraph.timeout.events", Map.of(
                     "failureClass", "timeout",
                     "timeoutMs", safeTimeoutMs,
-                    "cancelMode", "no_interrupt"));
+                    "cancelMode", "no_interrupt",
+                    "cancelRequested", cancelRequested,
+                    "cancelAccepted", cancelAccepted,
+                    "workerStarted", workerStarted,
+                    "workerFinished", workerFinished,
+                    "workerTermination", workerTermination(workerStarted, workerFinished)));
         } catch (Throwable ignore) {
             log.debug("[LangGraph] fail-soft stage=timeout.trace err=trace-failure");
         }
+    }
+
+    private static void recordWorkerCancellation(boolean cancelRequested,
+                                                 boolean cancelAccepted,
+                                                 boolean workerStarted,
+                                                 boolean workerFinished) {
+        TraceStore.put("langgraph.cancelRequested", cancelRequested);
+        TraceStore.put("langgraph.cancelAccepted", cancelAccepted);
+        TraceStore.put("langgraph.workerStarted", workerStarted);
+        TraceStore.put("langgraph.workerFinished", workerFinished);
+        TraceStore.put("langgraph.workerTermination", workerTermination(workerStarted, workerFinished));
+    }
+
+    private static String workerTermination(boolean workerStarted, boolean workerFinished) {
+        if (workerFinished) {
+            return "terminated";
+        }
+        return workerStarted ? "unfinished" : "not_started";
+    }
+
+    private record WorkerObservation(boolean started, boolean finished) {
     }
 
     private static void recordCompiledInvokeSuccess(Map<String, Object> debug,
@@ -231,6 +348,7 @@ public class RagGraphExecutor {
             return executeSequentialFallback(safeRequest, threadId,
                     InvokeFallbackTrigger.of("graph_invoke_npe", "langgraph-invoke-null", e), e);
         } catch (Exception e) {
+            propagateTerminalCancellation(e);
             TraceStore.put("langgraph.invoke.suppressed.error", true);
             TraceStore.put("langgraph.invoke.suppressed.error.errorType",
                     SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
@@ -323,6 +441,7 @@ public class RagGraphExecutor {
                     RagGraphState.RESPONSE, response,
                     RagGraphState.DEBUG, ensureDebug(response)));
         } catch (Exception e) {
+            propagateTerminalCancellation(e);
             failureReason = "retrieve_error:" + ((e instanceof CancellationException || e instanceof InterruptedException)
                     ? "cancelled"
                     : e.getClass().getSimpleName());
@@ -465,8 +584,15 @@ public class RagGraphExecutor {
                     "repair_empty_query",
                     "repair");
         }
+        if (request == null || !request.useWeb) {
+            debug.put("langgraph.node.repair", "skipped_web_disabled");
+            return transition(decision,
+                    RagGraphControlPolicy.FailureAction.FAIL_SOFT_FINALIZE,
+                    "repair_web_disabled",
+                    "repair");
+        }
         try {
-            List<Content> repairedContent = repairHandler.retrieve(new Query(query));
+            List<Content> repairedContent = repairHandler.retrieve(buildRepairQuery(request, query));
             List<Doc> repairedDocs = toDocs(repairedContent);
             if (repairedDocs.isEmpty()) {
                 debug.put("langgraph.node.repair", "empty");
@@ -478,14 +604,23 @@ public class RagGraphExecutor {
             if (response.results == null) {
                 response.results = new ArrayList<>();
             }
-            response.results.addAll(repairedDocs);
+            int existingCount = response.results.size();
+            MergeRepairStats merge = mergeRepairedDocs(request, response, repairedDocs);
             debug.put("langgraph.node.repair", "ok");
-            debug.put("langgraph.repair.added", repairedDocs.size());
+            debug.put("langgraph.repair.added", merge.merged);
+            debug.put("langgraph.repair.duplicateDropped", merge.duplicateDropped);
+            debug.put("langgraph.repair.scopeDropped", merge.scopeDropped);
+            debug.put("langgraph.repair.capacityDropped", merge.capacityDropped);
+            debug.put("langgraph.repair.existingCount", existingCount);
+            debug.put("langgraph.repair.reverified", true);
+            debug.put("langgraph.repair.qualityAfter",
+                    qualityGateReason(response, response.results.size(), query));
             return transition(decision,
                     RagGraphControlPolicy.FailureAction.FINALIZE,
                     "repair_ok",
                     "repair");
         } catch (Exception e) {
+            propagateTerminalCancellation(e);
             String reason = "repair_error:" + ((e instanceof CancellationException || e instanceof InterruptedException)
                     ? "cancelled"
                     : e.getClass().getSimpleName());
@@ -643,6 +778,7 @@ public class RagGraphExecutor {
         try {
             recorder.record(node, inputContext, outputContext(inputContext, updates));
         } catch (Exception e) {
+            propagateTerminalCancellation(e);
             log.debug("[AWX2AF2][langgraph][contamination] snapshot skipped node={} errorHash={} errorLength={}",
                     node, SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
@@ -1141,6 +1277,7 @@ public class RagGraphExecutor {
                     RagGraphState.DEBUG, ensureDebug(response)
             ));
         } catch (Exception e) {
+            propagateTerminalCancellation(e);
             String reason = "retrieve_error:" + ((e instanceof CancellationException || e instanceof InterruptedException)
                     ? "cancelled"
                     : e.getClass().getSimpleName());
@@ -1366,64 +1503,25 @@ public class RagGraphExecutor {
         EvidenceRepairHandler repairHandler = repairHandlerProvider.getIfAvailable();
         if (repairHandler == null) {
             debug.put("langgraph.node.repair", "unavailable");
-            RagGraphControlPolicy.Decision decision = transition(state.controlDecision(),
-                    RagGraphControlPolicy.FailureAction.FAIL_SOFT_FINALIZE,
-                    "repair_unavailable",
-                    "repair");
-            RagGraphControlPolicy.writeDebug(debug, decision);
-            QueryResponse response = responseForRepairFailure(state, request, "repair_unavailable", debug);
-            return recordNodeSnapshot("repair", nodeInput, updates(
-                    RagGraphState.RESPONSE, response,
-                    RagGraphState.FAILURE_REASON, "repair_unavailable",
-                    RagGraphState.DEBUG, ensureDebug(response),
-                    RagGraphState.CONTROL_DECISION, decision,
-                    RagGraphState.SAFETY_MODE, decision.safetyMode().name(),
-                    RagGraphState.RETRIEVAL_POSTURE, decision.retrievalPosture().name(),
-                    RagGraphState.FAILURE_ACTION, decision.failureAction().name(),
-                    RagGraphState.TRANSITION_TRACE, decision.transitionTrace()
-            ));
+            return repairFailSoft(state, request, nodeInput, debug, "repair_unavailable");
         }
         String query = request == null ? "" : request.query;
         if (query == null || query.isBlank()) {
             debug.put("langgraph.node.repair", "empty_query");
-            RagGraphControlPolicy.Decision decision = transition(state.controlDecision(),
-                    RagGraphControlPolicy.FailureAction.FAIL_SOFT_FINALIZE,
-                    "repair_empty_query",
-                    "repair");
-            RagGraphControlPolicy.writeDebug(debug, decision);
-            QueryResponse response = responseForRepairFailure(state, request, "repair_empty_query", debug);
-            return recordNodeSnapshot("repair", nodeInput, updates(
-                    RagGraphState.RESPONSE, response,
-                    RagGraphState.FAILURE_REASON, "repair_empty_query",
-                    RagGraphState.DEBUG, ensureDebug(response),
-                    RagGraphState.CONTROL_DECISION, decision,
-                    RagGraphState.SAFETY_MODE, decision.safetyMode().name(),
-                    RagGraphState.RETRIEVAL_POSTURE, decision.retrievalPosture().name(),
-                    RagGraphState.FAILURE_ACTION, decision.failureAction().name(),
-                    RagGraphState.TRANSITION_TRACE, decision.transitionTrace()
-            ));
+            return repairFailSoft(state, request, nodeInput, debug, "repair_empty_query");
+        }
+        if (!request.useWeb) {
+            // Evidence repair is web-backed; a web-disabled request must not
+            // regain external access through this stage.
+            debug.put("langgraph.node.repair", "skipped_web_disabled");
+            return repairFailSoft(state, request, nodeInput, debug, "repair_web_disabled");
         }
         try {
-            List<Content> repairedContent = repairHandler.retrieve(new Query(query));
+            List<Content> repairedContent = repairHandler.retrieve(buildRepairQuery(request, query));
             List<Doc> repairedDocs = toDocs(repairedContent);
             if (repairedDocs.isEmpty()) {
                 debug.put("langgraph.node.repair", "empty");
-                RagGraphControlPolicy.Decision decision = transition(state.controlDecision(),
-                        RagGraphControlPolicy.FailureAction.FAIL_SOFT_FINALIZE,
-                        "repair_empty",
-                        "repair");
-                RagGraphControlPolicy.writeDebug(debug, decision);
-                QueryResponse response = responseForRepairFailure(state, request, "repair_empty", debug);
-                return recordNodeSnapshot("repair", nodeInput, updates(
-                        RagGraphState.RESPONSE, response,
-                        RagGraphState.FAILURE_REASON, "repair_empty",
-                        RagGraphState.DEBUG, ensureDebug(response),
-                        RagGraphState.CONTROL_DECISION, decision,
-                        RagGraphState.SAFETY_MODE, decision.safetyMode().name(),
-                        RagGraphState.RETRIEVAL_POSTURE, decision.retrievalPosture().name(),
-                        RagGraphState.FAILURE_ACTION, decision.failureAction().name(),
-                        RagGraphState.TRANSITION_TRACE, decision.transitionTrace()
-                ));
+                return repairFailSoft(state, request, nodeInput, debug, "repair_empty");
             }
             QueryResponse response = state.response();
             if (response == null) {
@@ -1432,10 +1530,18 @@ public class RagGraphExecutor {
             if (response.results == null) {
                 response.results = new ArrayList<>();
             }
-            response.results.addAll(repairedDocs);
+            int existingCount = response.results.size();
+            MergeRepairStats merge = mergeRepairedDocs(request, response, repairedDocs);
             ensureDebug(response).putAll(debug);
             ensureDebug(response).put("langgraph.node.repair", "ok");
-            ensureDebug(response).put("langgraph.repair.added", repairedDocs.size());
+            ensureDebug(response).put("langgraph.repair.added", merge.merged);
+            ensureDebug(response).put("langgraph.repair.duplicateDropped", merge.duplicateDropped);
+            ensureDebug(response).put("langgraph.repair.scopeDropped", merge.scopeDropped);
+            ensureDebug(response).put("langgraph.repair.capacityDropped", merge.capacityDropped);
+            ensureDebug(response).put("langgraph.repair.existingCount", existingCount);
+            ensureDebug(response).put("langgraph.repair.reverified", true);
+            ensureDebug(response).put("langgraph.repair.qualityAfter",
+                    qualityGateReason(response, response.results.size(), query));
             RagGraphControlPolicy.Decision decision = transition(state.controlDecision(),
                     RagGraphControlPolicy.FailureAction.FINALIZE,
                     "repair_ok",
@@ -1452,28 +1558,201 @@ public class RagGraphExecutor {
                     RagGraphState.TRANSITION_TRACE, decision.transitionTrace()
             ));
         } catch (Exception e) {
+            propagateTerminalCancellation(e);
             String reason = "repair_error:" + ((e instanceof CancellationException || e instanceof InterruptedException)
                     ? "cancelled"
                     : e.getClass().getSimpleName());
             debug.put("langgraph.node.repair", reason);
             log.debug("[AWX2AF2][langgraph] repair fail-soft candidate: {}", reason);
-            RagGraphControlPolicy.Decision decision = transition(state.controlDecision(),
-                    RagGraphControlPolicy.FailureAction.FAIL_SOFT_FINALIZE,
-                    reason,
-                    "repair");
-            RagGraphControlPolicy.writeDebug(debug, decision);
-            QueryResponse response = responseForRepairFailure(state, request, reason, debug);
-            return recordNodeSnapshot("repair", nodeInput, updates(
-                    RagGraphState.RESPONSE, response,
-                    RagGraphState.FAILURE_REASON, reason,
-                    RagGraphState.DEBUG, ensureDebug(response),
-                    RagGraphState.CONTROL_DECISION, decision,
-                    RagGraphState.SAFETY_MODE, decision.safetyMode().name(),
-                    RagGraphState.RETRIEVAL_POSTURE, decision.retrievalPosture().name(),
-                    RagGraphState.FAILURE_ACTION, decision.failureAction().name(),
-                    RagGraphState.TRANSITION_TRACE, decision.transitionTrace()
-            ));
+            return repairFailSoft(state, request, nodeInput, debug, reason);
         }
+    }
+
+    private Map<String, Object> repairFailSoft(RagGraphState state,
+                                               QueryRequest request,
+                                               Map<String, Object> nodeInput,
+                                               Map<String, Object> debug,
+                                               String reason) {
+        RagGraphControlPolicy.Decision decision = transition(state.controlDecision(),
+                RagGraphControlPolicy.FailureAction.FAIL_SOFT_FINALIZE,
+                reason,
+                "repair");
+        RagGraphControlPolicy.writeDebug(debug, decision);
+        QueryResponse response = responseForRepairFailure(state, request, reason, debug);
+        return recordNodeSnapshot("repair", nodeInput, updates(
+                RagGraphState.RESPONSE, response,
+                RagGraphState.FAILURE_REASON, reason,
+                RagGraphState.DEBUG, ensureDebug(response),
+                RagGraphState.CONTROL_DECISION, decision,
+                RagGraphState.SAFETY_MODE, decision.safetyMode().name(),
+                RagGraphState.RETRIEVAL_POSTURE, decision.retrievalPosture().name(),
+                RagGraphState.FAILURE_ACTION, decision.failureAction().name(),
+                RagGraphState.TRANSITION_TRACE, decision.transitionTrace()
+        ));
+    }
+
+    /**
+     * Repair evidence is web-backed; the scoped query carries the request's own
+     * web/whitelist/doc-type scope and remaining time budget so repair can never
+     * widen the permissions of the original request.
+     */
+    private static Query buildRepairQuery(QueryRequest request, String query) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("allowWeb", request != null && request.useWeb);
+        meta.put("allowRag", request == null || request.useVector || request.useKg);
+        meta.put("webTopK", boundedRepairTopK(request));
+        meta.put(VectorMetaKeys.META_ALLOWED_DOC_TYPES, "KB,MEMORY,LEGACY");
+        meta.put("rag.repair.scope", "bounded");
+        if (request != null && request.whitelistOnly) {
+            meta.put("officialSourcesOnly", true);
+        }
+        TimeBudget budget = TimeBudgetContext.get();
+        if (budget != null && !budget.expired()) {
+            meta.put("webBudgetMs", Math.min(budget.remainingMillis(), 3000L));
+        }
+        return QueryUtils.buildQuery(query, meta);
+    }
+
+    private static int boundedRepairTopK(QueryRequest request) {
+        int cap = request != null && request.topK > 0 ? request.topK : 3;
+        return Math.min(Math.max(cap, 1), 5);
+    }
+
+    private static final class MergeRepairStats {
+        int merged;
+        int duplicateDropped;
+        int scopeDropped;
+        int capacityDropped;
+    }
+
+    /**
+     * Merge repaired docs under the original request's policy: dedup against
+     * existing results (url/title/normalized text), enforce whitelist-only scope,
+     * keep repaired evidence below already-retrieved scores, and cap the merged
+     * list so a full pool is not grown by unverified candidates.
+     */
+    private MergeRepairStats mergeRepairedDocs(QueryRequest request,
+                                               QueryResponse response,
+                                               List<Doc> repairedDocs) {
+        MergeRepairStats stats = new MergeRepairStats();
+        if (response == null || repairedDocs == null || repairedDocs.isEmpty()) {
+            return stats;
+        }
+        if (response.results == null) {
+            response.results = new ArrayList<>();
+        }
+        Set<String> seen = new HashSet<>();
+        for (Doc existing : response.results) {
+            collectDocKeys(seen, existing);
+        }
+        int existingCount = response.results.size();
+        double existingFloor = Double.POSITIVE_INFINITY;
+        for (Doc existing : response.results) {
+            if (existing != null) {
+                existingFloor = Math.min(existingFloor, existing.score);
+            }
+        }
+        List<Doc> accepted = new ArrayList<>();
+        for (Doc doc : repairedDocs) {
+            if (doc == null) {
+                continue;
+            }
+            Set<String> keys = docIdentityKeys(doc);
+            boolean duplicate = false;
+            for (String key : keys) {
+                if (seen.contains(key)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                stats.duplicateDropped++;
+                continue;
+            }
+            if (request != null && request.whitelistOnly) {
+                String url = metaString(doc, VectorMetaKeys.META_SOURCE_URL);
+                boolean allowed = url != null && domainWhitelist != null && domainWhitelist.isOfficial(url);
+                if (!allowed) {
+                    stats.scopeDropped++;
+                    continue;
+                }
+            }
+            if (existingCount > 0) {
+                double floorScore = existingFloor == Double.POSITIVE_INFINITY ? 0.0d : existingFloor;
+                doc.score = Math.min(doc.score, Math.max(0.0d, floorScore) * 0.9d);
+            }
+            if (doc.meta == null) {
+                doc.meta = new LinkedHashMap<>();
+            }
+            doc.meta.put("repair.unverified", true);
+            accepted.add(doc);
+            seen.addAll(keys);
+        }
+        int capacity = request != null && request.topK > 0
+                ? Math.max(request.topK, existingCount)
+                : Integer.MAX_VALUE;
+        int room = Math.max(0, capacity - existingCount);
+        List<Doc> admitted = accepted.size() <= room ? accepted : new ArrayList<>(accepted.subList(0, room));
+        stats.capacityDropped = accepted.size() - admitted.size();
+        response.results.addAll(admitted);
+        response.results.sort(Comparator.comparingDouble((Doc d) -> d == null ? 0.0d : d.score).reversed());
+        for (int i = 0; i < response.results.size(); i++) {
+            Doc d = response.results.get(i);
+            if (d != null) {
+                d.rank = i + 1;
+            }
+        }
+        stats.merged = admitted.size();
+        return stats;
+    }
+
+    private static void collectDocKeys(Set<String> sink, Doc doc) {
+        sink.addAll(docIdentityKeys(doc));
+    }
+
+    private static Set<String> docIdentityKeys(Doc doc) {
+        Set<String> keys = new HashSet<>();
+        if (doc == null) {
+            return keys;
+        }
+        String url = metaString(doc, VectorMetaKeys.META_SOURCE_URL);
+        if (url != null) {
+            keys.add("url:" + normalizeDocKey(url));
+        }
+        if (doc.snippet != null) {
+            String norm = doc.snippet.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+            if (!norm.isBlank()) {
+                keys.add("text:" + norm);
+            }
+        }
+        if (doc.title != null && !doc.title.isBlank() && !"repair evidence".equals(doc.title)) {
+            keys.add("title:" + doc.title.trim().toLowerCase(Locale.ROOT));
+        }
+        return keys;
+    }
+
+    private static String normalizeDocKey(String url) {
+        String out = url == null ? "" : url.trim().toLowerCase(Locale.ROOT);
+        int cut = out.indexOf('#');
+        if (cut >= 0) {
+            out = out.substring(0, cut);
+        }
+        while (out.endsWith("/")) {
+            out = out.substring(0, out.length() - 1);
+        }
+        return out;
+    }
+
+    private static String metaString(Doc doc, String key) {
+        if (doc == null || doc.meta == null || key == null) {
+            return null;
+        }
+        Object value = doc.meta.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isBlank() ? null : text;
     }
 
     private static QueryResponse responseForRepairFailure(RagGraphState state,
@@ -1608,15 +1887,25 @@ public class RagGraphExecutor {
             if (text.isBlank()) {
                 continue;
             }
+            var segmentMeta = content.textSegment() == null ? null : content.textSegment().metadata();
+            String url = segmentMeta == null ? null : segmentMeta.getString(VectorMetaKeys.META_SOURCE_URL);
+            String srcMeta = segmentMeta == null ? null : segmentMeta.getString("source");
+            String title = segmentMeta == null ? null : segmentMeta.getString("title");
             Doc doc = new Doc();
             doc.id = "repair:" + rank + ":" + Integer.toHexString(text.hashCode());
-            doc.title = "repair evidence";
+            doc.title = (title != null && !title.isBlank()) ? title.trim() : "repair evidence";
             doc.snippet = text;
             doc.source = "REPAIR";
             doc.score = 1.0d / rank;
             doc.rank = rank;
             doc.meta = new LinkedHashMap<>();
             doc.meta.put("langgraph.repair", true);
+            if (url != null && !url.isBlank()) {
+                doc.meta.put(VectorMetaKeys.META_SOURCE_URL, url.trim());
+            }
+            if (srcMeta != null && !srcMeta.isBlank()) {
+                doc.meta.put("source", srcMeta.trim());
+            }
             docs.add(doc);
             rank++;
         }
@@ -1629,6 +1918,34 @@ public class RagGraphExecutor {
         }
         var textSegment = content.textSegment();
         return textSegment == null ? content.toString() : textSegment.text();
+    }
+
+    private static void propagateTerminalCancellation(Throwable failure) {
+        CancellationException cancellation = null;
+        Throwable cursor = failure;
+        for (int depth = 0; cursor != null && depth < 16; depth++) {
+            if (cursor instanceof InterruptedException interrupted) {
+                throw terminalInterruption(interrupted);
+            }
+            if (cancellation == null && cursor instanceof CancellationException candidate) {
+                cancellation = candidate;
+            }
+            Throwable cause = cursor.getCause();
+            if (cause == cursor) {
+                break;
+            }
+            cursor = cause;
+        }
+        if (cancellation != null) {
+            throw cancellation;
+        }
+    }
+
+    private static CancellationException terminalInterruption(InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        CancellationException cancellation = new CancellationException("operation interrupted");
+        cancellation.initCause(interrupted);
+        return cancellation;
     }
 
     static String resolveThreadId(QueryRequest request) {

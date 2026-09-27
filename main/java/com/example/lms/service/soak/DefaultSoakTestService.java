@@ -46,6 +46,7 @@ public class DefaultSoakTestService implements SoakTestService {
             List<SearchOrchestrator.SearchResult> results = Collections.emptyList();
             try {
                 results = orchestrator.search(q, k);
+                if (results == null) results = Collections.emptyList();
             } catch (Exception error) {
                 traceSuppressed("runSearch", "run_search", error);
             }

@@ -33,6 +33,8 @@ public class Neo4jKnowledgeGraphClient {
     static final String LOOKUP_RELATION_QUERY = """
             MATCH (e:KgEntity {domain: $domain})-[r:KG_REL|RELATED_TO]->(target:KgEntity {domain: $domain})
             WHERE toLower(e.name) IN $entities
+              AND e.scopeKey = 'PUBLIC' AND target.scopeKey = 'PUBLIC'
+              AND r.source = 'graphdb_manual_learning' AND r.scopeKey = 'PUBLIC'
             RETURN e.name AS entity,
                    coalesce(e.type, '') AS entityType,
                    coalesce(e.confidence, 1.0) AS entityConfidence,
@@ -46,6 +48,46 @@ public class Neo4jKnowledgeGraphClient {
 
     private final Neo4jKnowledgeGraphProperties properties;
     private volatile Driver driver;
+
+    static final String PRIVATE_SOURCE_QUERY = """
+            CALL {
+                MATCH (recent:KgChunkNode {scopeKey: $scopeKey})
+                WITH recent ORDER BY toInteger(split(recent.sourceId, ':')[1]) DESC LIMIT 4
+                RETURN recent AS selected
+                UNION
+                MATCH (c:KgChunkNode {scopeKey: $scopeKey})-[:CONTAINS_ENTITY]->
+                      (e:KgEntity {scopeKey: $scopeKey})
+                WHERE $query CONTAINS toLower(e.name)
+                WITH c, e LIMIT 16
+                OPTIONAL MATCH (e)-[:RELATED_TO {scopeKey: $scopeKey}]-
+                      (neighbor:KgEntity {scopeKey: $scopeKey})<-[:CONTAINS_ENTITY]-
+                      (related:KgChunkNode {scopeKey: $scopeKey})
+                WITH c, related LIMIT 32
+                WITH collect(DISTINCT c) + collect(DISTINCT related) AS matches
+                UNWIND matches AS selected
+                RETURN selected
+            }
+            WITH collect(DISTINCT selected) AS candidates
+            UNWIND candidates AS candidate
+            RETURN DISTINCT candidate.sourceId AS sourceId, candidate.sourceRevision AS sourceRevision
+            LIMIT $limit
+            """;
+
+    public List<com.example.lms.service.rag.graph.KgChunk.SourceRef> lookupSources(
+            com.example.lms.service.rag.graph.GeneralGraphScope scope, String query, int limit) {
+        if (scope == null || !scope.memoryEnabled() || disabledReason() != null || query == null || query.isBlank())
+            return List.of();
+        try (Session session = openSession()) {
+            return session.executeRead(tx -> tx.run(PRIVATE_SOURCE_QUERY, Values.parameters(
+                    "scopeKey", scope.indexNamespace(), "query", query.toLowerCase(Locale.ROOT),
+                    "limit", Math.max(1, Math.min(limit, 20)))).list(row ->
+                    new com.example.lms.service.rag.graph.KgChunk.SourceRef(
+                            row.get("sourceId").asString(""), row.get("sourceRevision").asLong(0))));
+        } catch (Exception unavailable) {
+            TraceStore.put("retrieval.kg.private.neo4jStatus", "unavailable");
+            return List.of();
+        }
+    }
 
     public Neo4jKnowledgeGraphClient(Neo4jKnowledgeGraphProperties properties) {
         this.properties = properties;
@@ -68,6 +110,9 @@ public class Neo4jKnowledgeGraphClient {
     }
 
     public List<Neo4jKgEntry> lookup(String domain, Set<String> entities, int limit) {
+        TraceStore.put("retrieval.kg.neo4j.failed", false);
+        TraceStore.put("retrieval.kg.neo4j.failureClass", null);
+        TraceStore.put("retrieval.kg.neo4j.fallback", null);
         String disabledReason = disabledReason();
         if (disabledReason != null || domain == null || domain.isBlank() || entities == null || entities.isEmpty()) {
             return List.of();

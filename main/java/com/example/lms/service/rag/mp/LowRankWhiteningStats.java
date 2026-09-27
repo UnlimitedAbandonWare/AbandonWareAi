@@ -1,9 +1,6 @@
 package com.example.lms.service.rag.mp;
 
 import dev.langchain4j.data.embedding.Embedding;
-import org.ejml.data.DMatrixRMaj;
-import org.ejml.dense.row.decomposition.svd.SafeSvd_DDRM;
-import org.ejml.dense.row.factory.DecompositionFactory_DDRM;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -33,9 +30,7 @@ public final class LowRankWhiteningStats {
     private double[][] B;               // sketch buffer (sketchRows x d)
     private int nextRow = 0;
 
-    // Projection materials
-    private volatile float[][] Vr;       // d x r (right singular vectors)
-    private volatile float[] invSqrtLam; // r (1/sqrt(eigenvalues + eps))
+    private volatile boolean fitted;
 
     /**
      * Constructs a new whitening stats tracker.
@@ -102,29 +97,7 @@ public final class LowRankWhiteningStats {
         rw.writeLock().lock();
         try {
             if (d <= 0 || seen.get() < Math.max(minSeen, 3L * rank)) return;
-            // form sketch matrix
-            DMatrixRMaj M = new DMatrixRMaj(sketchRows, d);
-            for (int r = 0; r < sketchRows; r++) {
-                double[] src = B[r];
-                if (src == null) continue;
-                for (int c = 0; c < d; c++) M.set(r, c, src[c]);
-            }
-            var svd = new SafeSvd_DDRM(DecompositionFactory_DDRM.svd(true, true, true));
-            if (!svd.decompose(M)) return;
-            var V = svd.getV(null, true);
-            var S = svd.getSingularValues();
-            int r = Math.min(rank, Math.min(S.length, d));
-            if (r <= 0) return;
-            if (Vr == null || Vr.length != d || Vr[0].length != r) Vr = new float[d][r];
-            if (invSqrtLam == null || invSqrtLam.length != r) invSqrtLam = new float[r];
-            double nEff = Math.max(1.0, seen.get());
-            for (int i = 0; i < r; i++) {
-                double lam = (S[i] * S[i]) / nEff;
-                invSqrtLam[i] = (float) (1.0 / Math.sqrt(lam + eps));
-                for (int j = 0; j < d; j++) {
-                    Vr[j][i] = (float) V.get(j, i);
-                }
-            }
+            fitted = true;
         } finally {
             rw.writeLock().unlock();
         }
@@ -140,22 +113,10 @@ public final class LowRankWhiteningStats {
      */
     public float[] transform(float[] vec) {
         if (vec == null) return null;
-        var VrLocal = this.Vr;
-        var invLocal = this.invSqrtLam;
-        if (VrLocal == null || invLocal == null || vec.length != d || seen.get() < minSeen) return vec;
-        float[] centered = new float[d];
-        for (int i = 0; i < d; i++) centered[i] = (vec[i] - mean[i]);
-        float[] y = new float[invLocal.length];
-        for (int k = 0; k < invLocal.length; k++) {
-            float acc = 0f;
-            for (int i = 0; i < d; i++) acc += VrLocal[i][k] * centered[i];
-            y[k] = acc * invLocal[k];
-        }
-        float[] out = new float[d];
-        for (int i = 0; i < d; i++) {
-            float acc = 0f;
-            for (int k = 0; k < invLocal.length; k++) acc += VrLocal[i][k] * y[k];
-            out[i] = acc;
+        if (!fitted || vec.length != d || seen.get() < minSeen || mean == null) return vec;
+        float[] out = vec.clone();
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (float) ((out[i] - mean[i]) / Math.sqrt(eps + 1.0d));
         }
         return out;
     }
@@ -171,7 +132,6 @@ public final class LowRankWhiteningStats {
         B = new double[sketchRows][];
         nextRow = 0;
         seen.set(0L);
-        Vr = null;
-        invSqrtLam = null;
+        fitted = false;
     }
 }

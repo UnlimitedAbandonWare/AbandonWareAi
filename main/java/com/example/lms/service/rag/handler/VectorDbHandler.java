@@ -32,12 +32,7 @@ public class VectorDbHandler extends AbstractRetrievalHandler {
                 return true;
             }
 
-            // Guard: skip vector retrieval when the index name is blank or null.
-            if (indexName == null || indexName.isBlank()) {
-                log.debug("[VectorDB] indexName is blank - skipping vector retrieval (fail-soft).");
-                return true;
-            }
-
+            // Backend readiness belongs to the injected service; a Pinecone name is optional.
             ContentRetriever pine = ragSvc.asContentRetriever(indexName);
             if (pine == null) {
                 log.debug("[VectorDB] retriever is null - skipping (fail-soft).");

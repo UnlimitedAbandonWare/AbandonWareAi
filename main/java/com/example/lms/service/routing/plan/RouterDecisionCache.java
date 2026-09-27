@@ -1,5 +1,7 @@
 package com.example.lms.service.routing.plan;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -11,9 +13,13 @@ import org.springframework.stereotype.Component;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 /**
@@ -39,6 +45,9 @@ public class RouterDecisionCache {
     private final String tracePrefix;
     private final boolean l2Enabled;
     private final Cache<String, CacheEntry> l2Cache;
+
+    @Value("${addons.budget.default-ms:1500}")
+    private long fallbackWaitMillis = 1_500L;
 
     // De-duplicate in-flight computations for the same (key, slice).
     private final ConcurrentHashMap<String, CompletableFuture<CacheEntry>> inflight = new ConcurrentHashMap<>();
@@ -94,34 +103,37 @@ public class RouterDecisionCache {
         CompletableFuture<CacheEntry> fresh = new CompletableFuture<>();
         CompletableFuture<CacheEntry> existing = inflight.putIfAbsent(inflightKey, fresh);
         CompletableFuture<CacheEntry> future = existing != null ? existing : fresh;
+        String flightRole = existing == null ? "leader" : "follower";
 
         if (existing == null) {
+            long leaderLeaseMillis = remainingWaitMillis();
+            fresh.orTimeout(leaderLeaseMillis, TimeUnit.MILLISECONDS)
+                    .whenComplete((ignored, failure) -> {
+                        if (isTimeoutFailure(failure)) {
+                            inflight.remove(inflightKey, fresh);
+                        }
+                    });
             try {
                 T computed = supplier.get();
                 CacheEntry stored = new CacheEntry(fp, computed);
-                TraceStore.put(traceKey, stored);
-                if (l2Enabled) {
-                    l2Cache.put(traceKey, stored);
+                if (fresh.complete(stored)) {
+                    TraceStore.put(traceKey, stored);
+                    if (l2Enabled) {
+                        l2Cache.put(traceKey, stored);
+                    }
                 }
-                fresh.complete(stored);
             } catch (Throwable t) {
                 traceSuppressed("compute", traceKey, t);
                 fresh.completeExceptionally(t);
                 throw t;
             } finally {
-                inflight.remove(inflightKey);
+                inflight.remove(inflightKey, fresh);
             }
         }
 
-        try {
-            CacheEntry resolved = future.join();
-            if (resolved != null && expectedType.isInstance(resolved.value)) {
-                return expectedType.cast(resolved.value);
-            }
-        } catch (RuntimeException e) {
-            // join() wraps checked exceptions; keep propagation but leave a redacted breadcrumb.
-            traceSuppressed("join", traceKey, e);
-            throw e;
+        CacheEntry resolved = awaitFlight(future, inflightKey, traceKey, flightRole);
+        if (resolved != null && expectedType.isInstance(resolved.value)) {
+            return expectedType.cast(resolved.value);
         }
 
         // Defensive fallback: compute synchronously
@@ -132,6 +144,100 @@ public class RouterDecisionCache {
             l2Cache.put(traceKey, stored);
         }
         return computed;
+    }
+
+    private CacheEntry awaitFlight(
+            CompletableFuture<CacheEntry> future,
+            String inflightKey,
+            String traceKey,
+            String role) {
+        long remainingMillis = remainingWaitMillis();
+        long startedNanos = System.nanoTime();
+        try {
+            CacheEntry resolved = future.get(remainingMillis, TimeUnit.MILLISECONDS);
+            traceWait(traceKey, role, startedNanos, remainingMillis,
+                    "success", "completed", "not_required");
+            return resolved;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            traceWait(traceKey, role, startedNanos, remainingMillis,
+                    "cancelled", "wait_interrupted", "not_owner");
+            CancellationException cancelled = new CancellationException("router_decision_wait_interrupted");
+            cancelled.initCause(interrupted);
+            throw cancelled;
+        } catch (TimeoutException timeout) {
+            traceWait(traceKey, role, startedNanos, remainingMillis,
+                    "timeout", "follower_deadline_expired", "not_owner");
+            throw new CompletionException("router_decision_wait_timeout", timeout);
+        } catch (CancellationException cancelled) {
+            boolean cleaned = inflight.remove(inflightKey, future);
+            traceWait(traceKey, role, startedNanos, remainingMillis,
+                    "cancelled", "shared_flight_cancelled", cleanupReason(cleaned));
+            throw cancelled;
+        } catch (ExecutionException completedExceptionally) {
+            Throwable cause = completedExceptionally.getCause() == null
+                    ? completedExceptionally
+                    : completedExceptionally.getCause();
+            boolean timedOut = isTimeoutFailure(cause);
+            boolean cleaned = inflight.remove(inflightKey, future);
+            traceWait(traceKey, role, startedNanos, remainingMillis,
+                    timedOut ? "timeout" : "failed",
+                    timedOut ? "leader_lease_expired" : "leader_failed",
+                    cleanupReason(cleaned));
+            traceSuppressed("wait", traceKey, cause);
+            throw new CompletionException(
+                    timedOut ? "router_decision_leader_timeout" : "router_decision_leader_failed",
+                    cause);
+        }
+    }
+
+    private long remainingWaitMillis() {
+        TimeBudget budget = TimeBudgetContext.get();
+        return budget == null
+                ? Math.max(1L, fallbackWaitMillis)
+                : Math.max(1L, budget.remainingMillis());
+    }
+
+    private void traceWait(
+            String traceKey,
+            String role,
+            long startedNanos,
+            long remainingMillis,
+            String outcome,
+            String reason,
+            String cleanupResult) {
+        try {
+            TraceStore.put("router.plan.cache.wait.keyHash", SafeRedactor.hashValue(traceKey));
+            TraceStore.put("router.plan.cache.wait.role", SafeRedactor.traceLabelOrFallback(role, "unknown"));
+            TraceStore.put("router.plan.cache.wait.inflightCount", inflight.size());
+            TraceStore.put("router.plan.cache.wait.elapsedMs",
+                    Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L));
+            TraceStore.put("router.plan.cache.wait.remainingMs", Math.max(0L, remainingMillis));
+            TraceStore.put("router.plan.cache.wait.outcome", SafeRedactor.traceLabelOrFallback(outcome, "unknown"));
+            TraceStore.put("router.plan.cache.wait.reason", SafeRedactor.traceLabelOrFallback(reason, "unknown"));
+            TraceStore.put("router.plan.cache.wait.cleanupResult",
+                    SafeRedactor.traceLabelOrFallback(cleanupResult, "unknown"));
+        } catch (RuntimeException traceFailure) {
+            log.debug("[AWX][router][plan-cache] wait trace failed errorType={}", errorType(traceFailure));
+        }
+    }
+
+    private static String cleanupReason(boolean cleaned) {
+        return cleaned ? "removed" : "already_removed_or_replaced";
+    }
+
+    private static boolean isTimeoutFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof TimeoutException) {
+                return true;
+            }
+            if (current.getCause() == null || current.getCause() == current) {
+                return false;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /** Best-effort read without computing (L1 → L2). */

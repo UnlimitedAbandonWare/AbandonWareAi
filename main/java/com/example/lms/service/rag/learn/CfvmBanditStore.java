@@ -5,13 +5,19 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -48,6 +54,11 @@ public class CfvmBanditStore {
     @PostConstruct
     void init() {
         loadBestEffort();
+    }
+
+    @PreDestroy
+    void flushOnShutdown() {
+        flushBestEffort();
     }
 
     public TileStats tile(String key) {
@@ -161,21 +172,62 @@ public class CfvmBanditStore {
             return;
         }
         synchronized (ioLock) {
+            Path temporary = null;
             try {
-                Path p = storePath();
+                Path p = storePath().toAbsolutePath().normalize();
                 Path parent = p.getParent();
-                if (parent != null) {
-                    Files.createDirectories(parent);
+                if (parent == null) {
+                    throw new IOException("bandit-store-parent-unavailable");
                 }
+                Files.createDirectories(parent);
                 byte[] json = om.writerWithDefaultPrettyPrinter().writeValueAsBytes(tiles);
-                Files.write(p, json);
+                temporary = Files.createTempFile(parent, temporaryPrefix(p), ".tmp");
+                try (FileChannel channel = FileChannel.open(
+                        temporary,
+                        StandardOpenOption.WRITE,
+                        StandardOpenOption.TRUNCATE_EXISTING)) {
+                    ByteBuffer buffer = ByteBuffer.wrap(json);
+                    while (buffer.hasRemaining()) {
+                        channel.write(buffer);
+                    }
+                    channel.force(true);
+                }
+                moveIntoPlace(temporary, p);
+                temporary = null;
             } catch (IOException e) {
                 log.warn("[CFVM] bandit store flush failed-soft. errorHash={} errorLength={}",
                         SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             } catch (Exception e) {
                 log.warn("[CFVM] bandit store flush failed-soft. errorHash={} errorLength={}",
                         SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+            } finally {
+                if (temporary != null) {
+                    try {
+                        Files.deleteIfExists(temporary);
+                    } catch (IOException e) {
+                        log.debug("[CFVM-KAlloc] fail-soft stage=bandit.temp.cleanup errorHash={} errorLength={}",
+                                SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+                    }
+                }
             }
+        }
+    }
+
+    private static String temporaryPrefix(Path target) {
+        Path fileName = target.getFileName();
+        String prefix = "." + (fileName == null ? "cfvm-bandit" : fileName) + ".";
+        return prefix.length() >= 3 ? prefix : "cfvm.";
+    }
+
+    private static void moveIntoPlace(Path temporary, Path target) throws IOException {
+        try {
+            Files.move(
+                    temporary,
+                    target,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException unsupported) {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
