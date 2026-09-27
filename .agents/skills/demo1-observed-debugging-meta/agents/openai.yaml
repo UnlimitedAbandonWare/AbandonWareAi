@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 Observed Debugging Meta"
+  short_description: "Trace skill failures and verify minimal repairs"
+  default_prompt: "Use $demo1-observed-debugging-meta to reuse local inspectors, trace this failure, reproduce one cause, and verify the smallest authorized repair with fixed regression cases and measured before/after evidence."
+
+policy:
+  allow_implicit_invocation: true

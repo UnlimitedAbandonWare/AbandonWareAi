@@ -1,0 +1,4 @@
+interface:
+  display_name: "Meta Display · 작업 진입"
+  short_description: "Display 요청을 구현·재개·실제 검증 역할 중 하나로 연결"
+  default_prompt: "Use $demo1-meta-display-webapp to select the one relevant Display role, reuse current evidence, and continue the existing authorized task without duplicate reviews."

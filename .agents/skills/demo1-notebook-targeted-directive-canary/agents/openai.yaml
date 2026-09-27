@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notebook Targeted Directive Canary"
+  short_description: "Validate targeted SMB directive handoffs"
+  default_prompt: "Use $demo1-notebook-targeted-directive-canary to prepare a no-source-change Desktop Canary from explicit files."

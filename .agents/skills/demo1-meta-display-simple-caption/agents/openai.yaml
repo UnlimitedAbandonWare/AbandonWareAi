@@ -1,0 +1,4 @@
+interface:
+  display_name: "Meta Display · 대화·힌트 캡션"
+  short_description: "안경에는 대화 전사와 짧은 힌트만 단순 표시"
+  default_prompt: "Use $demo1-meta-display-simple-caption so Meta Ray-Ban Display shows only conversation text and short hints on a minimal test-01-style surface; keep Fold6/web for mic and controls; do not mix DAT/Web App/custom relay or cover the lens with diagnostics."
