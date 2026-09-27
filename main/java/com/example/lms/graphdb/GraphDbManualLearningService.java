@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 
@@ -745,8 +746,8 @@ public class GraphDbManualLearningService {
             return "";
         }
         String className = ex.getClass().getSimpleName();
-        String name = safe(className).toLowerCase();
-        String message = safe(ex.getMessage()).toLowerCase();
+        String name = safe(className).toLowerCase(Locale.ROOT);
+        String message = safe(ex.getMessage()).toLowerCase(Locale.ROOT);
         if (ex instanceof CancellationException || ex instanceof InterruptedException
                 || name.contains("cancel")
                 || name.contains("interrupt")
@@ -763,7 +764,7 @@ public class GraphDbManualLearningService {
         if (!StringUtils.hasText(raw)) {
             return "";
         }
-        String lower = raw.toLowerCase();
+        String lower = raw.toLowerCase(Locale.ROOT);
         if (lower.contains("secret")
                 || lower.contains("token")
                 || lower.contains("authorization")
