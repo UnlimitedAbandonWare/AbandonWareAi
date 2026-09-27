@@ -26,6 +26,17 @@ class PromptBuilderBoundaryTest {
         assertTrue(source.contains("promptBuilder.build(ctx)"));
         assertTrue(source.contains("promptBuilder.buildInstructions(ctx)"));
         assertTrue(source.contains("TraceStore.put(\"chatWorkflow.promptBuilderUsed\", true);"));
+        assertTrue(source.contains(".contextRefinementSummary(promptComposition == null ? null : promptComposition.contextRefinementSummary())"));
+        assertTrue(source.contains(".contextRefinementSignals(promptComposition == null ? null : promptComposition.contextRefinementSignals())"));
+        String refinerCall = "sampleCandidatesForRefinement(refinerSeedCtx, sessionIdLong,";
+        assertTrue(source.contains(refinerCall));
+        assertTrue(source.contains("() -> throwIfCancelled(sessionIdLong)"));
+        assertTrue(source.indexOf(refinerCall)
+                < source.indexOf("String ctxText = promptBuilder.build(ctx);"));
+        assertTrue(source.contains("ctxBuilder.ensembleCandidates(refinementCandidates)"));
+        assertTrue(source.contains("Math.min(3, refinementCandidates.size())"));
+        assertTrue(source.contains("TraceStore.get(\"ensemble.refiner.selectionDecision\")"));
+        assertFalse(source.contains("refinementCandidates.get(0).nodeId()"));
         assertFalse(source.contains("String finalPrompt ="));
         assertFalse(source.contains("new StringBuilder(\"### SEARCH RESULTS"));
         assertFalse(source.contains("String.format(WEB_PREFIX"));

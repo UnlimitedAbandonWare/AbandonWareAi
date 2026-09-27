@@ -3,6 +3,8 @@ package com.example.lms.probe;
 import com.example.lms.probe.dto.SearchProbeResponse;
 import com.example.lms.probe.dto.SearchProbeRequest;
 import com.example.lms.probe.dto.StageSnapshot;
+import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugProbeType;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.TraceSnapshotStore;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,6 +17,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -128,5 +132,42 @@ class SearchProbeControllerTraceSnapshotTest {
         assertEquals(true, stage.params.get("trace.snapshot.capture.skipped"));
         assertEquals("disabled", stage.params.get("trace.snapshot.capture.skipReason"));
         assertEquals("probe_search", stage.params.get("trace.snapshot.capture.reason"));
+    }
+
+    @Test
+    void searchEndpointCapturesRedactedTraceMemoryDiagnosticsWhenServiceFails() {
+        String rawFailure = "private trace memory loader secret sk-local-probe-value";
+        SearchProbeService service = request -> {
+            TraceStore.put("traceMemory.virtualCheckpoint.beforeService", "raw_snapshot");
+            throw new IllegalStateException(rawFailure);
+        };
+        TraceSnapshotStore snapshotStore = mock(TraceSnapshotStore.class);
+        when(snapshotStore.captureCurrent(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    assertEquals(Boolean.TRUE, TraceStore.get("traceSnapshot.probe.search.serviceFailed"));
+                    assertEquals("serviceRun", TraceStore.get("traceSnapshot.probe.search.failedStage"));
+                    assertEquals(Boolean.TRUE, TraceStore.get("traceMemory.probe.search.serviceFailed"));
+                    assertEquals("IllegalStateException", TraceStore.get("traceMemory.probe.search.errorType"));
+                    assertFalse(String.valueOf(TraceStore.getAll()).contains(rawFailure));
+                    return "snap-search-failure-001";
+                });
+        DebugEventStore debugEventStore = new DebugEventStore();
+        SearchProbeController controller = new SearchProbeController(service, true, "probe-token-value");
+        ReflectionTestUtils.setField(controller, "traceSnapshotStore", snapshotStore);
+        ReflectionTestUtils.setField(controller, "debugEventStore", debugEventStore);
+
+        ResponseEntity<?> entity = controller.search(
+                new SearchProbeRequest(),
+                "probe-token-value",
+                mock(HttpServletRequest.class));
+
+        assertEquals(500, entity.getStatusCode().value());
+        assertEquals("snap-search-failure-001", entity.getHeaders().getFirst("X-Trace-Snapshot-Id"));
+        assertEquals(Boolean.TRUE, TraceStore.get("traceSnapshot.probe.search.serviceFailed"));
+        assertEquals("serviceRun", TraceStore.get("traceMemory.probe.search.failedStage"));
+        assertTrue(String.valueOf(TraceStore.get("traceMemory.probe.search.errorHash")).startsWith("hash:"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(rawFailure));
+        assertEquals(1, debugEventStore.listByProbe(DebugProbeType.TRACE_MEMORY, 5).size());
+        assertFalse(String.valueOf(debugEventStore.list(10)).contains(rawFailure));
     }
 }

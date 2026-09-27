@@ -978,6 +978,163 @@ class RagFailureBlackboxServiceTest {
         assertEquals(Boolean.TRUE, TraceStore.get("blackbox.risk.virtualPoint.matched"));
         assertEquals(Boolean.TRUE, TraceStore.get("blackbox.risk.virtualPoint.applied"));
         assertEquals("prior-pattern", TraceStore.get("blackbox.risk.virtualPoint.priorPatternId"));
+        Object observedAgeMs = TraceStore.get("blackbox.risk.virtualPoint.ageMs");
+        assertEquals(Boolean.TRUE, TraceStore.get("blackbox.risk.virtualPoint.ageKnown"));
+        assertTrue(observedAgeMs instanceof Number);
+        assertTrue(((Number) observedAgeMs).longValue() > 0L);
+        assertEquals("shadow_uncalibrated",
+                TraceStore.get("blackbox.risk.virtualPoint.freshnessDisposition"));
+        assertEquals("legacy_applied",
+                TraceStore.get("blackbox.risk.virtualPoint.decisionAuthority"));
+    }
+
+    @Test
+    void virtualPointBelowThresholdReportsShadowAgeWithoutAuthority() {
+        VirtualPointService virtualPoints = new VirtualPointService();
+        virtualPoints.put("blackbox:prior", new VirtualPoint(
+                new float[]{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+                0.50d,
+                0.50d,
+                "context_contamination",
+                "vector_quarantine",
+                "prior-pattern",
+                1L));
+        RagFailureBlackboxService service = service(true, null, virtualPoints);
+        ReflectionTestUtils.setField(service, "virtualPointEnabled", true);
+        ReflectionTestUtils.setField(service, "virtualPointMinSimilarity", 0.92d);
+        TraceStore.put("webSearch.returnedCount", 5);
+        TraceStore.put("prompt.memory.compressor.activated", true);
+        TraceStore.put("prompt.memory.compressor.contaminationScore", 0.50d);
+
+        service.refresh("prior-below-threshold");
+
+        Object observedAgeMs = TraceStore.get("blackbox.risk.virtualPoint.ageMs");
+        assertEquals("prior_below_threshold",
+                TraceStore.get("blackbox.risk.virtualPoint.reason"));
+        assertEquals(Boolean.FALSE,
+                TraceStore.get("blackbox.risk.virtualPoint.applied"));
+        assertEquals(Boolean.TRUE,
+                TraceStore.get("blackbox.risk.virtualPoint.ageKnown"));
+        assertTrue(observedAgeMs instanceof Number);
+        assertTrue(((Number) observedAgeMs).longValue() > 0L);
+        assertEquals("shadow_uncalibrated",
+                TraceStore.get("blackbox.risk.virtualPoint.freshnessDisposition"));
+        assertEquals("not_applied",
+                TraceStore.get("blackbox.risk.virtualPoint.decisionAuthority"));
+    }
+
+    @Test
+    void virtualPointFreshnessTraceIsRemovedWhenLaterRefreshHasNoPoint() {
+        VirtualPointService virtualPoints = new VirtualPointService();
+        virtualPoints.put("blackbox:prior", new VirtualPoint(
+                new float[]{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+                0.90d,
+                0.90d,
+                "context_contamination",
+                "vector_quarantine",
+                "prior-pattern",
+                1L));
+        RagFailureBlackboxService service = service(true, null, virtualPoints);
+        ReflectionTestUtils.setField(service, "virtualPointEnabled", true);
+        ReflectionTestUtils.setField(service, "virtualPointMinSimilarity", 0.92d);
+        TraceStore.put("webSearch.returnedCount", 5);
+        TraceStore.put("prompt.memory.compressor.activated", true);
+        TraceStore.put("prompt.memory.compressor.contaminationScore", 0.50d);
+
+        service.refresh("matched-first");
+
+        assertEquals(Boolean.TRUE, TraceStore.get("blackbox.risk.virtualPoint.ageKnown"));
+        assertEquals("legacy_applied",
+                TraceStore.get("blackbox.risk.virtualPoint.decisionAuthority"));
+
+        ReflectionTestUtils.setField(service, "historyCorrectionEnabled", false);
+        service.refresh("disabled-second");
+
+        assertEquals("history_correction_disabled",
+                TraceStore.get("blackbox.risk.virtualPoint.reason"));
+        assertEquals(Boolean.FALSE, TraceStore.get("blackbox.risk.virtualPoint.matched"));
+        assertEquals(Boolean.FALSE, TraceStore.get("blackbox.risk.virtualPoint.applied"));
+        Map<String, Object> trace = TraceStore.getAll();
+        assertFalse(trace.containsKey("blackbox.risk.virtualPoint.ageKnown"));
+        assertFalse(trace.containsKey("blackbox.risk.virtualPoint.ageMs"));
+        assertFalse(trace.containsKey("blackbox.risk.virtualPoint.freshnessDisposition"));
+        assertFalse(trace.containsKey("blackbox.risk.virtualPoint.decisionAuthority"));
+    }
+
+    @Test
+    void virtualPointInvalidOrFutureSeenAtReportsUnknownShadowAge() {
+        for (long seenAtMs : new long[]{0L, Long.MAX_VALUE}) {
+            TraceStore.clear();
+            VirtualPoint point = new VirtualPoint(
+                    new float[]{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+                    0.90d,
+                    0.90d,
+                    "context_contamination",
+                    "vector_quarantine",
+                    "prior-pattern",
+                    seenAtMs);
+            RagFailureBlackboxService service = service(true, null, fixedMatchService(point, 1.0d));
+            ReflectionTestUtils.setField(service, "virtualPointEnabled", true);
+            ReflectionTestUtils.setField(service, "historyCorrectionRequireCurrentSignal", false);
+
+            service.refresh("unknown-age");
+
+            assertEquals(Boolean.TRUE, TraceStore.get("blackbox.risk.virtualPoint.matched"));
+            assertEquals(Boolean.FALSE, TraceStore.get("blackbox.risk.virtualPoint.ageKnown"));
+            assertEquals(-1L, TraceStore.get("blackbox.risk.virtualPoint.ageMs"));
+            assertEquals("shadow_uncalibrated",
+                    TraceStore.get("blackbox.risk.virtualPoint.freshnessDisposition"));
+            assertEquals("legacy_applied",
+                    TraceStore.get("blackbox.risk.virtualPoint.decisionAuthority"));
+        }
+    }
+
+    @Test
+    void virtualPointObserveOnlyReportsShadowAgeWithoutAuthority() {
+        VirtualPoint point = new VirtualPoint(
+                new float[]{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+                0.90d,
+                0.90d,
+                "none",
+                "observe_only",
+                "prior-pattern",
+                1L);
+        RagFailureBlackboxService service = service(true, null, fixedMatchService(point, 1.0d));
+        ReflectionTestUtils.setField(service, "virtualPointEnabled", true);
+        ReflectionTestUtils.setField(service, "historyCorrectionRequireCurrentSignal", false);
+
+        service.refresh("observe-only");
+
+        assertEquals("prior_observe_only", TraceStore.get("blackbox.risk.virtualPoint.reason"));
+        assertEquals(Boolean.FALSE, TraceStore.get("blackbox.risk.virtualPoint.applied"));
+        assertEquals(Boolean.TRUE, TraceStore.get("blackbox.risk.virtualPoint.ageKnown"));
+        assertEquals("shadow_uncalibrated",
+                TraceStore.get("blackbox.risk.virtualPoint.freshnessDisposition"));
+        assertEquals("not_applied", TraceStore.get("blackbox.risk.virtualPoint.decisionAuthority"));
+    }
+
+    @Test
+    void virtualPointBoostBelowThresholdReportsShadowAgeWithoutAuthority() {
+        VirtualPoint point = new VirtualPoint(
+                new float[]{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+                0.66d,
+                0.66d,
+                "context_contamination",
+                "vector_quarantine",
+                "prior-pattern",
+                1L);
+        RagFailureBlackboxService service = service(true, null, fixedMatchService(point, 0.92d));
+        ReflectionTestUtils.setField(service, "virtualPointEnabled", true);
+        ReflectionTestUtils.setField(service, "historyCorrectionRequireCurrentSignal", false);
+
+        service.refresh("boost-below-threshold");
+
+        assertEquals("boost_below_threshold", TraceStore.get("blackbox.risk.virtualPoint.reason"));
+        assertEquals(Boolean.FALSE, TraceStore.get("blackbox.risk.virtualPoint.applied"));
+        assertEquals(Boolean.TRUE, TraceStore.get("blackbox.risk.virtualPoint.ageKnown"));
+        assertEquals("shadow_uncalibrated",
+                TraceStore.get("blackbox.risk.virtualPoint.freshnessDisposition"));
+        assertEquals("not_applied", TraceStore.get("blackbox.risk.virtualPoint.decisionAuthority"));
     }
 
     @Test
@@ -1065,6 +1222,15 @@ class RagFailureBlackboxServiceTest {
             @Override
             public Stream<T> orderedStream() {
                 return stream();
+            }
+        };
+    }
+
+    private static VirtualPointService fixedMatchService(VirtualPoint point, double similarity) {
+        return new VirtualPointService() {
+            @Override
+            public synchronized java.util.Optional<Match> nearest(float[] vector, double minSimilarity) {
+                return java.util.Optional.of(new Match("blackbox:prior", point, similarity));
             }
         };
     }

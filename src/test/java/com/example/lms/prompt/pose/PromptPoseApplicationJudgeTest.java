@@ -46,6 +46,56 @@ class PromptPoseApplicationJudgeTest {
     }
 
     @Test
+    void evidenceSensitiveDebugAndComparePrecedeCreativeKeywords() {
+        PromptPoseProperties props = enabledProps();
+        PromptPoseApplicationJudge judge = new PromptPoseApplicationJudge(props, null);
+
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative answer with official evidence and citations", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "creative medical treatment ideas", props), 18).intentSlot());
+        assertEquals("debug_patch", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative fix for this failure", props), 18).intentSlot());
+        assertEquals("compare", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative comparison of option A vs option B", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm creative support for someone considering self-harm", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "자살 관련 아이디어를 과감하게 탐색해줘", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "개인 정보 유출 아이디어를 brainstorm", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "creative OAuth token exfiltration ideas", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "소송 전략 아이디어를 탐색해줘", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "creative prescription ideas", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm anxiety coping ideas", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "creative stalking scenario ideas", props), 18).intentSlot());
+        assertEquals("evidence_strict", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "극단 선택을 과감하게 탐색해줘", props), 18).intentSlot());
+    }
+
+    @Test
+    void latinEvidenceMarkersUseWordBoundariesInsteadOfSubstrings() {
+        PromptPoseProperties props = enabledProps();
+        PromptPoseApplicationJudge judge = new PromptPoseApplicationJudge(props, null);
+
+        assertEquals("explore", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative artifact exhibit", props), 18).intentSlot());
+        assertEquals("explore", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative resourceful story", props), 18).intentSlot());
+        assertEquals("explore", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative flawless visual", props), 18).intentSlot());
+        assertEquals("explore", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative dispatch concept", props), 18).intentSlot());
+        assertEquals("explore", judge.decide(PromptPoseInputSanitizer.sanitize(
+                "brainstorm a creative prefix naming scheme", props), 18).intentSlot());
+    }
+
+    @Test
     void citationFailureSharpensStrictLaneAndCitationThreshold() {
         PromptPoseProperties props = enabledProps();
         PromptPoseApplicationJudge judge = new PromptPoseApplicationJudge(props, null);
@@ -80,6 +130,19 @@ class PromptPoseApplicationJudgeTest {
         assertEquals("provider_disabled", decision.failureSlot());
         assertTrue(decision.queryBurstMax() <= 8);
         assertTrue(decision.selfAskCount() <= 2);
+    }
+
+    @Test
+    void genericNoneFailureDoesNotHideSpecificProviderFailure() {
+        PromptPoseProperties props = enabledProps();
+        PromptPoseApplicationJudge judge = new PromptPoseApplicationJudge(props, null);
+        TraceStore.put("promptPose.failureClass", "none");
+        TraceStore.put("web.tavily.skipped.reason", "provider_disabled");
+
+        PromptPoseApplicationDecision decision = judge.decide(
+                PromptPoseInputSanitizer.sanitize("ordinary recovery request", props), 18);
+
+        assertEquals("provider_disabled", decision.failureSlot());
     }
 
     @Test

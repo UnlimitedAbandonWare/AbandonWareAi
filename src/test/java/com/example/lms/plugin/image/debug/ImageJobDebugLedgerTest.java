@@ -2,7 +2,10 @@ package com.example.lms.plugin.image.debug;
 
 import com.example.lms.debug.DebugEvent;
 import com.example.lms.debug.DebugEventStore;
+import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -16,6 +19,16 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ImageJobDebugLedgerTest {
+
+    @BeforeEach
+    void clearTraceBefore() {
+        TraceStore.clear();
+    }
+
+    @AfterEach
+    void clearTraceAfter() {
+        TraceStore.clear();
+    }
 
     @Test
     void recordStoresRedactedSignalAndDebugEvent() {
@@ -106,6 +119,29 @@ class ImageJobDebugLedgerTest {
         assertFalse(dump.contains(rawNote));
         assertFalse(dump.contains(com.example.lms.test.SecretFixtures.openAiKey()));
         assertTrue(dump.contains("hash:"));
+    }
+
+    @Test
+    void invalidNumericDebugMetricsLeaveRedactedTraceBreadcrumb() {
+        DebugEventStore store = enabledDebugEventStore();
+        ImageJobDebugLedger ledger = enabledLedger(store);
+        String rawMetric = "bad-number-" + com.example.lms.test.SecretFixtures.openAiKey();
+
+        ImageJobDebugSignal signal = ledger.record("job-parse-private", ImageJobDebugAgent.UI_POLL,
+                "ui.wait", 0.10, 1.0, 1.0, "QUEUED",
+                Map.of("waitingMs", rawMetric, "expectedUiPollMs", 1000));
+
+        assertNotNull(signal);
+        assertEquals(Boolean.TRUE, TraceStore.get("image.job.debug.metricCoercion.failed"));
+        assertEquals("waitingMs", TraceStore.get("image.job.debug.metricCoercion.field"));
+        assertEquals("invalid_number", TraceStore.get("image.job.debug.metricCoercion.errorType"));
+        assertEquals(SafeRedactor.hashValue(rawMetric),
+                TraceStore.get("image.job.debug.metricCoercion.valueHash"));
+        assertEquals(rawMetric.length(), TraceStore.get("image.job.debug.metricCoercion.valueLength"));
+
+        String traceDump = TraceStore.getAll().toString();
+        assertFalse(traceDump.contains(rawMetric));
+        assertFalse(traceDump.contains(com.example.lms.test.SecretFixtures.openAiKey()));
     }
 
     private static ImageJobDebugLedger enabledLedger(DebugEventStore store) {
