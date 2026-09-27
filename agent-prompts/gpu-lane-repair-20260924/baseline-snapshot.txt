@@ -1,0 +1,45 @@
+Baseline live snapshot — 2026-09-24 ~20:5x KST
+Captured by: scripts/ollama-status-snapshot.ps1 (exit 0, read-only)
+Re-probe before relying — this state changes with keep_alive expiry and user activity.
+
+== 1) ollama serve instances (3 concurrent, started via awx.ollama-startup ~01:41-01:42 KST) ==
+PID 19016  -> port 11434  (tray-app child)
+PID 26344  -> port 11435  (cmd child)
+PID 22320  -> port 11438  (cmd child)  ** outside spec docs (mention up to 11437) — owner unconfirmed **
+
+== 2) per-port loaded models (/api/ps) ==
+11434: gemma4:26b  vram=16.2GB  until=2026-09-24T20:56:50+09:00
+11435: (empty)
+11438: (empty)
+ollama ps: gemma4:26b  17GB  100% GPU  context=4096
+
+== 3) installed models (ollama list) ==
+smtek/Qwen3.8-27B:Q3_K_XL (14GB), qwen3.8:27b (17GB), gemma4:31b (19GB),
+qwen3.6:27b (17GB), gemma4:26b (17GB), gemma4:latest (9.6GB), gemma4:12b (7.6GB),
+qwen3.5:9b (6.6GB), qwen3-vl:8b (6.1GB),
+qwen3-embedding:4b (2.5GB), qwen3-embedding:latest (4.7GB),
+bge-m3:latest (1.2GB), nomic-embed-text:latest (274MB)
+
+== 4) GPU util / VRAM (nvidia-smi index order) ==
+index 0 | RTX 3060 | util ~12-42% | vram ~1379/12288 MiB | GPU-3d34d77c-1173-6bc7-a96d-c2d9b7c4e670
+index 1 | RTX 3090 | util 0%      | vram 18051/24576 MiB | GPU-4032bebe-fd12-b9cb-77fa-d4ac53a0e586
+NOTE: index 0 = 3060; Task Manager "GPU 0" label = 3090 (reversed). Use UUID.
+
+== 5) compute-apps PID -> GPU UUID ==
+~34 desktop/browser/agent procs on 3060 UUID (explorer, chrome x2, msedge x2,
+msedgewebview2 x5, obs64 + obs-browser-page, TeamViewer, parsecd, Devin.exe,
+codex-computer-use-swift, ChatGPT x2, Grok Bot x2, OpenCode, OneDrive, Epic, ...)
+** llama-server.exe PID 51660 on RTX 3090 UUID ** — the resident gemma4:26b runner.
+All rows show VRAM_MiB = [N/A] — live demonstration of the WDDM per-process
+memory observation limit (do NOT interpret as 0 or absent).
+
+== 6) heuristic ==
+No reversal pattern at capture time (3060 util < 80%).
+
+== Related live facts ==
+- demo-1 server: no listeners on 18180-18182 at 스터프2 capture time (server down);
+  ollama serve instances persist independently of the Spring server.
+- var/debug/rtx3090-watch/latest.json earlier showed the same "resident + idle"
+  3090 pattern for hours with no alert flags.
+- The earlier session noted E: drive 86-91% activity during model switching —
+  model store is on E:\models (see desktop_dual_ollama_gpu_setup MainModelsPath).

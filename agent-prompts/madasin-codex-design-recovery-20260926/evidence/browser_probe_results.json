@@ -1,0 +1,84 @@
+{
+  "scope": "isolated fixtures using supplied JS; no Spring runtime, DB or provider calls",
+  "tests": [
+    {
+      "name": "per_assistant_upsert_collapsed",
+      "outcome": "PASS",
+      "detail": {
+        "count": 2,
+        "a": "이 답변 추적FINALfinal-A",
+        "b": "이 답변 추적Bfinal-B",
+        "open": false
+      }
+    },
+    {
+      "name": "sanitizer_removes_execution_and_clobbering",
+      "outcome": "PASS",
+      "detail": {
+        "executed": 0,
+        "unsafe": 0,
+        "text": "safesafe text"
+      }
+    },
+    {
+      "name": "details_snapshot_supported",
+      "outcome": "PASS",
+      "detail": {
+        "body": "snapshot"
+      }
+    },
+    {
+      "name": "metadata_only_section_snapshot_rejected",
+      "outcome": "REPRODUCED_CONTRACT_GAP",
+      "detail": {
+        "body": "트레이스 표시 불가"
+      }
+    },
+    {
+      "name": "snapshot_http_401",
+      "outcome": "PASS",
+      "detail": {
+        "body": "상세 조회 권한 없음"
+      }
+    },
+    {
+      "name": "snapshot_http_403",
+      "outcome": "PASS",
+      "detail": {
+        "body": "상세 조회 권한 없음"
+      }
+    },
+    {
+      "name": "snapshot_http_404",
+      "outcome": "PASS",
+      "detail": {
+        "body": "상세 스냅샷을 현재 저장소에서 찾을 수 없음"
+      }
+    },
+    {
+      "name": "late_snapshot_after_toggle_off_ignored",
+      "outcome": "PASS",
+      "detail": {
+        "body": "저장된 요약입니다. 상세는 펼칠 때 조회합니다."
+      }
+    },
+    {
+      "name": "same_diagnostic_event_appends_duplicates",
+      "outcome": "REPRODUCED_PRESENTATION_GAP",
+      "detail": {
+        "signalRows": 2,
+        "scoreRows": 2
+      }
+    },
+    {
+      "name": "legacy_interactive_controls_removed_by_current_safety_contract",
+      "outcome": "REPRODUCED_COMPATIBILITY_GAP",
+      "detail": {
+        "inputs": 0,
+        "dataFields": 0,
+        "script": 0,
+        "tableRetained": true
+      }
+    }
+  ]
+}

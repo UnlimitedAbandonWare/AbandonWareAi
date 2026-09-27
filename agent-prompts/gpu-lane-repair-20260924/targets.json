@@ -1,0 +1,24 @@
+{
+  "targets": [
+    {
+      "path": "scripts/ollama-status-snapshot.ps1",
+      "sha256": null
+    },
+    {
+      "path": "scripts/ollama-unload-idle.ps1",
+      "sha256": null
+    },
+    {
+      "path": "scripts/ollama-prefer-3090.ps1",
+      "sha256": null
+    },
+    {
+      "path": "scripts/ollama-light-preload.ps1",
+      "sha256": null
+    },
+    {
+      "path": ".agents/skills-intent-index.yaml",
+      "sha256": "234bd81de9d0417b6bab7a2efd85729d063788cd73fc5cfce221fc740b42dd53"
+    }
+  ]
+}

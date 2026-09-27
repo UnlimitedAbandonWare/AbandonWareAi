@@ -1,0 +1,24 @@
+{
+  "targets": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "d8eb0961d15107bfe2b06d05b9ca219a3c78b4070be60ccf69c575113a482783"
+    },
+    {
+      "path": ".agents/skills/demo1-gpu-lane-evidence/SKILL.md",
+      "sha256": null
+    },
+    {
+      "path": "agent-prompts/gpu-lane-repair-20260924/brief.md",
+      "sha256": null
+    },
+    {
+      "path": "agent-prompts/gpu-lane-repair-20260924/codex_operating_card.md",
+      "sha256": null
+    },
+    {
+      "path": "agent-prompts/gpu-lane-repair-20260924/baseline-snapshot.txt",
+      "sha256": null
+    }
+  ]
+}

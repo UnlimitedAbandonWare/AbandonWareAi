@@ -1,0 +1,376 @@
+# Codex 실행 지시서 — madasin의 장점을 보존하는 설계·UI 복원
+# 기준일: 2026-09-26 / Asia-Seoul
+# 이 파일은 구현 지시서다. 현재 코드의 패치 완료 선언이 아니다.
+
+[목표]
+현재 실행 중인 madasin 계보를 유지하면서 src111_mergex15와 UAW의 장점만 복원한다.
+복원할 핵심은 “답변별로 모델 선택 → 검색 → 문맥 조립 → 생성 → gate/fallback → 저장을 추적하고, 설정이 실제로 적용되는 것을 확인할 수 있는 UI”다.
+과거 UI/서비스/설정 파일을 통째 덮거나 새로운 RAG/DSL/트레이스 엔진을 만들지 않는다.
+
+[함께 읽을 파일]
+1. ANALYSIS_REPORT.md — 분석·장점 추출·위험·단계별 의도.
+2. evidence/EVIDENCE.md — E01~E31 실제 파일과 행, 해시, 발췌.
+3. evidence/source_inventory.json — 전체 ZIP 해시·파일 계보·실질 변경과 개행 변경 구분.
+4. evidence/browser_probe_results.json — 현재 UI fixture 10개: 보존할 동작 7개, 간극 재현 3개.
+5. evidence/plan_contract_probe.txt — 순수 PlanExecutionSpec 독립 assertion 9개.
+6. SOURCES.md — 보안/비동기/비용 공개 근거.
+
+[소스 우선순위]
+실제 Desktop canonical 실행 소스와 fresh 테스트 > 현재 madasin.zip > 이 보고서의 구체적 근거 > 과거 src111_mergex15.zip > UAW의 포트폴리오식 서술.
+
+시작 경로는 C:\AbandonWare\demo-1\demo-1\src 이다.
+단, 이것을 Gradle root라고 가정하지 말 것. madasin ZIP은 main/java와 main/resources를 가진 소스 스냅샷이며 build.gradle/pom/wrapper/tests가 없다.
+실제 build root, sourceSets, mainClass, 배포되는 JAR/정적 리소스 경로를 먼저 확정한다.
+이후 이 지시서의 ${SRC}는 “현재 ZIP의 main/가 실제로 매핑되는 부모 디렉터리”, ${BUILD}는 실제 build root, ${TEST_JAVA}는 실제 활성 Java test source root다.
+main 경로가 별도 생성/clean 소스로 매핑되면 그 경로를 따르고 원본→생성본의 소유권을 문서화한다. 둘 다 임의 수정하지 않는다.
+
+[절대 보존]
+- Java/Spring/LangChain4j의 현재 실제 dependency lock. 이 작업을 빌미로 버전 upgrade 금지.
+- 기존 provider/key/env 계약. openssl/opnessl/apikey/시크릿 파일 및 이름·값·포맷을 바꾸거나 출력하지 말 것.
+- 현재 preferred/strict/auto 모델 선택, actual model 보고, generationTermination, stop/cancel, exact-run replay/terminal commit.
+- 현재 session settings, 첨부 소유권, 기억 scope, GraphRAG source revision/consent, private 자료 격리.
+- DOMPurify, raw HTML subscriber projection, snapshot size/field cap, lazy load, AbortController/version guard.
+- 현재 정상인 memory-only/empty-context PromptBuilder fallback.
+- 기존 task/lease/preflight가 있으면 그것을 사용한다. 이번 작업을 위해 감독 agent나 병렬 work-ledger를 새로 만들지 않는다.
+
+[범위와 작업 방식]
+코드 수정은 Desktop의 확인된 canonical source에서만 한다. 외부 조사본/Notebook은 supporting evidence다.
+기존 다른 작업의 수정과 uncommitted 변경을 보존한다. 강제 reset/clean/force-push/자동 배포 금지.
+한 원인마다 failing test → 최소 patch → 해당 test → 관련 regression 순서.
+같은 목표를 두 route/두 facade/두 pipeline에 중복 구현하지 않는다.
+판정은 positive(보존), negative(수정), neutral/evidence_needed(런타임 증거 필요)로 나눈다.
+이미 해결된 항목은 no-op과 해당 테스트 증거를 기록하고 넘어간다.
+
+================================================================
+do00 — 실제 실행 경계와 baseline을 확정한다 (소스 쓰기 전)
+================================================================
+Observation
+- 현재 ZIP: 2,364개 파일, Java 2,152개, build/test 트리 없음.
+- 과거 main 대비 700개 추가, 411개 과거에만 존재. 공통 내용 변경 994개, 개행만 변경 653개.
+- 현재 LmsApplication scan은 com.example.lms/com.nova.protocol이고 Nova auto-config imports가 이미 존재한다. [E01-E02]
+- UAW의 “등록 누락” 옛 지시를 그대로 실행하지 않는다.
+
+Patch Blocks
+- 아직 application source 수정 없음.
+- 기존 AGENTS/현재 작업 계약, 배포 entrypoint, 실행 sourceSet을 읽고 SourceMap 표를 작성한다.
+- 현재 실제 파일과 첨부 스냅샷의 drift를 관련 파일에 대해 확인한다. 날짜가 같아도 동일하다고 가정하지 않는다.
+- 전체 대규모 파일 정리나 패키지 이동을 목표에 추가하지 않는다.
+
+Setup Commands (PowerShell; 읽기 전용, 존재하는 대상만 실행)
+Set-Location 'C:\AbandonWare\demo-1\demo-1\src'
+Get-Location
+Get-ChildItem -Force | Select-Object Name,Mode
+Get-ChildItem '..','..\..' -File -Force -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -in @('build.gradle','build.gradle.kts','settings.gradle','settings.gradle.kts','pom.xml','gradlew.bat','mvnw.cmd','AGENTS.md') } |
+  Select-Object FullName
+# 실제 저장소임이 확인된 후:
+git status --short
+git diff --name-only
+# 환경변수 전체 dump, key 파일 Get-Content, 무차별 로그 복사는 금지.
+
+Verification
+- SourceMap에 current ZIP path → actual editable source path → compile/resource sourceSet → test root를 기록.
+- 실제 사용 가능한 build task와 테스트 baseline을 실행하고 command/exit/time을 기록.
+- baseline 실패는 기존 실패인지 이번 변경인지 분리. 소스 ZIP 안에 임의 build.gradle을 만들어 성공시키지 않는다.
+- 현재 Java 파일의 NUL 후보는 binary-safe 검색 후 실제 컴파일 의미를 확인한다. 자동 인코딩 전체 변환 금지.
+
+================================================================
+do01 — metadata-only snapshot의 producer/consumer 규격을 맞춘다
+================================================================
+Observation
+- 현재 producer는 traceMemory/harmony metadata-only <section>을 저장한다.
+- 현재 snapshot consumer는 details.search-trace만 결과 루트로 채택한다.
+- 제공된 실제 JS fixture에서 metadata-only만 “트레이스 표시 불가”가 재현됐다. [E05-E08]
+
+Patch Blocks
+대상:
+${SRC}/main/java/com/example/lms/api/ChatTraceSnapshotPointerPersister.java
+${SRC}/main/resources/static/js/chat-trace-ui.js
+필요 시 기존 ${SRC}/main/java/com/example/lms/api/TraceSnapshotsDiagnosticsController.java
+
+- 새 metadata-only HTML은 현재 허용된 공통 trace wrapper로 만든다.
+- 이미 저장된 section 형태는 제한된 호환 projection으로 표시한다. 기존 저장소 전체 rewrite 금지.
+- traceMemory/harmony라는 알려진 shape만 식별하고, 정제된 안전한 하위 DOM만 렌더한다. 임의 whole-document/section 허용 금지.
+- 데이터가 metadata-only이면 “진단 요약만 저장됨”으로 표시. 원문 검색 상세가 존재하는 척하지 않는다.
+- 현재 <details class=search-trace> 정상 경로와 불명확한 HTML의 fail-closed를 유지한다.
+- no stored HTML fallback도 full trace와 구분한다.
+- snapshot 조회에 유한 timeout을 기존 abort/version guard와 결합한다. timeout은 activeSnapshotFetches 슬롯을 해제하고 명시적 재시도만 허용한다. timeout 값은 실제 기존 HTTP 정책에서 재사용하거나 테스트 가능한 한 곳에 둔다.
+
+Verification
+새 테스트 이름 예시(기존 동등 테스트가 있으면 재사용): TraceSnapshotHtmlCompatibilityTest, chat-trace-ui snapshot fixtures.
+- details / traceMemory section / harmony section / no HTML / malformed 모두 판정.
+- 401/403/404/500/network/timeout은 서로 식별 가능.
+- DOMPurify 미로딩 시 임의 innerHTML fallback 금지.
+- script/style/iframe/event handler/id/name/data-secret는 제거.
+- 두 pending fetch 이후 timeout 또는 abort가 슬롯을 돌려주며 stale 응답은 삽입되지 않음.
+
+================================================================
+do02 — typed signal과 HTML trace를 동일 assistant에 귀속시킨다
+================================================================
+Observation
+- 현재 HTML upsert는 WeakMap으로 assistant별 패널 하나를 관리한다: 보존.
+- renderTraceSignalDetail/renderScoreDeltaDetail은 매번 transcript parent에 append한다.
+- 동일 event를 두 번 넣으면 signal 2행/score 2행이 재현됐다. [E05, E13]
+
+Patch Blocks
+대상:
+${SRC}/main/resources/static/js/chat.js
+${SRC}/main/resources/static/js/chat-trace-ui.js
+${SRC}/main/resources/static/css/chat-trace.css (필요한 최소치)
+
+- trace/signal/score의 표시 소유자는 현재 assistant bubble의 trace state다.
+- 기존 AwxChatTraceUi를 확장하거나 그 내부 slot을 재사용한다. 별도 새 글로벌 cockpit/trace manager 금지.
+- summary는 같은 답변에서 update한다. timeline은 실제 고유 event만 bounded append한다.
+- eventId/cursor가 있으면 그 식별자를 기준으로 dedup. 값이 없으면 동일 요약 upsert와 단계별 key 등 제한된 fallback을 사용한다.
+- scoreDelta 이력 전체를 덮어 지우지 말 것. rawScoreDelta와 normalized 값, 단위·범위는 구분한다.
+- 실제 답변 A와 B의 state를 합치지 않는다. document.querySelector의 첫 trace 또는 전역 latest로 대체하지 않는다.
+- debug off, session dispose, history hydration에서 state·pending request를 정리한다.
+- 서버 state.traceHtml, ReportSnapshotService의 global lastSelected 등으로 현재 답변 trace를 추정하지 않는다.
+
+Verification
+- A raw→A final: panel 하나. A/B 각각 분리.
+- trace와 scoreDelta 같은 이벤트 재전송: summary 동일, timeline 중복 없음.
+- 다른 eventId의 실제 점수 변화는 보존.
+- reconnect replay/final 중복, session 전환, trace 토글 off 중 늦은 이벤트 검사.
+- 진단이 없어도 답변 본문/출처/stop 동작은 유지.
+
+================================================================
+do03 — snapshot을 명시적으로 답변 메시지와 연결한다
+================================================================
+Observation
+- 현재 pointer persister는 assistantMessageId를 받지 않는다.
+- SessionDetail builder는 createdAt만 정렬하고 직전 non-system을 답변으로 추정한다.
+- traceTurnId는 system meta message id인 경로가 있으므로 assistant id로 의미를 변경하면 안 된다. [E07, E09-E11]
+
+Patch Blocks
+대상:
+${SRC}/main/java/com/example/lms/api/ChatTraceSnapshotPointerPersister.java
+${SRC}/main/java/com/example/lms/api/ChatTraceMetaMessageRestorer.java
+${SRC}/main/java/com/example/lms/api/ChatSessionDetailResponseBuilder.java
+${SRC}/main/java/com/example/lms/api/ChatApiController.java (기존 persist callsite만)
+필요한 additive DTO 변경만 허용.
+
+- assistant 저장 성공으로 얻은 id를 해당 snapshot pointer로 전달한다.
+- v2 envelope 또는 이에 동등한 명시적 versioned field를 사용한다. v1 strict parser allowlist에 임의 필드를 섞어 기존 reader를 깨지 않는다.
+- reader는 기존 plain pointer/v1 및 신규 버전을 모두 지원한다. summary cap/field allowlist/hash/redaction을 유지한다.
+- 새 연결은 같은 session의 assistant id임을 검증한다. 다른 owner/session, user/system role, 존재하지 않는 id는 연결하지 않는다.
+- v1 fallback은 createdAt,id의 결정적 순서와 직전 assistant를 사용한다. 애매하면 unbound 요약으로 남기고 임의 답변에 붙이지 않는다.
+- DB의 과거 meta text를 일괄 수정하거나 대형 HTML을 다시 Base64로 transcript에 넣지 않는다.
+- exact-run의 transcript commit 중복 방어·generationTermination·기존 traceTurnId 의미는 유지한다.
+
+Verification
+새 테스트 예시: ChatTracePointerAssociationTest.
+- assistant A → pointer A → assistant B → pointer B.
+- assistant A와 pointer A 사이 user 메시지 도착.
+- timestamp 동률, pointer 지연 저장, 중복 pointer, malformed version.
+- v1 과거 기록과 v2 새 기록을 같은 session에서 읽음.
+- 다른 session id 참조는 거절. unbound는 최신 답변에 자동 배치하지 않음.
+- 새로고침 후 같은 답변 옆에 같은 snapshotId.
+
+================================================================
+do04 — 옛 UI의 필터·정렬 장점을 안전한 정적 코드로 복원한다
+================================================================
+Observation
+- 과거 chat.js는 받은 HTML에서 script를 꺼내 재실행했다: 복원 금지.
+- 현재 TraceHtmlBuilder도 입력/data attribute/inline script 기반 필터·정렬을 만들어내나 current sanitizer가 이를 없앤다. [E14-E15]
+
+Patch Blocks
+대상:
+${SRC}/main/resources/static/js/chat-trace-ui.js
+${SRC}/main/resources/static/css/chat-trace.css
+${SRC}/main/java/com/example/lms/service/trace/TraceHtmlBuilder.java (호환 가능한 최소 수정)
+필요하면 do06의 제한된 typed stage row 계약 재사용. 다른 trace schema를 만들지 않는다.
+
+- non-ok / slow / stage 필터와 순번/반환수/유지수/시간 정렬을 정적 JS가 createElement로 만든다.
+- 입력값은 실행하지 않고 text/numeric comparator로만 처리한다.
+- script[data-trace-script]는 계속 금지. eval/Function/script 재생성 금지.
+- client가 필요한 row 데이터를 기존 안전한 표에서 읽을 수 있으면 좁게 재사용한다. 그게 불가능하면 allowlisted typed rows를 사용한다. 임의 HTML의 data-*를 전부 허용하지 않는다.
+- 실제 원문 쿼리와 표시용 hash/length를 구분한다. 쿼리 원문을 새로 수집·전송하는 작업으로 확대하지 않는다.
+- 상세 표는 최대 행·크기 한도 안에 두고 전체 trace 보기 때문에 재검색하지 않는다.
+- 정렬/filter의 장점만 복원한다. 과거 Bootstrap offcanvas·DOM id·old model picker를 통째 옮기지 않는다.
+
+Verification
+- script 없는 production fixture로 filter/sort가 작동.
+- filter/sort 뒤 row와 evidence 출처 연결이 바뀌지 않음.
+- 빈 값/NaN/missing duration은 0ms 성공처럼 표시하지 않음.
+- 키보드 조작, 접힘, focus, 360/768/1440px, 200% 확대에서 overflow 검증.
+- inline script를 제거해도 모든 새 컨트롤이 동작.
+
+================================================================
+do05 — 관리자 발견성과 실제 적용 설정을 복원한다
+================================================================
+Observation
+- 현재 trace는 admin 조건+unchecked 토글 안에 있다. 비로그인에서 안 보이는 것을 곧바로 데이터 유실로 판단하지 않는다.
+- 실제 HTML 렌더는 Thymeleaf가 아니라 ChatUiViewConfig의 Jsoup 명시적 projection이다.
+- 현재 model/search/RAG/selectionMode 및 별도 Models 관리 경로가 이미 있다. [E03-E04, E30-E31]
+
+Patch Blocks
+대상:
+${SRC}/main/resources/templates/chat-ui.html
+${SRC}/main/java/com/example/lms/config/ChatUiViewConfig.java
+${SRC}/main/java/com/example/lms/web/PageController.java (필요한 model attrs만)
+${SRC}/main/resources/static/js/chat.js
+${SRC}/main/resources/static/css/chat-style.css (최소 변경)
+
+- 기본 대화에는 본문·근거·모델·검색/생성 상태만 남긴다.
+- 운영자는 “답변별 디버깅 표시”를 쉽게 찾게 하고, 비활성/권한 없음/요약만 존재/상세 없음 상태를 분리한다.
+- 기본적으로 접힌 per-answer 상세를 유지한다. 전체 heartbeat/RAG Ops는 기존 운영 진단 영역에 둔다.
+- 새 th:if/text만 붙여 기능이 된 것으로 보고하지 않는다. 필요한 서버 owned value는 실제 projector에서 넣는다.
+- “요청 설정”과 “실제 적용 설정”을 구분한다. request/저장/default 중 어디에서 왔는지는 존재하는 증거에 한해 표시한다.
+- explicit OFF/false를 누락으로 해석하지 않는다. preferred/strict/auto를 유지한다.
+- topK/provider/official-only 등의 옛 옵션은 실제 consumer와 session save/load가 확인되는 경우에만 제한적으로 복원한다. 현재 Models 페이지에 있는 설정을 중복 UI로 만들지 않는다.
+- 로그인 상태 변경 시 토글 메모가 다른 사용자에게 자동 적용되지 않게 한다.
+
+Verification
+- admin/non-admin/anonymous UI server projection.
+- initial/replay/session/snapshot server access check를 별도로 검증. 프런트 hidden은 권한 검사가 아니다.
+- 모든 배포 HTML의 서버 템플릿 표현식이 정상 처리되고 inert th 속성이 남지 않음.
+- 설정 변경→요청→실제 적용→새로고침→세션 전환 round-trip.
+- 설정 UI가 사라져도 request DTO의 다른 기존 옵션을 누락시키지 않음.
+
+================================================================
+do06 — Plan UNKNOWN 처리와 실행 ledger의 표시 규격을 맞춘다
+================================================================
+Observation
+- PlanExecutionSpec은 이미 존재하고 순수 Java 계약 검사 9개가 통과했다.
+- missing metric을 UNKNOWN으로 만드는 기능은 재작성하지 않는다.
+- ChatWorkflow는 hints 선적용 후 FALSE에서만 expansion을 제거하고, expansionEligible을 !=FALSE로 계산한다.
+- post when lateActivation은 관측값이지 추가 실행 증명이 아니다.
+- PipelineSnapshot은 요약 중심이며 전체 plan.stageLedger는 아직 그 typed 계약에 없다. [E16-E20]
+
+Patch Blocks
+대상:
+${SRC}/main/java/com/example/lms/service/ChatWorkflow.java
+${SRC}/main/java/com/example/lms/plan/PlanExecutionSpec.java (정말 필요한 의미 수정만)
+${SRC}/main/java/com/example/lms/api/ChatStreamSignalBuilder.java
+${SRC}/main/java/com/example/lms/dto/ChatStreamEvent.java
+관련 기존 client trace render path.
+
+A. 우선 실제 failing test로 whenPresent/TRUE/FALSE/UNKNOWN와 baseline policy 경계를 확정한다.
+- plan 유래 확장만 제어한다. UNKNOWN만으로 plan 확장이 새로 활성화되면 안 된다.
+- 명시적 사용자 deep 검색·기존 baseline Self-Ask까지 무조건 끄는 broad fix 금지.
+- when 자체가 없는 경우를 미측정 when과 혼동하지 않는다.
+- UNKNOWN→TRUE post observation은 현재 요청의 실행 로그로만 기록한다. 늦은 activation이라는 이유로 숨은 두 번째 검색 루프를 만들지 않는다.
+
+B. 기존 snapshot에 제한된 typed ledger/when projection을 추가한다.
+- stage/status/count/duration/reason만 허용하고, 원문 request headers·when expression의 민감 값·prompt를 복사하지 않는다.
+- 기존 record constructor 및 builder/copy/subscriber projection/replay/final 경로를 모두 호환시킨다.
+- plan declared order와 실제 observed execution을 구분한다. binding 없는 label은 unavailable.
+- OFF / 빈 결과 / 미관측 / dependency 없음 / failed / delegated는 다른 상태다.
+- finalContextCount의 추정 합계는 실측과 다르게 표시하거나 provenance를 둔다. 웹/벡터 개수 합이 항상 최종 prompt 투입량인 것은 아니다.
+- Web enabled-empty와 disabled(null)를 유지한다.
+
+Verification
+새 테스트 예시: ChatPlanUnknownExpansionGateTest, ChatPlanStageProjectionTest.
+- PlanContractProbe의 9개 의미 유지 + 실제 ChatWorkflow 연결부 테스트.
+- 미측정과 0, unknown과 no-when을 구분.
+- 반환 0인 실제 retrieval과 미실행 retrieval의 표시 차이.
+- unsupported/duplicate/delegated/error/skip marker를 정확하게 표시.
+- typed ledger 추가가 권한 없는 subscriber에게 민감 상세를 새로 노출하지 않음.
+- 실제 orchestration/모델 호출 수가 display 변경 때문에 증가하지 않음.
+
+================================================================
+do07 — MoE/Failure Pattern의 강점을 유지하되 가상 표본으로 승격하지 않는다
+================================================================
+Observation
+- NineArtPlateGate는 samples=evidenceCount*5+sessionRecur를 사용한다.
+- ArtPlateEvolver는 이 samples와 score로 5/15/50% rollout을 결정한다.
+- 이 값은 실측 A/B 관측 횟수라는 증거가 아니다. [E23-E24]
+
+Patch Blocks
+대상:
+${SRC}/main/java/com/example/lms/artplate/NineArtPlateGate.java
+${SRC}/main/java/com/example/lms/artplate/ArtPlateEvolver.java
+기존 실제 observation/repository가 있는 경우 그 경계만 재사용.
+
+- 현재 deterministic base strategy는 유지한다.
+- heuristic mass/score와 empirical observation count를 명시적으로 분리한다.
+- 실제 표본과 검증된 gain이 없으면 “학습 성과에 따른 승격”을 하지 않는다. 기존 명시적 실험 정책을 보존하되 기본 트래픽을 synthetic samples 때문에 15/50%로 확대하지 않는다.
+- 이미 검증된 explicit rollout이 있는 실행 환경이면 실제 증거를 읽고 그 동작을 존중한다. 모든 실험 기능을 무조건 삭제하거나 전체 OFF로 덮지 않는다.
+- 후보 제안/실험군 할당/관측 수집/승격을 서로 다른 상태로 기록한다.
+- heuristic을 UI의 accuracy/confidence/실험 성공률처럼 표시하지 않는다.
+- rawMatrix/CFVM/Failure Pattern을 새로운 자동학습 엔진으로 다시 만들지 않는다.
+- 전역 lastSelected 대신 해당 요청에 이미 기록된 plan/route/plate 신호를 표시한다.
+
+Verification
+새 테스트 예시: ArtPlateEmpiricalPromotionGuardTest.
+- 높은 heuristic score + empirical 0 → 검증된 승격 없음.
+- 실제 샘플/평가가 있는 explicit 정책은 해당 정책대로 동작.
+- state isolation, rollout determinism, auth/owner 정책은 유지.
+- candidate proposal 실패는 deterministic base로 돌아가고 reason이 남음.
+
+================================================================
+do08 — memory·attachment·graph·embedding 회귀 fence를 검증한다
+================================================================
+Observation
+- current ContextOrchestrator는 memory-only와 빈 context의 PromptBuilder fallback을 이미 지원.
+- compressor는 조건부 압축·원본 fallback을 지원.
+- attachment handler는 session/owner identity를 받으며 현재 IQR 일부는 iterations=1이다.
+- Graph gate에는 owner/session/consent/revision fence가 있다.
+- embedding은 현재 차원 옵션과 fingerprint가 있다. [E21-E22, E25-E31]
+
+Patch Blocks
+먼저 existing tests만 실행/추가한다. 아래는 복원 대상 기능을 통째 수정할 목록이 아니다.
+- ContextOrchestrator / PromptBuilder: history-memory-vector-web-attachment-graph 기여를 구분한다. trace 자체는 외부 사실 근거가 아니다.
+- 압축: 원문 text뿐 아니라 source/owner/session/revision/동의 메타데이터를 보존. 실패시 원본 유지와 reason 표시.
+- attachment: 실제 enum의 준비 완료 상태만 검색. owner/session filter는 API, 지연 작업, prompt 진입에서 유지.
+- GraphRAG: 삭제/수정 후 stale source와 old consent epoch가 다시 유입되지 않는지 확인.
+- embedding: raw/target/normalization/model fingerprint의 실제 계약 검증. 차원이 같다고 다른 모델 vector를 혼용하지 않는다.
+- AutoLearn: dataset 품질 gate와 interactive release policy 분리. vector ingest를 LLM weight training 완료라 표시하지 않는다.
+- Jev: 현재 off/shadow/on, timeout/defer, 미설정, budget_skip를 유지. provider 무료 기간을 hardcode 연장하거나 paid를 자동 허용하지 않는다.
+
+Verification
+- 3개 세션 기억 시나리오: store→load→compression→prompt inclusion 구분. 다른 owner 자료는 차단.
+- explicit OFF, empty, missing 각각 의미 유지.
+- attachment not-ready/deleted/wrong-owner, graph stale/revoked, model same-dim-different-fingerprint 테스트.
+- 이 단계에서 증명되지 않은 구조를 “완성”하려고 전체 RAG를 재작성하지 않는다.
+
+================================================================
+do09 — 계약 문서와 fresh 증거를 남기고 종료한다
+================================================================
+Patch Blocks
+- 기존 docs 중 적합한 한 문서에 설계 계약 표를 둔다. 동일 지시서를 여러 파일에 복제하지 않는다.
+- 각 기능에 declared/registered/enabled/executed/persisted/rendered의 어떤 상태를 확인했는지 명시한다.
+- requirements → production producer → DTO/store → consumer → test → evidence를 연결한다.
+- 최소한 v1/v2 pointer, source→UI trace shape, Plan UNKNOWN, typed row, scope/embedding contract를 회귀 테스트로 고정한다.
+
+Setup Commands
+# ${BUILD}와 실제 활성 테스트 task가 확인된 뒤, 프로젝트가 Gradle인 경우:
+.\gradlew.bat test --tests '*TraceSnapshotHtmlCompatibilityTest'
+.\gradlew.bat test --tests '*ChatTracePointerAssociationTest'
+.\gradlew.bat test --tests '*ChatPlanUnknownExpansionGateTest'
+.\gradlew.bat test --tests '*ArtPlateEmpiricalPromotionGuardTest'
+.\gradlew.bat test
+.\gradlew.bat bootJar
+# 위 클래스명은 신규 테스트 제안이다. 실제 생성/기존 재사용된 이름으로 바꾼 뒤 실행한다.
+# 실제 Maven 프로젝트이면 기존 wrapper/task로 동등 검증. 임의 빌드 구조 생성 금지.
+# 별도 UI test task/브라우저 harness도 실제 프로젝트 방식으로 실행한다.
+
+Verification / 종료 조건
+- 관련 테스트 및 전체 build의 fresh command, exit code, 시각, 실패 원인 구분.
+- 관리자/일반/익명, 답변 A/B, 새로고침, cancel/reconnect, 대표 memory/attachment 흐름 확인.
+- 모드 선언이 실제 실행으로 오인되지 않고 unsupported는 정직하게 unavailable.
+- 시크릿/원문 prompt/권한 없는 상세 노출 0.
+- 요청당 추가 모델 호출·숨은 반복 검색·중복 저장 없음.
+- 완료된 patch 목록, 보존한 장점, 제거/상쇄한 단점, 확인하지 못한 runtime 사실을 분리한다.
+- 이 기준을 만족하면 종료한다. 새 후보 기능, 추가 dashboard, 전체 legacy 복구, 모든 실험 모드 활성화를 후속 작업으로 계속 붙이지 않는다.
+
+[최종 보고 형식]
+## 요약
+## doXX 결과
+### Observation
+### Patch Blocks (실제 변경 경로)
+### Setup Commands
+### Verification (실제 출력·exit code)
+## 긍정/부정/중립 변화
+## 재현 및 회귀 증거
+## evidence_needed
+## 종료 판단
+
+[완료 주장의 범위]
+“코드가 존재한다”는 registered/executed를 증명하지 않는다.
+“UI fixture가 통과했다”는 서버 권한·DB·외부 API를 증명하지 않는다.
+“PlanExecutionSpec이 통과했다”는 ChatWorkflow의 when gate를 증명하지 않는다.
+“스냅샷 pointer를 저장했다”는 그 assistant와 연결되어 렌더됐음을 증명하지 않는다.
+“실험 후보 score가 높다”는 정확도 향상·학습 완료를 증명하지 않는다.
+이 구분을 유지하면서 실제 확인된 부분까지 완성하고 멈춘다.
