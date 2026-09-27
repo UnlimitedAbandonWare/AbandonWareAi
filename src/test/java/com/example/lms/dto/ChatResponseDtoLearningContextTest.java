@@ -1,6 +1,9 @@
 package com.example.lms.dto;
 
+import com.example.lms.infra.selection.ReplaySelectionEntropy;
+import com.example.lms.infra.selection.SelectionEntropyProjection;
 import com.example.lms.search.TraceStore;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +54,46 @@ class ChatResponseDtoLearningContextTest {
                 List.of());
 
         assertEquals(42L, dto.getTraceTurnId());
+    }
+
+    @Test
+    void selectionEntropyProjectionIsAdditiveAndNullIsOmittedFromLegacyJson() throws Exception {
+        SelectionEntropyProjection projection = replayProjection();
+        ChatResponseDto legacy = new ChatResponseDto("ok", 7L, "local", true);
+        ChatResponseDto existingTerminal = new ChatResponseDto(
+                "ok",
+                7L,
+                "local",
+                true,
+                "EVIDENCE_ONLY",
+                42L,
+                LearningContextMetadata.empty(),
+                List.of(),
+                null);
+        ChatResponseDto replay = new ChatResponseDto(
+                "ok",
+                7L,
+                "local",
+                true,
+                "EVIDENCE_ONLY",
+                42L,
+                LearningContextMetadata.empty(),
+                List.of(),
+                null,
+                projection);
+
+        assertNull(legacy.getSelectionEntropy());
+        assertNull(existingTerminal.getSelectionEntropy());
+        assertEquals(projection, replay.getSelectionEntropy());
+
+        ObjectMapper mapper = new ObjectMapper();
+        String legacyJson = mapper.writeValueAsString(legacy);
+        String replayJson = mapper.writeValueAsString(replay);
+        assertFalse(legacyJson.contains("selectionEntropy"), legacyJson);
+        assertTrue(replayJson.contains("\"selectionEntropy\""), replayJson);
+        assertTrue(replayJson.contains("\"seedFingerprint\":\"012345abcdef\""), replayJson);
+        assertFalse(replayJson.contains("X-AWX-Selection-Seed"), replayJson);
+        assertFalse(replayJson.contains("raw-replay-seed"), replayJson);
     }
 
     @Test
@@ -152,5 +195,25 @@ class ChatResponseDtoLearningContextTest {
 
         assertTrue(source.contains("traceSuppressed(\"learningContext.signalCount\", ex);"));
         assertTrue(source.contains("TraceStore.put(\"learning.context.suppressed.\" + safeStage, true);"));
+    }
+
+    private static SelectionEntropyProjection replayProjection() {
+        return new SelectionEntropyProjection(
+                "awx.selection-entropy.v1",
+                "replay",
+                ReplaySelectionEntropy.ALGORITHM_VERSION,
+                true,
+                "matched",
+                "012345abcdef",
+                "a".repeat(64),
+                4,
+                3,
+                1,
+                0,
+                1,
+                1,
+                1,
+                false,
+                "");
     }
 }

@@ -41,6 +41,10 @@ SECRET_RE = re.compile(
 )
 
 
+def deployment_public_base_url() -> str:
+    return (os.environ.get("APP_PUBLIC_BASE_URL", "").strip() or os.environ.get("PUBLIC_BASE_URL", "").strip())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AWX MCP node smoke")
     parser.add_argument("--root", default=".", help="Node-local repo/worktree root to probe.")
@@ -102,6 +106,7 @@ def main() -> int:
             "failReason": safe_scalar(data.get("failReason", ""), 80),
             "localFallbackPresent": isinstance(data.get("localFallback"), dict),
             "outputCount": int(data.get("outputCount", 0) or 0),
+            "elapsedMs": max(0, int(data.get("elapsedMs", 0) or 0)),
             "evidence_needed": "; ".join(step_evidence),
         }
         steps.append(step)
@@ -111,7 +116,8 @@ def main() -> int:
         return data
 
     run_step("source_scan", {"root": str(root)})
-    runtime_base_url = os.environ.get("AWX_AGENT_DB_CONTEXT_BASE_URL", "").strip()
+    public_base_url = deployment_public_base_url()
+    runtime_base_url = os.environ.get("AWX_AGENT_DB_CONTEXT_BASE_URL", "").strip() or public_base_url
     trace_base_url = os.environ.get("AWX_TRACE_SNAPSHOT_BASE_URL", "").strip() or runtime_base_url
     local_runtime_probe = {
         "root": str(root),

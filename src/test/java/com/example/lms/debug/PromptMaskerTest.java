@@ -2,6 +2,7 @@ package com.example.lms.debug;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -53,5 +54,33 @@ class PromptMaskerTest {
 
         assertFalse(masked.contains(secretKey));
         assertFalse(masked.contains(publishableKey));
+    }
+
+    @Test
+    void masksHangulAdjacentSecretLabelsWithoutMatchingAsciiIdentifierSubstrings() {
+        String secret = "fixture-secret-abcdefghijklmnop";
+        String stars = "*".repeat(secret.length());
+
+        assertEquals(
+                "노출ownerToken=" + stars,
+                PromptMasker.mask("노출ownerToken=" + secret));
+
+        for (String asciiIdentifierPrefix : new String[]{"x", "9", "_"}) {
+            String embedded = asciiIdentifierPrefix + "ownerToken=" + secret;
+            assertEquals(embedded, PromptMasker.mask(embedded));
+        }
+
+        assertEquals(
+                "앞 ownerToken=\"" + stars + "\" 뒤",
+                PromptMasker.mask("앞 ownerToken=\"" + secret + "\" 뒤"));
+
+        String mixed = "노출ownerToken=" + secret
+                + " xownerToken=" + secret
+                + " ownerToken='" + secret + "'";
+        assertEquals(
+                "노출ownerToken=" + stars
+                        + " xownerToken=" + secret
+                        + " ownerToken='" + stars + "'",
+                PromptMasker.mask(mixed));
     }
 }

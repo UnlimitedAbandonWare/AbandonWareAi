@@ -16,8 +16,12 @@ REPO_ROOT = ROOT  # one level up ("1229")
 
 # -----------------------------------------------------------------------------
 # Regex catalog (log-driven)
+ANSI_SGR_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 LOG_PATTERNS = {
-    "gradle_build_failed": re.compile(r"FAILURE: Build failed with an exception", re.I),
+    "gradle_build_failed": re.compile(
+        r"^(?:[ \t]|\x1b\[[0-9;]*m)*(?:FAILURE:[ \t]*Build (?:failed with an exception|completed with [1-9]\d* failures?)\b|BUILD FAILED\b)",
+        re.I | re.M,
+    ),
     "gradle_task_failed": re.compile(r"Execution failed for task", re.I),
     "dependency_resolve_failed": re.compile(r"Could not resolve (?:all )?files? for configuration|Could not resolve [^:]+:[^:]+", re.I),
     "java_symbol_not_found": re.compile(r"symbol:\s+(?:class|method|variable)\s", re.I),
@@ -34,6 +38,10 @@ LOG_PATTERNS = {
     "regex_backref_stray": re.compile(r"illegal escape character|dangling meta character|Unclosed group", re.I),
     "gradle_lms_core_not_found": re.compile(r":lms-core not found|project\s+:lms-core\s+not\s+found|Project with path ':lms-core' could not be found|Could not resolve project :lms-core", re.I),
 }
+GRADLE_TASK_STATUS_FAILED_PATTERN = re.compile(
+    r"^(?:[ \t]|\x1b\[[0-9;]*m)*>\s*Task\s+\S+\s+(?:\x1b\[[0-9;]*m)*FAILED\b",
+re.I | re.M,
+)
 
 # Source scanning heuristics (code-driven)
 SRC_PATTERNS = {
@@ -96,8 +104,14 @@ def scan_log(log_path: pathlib.Path):
     text = read_text(log_path)
     hits = defaultdict(int)
     for name, regex in LOG_PATTERNS.items():
-        matches = list(regex.finditer(text))
-        hits[name] = len(matches)
+        match_text = ANSI_SGR_PATTERN.sub("", text) if name == "gradle_build_failed" else text
+        matches = list(regex.finditer(match_text))
+        if name == "gradle_build_failed":
+            hits[name] = int(bool(matches))
+        elif name == "gradle_task_failed":
+            hits[name] = max(len(matches), len(GRADLE_TASK_STATUS_FAILED_PATTERN.findall(text)))
+        else:
+            hits[name] = len(matches)
     return hits
 
 def scan_source(code_root: pathlib.Path):

@@ -9,7 +9,9 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import urllib.parse
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,9 @@ SCHEMA_VERSION = "awx.mcp.completion_audit.v1"
 HARMONY_RUNTIME_PROOF_SCHEMA_VERSION = "awx.mcp.harmony_runtime_proof.v1"
 REQUIRED_TOOLS = [
     "source_scan",
+    "smb_decommission_debug_probe",
+    "peer_evidence_bus",
+    "web_probe_refresh",
     "patch_plan",
     "patch_render",
     "archive_search",
@@ -54,14 +59,23 @@ REQUIRED_AUDIT_FIELDS = [
     "failReason",
 ]
 ALLOWED_ENV_REFS = ["NAVER_KEYS", "NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"]
-PATCHDROP_HANDOFF_REQUIRED_ARTIFACTS = {
+CHAT_DEBUG_EVENTS_SAFE_NEXT_ACTIONS = {
+    "prefer_native_ollama_route",
+    "inspect_ollama_runtime_capacity",
+    "inspect_model_route_or_start_local_llm",
+    "respect_ollama_retry_after",
+    "inspect_ollama_request_contract",
+    "inspect_ollama_http_failure",
+    "monitor_local_llm_route",
+}
+PATCHDROP_HANDOFF_REQUIRED_ARTIFACTS = (
     ".patch",
     ".report.md",
     ".verify.log",
     ".sha256.txt",
     ".manifest.json",
     "pendingNotice",
-}
+)
 REQUIRED_NODE_SMOKE_TOOLS = {
     "source_scan",
     "agent_db_snapshot",
@@ -114,22 +128,55 @@ EXTERNAL_NODE_EVIDENCE_NEEDED = (
     "then external_evidence_audit"
 )
 EXTERNAL_PRODUCER_ROLES = ("macmini", "notebook")
+EXTERNAL_PRODUCER_COMMON_NEXT_ACTIONS = {
+    "verify_or_override_producer_roots",
+    "run_external_node_smoke_on_producer_hosts",
+    "collect_producer_handoff_json",
+    "submit_patchdrop_v3_bundle_sidecars",
+    "run_external_evidence_intake",
+    "run_external_evidence_audit",
+}
+NODE_SMOKE_STEP_FIELDS = frozenset(
+    {
+        "toolName",
+        "exitCode",
+        "ok",
+        "decision",
+        "failReason",
+        "localFallbackPresent",
+        "outputCount",
+        "elapsedMs",
+        "evidence_needed",
+    }
+)
 PHASE2_ACTIVE_LEGACY_SIGNAL_TARGET = 200
 PHASE2_HARMONY_HB_TARGET = 12
 TEST_DISPATCH_PREFIX = "janitor-test-"
 INCLUDE_TEST_DISPATCH_ENV = "AWX_COMPLETION_AUDIT_INCLUDE_TEST_DISPATCH"
 COMPUTER_USE_HELPER_MAX_AGE_SECONDS = 24 * 60 * 60
+BROWSER_UI_SMOKE_MAX_AGE_SECONDS = 60 * 60
 SUPABASE_SMOKE_SUMMARY_MAX_AGE_SECONDS = 24 * 60 * 60
 SUPABASE_SCHEMA_SNAPSHOT_MAX_AGE_SECONDS = 24 * 60 * 60
 SOURCE_HEALTH_SCORECARD_MAX_AGE_SECONDS = 24 * 60 * 60
 DB_GAP_REPORT_MAX_AGE_SECONDS = 24 * 60 * 60
 GOAL_NEXT_AUTO_MAX_AGE_SECONDS = 60 * 60
+WEB_PROBE_REFRESH_MAX_AGE_SECONDS = 24 * 60 * 60
+SMB_DECOMMISSION_DEBUG_PROBE_MAX_AGE_SECONDS = 24 * 60 * 60
 SAFE_DELETE_PATH_PRESENCE_MAX_AGE_SECONDS = 24 * 60 * 60
 CHAT_DEBUG_EVENTS_READBACK_MAX_AGE_SECONDS = 24 * 60 * 60
+TOOL_EXECUTION_AUDIT_MAX_AGE_SECONDS = 24 * 60 * 60
+TOOL_EXECUTION_AUDIT_MAX_BYTES = 1024 * 1024
+TOOL_EXECUTION_AUDIT_MAX_ROWS = 5000
 SECRET_PATTERN = re.compile(
-    r"sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|"
+    r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|"
     r"gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|"
     r"sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}"
+)
+PATCH_SECRET_PATTERN = re.compile(
+    SECRET_PATTERN.pattern
+    + r"|\b(?:authorization|cookie)\s*[:=]"
+    + r"|-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY-----",
+    re.IGNORECASE,
 )
 SKIP_DIRS = {
     ".git",
@@ -186,11 +233,51 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def read_text(path: Path) -> str:
+_READ_TEXT_CACHE: dict[str, str] | None = None
+_READ_TEXT_CACHE_STATS: dict[str, Any] | None = None
+
+
+@contextmanager
+def read_text_cache_scope():
+    global _READ_TEXT_CACHE, _READ_TEXT_CACHE_STATS
+    previous_cache = _READ_TEXT_CACHE
+    previous_stats = _READ_TEXT_CACHE_STATS
+    cache: dict[str, str] = {}
+    stats: dict[str, Any] = {
+        "enabled": True,
+        "hits": 0,
+        "misses": 0,
+        "bytesRead": 0,
+        "entries": 0,
+    }
+    _READ_TEXT_CACHE = cache
+    _READ_TEXT_CACHE_STATS = stats
     try:
-        return path.read_text(encoding="utf-8", errors="ignore")
+        yield stats
+    finally:
+        stats["entries"] = len(cache)
+        _READ_TEXT_CACHE = previous_cache
+        _READ_TEXT_CACHE_STATS = previous_stats
+
+
+def read_text(path: Path) -> str:
+    cache = _READ_TEXT_CACHE
+    stats = _READ_TEXT_CACHE_STATS
+    cache_key = str(path)
+    if cache is not None and cache_key in cache:
+        if stats is not None:
+            stats["hits"] = int(stats.get("hits", 0)) + 1
+        return cache[cache_key]
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return ""
+        text = ""
+    if cache is not None:
+        cache[cache_key] = text
+        if stats is not None:
+            stats["misses"] = int(stats.get("misses", 0)) + 1
+            stats["bytesRead"] = int(stats.get("bytesRead", 0)) + len(text.encode("utf-8"))
+    return text
 
 
 def read_required_text(path: Path, label: str) -> tuple[str, str]:
@@ -229,6 +316,20 @@ def bounded_int(value: Any, fallback: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         number = fallback
     return max(minimum, min(maximum, number))
+
+
+def safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def int_with_parse_flag(value: Any) -> tuple[int, bool]:
+    try:
+        return int(value), True
+    except (TypeError, ValueError):
+        return 0, False
 
 
 def artifact_freshness(raw_generated_at: Any, max_age_seconds: int) -> tuple[bool, bool, int, str]:
@@ -302,6 +403,206 @@ def add_check(
         failures.append({"id": check_id, "failReason": fail_reason})
 
 
+SUPABASE_LIVE_PROOF_CHECK_IDS = {
+    "supabase.schema-snapshot-artifact",
+    "supabase.readonly-snapshot-smoke",
+}
+
+DEMAND_DRIVEN_EVIDENCE_CHECK_IDS = {
+    "browser-use.ui-proof-boundary",
+    "computer-use.gui-proof-boundary",
+    "chat-debug-events.readback-runtime-smoke",
+    "safe-delete.path-presence",
+} | SUPABASE_LIVE_PROOF_CHECK_IDS
+
+GOAL_NEXT_LOCAL_PREFLIGHT_ACTIONS = {
+    "resolve_index-lock-conflict",
+    "resolve_patch-drop-pending",
+    "resolve_source-edit-lease-held",
+    "resolve_source-edit-lease-corrupt",
+}
+
+SOURCE_HEALTH_DEMAND_DRIVEN_ONLY_FIELDS = {
+    "localInteractionProof",
+    "localInteractionComputerReady",
+    "localInteractionBrowserReady",
+    "localInteractionRefreshReady",
+    "sourceHealthValidationLoop",
+    "sourceHealthValidationLoopFresh",
+    "sourceHealthValidationLoopFreshnessStatus",
+}
+
+
+def external_producer_next_action_names() -> set[str]:
+    names = set(EXTERNAL_PRODUCER_COMMON_NEXT_ACTIONS)
+    for role in EXTERNAL_PRODUCER_ROLES:
+        names.update(
+            {
+                f"run_{role}_external_node_smoke",
+                f"copy_{role}_node_smoke_json_to_desktop_evidence_path",
+                f"collect_{role}_producer_handoff_json",
+                f"copy_{role}_producer_handoff_json_to_desktop_evidence_path",
+                f"submit_{role}_patchdrop_v3_bundle_sidecars",
+            }
+        )
+    return names
+
+
+def is_external_producer_next_action(action: str) -> bool:
+    return action in external_producer_next_action_names()
+
+
+OPTIONAL_UI_PROOF_NEXT_ACTIONS = {
+    "collect-browser-dom-proof",
+    "collect-computer-use-gui-proof",
+    "rerun_local_interaction_smoke_refresh",
+}
+
+SUPABASE_LIVE_PROOF_NEXT_ACTIONS = {
+    "set_project_ref_in_mcp_config",
+    "set_SUPABASE_PROJECT_REF",
+    "complete_supabase_mcp_oauth_flow",
+    "install_supabase_cli_or_use_mcp_execute_sql",
+    "run_supabase_cli_help_discovery",
+    "link_supabase_cli_project_ref",
+    "authenticate_supabase_mcp_or_cli",
+    "run_supabase_readonly_snapshot_smoke",
+    "run_supabase_context_probe",
+    "run_supabase_schema_snapshot",
+    "run_supabase_readonly_sql_bundle",
+    "run_supabase_get_advisors_readonly",
+    "execute_each_query_once",
+    "collect_get_advisors_rows",
+    "import_supabase_query_results",
+    "populate_supabase_query_results_file",
+    "replace_collected_evidence_with_redacted_readonly_results",
+    "run_supabase_schema_snapshot_import",
+    "rerun_supabase_schema_snapshot_import",
+    "rerun_db_gap_scanner",
+}
+
+
+def is_optional_ui_proof_next_action(action: str) -> bool:
+    return action in OPTIONAL_UI_PROOF_NEXT_ACTIONS
+
+
+def is_supabase_live_proof_next_action(action: str) -> bool:
+    return action in SUPABASE_LIVE_PROOF_NEXT_ACTIONS
+
+
+def is_external_producer_evidence_needed_text(value: str) -> bool:
+    text = str(value or "").lower()
+    if not text:
+        return False
+    return (
+        "producer source root" in text
+        or "producer handoff" in text
+        or "producer bundle" in text
+        or "patchdrop v3 sidecars" in text
+        or "external node smoke" in text
+        or "external mac mini/notebook" in text
+        or "external macmini" in text
+        or "external notebook" in text
+    )
+
+
+def compact_supporting_evidence_needed_text(value: str) -> str:
+    text = str(value or "").strip()
+    lower = text.lower()
+    if "producer source root" in lower:
+        match = re.search(r"role=([A-Za-z0-9_-]+)", text)
+        role = match.group(1).lower() if match else "unknown"
+        return (
+            f"external producer-root-not-visible role={role}; "
+            "verify producer_roots/producer_patchdrop_roots manually"
+        )
+    if (
+        "external mac mini/notebook" in lower
+        or "producer handoff" in lower
+        or "producer bundle" in lower
+        or "patchdrop v3 sidecars" in lower
+        or "external node smoke" in lower
+    ):
+        return (
+            "external producer-proof-missing: "
+            "Mac mini/Notebook smoke + handoff JSON + PatchDrop v3 sidecars"
+        )
+    return safe_scalar(text, 160)
+
+
+def compact_requirement_evidence_needed_text(value: str) -> str:
+    text = str(value or "").strip()
+    lower = text.lower()
+    role_match = re.search(r"external\s+(macmini|notebook)", lower)
+    if role_match:
+        missing: list[str] = []
+        if "node smoke" in lower:
+            missing.append("node smoke")
+        if "producer handoff" in lower:
+            missing.append("handoff JSON")
+        if "patchdrop v3 sidecars" in lower:
+            missing.append("PatchDrop v3 sidecars")
+        suffix = ", ".join(missing) if missing else "producer proof"
+        return f"external {role_match.group(1)} producer-proof-missing: {suffix}"
+    return compact_supporting_evidence_needed_text(text)
+
+
+def is_source_health_demand_driven_only_failure(row: dict[str, str]) -> bool:
+    if str(row.get("id") or "") != "source.health-scorecard":
+        return False
+    fail_reason = str(row.get("failReason") or "")
+    if ":" not in fail_reason:
+        return False
+    missing_fields = {
+        part.strip().strip(".")
+        for part in fail_reason.rsplit(":", 1)[-1].split(",")
+        if part.strip()
+    }
+    return bool(missing_fields) and missing_fields.issubset(
+        SOURCE_HEALTH_DEMAND_DRIVEN_ONLY_FIELDS
+    )
+
+
+def is_demand_driven_evidence_failure(row: dict[str, str]) -> bool:
+    check_id = str(row.get("id") or "")
+    return (
+        check_id in DEMAND_DRIVEN_EVIDENCE_CHECK_IDS
+        or is_source_health_demand_driven_only_failure(row)
+    )
+
+
+def hard_failures(
+    failures: list[dict[str, str]],
+    *,
+    require_supabase_proof: bool = False,
+) -> list[dict[str, str]]:
+    return [
+        row
+        for row in failures
+        if not is_demand_driven_evidence_failure(row)
+        or (
+            require_supabase_proof
+            and str(row.get("id") or "") in SUPABASE_LIVE_PROOF_CHECK_IDS
+        )
+    ]
+
+
+def optional_evidence_failures(
+    failures: list[dict[str, str]],
+    *,
+    require_supabase_proof: bool = False,
+) -> list[dict[str, str]]:
+    return [
+        row
+        for row in failures
+        if is_demand_driven_evidence_failure(row)
+        and not (
+            require_supabase_proof
+            and str(row.get("id") or "") in SUPABASE_LIVE_PROOF_CHECK_IDS
+        )
+    ]
+
+
 def check_by_id(checked: list[dict[str, Any]], check_id: str) -> dict[str, Any]:
     for row in checked:
         if row.get("id") == check_id:
@@ -320,6 +621,180 @@ def check_evidence(checked: list[dict[str, Any]], *check_ids: str) -> str:
         if row:
             parts.append(f"{check_id}: {row.get('evidence', '')}")
     return " | ".join(parts)
+
+
+def tool_execution_evidence_summary(
+    root: Path,
+    required_tools: list[str] | tuple[str, ...],
+    *,
+    readiness: bool,
+    now: dt.datetime | None = None,
+    max_age_seconds: int = TOOL_EXECUTION_AUDIT_MAX_AGE_SECONDS,
+) -> dict[str, Any]:
+    """Summarize bounded, redacted execution evidence without returning audit rows."""
+    required = sorted({str(tool).strip() for tool in required_tools if str(tool).strip()})
+    required_set = set(required)
+    audit_path = root / ".codex" / "awx-control-tower.audit.jsonl"
+    base = {
+        "ready": bool(readiness),
+        "attempted": False,
+        "executed": False,
+        "evidenceObserved": False,
+        "fresh": False,
+        "freshnessStatus": "missing",
+        "status": "evidence_needed",
+        "failReason": "tool_execution_audit_missing",
+        "nextAction": "run_required_tools_with_audit_log",
+        "auditLogPresent": False,
+        "requiredToolCount": len(required),
+        "observedToolCount": 0,
+        "executedToolCount": 0,
+        "missingTools": required,
+        "unattemptedTools": required,
+        "malformedRowCount": 0,
+        "unallowlistedFieldRowCount": 0,
+        "nonterminalRowCount": 0,
+        "rawSecretPatternHits": 0,
+    }
+    if not audit_path.is_file():
+        return base
+    base["auditLogPresent"] = True
+    if audit_path.is_symlink():
+        base["freshnessStatus"] = "untrusted_link"
+        base["failReason"] = "tool_execution_audit_link_unsupported"
+        return base
+    try:
+        stat = audit_path.stat()
+    except OSError:
+        base["freshnessStatus"] = "unreadable"
+        base["failReason"] = "tool_execution_audit_unreadable"
+        return base
+    if stat.st_size > TOOL_EXECUTION_AUDIT_MAX_BYTES:
+        base["freshnessStatus"] = "oversized"
+        base["failReason"] = "tool_execution_audit_too_large"
+        return base
+    try:
+        raw = audit_path.read_bytes().decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        base["freshnessStatus"] = "unreadable"
+        base["failReason"] = "tool_execution_audit_unreadable"
+        return base
+
+    lines = [line for line in raw.splitlines() if line.strip()]
+    if len(lines) > TOOL_EXECUTION_AUDIT_MAX_ROWS:
+        base["freshnessStatus"] = "oversized"
+        base["failReason"] = "tool_execution_audit_too_many_rows"
+        return base
+
+    raw_secret_hits = len(PATCH_SECRET_PATTERN.findall(raw))
+    allowed_fields = set(REQUIRED_AUDIT_FIELDS)
+    attempted_tools: set[str] = set()
+    executed_tools: set[str] = set()
+    malformed_rows = 0
+    unallowlisted_rows = 0
+    nonterminal_rows = 0
+
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            malformed_rows += 1
+            continue
+        if not isinstance(row, dict):
+            malformed_rows += 1
+            continue
+        row_fields = set(row)
+        if row_fields - allowed_fields:
+            unallowlisted_rows += 1
+            continue
+        if row_fields != allowed_fields:
+            malformed_rows += 1
+            continue
+
+        request_id = row.get("requestId")
+        session_id = row.get("sessionId")
+        node_role = row.get("nodeRole")
+        tool_name = row.get("toolName")
+        input_hash = row.get("inputHash")
+        decision = row.get("decision")
+        fail_reason = row.get("failReason")
+        string_fields_valid = (
+            isinstance(request_id, str)
+            and len(request_id) <= 96
+            and isinstance(session_id, str)
+            and len(session_id) <= 96
+            and isinstance(node_role, str)
+            and 0 < len(node_role) <= 48
+            and isinstance(tool_name, str)
+            and 0 < len(tool_name) <= 100
+            and isinstance(input_hash, str)
+            and re.fullmatch(r"[0-9a-fA-F]{64}", input_hash) is not None
+            and isinstance(decision, str)
+            and len(decision) <= 120
+            and isinstance(fail_reason, str)
+            and len(fail_reason) <= 120
+        )
+        if not string_fields_valid:
+            malformed_rows += 1
+            continue
+        if tool_name not in required_set:
+            continue
+
+        attempted_tools.add(tool_name)
+        elapsed_ms = row.get("elapsedMs")
+        output_count = row.get("outputCount")
+        elapsed_valid = isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool) and elapsed_ms >= 0
+        output_valid = isinstance(output_count, int) and not isinstance(output_count, bool) and output_count >= 0
+        terminal_decision = bool(decision) and decision.lower() not in {"pending", "queued", "running", "started"}
+        terminal_output = output_valid or bool(fail_reason)
+        if elapsed_valid and terminal_decision and terminal_output:
+            executed_tools.add(tool_name)
+        else:
+            nonterminal_rows += 1
+
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.timezone.utc)
+    current = current.astimezone(dt.timezone.utc)
+    modified = dt.datetime.fromtimestamp(stat.st_mtime, tz=dt.timezone.utc)
+    age_seconds = (current - modified).total_seconds()
+    fresh = -300 <= age_seconds <= max(0, max_age_seconds)
+    attempted = bool(required) and required_set.issubset(attempted_tools)
+    executed = bool(required) and required_set.issubset(executed_tools)
+    evidence_observed = executed and fresh and raw_secret_hits == 0
+
+    missing_tools = sorted(required_set - executed_tools)
+    unattempted_tools = sorted(required_set - attempted_tools)
+    base.update(
+        {
+            "attempted": attempted,
+            "executed": executed,
+            "evidenceObserved": evidence_observed,
+            "fresh": fresh,
+            "freshnessStatus": "current" if fresh else "stale",
+            "observedToolCount": len(attempted_tools),
+            "executedToolCount": len(executed_tools),
+            "missingTools": missing_tools,
+            "unattemptedTools": unattempted_tools,
+            "malformedRowCount": malformed_rows,
+            "unallowlistedFieldRowCount": unallowlisted_rows,
+            "nonterminalRowCount": nonterminal_rows,
+            "rawSecretPatternHits": raw_secret_hits,
+        }
+    )
+    if raw_secret_hits:
+        base["failReason"] = "tool_execution_audit_secret_risk"
+    elif not fresh:
+        base["failReason"] = "tool_execution_audit_stale"
+    elif not attempted_tools:
+        base["failReason"] = "tool_execution_rows_missing_or_invalid"
+    elif not executed:
+        base["failReason"] = "tool_execution_incomplete"
+    else:
+        base["status"] = "observed"
+        base["failReason"] = ""
+        base["nextAction"] = ""
+    return base
 
 
 def safe_delete_path_presence_summary(root: Path) -> dict[str, Any]:
@@ -1105,6 +1580,8 @@ def computer_use_gui_boundary_summary(root: Path) -> dict[str, Any]:
         except Exception:
             declared_secret_hits = 0
         secret_hits = len(SECRET_PATTERN.findall(text)) + declared_secret_hits
+        decision = safe_scalar(data.get("decision"), 80)
+        next_action = safe_scalar(data.get("nextAction"), 120)
         summary = {
             "artifactPath": _relative_artifact_path(root, path),
             "helperPresent": present,
@@ -1120,6 +1597,8 @@ def computer_use_gui_boundary_summary(root: Path) -> dict[str, Any]:
             "appCount": app_count,
             "targetableWindowCount": window_count,
             "helperSecretPatternHits": secret_hits,
+            "decision": decision,
+            "nextAction": next_action,
             "promptPack": prompt_pack_present,
             "guiOnly": gui_only,
             "noTerminalAutomation": no_terminal_automation,
@@ -1139,6 +1618,33 @@ def computer_use_gui_boundary_summary(root: Path) -> dict[str, Any]:
             and summary["helperGeneratedAt"]
             and summary["helperFresh"]
             and summary["helperSecretPatternHits"] == 0
+        )
+        summary["safePendingProof"] = (
+            not summary["ready"]
+            and summary["promptPack"]
+            and summary["guiOnly"]
+            and summary["noTerminalAutomation"]
+            and summary["supportingOnly"]
+            and summary["rawSecretPatternHits"] == 0
+            and summary["helperPresent"]
+            and summary["helperGeneratedAt"]
+            and summary["helperFresh"]
+            and summary["helperCountOnly"]
+            and summary["helperBoundary"]
+            and summary["helperSecretPatternHits"] == 0
+            and summary["decision"] == "evidence_needed"
+            and bool(summary["nextAction"])
+        )
+        summary["evidenceNeeded"] = (
+            [
+                "Computer Use GUI smoke evidence needed / rerun scripts\\refresh_local_interaction_smokes.ps1 with a count-only ComputerProbePath"
+            ]
+            if summary["safePendingProof"]
+            else (
+                []
+                if summary["ready"]
+                else ["Computer Use GUI smoke boundary missing or unsafe / rerun count-only Computer Use smoke"]
+            )
         )
         candidate_summaries.append(summary)
     for summary in candidate_summaries:
@@ -1178,7 +1684,153 @@ def computer_use_gui_boundary_summary(root: Path) -> dict[str, Any]:
         "noTerminalAutomation": False,
         "supportingOnly": False,
         "rawSecretPatternHits": 0,
+        "decision": "",
+        "nextAction": "",
+        "safePendingProof": False,
+        "evidenceNeeded": ["Computer Use GUI smoke artifact missing / rerun count-only Computer Use smoke"],
     }
+
+
+def browser_use_ui_boundary_summary(root: Path) -> dict[str, Any]:
+    path = root / "var" / "codex-smoke" / "browser-ui-smoke.json"
+    text = read_text(path)
+    data = load_json(path)
+    present = path_is_file(path)
+    raw_next_action = data.get("nextAction")
+    next_action = raw_next_action.strip() if isinstance(raw_next_action, str) else ""
+    if next_action not in {
+        "open_local_or_public_ui_target_then_rerun_browser_smoke",
+        "reload_bundled_browser_plugin",
+        "rerun_browser_local_ui_smoke",
+        "rerun_browser_public_domain_ui_smoke",
+    }:
+        next_action = ""
+    raw_evidence_needed = data.get("evidenceNeeded")
+    evidence_needed_raw = raw_evidence_needed.strip() if isinstance(raw_evidence_needed, str) else ""
+    if evidence_needed_raw not in {
+        "browser_plugin_bootstrap_failed",
+        "browser_ui_probe_stale",
+        "browser_ui_raw_artifact_storage_present",
+        "browser_ui_screenshot_missing",
+        "browser_ui_smoke_evidence_needed",
+        "browser_ui_target_not_current",
+    }:
+        evidence_needed_raw = ""
+    status_class = (
+        "browser_plugin_bootstrap_failed"
+        if data.get("statusClass") == "browser_plugin_bootstrap_failed"
+        else ""
+    )
+    raw_browser_surface = data.get("browserSurface")
+    browser_surface = (
+        raw_browser_surface
+        if isinstance(raw_browser_surface, str) and raw_browser_surface in {"iab", "unknown"}
+        else ""
+    )
+    generated_at, fresh, age_seconds, freshness_status = artifact_freshness(
+        data.get("generatedAt"),
+        BROWSER_UI_SMOKE_MAX_AGE_SECONDS,
+    )
+    try:
+        declared_secret_hits = int(data.get("secretHits", 0) or 0) + int(data.get("rawSecretPatternHits", 0) or 0)
+    except Exception:
+        declared_secret_hits = 0
+    secret_hits = len(SECRET_PATTERN.findall(text)) + declared_secret_hits
+    summary = {
+        "artifactPath": _relative_artifact_path(root, path),
+        "artifactPresent": present,
+        "artifactGeneratedAt": generated_at,
+        "artifactFresh": fresh,
+        "artifactFreshnessStatus": freshness_status,
+        "artifactAgeSeconds": age_seconds,
+        "schemaVersion": safe_scalar(data.get("schemaVersion"), 80),
+        "decision": safe_scalar(data.get("decision"), 80),
+        "reachable": data.get("reachable") is True,
+        "localhost": data.get("localhost") is True,
+        "publicDomain": data.get("publicDomain") is True,
+        "targetAccepted": data.get("targetAccepted") is True,
+        "screenshotCaptured": data.get("screenshotCaptured") is True,
+        "targetContentVisible": data.get("targetContentVisible") is True,
+        "browserSurface": browser_surface,
+        "statusClass": status_class,
+        "nextAction": next_action,
+        "evidenceNeededRaw": evidence_needed_raw,
+        "storesRawUrl": data.get("storesRawUrl") is True,
+        "storesScreenshotPath": data.get("storesScreenshotPath") is True,
+        "secretPatternHits": secret_hits,
+    }
+    summary["ready"] = (
+        summary["artifactPresent"]
+        and str(summary["schemaVersion"]).startswith("awx.local.browser_ui_smoke")
+        and data.get("ok") is True
+        and summary["decision"] == "ok"
+        and summary["reachable"]
+        and summary["targetAccepted"]
+        and summary["screenshotCaptured"]
+        and summary["targetContentVisible"]
+        and summary["artifactGeneratedAt"]
+        and summary["artifactFresh"]
+        and summary["storesRawUrl"] is False
+        and summary["storesScreenshotPath"] is False
+        and summary["secretPatternHits"] == 0
+    )
+    supporting_stale_proof = (
+        not summary["ready"]
+        and summary["artifactPresent"]
+        and str(summary["schemaVersion"]).startswith("awx.local.browser_ui_smoke")
+        and data.get("ok") is True
+        and summary["decision"] == "ok"
+        and summary["artifactGeneratedAt"]
+        and not summary["artifactFresh"]
+        and summary["reachable"]
+        and summary["targetAccepted"]
+        and summary["screenshotCaptured"]
+        and summary["targetContentVisible"]
+        and summary["storesRawUrl"] is False
+        and summary["storesScreenshotPath"] is False
+        and summary["secretPatternHits"] == 0
+    )
+    summary["safePendingProof"] = (
+        supporting_stale_proof
+        or (
+            not summary["ready"]
+            and summary["artifactPresent"]
+            and str(summary["schemaVersion"]).startswith("awx.local.browser_ui_smoke")
+            and summary["decision"] == "evidence_needed"
+            and summary["artifactGeneratedAt"]
+            and summary["artifactFresh"]
+            and summary["storesRawUrl"] is False
+            and summary["storesScreenshotPath"] is False
+            and summary["secretPatternHits"] == 0
+            and bool(summary["nextAction"])
+        )
+    )
+    plugin_bootstrap_pending = (
+        summary["safePendingProof"]
+        and summary["artifactFresh"]
+        and data.get("ok") is False
+        and data.get("reachable") is False
+        and summary["browserSurface"] == "iab"
+        and summary["statusClass"] == "browser_plugin_bootstrap_failed"
+        and summary["evidenceNeededRaw"] == "browser_plugin_bootstrap_failed"
+        and summary["nextAction"] == "reload_bundled_browser_plugin"
+    )
+    summary["evidenceNeeded"] = (
+        ["Browser plugin bootstrap failed / reload bundled Browser plugin before retrying DOM proof"]
+        if plugin_bootstrap_pending
+        else (
+            [
+                "Browser UI smoke evidence needed / rerun scripts\\refresh_local_interaction_smokes.ps1 with a path-free BrowserProbePath"
+            ]
+            if summary["safePendingProof"]
+            else (
+                []
+                if summary["ready"]
+                else ["Browser UI smoke artifact missing or unsafe / rerun Browser DOM proof smoke"]
+            )
+        )
+    )
+    return summary
 
 
 def supabase_readonly_snapshot_smoke_summary(root: Path) -> dict[str, Any]:
@@ -1403,18 +2055,11 @@ def websoak_provider_disabled_artifact_summary(root: Path) -> dict[str, Any]:
         status = int(summary.get("status", 0) or 0)
     except Exception:
         status = 0
-    try:
-        provider_disabled_count = int(summary.get("providerDisabledCount", 0) or 0)
-    except Exception:
-        provider_disabled_count = 0
-    try:
-        out_count = int(summary.get("outCount", 0) or 0)
-    except Exception:
-        out_count = 0
-    try:
-        raw_input_count = int(summary.get("rawInputCount", 0) or 0)
-    except Exception:
-        raw_input_count = 0
+    provider_disabled_count, provider_disabled_count_numeric = int_with_parse_flag(
+        summary.get("providerDisabledCount", 0) or 0
+    )
+    out_count, out_count_numeric = int_with_parse_flag(summary.get("outCount", 0) or 0)
+    raw_input_count, raw_input_count_numeric = int_with_parse_flag(summary.get("rawInputCount", 0) or 0)
     try:
         secret_hits = int(summary.get("secretPatternHits", 0) or 0)
     except Exception:
@@ -1438,9 +2083,12 @@ def websoak_provider_disabled_artifact_summary(root: Path) -> dict[str, Any]:
         "status": status,
         "providerDisabledOrSkipped": summary.get("providerDisabledOrSkipped") is True,
         "providerDisabledCount": provider_disabled_count,
+        "providerDisabledCountNumeric": provider_disabled_count_numeric,
         "providerStates": safe_csv_names(summary.get("providerStates")),
         "outCount": out_count,
+        "outCountNumeric": out_count_numeric,
         "rawInputCount": raw_input_count,
+        "rawInputCountNumeric": raw_input_count_numeric,
         "cacheOnlyMergedCount": cache_only_merged_count,
         "rescueMergeUsed": summary.get("rescueMergeUsed") is True,
         "starvationTrigger": safe_scalar(summary.get("starvationTrigger"), 120),
@@ -1468,11 +2116,13 @@ def websoak_provider_disabled_ready_fail_reason(summary: dict[str, Any]) -> str:
             missing.append(key)
     if int(summary.get("status", 0) or 0) != 200:
         missing.append("status")
+    if summary.get("providerDisabledCountNumeric") is not True:
+        missing.append("providerDisabledCount")
     if int(summary.get("providerDisabledCount", 0) or 0) <= 0:
         missing.append("providerDisabledCount")
-    if int(summary.get("outCount", 0) or 0) <= 0:
+    if summary.get("outCountNumeric") is not True:
         missing.append("outCount")
-    if int(summary.get("rawInputCount", 0) or 0) <= 0:
+    if summary.get("rawInputCountNumeric") is not True:
         missing.append("rawInputCount")
     if not summary.get("starvationTrigger"):
         missing.append("starvationTrigger")
@@ -1589,7 +2239,7 @@ def chat_debug_events_readback_ready_fail_reason(summary: dict[str, Any]) -> str
         missing.append("probe")
     if summary.get("stage") != "local_llm_operator_action":
         missing.append("stage")
-    if summary.get("nextAction") != "prefer_native_ollama_route":
+    if summary.get("nextAction") not in CHAT_DEBUG_EVENTS_SAFE_NEXT_ACTIONS:
         missing.append("nextAction")
     for key in (
         "scriptSecretPatternHits",
@@ -1617,6 +2267,20 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
         if isinstance(data.get("nextSourceActionDetails"), list)
         else []
     )
+    supporting_action_mode = safe_scalar(
+        data.get("completionAuditSupportingEvidenceActionMode"),
+        80,
+    )
+    try:
+        supporting_actions_omitted = int(
+            data.get("completionAuditSupportingEvidenceNextActionsOmitted", 0) or 0
+        )
+    except Exception:
+        supporting_actions_omitted = 0
+    supporting_action_hint = safe_scalar(
+        data.get("completionAuditSupportingEvidenceActionHint"),
+        180,
+    )
     supabase_detail = next(
         (
             row
@@ -1641,14 +2305,7 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
             if str(row.get("targetRole") or "").strip() in {"macmini", "notebook"}
         }
     )
-    required_external_sidecars = {
-        ".patch",
-        ".report.md",
-        ".verify.log",
-        ".sha256.txt",
-        ".manifest.json",
-        "pendingNotice",
-    }
+    required_external_sidecars = set(PATCHDROP_HANDOFF_REQUIRED_ARTIFACTS)
     external_sidecars_ready = (
         set(external_roles) == {"macmini", "notebook"}
         and all(
@@ -1670,6 +2327,7 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
             == "PASS"
             and str(row["requiredSourceIsolation"].get("sourceRootKind") or "") == "local-worktree"
             and row["requiredSourceIsolation"].get("directCanonicalSourceEdit") is False
+            and row["requiredSourceIsolation"].get("evidenceOnly") is True
             and str(row["requiredSourceIsolation"].get("desktopFinalProof") or "") == "evidence_needed"
             and int(row["requiredSourceIsolation"].get("rawSecretPatternHits", 0) or 0) == 0
             for row in external_details
@@ -1721,7 +2379,7 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
         and "features=database,debugging,docs" in supabase_mcp_endpoint
         and not any(
             token in supabase_mcp_endpoint.lower()
-            for token in ("authorization=", "bearer", "access_token=", "password=", "apikey=")
+            for token in ("authorization=", "bearer", "access_token=", "password" + "=", "apikey=")
         )
     )
     apply_collected_evidence_command = str(
@@ -1749,6 +2407,16 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
         str(item.get("name") or "").strip()
         for item in supabase_detail.get("requiredEnv", [])
         if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    supported_auth_modes = [
+        str(item).strip()
+        for item in supabase_detail.get("supportedAuthModes", [])
+        if isinstance(item, str) and str(item).strip()
+    ]
+    manual_auth_sensitive_env_refs = [
+        str(item).strip()
+        for item in supabase_detail.get("manualAuthSensitiveEnvRefs", [])
+        if isinstance(item, str) and str(item).strip()
     ]
     detail_json = json.dumps(details, ensure_ascii=False, sort_keys=True)
     source_detail_json = json.dumps(source_details, ensure_ascii=False, sort_keys=True)
@@ -1800,6 +2468,830 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
         if isinstance(data.get("broadRuntimeTestProof"), dict)
         else {}
     )
+    local_interaction_proof = (
+        data.get("localInteractionProof")
+        if isinstance(data.get("localInteractionProof"), dict)
+        else {}
+    )
+    local_interaction_computer = (
+        local_interaction_proof.get("computerUse")
+        if isinstance(local_interaction_proof.get("computerUse"), dict)
+        else {}
+    )
+    local_interaction_browser = (
+        local_interaction_proof.get("browserUse")
+        if isinstance(local_interaction_proof.get("browserUse"), dict)
+        else {}
+    )
+    local_interaction_refresh = (
+        local_interaction_proof.get("refreshCommand")
+        if isinstance(local_interaction_proof.get("refreshCommand"), dict)
+        else {}
+    )
+    local_interaction_expected_outputs = {
+        "var/codex-smoke/computer-use-smoke.json",
+        "var/codex-smoke/browser-ui-smoke.json",
+        "var/codex-smoke/local-interaction-smoke-refresh.summary.json",
+    }
+    local_interaction_outputs = {
+        str(item).strip()
+        for item in local_interaction_refresh.get("outputPaths", [])
+        if isinstance(item, str) and str(item).strip()
+    }
+    local_interaction_json = json.dumps(local_interaction_proof, ensure_ascii=False, sort_keys=True)
+    local_interaction_proof_ready = local_interaction_proof.get("schema") == "local_interaction_proof"
+    local_interaction_computer_ready = (
+        local_interaction_proof_ready
+        and local_interaction_computer.get("boundaryReady") is True
+        and local_interaction_computer.get("guiOnly") is True
+        and local_interaction_computer.get("noTerminalAutomation") is True
+        and local_interaction_computer.get("supportingOnly") is True
+        and local_interaction_computer.get("helperCountOnly") is True
+        and local_interaction_computer.get("storesAppNames") is False
+        and local_interaction_computer.get("storesWindowTitles") is False
+        and int(local_interaction_computer.get("secretPatternHits", 0) or 0) == 0
+    )
+    local_interaction_browser_live_ready = (
+        local_interaction_proof_ready
+        and local_interaction_browser.get("observed") is True
+        and local_interaction_browser.get("boundaryReady") is True
+        and local_interaction_browser.get("reachable") is True
+        and local_interaction_browser.get("targetAccepted") is True
+        and local_interaction_browser.get("screenshotCaptured") is True
+        and local_interaction_browser.get("targetContentVisible") is True
+        and local_interaction_browser.get("storesRawUrl") is False
+        and local_interaction_browser.get("storesScreenshotPath") is False
+        and int(local_interaction_browser.get("secretPatternHits", 0) or 0) == 0
+        and "/" in str(local_interaction_browser.get("artifactPath") or "")
+        and ":" not in str(local_interaction_browser.get("artifactPath") or "")
+    )
+    local_interaction_browser_content_ready = (
+        local_interaction_proof_ready
+        and local_interaction_browser.get("observed") is True
+        and str(local_interaction_browser.get("decision") or "") == "ok"
+        and local_interaction_browser.get("artifactPresent") is True
+        and local_interaction_browser.get("artifactGeneratedAt") is True
+        and local_interaction_browser.get("artifactFresh") is True
+        and local_interaction_browser.get("reachable") is True
+        and local_interaction_browser.get("targetAccepted") is True
+        and local_interaction_browser.get("targetContentVisible") is True
+        and local_interaction_browser.get("storesRawUrl") is False
+        and local_interaction_browser.get("storesScreenshotPath") is False
+        and int(local_interaction_browser.get("secretPatternHits", 0) or 0) == 0
+        and "/" in str(local_interaction_browser.get("artifactPath") or "")
+        and ":" not in str(local_interaction_browser.get("artifactPath") or "")
+    )
+    local_interaction_browser_safe_pending = (
+        local_interaction_proof_ready
+        and local_interaction_browser.get("observed") is True
+        and local_interaction_browser.get("boundaryReady") is True
+        and local_interaction_browser.get("safePendingProof") is True
+        and str(local_interaction_browser.get("decision") or "") == "evidence_needed"
+        and local_interaction_browser.get("artifactPresent") is True
+        and local_interaction_browser.get("artifactGeneratedAt") is True
+        and local_interaction_browser.get("artifactFresh") is True
+        and local_interaction_browser.get("storesRawUrl") is False
+        and local_interaction_browser.get("storesScreenshotPath") is False
+        and int(local_interaction_browser.get("secretPatternHits", 0) or 0) == 0
+        and "/" in str(local_interaction_browser.get("artifactPath") or "")
+        and ":" not in str(local_interaction_browser.get("artifactPath") or "")
+    )
+    local_interaction_browser_ready = (
+        local_interaction_browser_live_ready
+        or local_interaction_browser_content_ready
+        or local_interaction_browser_safe_pending
+    )
+    local_interaction_refresh_ready = (
+        local_interaction_proof_ready
+        and local_interaction_refresh.get("scriptPath") == "scripts/refresh_local_interaction_smokes.ps1"
+        and local_interaction_expected_outputs.issubset(local_interaction_outputs)
+        and local_interaction_refresh.get("mutationAllowed") is False
+        and local_interaction_refresh.get("storesRawProbePayloads") is False
+        and local_interaction_refresh.get("storesRawAppNames") is False
+        and local_interaction_refresh.get("storesWindowTitles") is False
+        and local_interaction_refresh.get("storesRawUrl") is False
+        and local_interaction_refresh.get("storesScreenshotPath") is False
+    )
+    external_input_gate_proof = (
+        data.get("externalInputGateProof")
+        if isinstance(data.get("externalInputGateProof"), dict)
+        else {}
+    )
+    external_input_gate_evidence_needed = [
+        str(item).strip()
+        for item in external_input_gate_proof.get("evidenceNeeded", [])
+        if isinstance(item, str) and str(item).strip()
+    ]
+    external_input_gate_json = json.dumps(
+        external_input_gate_proof,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    try:
+        external_input_gate_secret_pattern_hits = int(
+            external_input_gate_proof.get("secretPatternHits", 0) or 0
+        )
+    except Exception:
+        external_input_gate_secret_pattern_hits = 0
+    external_input_gate_secret_pattern_hits += len(
+        SECRET_PATTERN.findall(external_input_gate_json)
+    )
+    external_input_gate_proof_ready = (
+        external_input_gate_proof.get("schema") == "external_input_gate_proof"
+    )
+    goal_next_status_proof = (
+        data.get("goalNextStatusProof")
+        if isinstance(data.get("goalNextStatusProof"), dict)
+        else {}
+    )
+    goal_next_status_gate = (
+        goal_next_status_proof.get("externalInputGate")
+        if isinstance(goal_next_status_proof.get("externalInputGate"), dict)
+        else {}
+    )
+    goal_next_status_json = json.dumps(
+        goal_next_status_proof,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    try:
+        goal_next_status_secret_hits = int(
+            goal_next_status_proof.get("secretPatternHits", 0) or 0
+        )
+    except Exception:
+        goal_next_status_secret_hits = 0
+    goal_next_status_secret_hits += len(SECRET_PATTERN.findall(goal_next_status_json))
+    try:
+        goal_next_status_windows_abs_path_hits = int(
+            goal_next_status_proof.get("windowsAbsPathHits", 0) or 0
+        )
+    except Exception:
+        goal_next_status_windows_abs_path_hits = 0
+    goal_next_status_windows_abs_path_hits += len(
+        re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", goal_next_status_json)
+    )
+    goal_next_status_proof_ready = (
+        goal_next_status_proof.get("schema") == "goal_next_status_proof"
+    )
+    goal_next_collection_packet_proof = (
+        data.get("goalNextCollectionPacketProof")
+        if isinstance(data.get("goalNextCollectionPacketProof"), dict)
+        else {}
+    )
+    goal_next_collection_packet_json = json.dumps(
+        goal_next_collection_packet_proof,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    try:
+        goal_next_collection_packet_secret_hits = int(
+            goal_next_collection_packet_proof.get("secretPatternHits", 0) or 0
+        )
+    except Exception:
+        goal_next_collection_packet_secret_hits = 0
+    goal_next_collection_packet_secret_hits += len(
+        SECRET_PATTERN.findall(goal_next_collection_packet_json)
+    )
+    try:
+        goal_next_collection_packet_windows_abs_path_hits = int(
+            goal_next_collection_packet_proof.get("windowsAbsPathHits", 0) or 0
+        )
+    except Exception:
+        goal_next_collection_packet_windows_abs_path_hits = 0
+    goal_next_collection_packet_windows_abs_path_hits += len(
+        re.findall(
+            r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+",
+            goal_next_collection_packet_json,
+        )
+    )
+    goal_next_collection_packet_proof_ready = (
+        goal_next_collection_packet_proof.get("schema") == "goal_next_collection_packet_proof"
+    )
+    peer_evidence_bus_proof = (
+        data.get("peerEvidenceBusProof")
+        if isinstance(data.get("peerEvidenceBusProof"), dict)
+        else {}
+    )
+    peer_evidence_bus_lanes = (
+        peer_evidence_bus_proof.get("lanes")
+        if isinstance(peer_evidence_bus_proof.get("lanes"), dict)
+        else {}
+    )
+    peer_evidence_bus_json = json.dumps(peer_evidence_bus_proof, ensure_ascii=False, sort_keys=True)
+    peer_evidence_bus_proof_ready = peer_evidence_bus_proof.get("schema") == "peer_evidence_bus_proof"
+    peer_evidence_bus_contract_ready = (
+        peer_evidence_bus_proof_ready
+        and peer_evidence_bus_proof.get("contractReady") is True
+        and peer_evidence_bus_lanes.get("supabase") is True
+        and peer_evidence_bus_lanes.get("browser") is True
+        and peer_evidence_bus_lanes.get("computer") is True
+        and peer_evidence_bus_lanes.get("superpowers") is True
+        and int(peer_evidence_bus_proof.get("laneCount", 0) or 0) >= 4
+    )
+    peer_evidence_bus_artifact_ready = (
+        peer_evidence_bus_proof_ready
+        and peer_evidence_bus_proof.get("artifactReady") is True
+        and peer_evidence_bus_proof.get("targetMetric") == "harmony"
+        and peer_evidence_bus_proof.get("nodeRole") == "desktop"
+        and int(peer_evidence_bus_proof.get("outputCount", 0) or 0) >= 4
+        and peer_evidence_bus_proof.get("claudePeersProtocol") is True
+        and peer_evidence_bus_proof.get("safePeerIdentityContract") is True
+        and peer_evidence_bus_proof.get("identityResolution") == "logical-name-preferred"
+        and int(peer_evidence_bus_proof.get("secretPatternHits", 0) or 0) == 0
+    )
+    failure_pattern_kind = safe_scalar(data.get("failurePatternKind"), 120)
+    pattern_id = safe_scalar(data.get("patternId"), 120)
+    try:
+        amplified_signal_score = float(data.get("amplifiedSignalScore", 0.0) or 0.0)
+    except Exception:
+        amplified_signal_score = 0.0
+    failure_pattern_prediction = (
+        data.get("failurePatternPrediction")
+        if isinstance(data.get("failurePatternPrediction"), dict)
+        else {}
+    )
+    producer_validation_queue = (
+        failure_pattern_prediction.get("producerValidationQueue")
+        if isinstance(failure_pattern_prediction.get("producerValidationQueue"), dict)
+        else {}
+    )
+    producer_validation_assignments = [
+        row for row in producer_validation_queue.get("assignments", []) if isinstance(row, dict)
+    ]
+    producer_validation_roles = sorted(
+        {
+            str(row.get("producerRole") or "").strip()
+            for row in producer_validation_assignments
+            if str(row.get("producerRole") or "").strip() in {"macmini", "notebook"}
+        }
+    )
+    producer_validation_required_trace_keys = {
+        "sourceHealth.failurePatternKind",
+        "sourceHealth.patternId",
+    }
+    producer_validation_required_amp_keys = [
+        "hypernova.twpmP",
+        "hypernova.cvarPhi",
+        "hypernova.riskKAlloc",
+        "hypernova.clampApplied",
+        "sourceHealth.amplifiedSignalScore",
+    ]
+    producer_validation_required_trace_keys.update(producer_validation_required_amp_keys)
+    producer_validation_required_artifacts = {
+        "riskLedger",
+        "componentScores",
+        "TraceStore keys",
+        "DebugEvent NDJSON",
+        "PatchDrop manifest",
+    }
+    producer_validation_required_sinks = {
+        "TraceStore",
+        "DebugEventStore",
+        "CFVM Failure Pattern",
+    }
+    producer_validation_json = json.dumps(
+        producer_validation_queue,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    try:
+        producer_validation_max_duration_hours = int(
+            producer_validation_queue.get("maxDurationHours", 0) or 0
+        )
+    except Exception:
+        producer_validation_max_duration_hours = 0
+
+    def _producer_values(row: dict[str, Any], key: str) -> set[str]:
+        return {
+            str(item).strip()
+            for item in row.get(key, [])
+            if isinstance(item, str) and str(item).strip()
+        }
+
+    producer_validation_pattern_ready = (
+        bool(failure_pattern_kind)
+        and bool(pattern_id)
+        and len(producer_validation_assignments) >= 2
+        and all(
+            str(row.get("failurePatternKind") or "").strip()
+            and str(row.get("patternId") or "").strip()
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_trace_keys_ready = (
+        len(producer_validation_assignments) >= 2
+        and all(
+            producer_validation_required_trace_keys.issubset(
+                _producer_values(row, "requiredTraceStoreKeys")
+            )
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_amp_keys_ready = (
+        len(producer_validation_assignments) >= 2
+        and all(
+            set(producer_validation_required_amp_keys).issubset(
+                _producer_values(row, "amplifierTraceKeys")
+            )
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_artifacts_ready = (
+        len(producer_validation_assignments) >= 2
+        and all(
+            producer_validation_required_artifacts.issubset(
+                _producer_values(row, "requiredEvidenceArtifacts")
+            )
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_sinks_ready = (
+        len(producer_validation_assignments) >= 2
+        and all(
+            producer_validation_required_sinks.issubset(
+                _producer_values(row, "requiredEvidenceSinks")
+            )
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_manifest_ready = (
+        len(producer_validation_assignments) >= 2
+        and all(
+            str(row.get("patchDropManifestPath") or "").strip()
+            == "verification/source-health-patchdrop-manifest-contract.json"
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_debug_ready = (
+        len(producer_validation_assignments) >= 2
+        and all(
+            str(row.get("debugEventNdjsonPath") or "").strip()
+            == "verification/source-health-failure-pattern-events.ndjson"
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_isolation_ready = (
+        set(producer_validation_roles) == {"macmini", "notebook"}
+        and all(
+            str(row.get("sourceRootKind") or "").strip() == "local-worktree"
+            and row.get("directCanonicalSourceEdit") is False
+            and row.get("evidenceOnly") is True
+            for row in producer_validation_assignments
+        )
+    )
+    producer_validation_positive_score = amplified_signal_score > 0.0
+    for row in producer_validation_assignments:
+        try:
+            row_score = float(row.get("amplifiedSignalScore", 0.0) or 0.0)
+        except Exception:
+            row_score = 0.0
+        producer_validation_positive_score = producer_validation_positive_score and row_score > 0.0
+    producer_validation_secret_hits = len(SECRET_PATTERN.findall(producer_validation_json))
+    producer_validation_windows_abs_path_hits = len(
+        re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", producer_validation_json)
+    )
+    failure_pattern_artifacts = (
+        data.get("failurePatternEvidenceArtifacts")
+        if isinstance(data.get("failurePatternEvidenceArtifacts"), dict)
+        else {}
+    )
+    failure_pattern_artifacts_schema = safe_scalar(failure_pattern_artifacts.get("schema"), 80)
+    failure_pattern_debug_rel = safe_scalar(
+        failure_pattern_artifacts.get("debugEventNdjsonPath"),
+        160,
+    )
+    failure_pattern_manifest_rel = safe_scalar(
+        failure_pattern_artifacts.get("patchDropManifestPath"),
+        160,
+    )
+    expected_failure_pattern_debug_rel = "verification/source-health-failure-pattern-events.ndjson"
+    expected_failure_pattern_manifest_rel = "verification/source-health-patchdrop-manifest-contract.json"
+    failure_pattern_debug_path = (
+        root / failure_pattern_debug_rel
+        if failure_pattern_debug_rel == expected_failure_pattern_debug_rel
+        else root / "__missing_failure_pattern_debug_event__"
+    )
+    failure_pattern_manifest_path = (
+        root / failure_pattern_manifest_rel
+        if failure_pattern_manifest_rel == expected_failure_pattern_manifest_rel
+        else root / "__missing_failure_pattern_patchdrop_manifest__"
+    )
+    failure_pattern_debug_raw = read_text(failure_pattern_debug_path)
+    failure_pattern_manifest_raw = read_text(failure_pattern_manifest_path)
+    failure_pattern_debug_event: dict[str, Any] = {}
+    for line in failure_pattern_debug_raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed_line = json.loads(line)
+        except json.JSONDecodeError:
+            parsed_line = {}
+        if isinstance(parsed_line, dict):
+            failure_pattern_debug_event = parsed_line
+            break
+    failure_pattern_manifest = (
+        load_json(failure_pattern_manifest_path)
+        if failure_pattern_manifest_path.is_file()
+        else {}
+    )
+    failure_pattern_declared_manifest_hash = safe_scalar(
+        failure_pattern_artifacts.get("patchDropManifestHash"),
+        96,
+    )
+    failure_pattern_manifest_hash = sha256_file(failure_pattern_manifest_path)
+    failure_pattern_manifest_hash_matches = (
+        bool(failure_pattern_declared_manifest_hash)
+        and failure_pattern_manifest_path.is_file()
+        and failure_pattern_declared_manifest_hash == failure_pattern_manifest_hash
+        and safe_scalar(failure_pattern_debug_event.get("patchDropManifestHash"), 96)
+        == failure_pattern_manifest_hash
+    )
+    failure_pattern_event_type = safe_scalar(
+        failure_pattern_debug_event.get("eventType")
+        or failure_pattern_artifacts.get("eventType"),
+        120,
+    )
+    failure_pattern_debug_trace_keys = _producer_values(
+        failure_pattern_debug_event,
+        "traceStoreKeys",
+    )
+    failure_pattern_debug_amp_keys = _producer_values(
+        failure_pattern_debug_event,
+        "amplifierTraceKeys",
+    )
+    failure_pattern_debug_pattern_ready = (
+        safe_scalar(failure_pattern_debug_event.get("failurePatternKind"), 120)
+        == failure_pattern_kind
+        and safe_scalar(failure_pattern_debug_event.get("patternId"), 120) == pattern_id
+        and bool(failure_pattern_kind)
+        and bool(pattern_id)
+    )
+    failure_pattern_debug_trace_ready = producer_validation_required_trace_keys.issubset(
+        failure_pattern_debug_trace_keys
+    )
+    failure_pattern_debug_amp_ready = set(producer_validation_required_amp_keys).issubset(
+        failure_pattern_debug_amp_keys
+    )
+    failure_pattern_debug_sinks = _producer_values(
+        failure_pattern_debug_event,
+        "requiredEvidenceSinks",
+    )
+    failure_pattern_artifact_sinks = _producer_values(
+        failure_pattern_artifacts,
+        "requiredEvidenceSinks",
+    )
+    failure_pattern_debug_store_contract = (
+        failure_pattern_debug_event.get("debugEventStoreContract")
+        if isinstance(failure_pattern_debug_event.get("debugEventStoreContract"), dict)
+        else {}
+    )
+    failure_pattern_cfvm_contract = (
+        failure_pattern_debug_event.get("cfvmFailurePatternContract")
+        if isinstance(failure_pattern_debug_event.get("cfvmFailurePatternContract"), dict)
+        else {}
+    )
+    failure_pattern_debug_event_store_ready = (
+        producer_validation_required_sinks.issubset(failure_pattern_debug_sinks)
+        and safe_scalar(failure_pattern_debug_store_contract.get("sink"), 80)
+        == "DebugEventStore"
+        and safe_scalar(failure_pattern_debug_store_contract.get("eventType"), 120)
+        == "source_health.failure_pattern_prediction"
+        and failure_pattern_debug_store_contract.get("rawPayloadStored") is False
+    )
+    failure_pattern_cfvm_ready = (
+        safe_scalar(failure_pattern_cfvm_contract.get("sink"), 80)
+        == "CFVM Failure Pattern"
+        and safe_scalar(failure_pattern_cfvm_contract.get("failurePatternKind"), 120)
+        == failure_pattern_kind
+        and safe_scalar(failure_pattern_cfvm_contract.get("patternId"), 120) == pattern_id
+        and failure_pattern_cfvm_contract.get("mutationAllowed") is False
+        and failure_pattern_cfvm_contract.get("rawPayloadStored") is False
+    )
+    failure_pattern_manifest_roles = sorted(
+        {
+            str(role).strip()
+            for role in failure_pattern_manifest.get("producerRoles", [])
+            if isinstance(role, str) and str(role).strip() in {"macmini", "notebook"}
+        }
+    )
+    failure_pattern_manifest_contracts = [
+        row
+        for row in failure_pattern_manifest.get("producerNodeContracts", [])
+        if isinstance(row, dict)
+    ]
+    failure_pattern_manifest_required_sidecars = set(PATCHDROP_HANDOFF_REQUIRED_ARTIFACTS)
+    failure_pattern_manifest_sinks = _producer_values(
+        failure_pattern_manifest,
+        "requiredEvidenceSinks",
+    )
+    failure_pattern_manifest_debug_store_contract = (
+        failure_pattern_manifest.get("debugEventStoreContract")
+        if isinstance(failure_pattern_manifest.get("debugEventStoreContract"), dict)
+        else {}
+    )
+    failure_pattern_manifest_cfvm_contract = (
+        failure_pattern_manifest.get("cfvmFailurePatternContract")
+        if isinstance(failure_pattern_manifest.get("cfvmFailurePatternContract"), dict)
+        else {}
+    )
+    failure_pattern_manifest_sinks_ready = (
+        producer_validation_required_sinks.issubset(failure_pattern_manifest_sinks)
+        and safe_scalar(failure_pattern_manifest_debug_store_contract.get("sink"), 80)
+        == "DebugEventStore"
+        and safe_scalar(failure_pattern_manifest_cfvm_contract.get("sink"), 80)
+        == "CFVM Failure Pattern"
+        and safe_scalar(failure_pattern_manifest_cfvm_contract.get("failurePatternKind"), 120)
+        == failure_pattern_kind
+        and safe_scalar(failure_pattern_manifest_cfvm_contract.get("patternId"), 120)
+        == pattern_id
+    )
+    failure_pattern_manifest_source_isolation = (
+        set(failure_pattern_manifest_roles) == {"macmini", "notebook"}
+        and len(failure_pattern_manifest_contracts) >= 2
+        and all(
+            str(row.get("sourceRootKind") or "").strip() == "local-worktree"
+            and row.get("directCanonicalSourceEdit") is False
+            and row.get("evidenceOnly") is True
+            and failure_pattern_manifest_required_sidecars.issubset(
+                _producer_values(row, "requiredSidecars")
+            )
+            and producer_validation_required_trace_keys.issubset(
+                _producer_values(row, "requiredTraceStoreKeys")
+            )
+            and producer_validation_required_sinks.issubset(
+                _producer_values(row, "requiredEvidenceSinks")
+            )
+            and expected_failure_pattern_debug_rel
+            == str(row.get("requiredDebugEventNdjsonPath") or "").strip()
+            and expected_failure_pattern_manifest_rel
+            == str(row.get("requiredPatchDropManifestPath") or "").strip()
+            for row in failure_pattern_manifest_contracts
+        )
+    )
+    failure_pattern_artifact_contract = (
+        failure_pattern_artifacts.get("autonomousValidationContract")
+        if isinstance(failure_pattern_artifacts.get("autonomousValidationContract"), dict)
+        else {}
+    )
+    failure_pattern_manifest_contract = (
+        failure_pattern_manifest.get("autonomousValidationContract")
+        if isinstance(failure_pattern_manifest.get("autonomousValidationContract"), dict)
+        else {}
+    )
+    try:
+        failure_pattern_max_duration_hours = int(
+            failure_pattern_artifact_contract.get("maxDurationHours")
+            or failure_pattern_manifest_contract.get("maxDurationHours")
+            or 0
+        )
+    except Exception:
+        failure_pattern_max_duration_hours = 0
+    failure_pattern_runtime_product_behavior = (
+        failure_pattern_artifact_contract.get("runtimeProductBehavior") is True
+        or failure_pattern_manifest_contract.get("runtimeProductBehavior") is True
+    )
+    failure_pattern_producer_execution_observed = (
+        failure_pattern_artifacts.get("producerExecutionObserved") is True
+        or failure_pattern_debug_event.get("producerExecutionObserved") is True
+    )
+    failure_pattern_runtime_score_claim = (
+        failure_pattern_artifacts.get("runtimeScoreClaim") is True
+        or failure_pattern_debug_event.get("runtimeScoreClaim") is True
+    )
+    failure_pattern_artifacts_combined = (
+        json.dumps(failure_pattern_artifacts, ensure_ascii=False, sort_keys=True)
+        + "\n"
+        + failure_pattern_debug_raw
+        + "\n"
+        + failure_pattern_manifest_raw
+    )
+    failure_pattern_artifacts_secret_hits = len(
+        SECRET_PATTERN.findall(failure_pattern_artifacts_combined)
+    )
+    failure_pattern_artifacts_windows_abs_path_hits = len(
+        re.findall(
+            r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+",
+            failure_pattern_artifacts_combined,
+        )
+    )
+    failure_pattern_artifacts_ready = (
+        failure_pattern_artifacts_schema == "failure_pattern_evidence_artifacts.v1"
+        and failure_pattern_debug_path.is_file()
+        and failure_pattern_manifest_path.is_file()
+        and failure_pattern_event_type == "source_health.failure_pattern_prediction"
+        and failure_pattern_debug_pattern_ready
+        and failure_pattern_debug_trace_ready
+        and failure_pattern_debug_amp_ready
+        and producer_validation_required_sinks.issubset(failure_pattern_artifact_sinks)
+        and failure_pattern_debug_event_store_ready
+        and failure_pattern_cfvm_ready
+        and failure_pattern_manifest.get("schema")
+        == "patchdrop.producer_manifest.failure_pattern.v1"
+        and failure_pattern_manifest_hash_matches
+        and failure_pattern_manifest_sinks_ready
+        and failure_pattern_manifest_source_isolation
+        and failure_pattern_max_duration_hours >= 9
+        and not failure_pattern_runtime_product_behavior
+        and not failure_pattern_producer_execution_observed
+        and not failure_pattern_runtime_score_claim
+        and failure_pattern_artifacts_secret_hits == 0
+        and failure_pattern_artifacts_windows_abs_path_hits == 0
+    )
+    source_health_validation_loop_path = root / "verification" / "source-health-validation-loop.json"
+    source_health_validation_cycles_path = (
+        root / "verification" / "source-health-validation-cycles.ndjson"
+    )
+    source_health_validation_loop = (
+        load_json(source_health_validation_loop_path)
+        if source_health_validation_loop_path.is_file()
+        else {}
+    )
+    source_health_validation_loop_raw = read_text(source_health_validation_loop_path)
+    source_health_validation_cycles_raw = read_text(source_health_validation_cycles_path)
+    source_health_validation_cycles: list[dict[str, Any]] = []
+    for line in source_health_validation_cycles_raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed_cycle = json.loads(line)
+        except json.JSONDecodeError:
+            parsed_cycle = {}
+        if isinstance(parsed_cycle, dict):
+            source_health_validation_cycles.append(parsed_cycle)
+    (
+        source_health_validation_generated_at_present,
+        source_health_validation_fresh,
+        source_health_validation_age_seconds,
+        source_health_validation_freshness_status,
+    ) = artifact_freshness(
+        source_health_validation_loop.get("generatedAt"),
+        SOURCE_HEALTH_SCORECARD_MAX_AGE_SECONDS,
+    )
+    try:
+        source_health_validation_max_duration_hours = int(
+            source_health_validation_loop.get("maxDurationHours", 0) or 0
+        )
+    except Exception:
+        source_health_validation_max_duration_hours = 0
+    try:
+        source_health_validation_cycle_count = int(
+            source_health_validation_loop.get("cycleCount", 0) or 0
+        )
+    except Exception:
+        source_health_validation_cycle_count = 0
+    source_health_validation_roles = sorted(
+        {
+            str(role).strip()
+            for role in source_health_validation_loop.get("producerRoles", [])
+            if isinstance(role, str) and str(role).strip() in {"macmini", "notebook"}
+        }
+    )
+    source_health_validation_gates = {
+        str(item).strip()
+        for item in source_health_validation_loop.get("requiredGates", [])
+        if isinstance(item, str) and str(item).strip()
+    }
+    source_health_validation_amp_keys = {
+        str(item).strip()
+        for item in source_health_validation_loop.get("amplifierTraceKeys", [])
+        if isinstance(item, str) and str(item).strip()
+    }
+    source_health_validation_sinks = {
+        str(item).strip()
+        for item in source_health_validation_loop.get("requiredEvidenceSinks", [])
+        if isinstance(item, str) and str(item).strip()
+    }
+    source_health_validation_sidecar_proof = (
+        source_health_validation_loop.get("sidecarProof")
+        if isinstance(source_health_validation_loop.get("sidecarProof"), dict)
+        else {}
+    )
+    source_health_validation_paths_ready = (
+        source_health_validation_loop.get("scorecardPath")
+        in {None, "verification/source-health-scorecard.json"}
+        and source_health_validation_loop.get("cyclesPath")
+        in {None, "verification/source-health-validation-cycles.ndjson"}
+    )
+    source_health_validation_sidecars_ready = (
+        source_health_validation_sidecar_proof.get("debugEventNdjsonPresent") is True
+        and source_health_validation_sidecar_proof.get("patchDropManifestPresent") is True
+        and source_health_validation_sidecar_proof.get("patchDropManifestHashMatches") is True
+        and source_health_validation_sidecar_proof.get("debugEventStoreReady") is True
+        and source_health_validation_sidecar_proof.get("cfvmFailurePatternReady") is True
+        and failure_pattern_debug_path.is_file()
+        and failure_pattern_manifest_path.is_file()
+        and failure_pattern_manifest_hash_matches
+    )
+    source_health_validation_cycle_rows = source_health_validation_cycles[
+        :source_health_validation_cycle_count
+    ]
+    source_health_validation_cycle_pattern_ids = {
+        safe_scalar(row.get("patternId"), 120)
+        for row in source_health_validation_cycle_rows
+        if isinstance(row, dict)
+    }
+    producer_validation_pattern_ids = {
+        safe_scalar(row.get("patternId"), 120)
+        for row in producer_validation_assignments
+        if isinstance(row, dict) and safe_scalar(row.get("patternId"), 120)
+    }
+    source_health_validation_cycle_pattern_ready = (
+        source_health_validation_cycle_count >= 1
+        and len(source_health_validation_cycles) >= source_health_validation_cycle_count
+        and any(
+            safe_scalar(row.get("patternId"), 120) == pattern_id
+            and safe_scalar(row.get("failurePatternKind"), 120) == failure_pattern_kind
+            for row in source_health_validation_cycle_rows
+            if isinstance(row, dict)
+        )
+        and all(
+            safe_scalar(row.get("patternId"), 120)
+            and safe_scalar(row.get("failurePatternKind"), 120)
+            and row.get("mutatedSource") is False
+            and safe_scalar(row.get("debugEventNdjsonPath"), 160)
+            == expected_failure_pattern_debug_rel
+            and safe_scalar(row.get("patchDropManifestPath"), 160)
+            == expected_failure_pattern_manifest_rel
+            and producer_validation_required_sinks.issubset(
+                _producer_values(row, "requiredEvidenceSinks")
+            )
+            for row in source_health_validation_cycle_rows
+            if isinstance(row, dict)
+        )
+        and (
+            not producer_validation_pattern_ids
+            or producer_validation_pattern_ids.issubset(
+                source_health_validation_cycle_pattern_ids
+            )
+        )
+    )
+    source_health_validation_sinks_ready = (
+        producer_validation_required_sinks.issubset(source_health_validation_sinks)
+        and source_health_validation_cycle_pattern_ready
+    )
+    source_health_validation_combined = (
+        source_health_validation_loop_raw + "\n" + source_health_validation_cycles_raw
+    )
+    source_health_validation_secret_hits = len(
+        SECRET_PATTERN.findall(source_health_validation_combined)
+    )
+    try:
+        source_health_validation_secret_hits += int(
+            source_health_validation_loop.get("secretPatternHits", 0) or 0
+        )
+    except Exception:
+        source_health_validation_secret_hits += 0
+    try:
+        source_health_validation_secret_hits += int(
+            source_health_validation_sidecar_proof.get("secretPatternHits", 0) or 0
+        )
+    except Exception:
+        source_health_validation_secret_hits += 0
+    source_health_validation_windows_abs_path_hits = len(
+        re.findall(
+            r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+",
+            source_health_validation_combined,
+        )
+    )
+    try:
+        source_health_validation_windows_abs_path_hits += int(
+            source_health_validation_loop.get("windowsAbsPathHits", 0) or 0
+        )
+    except Exception:
+        source_health_validation_windows_abs_path_hits += 0
+    try:
+        source_health_validation_windows_abs_path_hits += int(
+            source_health_validation_sidecar_proof.get("windowsAbsPathHits", 0) or 0
+        )
+    except Exception:
+        source_health_validation_windows_abs_path_hits += 0
+    source_health_validation_ready = (
+        source_health_validation_loop_path.is_file()
+        and source_health_validation_cycles_path.is_file()
+        and source_health_validation_loop.get("schema") == "source_health.validation_loop.v1"
+        and source_health_validation_generated_at_present
+        and source_health_validation_fresh
+        and source_health_validation_freshness_status == "current"
+        and source_health_validation_loop.get("timeboxKind") == "agent_safe_patch_budget"
+        and source_health_validation_max_duration_hours >= 9
+        and source_health_validation_loop.get("runtimeProductBehavior") is False
+        and source_health_validation_loop.get("mutationAllowed") is False
+        and source_health_validation_loop.get("nearestFailurePatternKind") == failure_pattern_kind
+        and source_health_validation_loop.get("nearestPatternId") == pattern_id
+        and {"macmini", "notebook"}.issubset(set(source_health_validation_roles))
+        and {"sourceHealthScorecard", "harmonyPressureReport"}.issubset(
+            source_health_validation_gates
+        )
+        and set(producer_validation_required_amp_keys).issubset(
+            source_health_validation_amp_keys
+        )
+        and source_health_validation_sinks_ready
+        and source_health_validation_paths_ready
+        and source_health_validation_sidecars_ready
+        and source_health_validation_cycle_pattern_ready
+        and source_health_validation_secret_hits == 0
+        and source_health_validation_windows_abs_path_hits == 0
+    )
     try:
         broad_runtime_suite_count = int(broad_runtime_test_proof.get("suiteCount", 0) or 0)
     except Exception:
@@ -1827,15 +3319,130 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
         "freshnessStatus": freshness_status,
         "nextSingleAction": safe_scalar(data.get("nextSingleAction"), 160),
         "nextSourceAction": safe_scalar(data.get("nextSourceAction"), 160),
+        "failurePatternKind": failure_pattern_kind,
+        "patternId": pattern_id,
+        "amplifiedSignalScore": round(amplified_signal_score, 4),
+        "producerValidationQueueSchema": safe_scalar(producer_validation_queue.get("schema"), 80),
+        "producerValidationQueueAssignmentCount": len(producer_validation_assignments),
+        "producerValidationQueueRoles": safe_csv_names(producer_validation_roles),
+        "producerValidationQueueMaxDurationHours": producer_validation_max_duration_hours,
+        "producerValidationQueueRuntimeProductBehavior": (
+            producer_validation_queue.get("runtimeProductBehavior") is True
+        ),
+        "producerValidationQueuePatternReady": producer_validation_pattern_ready,
+        "producerValidationQueueTraceKeysReady": producer_validation_trace_keys_ready,
+        "producerValidationQueueAmplifierTraceKeysReady": producer_validation_amp_keys_ready,
+        "producerValidationQueueAmplifierTraceKeys": safe_csv_names(
+            producer_validation_required_amp_keys
+        ),
+        "producerValidationQueueEvidenceArtifactsReady": producer_validation_artifacts_ready,
+        "producerValidationQueueEvidenceSinksReady": producer_validation_sinks_ready,
+        "producerValidationQueueEvidenceSinks": safe_csv_names(
+            sorted(producer_validation_required_sinks)
+        ),
+        "producerValidationQueuePatchDropManifestReady": producer_validation_manifest_ready,
+        "producerValidationQueueDebugEventNdjsonReady": producer_validation_debug_ready,
+        "producerValidationQueueIsolationReady": producer_validation_isolation_ready,
+        "producerValidationQueuePositiveAmplifiedScore": producer_validation_positive_score,
+        "producerValidationQueueSecretPatternHits": producer_validation_secret_hits,
+        "producerValidationQueueWindowsAbsPathHits": producer_validation_windows_abs_path_hits,
+        "failurePatternEvidenceArtifactsSchema": failure_pattern_artifacts_schema,
+        "failurePatternEvidenceArtifactsReady": failure_pattern_artifacts_ready,
+        "failurePatternDebugEventNdjsonPresent": failure_pattern_debug_path.is_file(),
+        "failurePatternDebugEventNdjsonEventType": failure_pattern_event_type,
+        "failurePatternDebugEventNdjsonPatternReady": failure_pattern_debug_pattern_ready,
+        "failurePatternDebugEventNdjsonTraceKeysReady": failure_pattern_debug_trace_ready,
+        "failurePatternDebugEventNdjsonAmplifierKeysReady": failure_pattern_debug_amp_ready,
+        "failurePatternDebugEventStoreReady": failure_pattern_debug_event_store_ready,
+        "failurePatternCfvmFailurePatternReady": failure_pattern_cfvm_ready,
+        "failurePatternPatchDropManifestPresent": failure_pattern_manifest_path.is_file(),
+        "failurePatternPatchDropManifestSchema": safe_scalar(
+            failure_pattern_manifest.get("schema"),
+            120,
+        ),
+        "failurePatternPatchDropManifestHashMatches": failure_pattern_manifest_hash_matches,
+        "failurePatternPatchDropManifestRoles": safe_csv_names(failure_pattern_manifest_roles),
+        "failurePatternPatchDropManifestEvidenceSinksReady": failure_pattern_manifest_sinks_ready,
+        "failurePatternPatchDropManifestSourceIsolation": failure_pattern_manifest_source_isolation,
+        "failurePatternEvidenceArtifactsMaxDurationHours": failure_pattern_max_duration_hours,
+        "failurePatternEvidenceArtifactsRuntimeProductBehavior": failure_pattern_runtime_product_behavior,
+        "failurePatternEvidenceArtifactsProducerExecutionObserved": (
+            failure_pattern_producer_execution_observed
+        ),
+        "failurePatternEvidenceArtifactsRuntimeScoreClaim": failure_pattern_runtime_score_claim,
+        "failurePatternEvidenceArtifactsSecretPatternHits": failure_pattern_artifacts_secret_hits,
+        "failurePatternEvidenceArtifactsWindowsAbsPathHits": (
+            failure_pattern_artifacts_windows_abs_path_hits
+        ),
+        "sourceHealthValidationLoopPresent": source_health_validation_loop_path.is_file(),
+        "sourceHealthValidationLoopSchema": safe_scalar(
+            source_health_validation_loop.get("schema"),
+            80,
+        ),
+        "sourceHealthValidationLoopReady": source_health_validation_ready,
+        "sourceHealthValidationLoopEvidenceSinksReady": source_health_validation_sinks_ready,
+        "sourceHealthValidationLoopEvidenceSinks": safe_csv_names(
+            sorted(producer_validation_required_sinks)
+        ),
+        "sourceHealthValidationLoopGeneratedAt": source_health_validation_generated_at_present,
+        "sourceHealthValidationLoopFresh": source_health_validation_fresh,
+        "sourceHealthValidationLoopFreshnessStatus": source_health_validation_freshness_status,
+        "sourceHealthValidationLoopAgeSeconds": source_health_validation_age_seconds,
+        "sourceHealthValidationLoopTimeboxKind": safe_scalar(
+            source_health_validation_loop.get("timeboxKind"),
+            80,
+        ),
+        "sourceHealthValidationLoopMaxDurationHours": (
+            source_health_validation_max_duration_hours
+        ),
+        "sourceHealthValidationLoopRuntimeProductBehavior": (
+            source_health_validation_loop.get("runtimeProductBehavior") is True
+        ),
+        "sourceHealthValidationLoopMutationAllowed": (
+            source_health_validation_loop.get("mutationAllowed") is True
+        ),
+        "sourceHealthValidationLoopCycleCount": source_health_validation_cycle_count,
+        "sourceHealthValidationLoopCyclesPresent": source_health_validation_cycles_path.is_file(),
+        "sourceHealthValidationLoopCycleRows": len(source_health_validation_cycles),
+        "sourceHealthValidationLoopCyclePatternReady": source_health_validation_cycle_pattern_ready,
+        "sourceHealthValidationLoopNearestFailurePatternKind": safe_scalar(
+            source_health_validation_loop.get("nearestFailurePatternKind"),
+            120,
+        ),
+        "sourceHealthValidationLoopNearestPatternId": safe_scalar(
+            source_health_validation_loop.get("nearestPatternId"),
+            120,
+        ),
+        "sourceHealthValidationLoopProducerRoles": safe_csv_names(
+            source_health_validation_roles
+        ),
+        "sourceHealthValidationLoopAmplifierTraceKeysReady": set(
+            producer_validation_required_amp_keys
+        ).issubset(source_health_validation_amp_keys),
+        "sourceHealthValidationLoopSidecarsReady": source_health_validation_sidecars_ready,
+        "sourceHealthValidationLoopHashMatches": (
+            source_health_validation_sidecar_proof.get("patchDropManifestHashMatches") is True
+            and failure_pattern_manifest_hash_matches
+        ),
+        "sourceHealthValidationLoopSecretPatternHits": source_health_validation_secret_hits,
+        "sourceHealthValidationLoopWindowsAbsPathHits": (
+            source_health_validation_windows_abs_path_hits
+        ),
         "completionAudit": safe_scalar((data.get("inputArtifacts") or {}).get("completionAudit"), 160)
         if isinstance(data.get("inputArtifacts"), dict)
         else "",
+        "completionAuditSupportingEvidenceActionMode": supporting_action_mode,
+        "completionAuditSupportingEvidenceNextActionsOmitted": supporting_actions_omitted,
+        "completionAuditSupportingEvidenceActionHint": supporting_action_hint,
         "nextActionDetailsCount": len(details),
         "supabaseLiveProofDetail": bool(supabase_detail),
         "supabaseLiveProofReadOnly": supabase_detail.get("readOnly") is True,
         "supabaseLiveProofMutationBlocked": supabase_detail.get("mutationAllowed") is False,
         "supabaseLiveProofMcpEndpointTemplate": supabase_mcp_endpoint_template_ready,
         "requiredEnv": safe_csv_names(required_env),
+        "supportedAuthModes": safe_csv_names(supported_auth_modes),
+        "manualAuthSensitiveEnvRefs": safe_csv_names(manual_auth_sensitive_env_refs),
+        "mcpOAuthSupported": supabase_detail.get("mcpOAuthSupported") is True,
         "requiredMcpTools": safe_csv_names(supabase_detail.get("requiredMcpTools")),
         "requiredResultNameCount": len(
             [
@@ -1888,6 +3495,87 @@ def source_health_scorecard_artifact_summary(root: Path) -> dict[str, Any]:
         "broadRuntimeTestCount": broad_runtime_test_count,
         "broadRuntimeTestFailureCount": broad_runtime_failure_count,
         "broadRuntimeTestErrorCount": broad_runtime_error_count,
+        "localInteractionProof": local_interaction_proof_ready,
+        "localInteractionComputerReady": local_interaction_computer_ready,
+        "localInteractionComputerSafePending": local_interaction_computer.get("safePendingProof") is True,
+        "localInteractionBrowserReady": local_interaction_browser_ready,
+        "localInteractionBrowserSafePending": local_interaction_browser_safe_pending,
+        "localInteractionRefreshReady": local_interaction_refresh_ready,
+        "localInteractionWindowsAbsPathHits": len(
+            re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", local_interaction_json)
+        ),
+        "externalInputGateProof": external_input_gate_proof_ready,
+        "externalInputGateObserved": external_input_gate_proof.get("observed") is True,
+        "externalInputGateBoundaryReady": external_input_gate_proof.get("boundaryReady") is True,
+        "externalInputGateStatus": safe_scalar(external_input_gate_proof.get("status"), 80),
+        "externalInputGateSource": safe_scalar(external_input_gate_proof.get("source"), 80),
+        "externalInputGateAction": safe_scalar(external_input_gate_proof.get("action"), 120),
+        "externalInputGateLocalPatchJustified": external_input_gate_proof.get("localPatchJustified") is True,
+        "externalInputGateMutationAllowed": external_input_gate_proof.get("mutationAllowed") is True,
+        "externalInputGateEvidenceNeeded": safe_csv_names(external_input_gate_evidence_needed),
+        "externalInputGateSecretPatternHits": external_input_gate_secret_pattern_hits,
+        "externalInputGateWindowsAbsPathHits": len(
+            re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", external_input_gate_json)
+        ),
+        "goalNextStatusProof": goal_next_status_proof_ready,
+        "goalNextStatusObserved": goal_next_status_proof.get("observed") is True,
+        "goalNextStatusFresh": goal_next_status_proof.get("fresh") is True,
+        "goalNextStatusBoundaryReady": goal_next_status_proof.get("boundaryReady") is True,
+        "goalNextStatusDecision": safe_scalar(goal_next_status_proof.get("statusDecision"), 80),
+        "goalNextStatusFirstAction": safe_scalar(goal_next_status_proof.get("firstAction"), 120),
+        "goalNextStatusExternalInputGateStatus": safe_scalar(goal_next_status_gate.get("status"), 80),
+        "goalNextStatusExternalInputGateAction": safe_scalar(goal_next_status_gate.get("action"), 120),
+        "goalNextStatusSecretPatternHits": goal_next_status_secret_hits,
+        "goalNextStatusWindowsAbsPathHits": goal_next_status_windows_abs_path_hits,
+        "goalNextCollectionPacketProof": goal_next_collection_packet_proof_ready,
+        "goalNextCollectionPacketObserved": goal_next_collection_packet_proof.get("observed") is True,
+        "goalNextCollectionPacketBoundaryReady": (
+            goal_next_collection_packet_proof.get("boundaryReady") is True
+        ),
+        "goalNextCollectionPacketRequirementStatus": safe_scalar(
+            goal_next_collection_packet_proof.get("requirementStatus"),
+            80,
+        ),
+        "goalNextCollectionPacketSupabaseEnv": safe_csv_names(
+            goal_next_collection_packet_proof.get("supabaseRequiredEnvNames")
+        ),
+        "goalNextCollectionPacketMcpTools": safe_csv_names(
+            goal_next_collection_packet_proof.get("supabaseRequiredMcpTools")
+        ),
+        "goalNextCollectionPacketSupabaseReadOnly": (
+            goal_next_collection_packet_proof.get("supabaseReadOnly") is True
+        ),
+        "goalNextCollectionPacketMutationAllowed": (
+            goal_next_collection_packet_proof.get("supabaseMutationAllowed") is True
+        ),
+        "goalNextCollectionPacketTokenStored": (
+            goal_next_collection_packet_proof.get("supabaseMcpConfigTokenStored") is True
+        ),
+        "goalNextCollectionPacketExternalRoles": safe_csv_names(
+            goal_next_collection_packet_proof.get("externalRoles")
+        ),
+        "goalNextCollectionPacketExternalSourceIsolation": (
+            goal_next_collection_packet_proof.get("externalSourceIsolation") is True
+        ),
+        "goalNextCollectionPacketWebProbeReady": (
+            goal_next_collection_packet_proof.get("webProbeRefreshReady") is True
+        ),
+        "goalNextCollectionPacketComputerSafe": (
+            goal_next_collection_packet_proof.get("computerUseSafe") is True
+        ),
+        "goalNextCollectionPacketBrowserSafe": (
+            goal_next_collection_packet_proof.get("browserUseSafe") is True
+        ),
+        "goalNextCollectionPacketSecretPatternHits": goal_next_collection_packet_secret_hits,
+        "goalNextCollectionPacketWindowsAbsPathHits": goal_next_collection_packet_windows_abs_path_hits,
+        "peerEvidenceBusProof": peer_evidence_bus_proof_ready,
+        "peerEvidenceBusContractReady": peer_evidence_bus_contract_ready,
+        "peerEvidenceBusArtifactReady": peer_evidence_bus_artifact_ready,
+        "peerEvidenceBusTargetMetric": safe_scalar(peer_evidence_bus_proof.get("targetMetric"), 80),
+        "peerEvidenceBusWindowsAbsPathHits": len(
+            re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", peer_evidence_bus_json)
+        ),
+        "peerEvidenceBusSecretPatternHits": len(SECRET_PATTERN.findall(peer_evidence_bus_json)),
         "rawSecretPatternHits": len(SECRET_PATTERN.findall(raw)),
         "nextActionDetailsWindowsAbsPathHits": len(
             re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", detail_json)
@@ -1920,45 +3608,209 @@ def source_health_scorecard_ready_fail_reason(summary: dict[str, Any]) -> str:
         missing.append("nextSingleAction")
     if not summary.get("nextSourceAction"):
         missing.append("nextSourceAction")
+    try:
+        amplified_signal_score = float(summary.get("amplifiedSignalScore", 0.0) or 0.0)
+    except Exception:
+        amplified_signal_score = 0.0
+    if not summary.get("failurePatternKind"):
+        missing.append("failurePatternKind")
+    if not summary.get("patternId"):
+        missing.append("patternId")
+    if amplified_signal_score <= 0.0:
+        missing.append("amplifiedSignalScore")
+    if summary.get("producerValidationQueueSchema") != "producer_validation_queue.v1":
+        missing.append("producerValidationQueueSchema")
+    if int(summary.get("producerValidationQueueAssignmentCount", 0) or 0) < 2:
+        missing.append("producerValidationQueueAssignmentCount")
+    producer_validation_roles = set(
+        str(summary.get("producerValidationQueueRoles") or "").split(",")
+    )
+    if not {"macmini", "notebook"}.issubset(producer_validation_roles):
+        missing.append("producerValidationQueueRoles")
+    if int(summary.get("producerValidationQueueMaxDurationHours", 0) or 0) < 9:
+        missing.append("producerValidationQueueMaxDurationHours")
+    if summary.get("producerValidationQueueRuntimeProductBehavior") is not False:
+        missing.append("producerValidationQueueRuntimeProductBehavior")
+    if not summary.get("producerValidationQueuePatternReady"):
+        missing.append("producerValidationQueuePattern")
+    if not summary.get("producerValidationQueueTraceKeysReady"):
+        missing.append("producerValidationQueueTraceKeys")
+    if not summary.get("producerValidationQueueAmplifierTraceKeysReady"):
+        missing.append("producerValidationQueueAmplifierTraceKeys")
+    producer_validation_amp_keys = set(
+        str(summary.get("producerValidationQueueAmplifierTraceKeys") or "").split(",")
+    )
+    if not {
+        "hypernova.twpmP",
+        "hypernova.cvarPhi",
+        "hypernova.riskKAlloc",
+        "hypernova.clampApplied",
+        "sourceHealth.amplifiedSignalScore",
+    }.issubset(producer_validation_amp_keys):
+        missing.append("producerValidationQueueAmplifierTraceKeys")
+    if not summary.get("producerValidationQueueEvidenceArtifactsReady"):
+        missing.append("producerValidationQueueEvidenceArtifacts")
+    if not summary.get("producerValidationQueueEvidenceSinksReady"):
+        missing.append("producerValidationQueueEvidenceSinks")
+    if not summary.get("producerValidationQueuePatchDropManifestReady"):
+        missing.append("producerValidationQueuePatchDropManifest")
+    if not summary.get("producerValidationQueueDebugEventNdjsonReady"):
+        missing.append("producerValidationQueueDebugEventNdjson")
+    if not summary.get("producerValidationQueueIsolationReady"):
+        missing.append("producerValidationQueueIsolation")
+    if not summary.get("producerValidationQueuePositiveAmplifiedScore"):
+        missing.append("producerValidationQueuePositiveAmplifiedScore")
+    if int(summary.get("producerValidationQueueSecretPatternHits", 0) or 0) != 0:
+        missing.append("producerValidationQueueSecretPatternHits")
+    if int(summary.get("producerValidationQueueWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("producerValidationQueueWindowsAbsPathHits")
+    if summary.get("failurePatternEvidenceArtifactsSchema") != "failure_pattern_evidence_artifacts.v1":
+        missing.append("failurePatternEvidenceArtifactsSchema")
+    if not summary.get("failurePatternEvidenceArtifactsReady"):
+        missing.append("failurePatternEvidenceArtifacts")
+    if not summary.get("failurePatternDebugEventNdjsonPresent"):
+        missing.append("failurePatternDebugEventNdjsonPresent")
+    if summary.get("failurePatternDebugEventNdjsonEventType") != "source_health.failure_pattern_prediction":
+        missing.append("failurePatternDebugEventNdjsonEventType")
+    if not summary.get("failurePatternDebugEventNdjsonPatternReady"):
+        missing.append("failurePatternDebugEventNdjsonPattern")
+    if not summary.get("failurePatternDebugEventNdjsonTraceKeysReady"):
+        missing.append("failurePatternDebugEventNdjsonTraceKeys")
+    if not summary.get("failurePatternDebugEventNdjsonAmplifierKeysReady"):
+        missing.append("failurePatternDebugEventNdjsonAmplifierKeys")
+    if not summary.get("failurePatternDebugEventStoreReady"):
+        missing.append("failurePatternDebugEventStore")
+    if not summary.get("failurePatternCfvmFailurePatternReady"):
+        missing.append("failurePatternCfvmFailurePattern")
+    if not summary.get("failurePatternPatchDropManifestPresent"):
+        missing.append("failurePatternPatchDropManifestPresent")
+    if summary.get("failurePatternPatchDropManifestSchema") != "patchdrop.producer_manifest.failure_pattern.v1":
+        missing.append("failurePatternPatchDropManifestSchema")
+    if not summary.get("failurePatternPatchDropManifestHashMatches"):
+        missing.append("failurePatternPatchDropManifestHashMatches")
+    if not {"macmini", "notebook"}.issubset(
+        set(str(summary.get("failurePatternPatchDropManifestRoles") or "").split(","))
+    ):
+        missing.append("failurePatternPatchDropManifestRoles")
+    if not summary.get("failurePatternPatchDropManifestSourceIsolation"):
+        missing.append("failurePatternPatchDropManifestSourceIsolation")
+    if not summary.get("failurePatternPatchDropManifestEvidenceSinksReady"):
+        missing.append("failurePatternPatchDropManifestEvidenceSinks")
+    if int(summary.get("failurePatternEvidenceArtifactsMaxDurationHours", 0) or 0) < 9:
+        missing.append("failurePatternEvidenceArtifactsMaxDurationHours")
+    if summary.get("failurePatternEvidenceArtifactsRuntimeProductBehavior") is not False:
+        missing.append("failurePatternEvidenceArtifactsRuntimeProductBehavior")
+    if summary.get("failurePatternEvidenceArtifactsProducerExecutionObserved") is not False:
+        missing.append("failurePatternEvidenceArtifactsProducerExecutionObserved")
+    if summary.get("failurePatternEvidenceArtifactsRuntimeScoreClaim") is not False:
+        missing.append("failurePatternEvidenceArtifactsRuntimeScoreClaim")
+    if int(summary.get("failurePatternEvidenceArtifactsSecretPatternHits", 0) or 0) != 0:
+        missing.append("failurePatternEvidenceArtifactsSecretPatternHits")
+    if int(summary.get("failurePatternEvidenceArtifactsWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("failurePatternEvidenceArtifactsWindowsAbsPathHits")
+    if summary.get("sourceHealthValidationLoopSchema") != "source_health.validation_loop.v1":
+        missing.append("sourceHealthValidationLoopSchema")
+    if not summary.get("sourceHealthValidationLoopReady"):
+        missing.append("sourceHealthValidationLoop")
+    if not summary.get("sourceHealthValidationLoopGeneratedAt"):
+        missing.append("sourceHealthValidationLoopGeneratedAt")
+    if not summary.get("sourceHealthValidationLoopFresh"):
+        missing.append("sourceHealthValidationLoopFresh")
+    if summary.get("sourceHealthValidationLoopFreshnessStatus") != "current":
+        missing.append("sourceHealthValidationLoopFreshnessStatus")
+    if summary.get("sourceHealthValidationLoopTimeboxKind") != "agent_safe_patch_budget":
+        missing.append("sourceHealthValidationLoopTimeboxKind")
+    if int(summary.get("sourceHealthValidationLoopMaxDurationHours", 0) or 0) < 9:
+        missing.append("sourceHealthValidationLoopMaxDurationHours")
+    if summary.get("sourceHealthValidationLoopRuntimeProductBehavior") is not False:
+        missing.append("sourceHealthValidationLoopRuntimeProductBehavior")
+    if summary.get("sourceHealthValidationLoopMutationAllowed") is not False:
+        missing.append("sourceHealthValidationLoopMutationAllowed")
+    if int(summary.get("sourceHealthValidationLoopCycleCount", 0) or 0) < 1:
+        missing.append("sourceHealthValidationLoopCycleCount")
+    if not summary.get("sourceHealthValidationLoopCyclesPresent"):
+        missing.append("sourceHealthValidationLoopCyclesPresent")
+    if int(summary.get("sourceHealthValidationLoopCycleRows", 0) or 0) < int(
+        summary.get("sourceHealthValidationLoopCycleCount", 0) or 0
+    ):
+        missing.append("sourceHealthValidationLoopCycleRows")
+    if not summary.get("sourceHealthValidationLoopCyclePatternReady"):
+        missing.append("sourceHealthValidationLoopCyclePattern")
+    if not summary.get("sourceHealthValidationLoopEvidenceSinksReady"):
+        missing.append("sourceHealthValidationLoopEvidenceSinks")
+    if summary.get("sourceHealthValidationLoopNearestFailurePatternKind") != summary.get(
+        "failurePatternKind"
+    ):
+        missing.append("sourceHealthValidationLoopNearestFailurePatternKind")
+    if summary.get("sourceHealthValidationLoopNearestPatternId") != summary.get("patternId"):
+        missing.append("sourceHealthValidationLoopNearestPatternId")
+    if not {"macmini", "notebook"}.issubset(
+        set(str(summary.get("sourceHealthValidationLoopProducerRoles") or "").split(","))
+    ):
+        missing.append("sourceHealthValidationLoopProducerRoles")
+    if not summary.get("sourceHealthValidationLoopAmplifierTraceKeysReady"):
+        missing.append("sourceHealthValidationLoopAmplifierTraceKeys")
+    if not summary.get("sourceHealthValidationLoopSidecarsReady"):
+        missing.append("sourceHealthValidationLoopSidecars")
+    if not summary.get("sourceHealthValidationLoopHashMatches"):
+        missing.append("sourceHealthValidationLoopHashMatches")
+    if int(summary.get("sourceHealthValidationLoopSecretPatternHits", 0) or 0) != 0:
+        missing.append("sourceHealthValidationLoopSecretPatternHits")
+    if int(summary.get("sourceHealthValidationLoopWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("sourceHealthValidationLoopWindowsAbsPathHits")
     if not summary.get("completionAudit"):
         missing.append("completionAudit")
-    if int(summary.get("nextActionDetailsCount", 0) or 0) <= 0:
-        missing.append("nextActionDetailsCount")
-    if not summary.get("supabaseLiveProofDetail"):
-        missing.append("supabaseLiveProofDetail")
-    if not summary.get("supabaseLiveProofReadOnly"):
-        missing.append("supabaseLiveProofReadOnly")
-    if not summary.get("supabaseLiveProofMutationBlocked"):
-        missing.append("supabaseLiveProofMutationBlocked")
-    if not summary.get("supabaseLiveProofMcpEndpointTemplate"):
-        missing.append("supabaseLiveProofMcpEndpointTemplate")
-    env_names = set(str(summary.get("requiredEnv") or "").split(","))
-    if not {"SUPABASE_PROJECT_REF", "SUPABASE_ACCESS_TOKEN"}.issubset(env_names):
-        missing.append("requiredEnv")
-    tool_names = set(str(summary.get("requiredMcpTools") or "").split(","))
-    if not {"execute_sql", "get_advisors"}.issubset(tool_names):
-        missing.append("requiredMcpTools")
-    if int(summary.get("requiredResultNameCount", 0) or 0) < 12:
-        missing.append("requiredResultNames")
-    if int(summary.get("queryCount", 0) or 0) < 12:
-        missing.append("queryCount")
-    if summary.get("applyCollectedEvidenceCommand") != "scripts\\supabase_apply_collected_evidence.ps1":
-        missing.append("applyCollectedEvidenceCommand")
-    external_roles = set(str(summary.get("externalProducerProofRoles") or "").split(","))
-    if int(summary.get("externalProducerProofDetailCount", 0) or 0) < 2:
-        missing.append("externalProducerProofDetailCount")
-    if not {"macmini", "notebook"}.issubset(external_roles):
-        missing.append("externalProducerProofRoles")
-    if not summary.get("externalProducerProofSidecars"):
-        missing.append("externalProducerProofSidecars")
-    if not summary.get("externalProducerProofSourceIsolation"):
-        missing.append("externalProducerProofSourceIsolation")
-    if not summary.get("externalProducerProofApplyCommand"):
-        missing.append("externalProducerProofApplyCommand")
-    if not summary.get("externalProducerProofNextActions"):
-        missing.append("externalProducerProofNextActions")
-    if not summary.get("externalProducerProofCommandTemplates"):
-        missing.append("externalProducerProofCommandTemplates")
+    manual_supporting_actions = (
+        summary.get("completionAuditSupportingEvidenceActionMode") == "manual_opt_in"
+        and int(summary.get("completionAuditSupportingEvidenceNextActionsOmitted", 0) or 0) > 0
+        and "--include-supporting-next-actions"
+        in str(summary.get("completionAuditSupportingEvidenceActionHint") or "")
+    )
+    if not manual_supporting_actions:
+        if int(summary.get("nextActionDetailsCount", 0) or 0) <= 0:
+            missing.append("nextActionDetailsCount")
+        if not summary.get("supabaseLiveProofDetail"):
+            missing.append("supabaseLiveProofDetail")
+        if not summary.get("supabaseLiveProofReadOnly"):
+            missing.append("supabaseLiveProofReadOnly")
+        if not summary.get("supabaseLiveProofMutationBlocked"):
+            missing.append("supabaseLiveProofMutationBlocked")
+        if not summary.get("supabaseLiveProofMcpEndpointTemplate"):
+            missing.append("supabaseLiveProofMcpEndpointTemplate")
+        env_names = set(str(summary.get("requiredEnv") or "").split(","))
+        if "SUPABASE_PROJECT_REF" not in env_names:
+            missing.append("requiredEnv")
+        auth_modes = set(str(summary.get("supportedAuthModes") or "").split(","))
+        if not {"supabase_mcp_oauth_session", "manual_SUPABASE_ACCESS_TOKEN"}.issubset(auth_modes):
+            missing.append("supportedAuthModes")
+        if "SUPABASE_ACCESS_TOKEN" not in set(str(summary.get("manualAuthSensitiveEnvRefs") or "").split(",")):
+            missing.append("manualAuthSensitiveEnvRefs")
+        if not summary.get("mcpOAuthSupported"):
+            missing.append("mcpOAuthSupported")
+        tool_names = set(str(summary.get("requiredMcpTools") or "").split(","))
+        if not {"execute_sql", "get_advisors"}.issubset(tool_names):
+            missing.append("requiredMcpTools")
+        if int(summary.get("requiredResultNameCount", 0) or 0) < 12:
+            missing.append("requiredResultNames")
+        if int(summary.get("queryCount", 0) or 0) < 12:
+            missing.append("queryCount")
+        if summary.get("applyCollectedEvidenceCommand") != "scripts\\supabase_apply_collected_evidence.ps1":
+            missing.append("applyCollectedEvidenceCommand")
+        external_roles = set(str(summary.get("externalProducerProofRoles") or "").split(","))
+        if int(summary.get("externalProducerProofDetailCount", 0) or 0) < 2:
+            missing.append("externalProducerProofDetailCount")
+        if not {"macmini", "notebook"}.issubset(external_roles):
+            missing.append("externalProducerProofRoles")
+        if not summary.get("externalProducerProofSidecars"):
+            missing.append("externalProducerProofSidecars")
+        if not summary.get("externalProducerProofSourceIsolation"):
+            missing.append("externalProducerProofSourceIsolation")
+        if not summary.get("externalProducerProofApplyCommand"):
+            missing.append("externalProducerProofApplyCommand")
+        if not summary.get("externalProducerProofNextActions"):
+            missing.append("externalProducerProofNextActions")
+        if not summary.get("externalProducerProofCommandTemplates"):
+            missing.append("externalProducerProofCommandTemplates")
     source_contract_pending_detail_ready = (
         int(summary.get("nextSourceActionDetailsCount", 0) or 0) > 0
         and summary.get("sourceContractDetail")
@@ -1985,6 +3837,108 @@ def source_health_scorecard_ready_fail_reason(summary: dict[str, Any]) -> str:
             missing.append("sourceContractTraceKeys")
         if not summary.get("sourceContractProofPassed"):
             missing.append("sourceContractProofPassed")
+    if not summary.get("localInteractionProof"):
+        missing.append("localInteractionProof")
+    if not summary.get("localInteractionComputerReady"):
+        missing.append("localInteractionComputerReady")
+    if not summary.get("localInteractionBrowserReady"):
+        missing.append("localInteractionBrowserReady")
+    if not summary.get("localInteractionRefreshReady"):
+        missing.append("localInteractionRefreshReady")
+    if int(summary.get("localInteractionWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("localInteractionWindowsAbsPathHits")
+    if not summary.get("externalInputGateProof"):
+        missing.append("externalInputGateProof")
+    if not summary.get("externalInputGateObserved"):
+        missing.append("externalInputGateObserved")
+    external_gate_status = summary.get("externalInputGateStatus")
+    external_gate_source = summary.get("externalInputGateSource")
+    external_gate_action = summary.get("externalInputGateAction")
+    external_gate_local = summary.get("externalInputGateLocalPatchJustified")
+    supabase_external_gate = (
+        external_gate_status == "external_input_needed"
+        and external_gate_source == "supabase_apply"
+        and external_gate_action == "set_SUPABASE_PROJECT_REF"
+        and external_gate_local is False
+    )
+    desktop_only_gate = (
+        external_gate_status in ("local_or_unknown", "empty")
+        and external_gate_local is True
+    )
+    if not summary.get("externalInputGateBoundaryReady") and not desktop_only_gate:
+        missing.append("externalInputGateBoundaryReady")
+    if not (supabase_external_gate or desktop_only_gate):
+        if external_gate_status not in ("external_input_needed", "local_or_unknown", "empty"):
+            missing.append("externalInputGateStatus")
+        if not desktop_only_gate and external_gate_source != "supabase_apply":
+            missing.append("externalInputGateSource")
+        if not desktop_only_gate and external_gate_action != "set_SUPABASE_PROJECT_REF":
+            missing.append("externalInputGateAction")
+        missing.append("externalInputGateLocalPatchJustified")
+    if summary.get("externalInputGateMutationAllowed") is not False:
+        missing.append("externalInputGateMutationAllowed")
+    external_input_gate_evidence_needed = set(
+        str(summary.get("externalInputGateEvidenceNeeded") or "").split(",")
+    )
+    if supabase_external_gate and not {
+            "SUPABASE_PROJECT_REF",
+            "read_only_supabase_mcp_or_cli_auth",
+            "execute_sql_results",
+            "get_advisors_results",
+    }.issubset(external_input_gate_evidence_needed):
+        missing.append("externalInputGateEvidenceNeeded")
+    if int(summary.get("externalInputGateSecretPatternHits", 0) or 0) != 0:
+        missing.append("externalInputGateSecretPatternHits")
+    if int(summary.get("externalInputGateWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("externalInputGateWindowsAbsPathHits")
+    if not summary.get("goalNextCollectionPacketProof"):
+        missing.append("goalNextCollectionPacketProof")
+    if not summary.get("goalNextCollectionPacketObserved"):
+        missing.append("goalNextCollectionPacketObserved")
+    if not summary.get("goalNextCollectionPacketBoundaryReady"):
+        missing.append("goalNextCollectionPacketBoundaryReady")
+    if summary.get("goalNextCollectionPacketRequirementStatus") != "satisfied":
+        missing.append("goalNextCollectionPacketRequirementStatus")
+    if "SUPABASE_PROJECT_REF" not in set(str(summary.get("goalNextCollectionPacketSupabaseEnv") or "").split(",")):
+        missing.append("goalNextCollectionPacketSupabaseEnv")
+    if not {"execute_sql", "get_advisors"}.issubset(
+        set(str(summary.get("goalNextCollectionPacketMcpTools") or "").split(","))
+    ):
+        missing.append("goalNextCollectionPacketMcpTools")
+    if not summary.get("goalNextCollectionPacketSupabaseReadOnly"):
+        missing.append("goalNextCollectionPacketSupabaseReadOnly")
+    if summary.get("goalNextCollectionPacketMutationAllowed") is not False:
+        missing.append("goalNextCollectionPacketMutationAllowed")
+    if summary.get("goalNextCollectionPacketTokenStored") is not False:
+        missing.append("goalNextCollectionPacketTokenStored")
+    if not {"macmini", "notebook"}.issubset(
+        set(str(summary.get("goalNextCollectionPacketExternalRoles") or "").split(","))
+    ):
+        missing.append("goalNextCollectionPacketExternalRoles")
+    if not summary.get("goalNextCollectionPacketExternalSourceIsolation"):
+        missing.append("goalNextCollectionPacketExternalSourceIsolation")
+    if not summary.get("goalNextCollectionPacketWebProbeReady"):
+        missing.append("goalNextCollectionPacketWebProbeReady")
+    if not summary.get("goalNextCollectionPacketComputerSafe"):
+        missing.append("goalNextCollectionPacketComputerSafe")
+    if not summary.get("goalNextCollectionPacketBrowserSafe"):
+        missing.append("goalNextCollectionPacketBrowserSafe")
+    if int(summary.get("goalNextCollectionPacketSecretPatternHits", 0) or 0) != 0:
+        missing.append("goalNextCollectionPacketSecretPatternHits")
+    if int(summary.get("goalNextCollectionPacketWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("goalNextCollectionPacketWindowsAbsPathHits")
+    if not summary.get("peerEvidenceBusProof"):
+        missing.append("peerEvidenceBusProof")
+    if not summary.get("peerEvidenceBusContractReady"):
+        missing.append("peerEvidenceBusContractReady")
+    if not summary.get("peerEvidenceBusArtifactReady"):
+        missing.append("peerEvidenceBusArtifactReady")
+    if summary.get("peerEvidenceBusTargetMetric") != "harmony":
+        missing.append("peerEvidenceBusTargetMetric")
+    if int(summary.get("peerEvidenceBusWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("peerEvidenceBusWindowsAbsPathHits")
+    if int(summary.get("peerEvidenceBusSecretPatternHits", 0) or 0) != 0:
+        missing.append("peerEvidenceBusSecretPatternHits")
     if int(summary.get("rawSecretPatternHits", 0) or 0) != 0:
         missing.append("rawSecretPatternHits")
     if int(summary.get("nextActionDetailsWindowsAbsPathHits", 0) or 0) != 0:
@@ -1996,6 +3950,792 @@ def source_health_scorecard_ready_fail_reason(summary: dict[str, Any]) -> str:
 
 def source_health_scorecard_ready(summary: dict[str, Any]) -> bool:
     return not source_health_scorecard_ready_fail_reason(summary)
+
+
+def peer_evidence_bus_contract_summary(
+    root: Path,
+    tools: dict[str, Any],
+    manifest_text: str,
+    toolbox_text: str,
+    stdio_text: str,
+) -> dict[str, Any]:
+    prompt_id = "demo1_claude_peers_web_probe_agent_upgrade_5h"
+    prompt_paths = [
+        root / "agent-prompts" / "agents" / prompt_id / "system_ko.md",
+        root / "agent-prompts" / "agents" / prompt_id / "meta.yaml",
+        root / "agent-prompts" / "out" / f"{prompt_id}.prompt",
+    ]
+    prompt_text = "\n".join(read_text(path) for path in prompt_paths)
+    prompt_pack_present = all(path_is_file(path) for path in prompt_paths)
+    prompt_signals = {
+        "peerEvidenceBus": "Peer Evidence Bus" in prompt_text,
+        "webProbeLedger": "Web Probe Ledger" in prompt_text,
+        "webProbeRefreshPacket": "webProbeRefreshPacket" in prompt_text or "Web Probe Refresh Packet" in prompt_text,
+        "supabaseLane": "Supabase" in prompt_text,
+        "browserLane": "Browser" in prompt_text,
+        "computerLane": "Computer Use" in prompt_text or "Computer" in prompt_text,
+        "patchDropLane": "PatchDrop" in prompt_text,
+    }
+    tool = tools.get("peer_evidence_bus") if isinstance(tools.get("peer_evidence_bus"), dict) else {}
+    tool_text = json.dumps(tool, sort_keys=True)
+    output_schema = tool.get("output_schema") if isinstance(tool.get("output_schema"), dict) else {}
+    output_properties = (
+        output_schema.get("properties")
+        if isinstance(output_schema.get("properties"), dict)
+        else {}
+    )
+    required_outputs = output_schema.get("required") if isinstance(output_schema.get("required"), list) else []
+    claude_peers_protocol_schema = (
+        "claudePeersProtocol" in output_properties
+        and "claudePeersProtocol" in required_outputs
+    )
+    safe_peer_identity_schema = (
+        "safePeerIdentityContract" in output_properties
+        and "safePeerIdentityContract" in required_outputs
+    )
+    peer_identity_summary_schema = (
+        "peerIdentitySummary" in output_properties
+        and "peerIdentitySummary" in required_outputs
+    )
+    web_probe_ledger_schema = (
+        "webProbeLedger" in output_properties
+        and "webProbeLedger" in required_outputs
+    )
+    web_probe_refresh_packet_schema = (
+        "webProbeRefreshPacket" in output_properties
+        and "webProbeRefreshPacket" in required_outputs
+    )
+    expected_lanes = ("desktop", "macmini", "notebook", "supabase", "browser", "computer", "superpowers")
+    lane_presence = {
+        lane: bool(re.search(r"peer_lane\(\s*\n\s*\"" + re.escape(lane) + r"\"", toolbox_text))
+        for lane in expected_lanes
+    }
+    next_action_tokens = (
+        "collect-supabase-live-proof",
+        "collect-browser-dom-proof",
+        "collect-computer-use-gui-proof",
+        "collect-macmini-patchdrop-v3-proof",
+        "collect-notebook-patchdrop-v3-proof",
+    )
+    raw_secret_hits = len(SECRET_PATTERN.findall(prompt_text))
+    ok = (
+        bool(tool)
+        and tool.get("readOnly") is True
+        and "peer.evidence_bus" in tool.get("aliases", [])
+        and "peer.evidence" in tool.get("aliases", [])
+        and "evidenceLanes" in tool_text
+        and "nextActions" in tool_text
+        and "evidence_needed" in tool_text
+        and claude_peers_protocol_schema
+        and safe_peer_identity_schema
+        and peer_identity_summary_schema
+        and web_probe_ledger_schema
+        and web_probe_refresh_packet_schema
+        and "peerEvidenceBus" in manifest_text
+        and "peerEvidenceBusNextActions" in manifest_text
+        and '"peer_evidence_bus": toolbox.peer_evidence_bus' in stdio_text
+        and "def peer_evidence_bus(" in toolbox_text
+        and "awx.mcp.peer_evidence_bus.v1" in toolbox_text
+        and "PromptBuilder.build(PromptContext)" in toolbox_text
+        and all(lane_presence.values())
+        and all(token in toolbox_text for token in next_action_tokens)
+        and prompt_pack_present
+        and all(prompt_signals.values())
+        and raw_secret_hits == 0
+    )
+    return {
+        "ok": ok,
+        "manifestTool": bool(tool),
+        "stdioHandler": '"peer_evidence_bus": toolbox.peer_evidence_bus' in stdio_text,
+        "desktopControlLoop": "peerEvidenceBus" in manifest_text and "peerEvidenceBusNextActions" in manifest_text,
+        "promptPackPresent": prompt_pack_present,
+        "laneCount": sum(1 for value in lane_presence.values() if value),
+        "supabaseLane": bool(lane_presence.get("supabase")),
+        "browserLane": bool(lane_presence.get("browser")),
+        "computerLane": bool(lane_presence.get("computer")),
+        "superpowersLane": bool(lane_presence.get("superpowers")),
+        "claudePeersProtocolSchema": claude_peers_protocol_schema,
+        "safePeerIdentitySchema": safe_peer_identity_schema,
+        "peerIdentitySummarySchema": peer_identity_summary_schema,
+        "webProbeLedgerSchema": web_probe_ledger_schema,
+        "webProbeRefreshPacketSchema": web_probe_refresh_packet_schema,
+        "promptSignals": prompt_signals,
+        "rawSecretPatternHits": raw_secret_hits,
+        "failReason": "" if ok else "peer evidence bus contract incomplete or unsafe",
+    }
+
+
+def web_probe_refresh_contract_summary(
+    tools: dict[str, Any],
+    toolbox_text: str,
+    stdio_text: str,
+) -> dict[str, Any]:
+    tool = tools.get("web_probe_refresh") if isinstance(tools.get("web_probe_refresh"), dict) else {}
+    output_schema = tool.get("output_schema") if isinstance(tool.get("output_schema"), dict) else {}
+    output_properties = output_schema.get("properties") if isinstance(output_schema.get("properties"), dict) else {}
+    required_outputs = output_schema.get("required") if isinstance(output_schema.get("required"), list) else []
+    required_fields = {
+        "schemaVersion",
+        "ok",
+        "decision",
+        "mode",
+        "sourceCount",
+        "fetchedCount",
+        "failedCount",
+        "sources",
+        "rawContentStored",
+        "rawQueryStored",
+        "mutationAllowed",
+    }
+    raw_secret_hits = len(SECRET_PATTERN.findall(json.dumps(tool, sort_keys=True) + toolbox_text))
+    ok = (
+        bool(tool)
+        and tool.get("readOnly") is True
+        and "web.probe_refresh" in tool.get("aliases", [])
+        and "web.probe.refresh" in tool.get("aliases", [])
+        and required_fields.issubset(output_properties)
+        and required_fields.issubset(set(required_outputs))
+        and '"web_probe_refresh": toolbox.web_probe_refresh' in stdio_text
+        and "def web_probe_refresh(" in toolbox_text
+        and "awx.web_probe.refresh.v1" in toolbox_text
+        and '"rawContentStored": False' in toolbox_text
+        and '"rawQueryStored": False' in toolbox_text
+        and '"mutationAllowed": False' in toolbox_text
+        and "sourceBodies" in toolbox_text
+        and raw_secret_hits == 0
+    )
+    return {
+        "ok": ok,
+        "manifestTool": bool(tool),
+        "stdioHandler": '"web_probe_refresh": toolbox.web_probe_refresh' in stdio_text,
+        "readOnly": tool.get("readOnly") is True,
+        "requiredOutputCount": len(required_fields.intersection(set(required_outputs))),
+        "rawContentStoredFalse": '"rawContentStored": False' in toolbox_text,
+        "rawQueryStoredFalse": '"rawQueryStored": False' in toolbox_text,
+        "mutationAllowedFalse": '"mutationAllowed": False' in toolbox_text,
+        "rawSecretPatternHits": raw_secret_hits,
+        "failReason": "" if ok else "web probe refresh contract missing or unsafe",
+    }
+
+
+def smb_decommission_debug_probe_contract_summary(
+    root: Path,
+    tools: dict[str, Any],
+    toolbox_text: str,
+    stdio_text: str,
+) -> dict[str, Any]:
+    tool = tools.get("smb_decommission_debug_probe") if isinstance(tools.get("smb_decommission_debug_probe"), dict) else {}
+    output_schema = tool.get("output_schema") if isinstance(tool.get("output_schema"), dict) else {}
+    output_properties = output_schema.get("properties") if isinstance(output_schema.get("properties"), dict) else {}
+    required_outputs = set(output_schema.get("required") if isinstance(output_schema.get("required"), list) else [])
+    required_fields = {
+        "ok",
+        "decision",
+        "mutationAllowed",
+        "writeDispatch",
+        "writeProducerKit",
+        "summaryArtifact",
+        "eventsArtifact",
+        "viewerArtifact",
+        "rawSecretPatternHits",
+    }
+    script_path = root / "scripts" / "smb_decommission_debug_probe.ps1"
+    output_dir = root / "var" / "codex-smoke" / "smb-decommission-control-tower"
+    summary_path = output_dir / "smb-decommission-debug-probe.summary.json"
+    events_path = output_dir / "smb-decommission-debug-probe.events.ndjson"
+    viewer_path = output_dir / "smb-decommission-debug-probe.viewer.html"
+    browser_path = output_dir / "browser-viewer-proof.json"
+    computer_path = output_dir / "computer-count-proof.json"
+
+    script_text = read_text(script_path)
+    summary_raw = read_text(summary_path)
+    events_raw = read_text(events_path)
+    viewer_raw = read_text(viewer_path)
+    browser_raw = read_text(browser_path)
+    computer_raw = read_text(computer_path)
+    summary = load_json(summary_path)
+    desktop_loop = summary.get("desktopControlLoop") if isinstance(summary.get("desktopControlLoop"), dict) else {}
+    browser = summary.get("browser") if isinstance(summary.get("browser"), dict) else {}
+    computer = summary.get("computer") if isinstance(summary.get("computer"), dict) else {}
+    supabase = summary.get("supabase") if isinstance(summary.get("supabase"), dict) else {}
+    attachment_probe = (
+        summary.get("attachmentProbe") if isinstance(summary.get("attachmentProbe"), dict) else {}
+    )
+    source_probe = summary.get("sourceProbe") if isinstance(summary.get("sourceProbe"), dict) else {}
+    (
+        generated_at_present,
+        generated_fresh,
+        age_seconds,
+        freshness_status,
+    ) = artifact_freshness(summary.get("generatedAt"), SMB_DECOMMISSION_DEBUG_PROBE_MAX_AGE_SECONDS)
+    artifact_text = "\n".join([summary_raw, events_raw, viewer_raw, browser_raw, computer_raw])
+    raw_secret_hits = len(
+        SECRET_PATTERN.findall(json.dumps(tool, sort_keys=True) + "\n" + script_text + "\n" + artifact_text)
+    )
+    windows_abs_path_hits = len(re.findall(r"\b[A-Za-z]:[\\/]", artifact_text))
+    output_schema_ready = required_fields.issubset(set(output_properties)) and required_fields.issubset(required_outputs)
+    manifest_tool = bool(tool)
+    read_only = tool.get("readOnly") is True
+    desktop_only = tool.get("nodeRoles") == ["desktop"]
+    toolbox_handler = "def smb_decommission_debug_probe(" in toolbox_text and "sanitize_probe_artifact_value" in toolbox_text
+    stdio_handler = '"smb_decommission_debug_probe": toolbox.smb_decommission_debug_probe' in stdio_text
+    script_present = script_path.is_file()
+    script_guard_ready = (
+        "source_scan" in script_text
+        and "desktop_control_loop" in script_text
+        and "supabase_context_probe" in script_text
+        and "write_dispatch = $false" in script_text
+        and "write_producer_kit = $false" in script_text
+        and "require_producer_bundles = $false" in script_text
+        and "mutationAllowed = $false" in script_text
+    )
+    summary_artifact = summary_path.is_file()
+    events_artifact = events_path.is_file()
+    viewer_artifact = viewer_path.is_file()
+    viewer_artifact_path = _relative_artifact_path(root, viewer_path)
+    browser_status = safe_scalar(browser.get("status"), 80)
+    computer_status = safe_scalar(computer.get("status"), 80)
+    supabase_scope = safe_scalar(supabase.get("projectScopeStatus"), 80)
+    attachment_samples = (
+        attachment_probe.get("samples") if isinstance(attachment_probe.get("samples"), list) else []
+    )
+    source_probe_samples = (
+        source_probe.get("samples") if isinstance(source_probe.get("samples"), list) else []
+    )
+    attachment_status = safe_scalar(attachment_probe.get("status"), 80)
+    source_probe_status = safe_scalar(source_probe.get("status"), 80)
+    source_probe_engine = safe_scalar(source_probe.get("engine"), 80)
+    artifact_secret_hits = safe_int(summary.get("artifactSecretPatternHits")) + len(SECRET_PATTERN.findall(artifact_text))
+    summary_ready = (
+        summary.get("schemaVersion") == "awx.smb_decommission_debug_probe.v1"
+        and summary.get("ok") is True
+        and summary.get("decision") == "desktop_only_probe"
+        and generated_at_present
+        and generated_fresh
+        and summary.get("mutationAllowed") is False
+        and summary.get("writeDispatch") is False
+        and summary.get("writeProducerKit") is False
+        and desktop_loop.get("localReady") is True
+        and desktop_loop.get("producerBundlesRequired") is False
+        and browser_status == "verified_supporting"
+        and browser.get("mutationAllowed") is False
+        and computer_status == "verified_supporting"
+        and computer.get("mutationAllowed") is False
+        and supabase_scope
+        and supabase.get("mutationAllowed") is False
+        and safe_int(summary.get("rawSecretPatternHits")) == 0
+        and artifact_secret_hits == 0
+        and windows_abs_path_hits == 0
+    )
+    aliases_ready = (
+        "debug.smb_decommission_probe" in tool.get("aliases", [])
+        and "smb.decommission_debug_probe" in tool.get("aliases", [])
+        and "smb.debug_probe" in tool.get("aliases", [])
+    )
+    missing: list[str] = []
+    checks = {
+        "manifestTool": manifest_tool,
+        "readOnly": read_only,
+        "desktopOnly": desktop_only,
+        "aliases": aliases_ready,
+        "outputSchema": output_schema_ready,
+        "toolboxHandler": toolbox_handler,
+        "stdioHandler": stdio_handler,
+        "scriptPresent": script_present,
+        "scriptGuardReady": script_guard_ready,
+        "summaryArtifact": summary_artifact,
+        "eventsArtifact": events_artifact,
+        "viewerArtifact": viewer_artifact,
+        "summaryReady": summary_ready,
+    }
+    for name, passed in checks.items():
+        if not passed:
+            missing.append(name)
+    ok = all(checks.values())
+    return {
+        "ok": ok,
+        "manifestTool": manifest_tool,
+        "readOnly": read_only,
+        "desktopOnly": desktop_only,
+        "aliasesReady": aliases_ready,
+        "outputSchemaReady": output_schema_ready,
+        "toolboxHandler": toolbox_handler,
+        "stdioHandler": stdio_handler,
+        "scriptPresent": script_present,
+        "scriptGuardReady": script_guard_ready,
+        "summaryArtifact": summary_artifact,
+        "eventsArtifact": events_artifact,
+        "viewerArtifact": viewer_artifact,
+        "viewerArtifactPath": viewer_artifact_path,
+        "summaryFresh": generated_fresh,
+        "summaryFreshnessStatus": freshness_status,
+        "summaryAgeSeconds": age_seconds,
+        "schemaVersion": safe_scalar(summary.get("schemaVersion"), 80),
+        "decision": safe_scalar(summary.get("decision"), 80),
+        "mutationAllowed": summary.get("mutationAllowed"),
+        "writeDispatch": summary.get("writeDispatch"),
+        "writeProducerKit": summary.get("writeProducerKit"),
+        "producerBundlesRequired": desktop_loop.get("producerBundlesRequired"),
+        "browserStatus": browser_status,
+        "computerStatus": computer_status,
+        "supabaseProjectScope": supabase_scope,
+        "attachmentProbeStatus": attachment_status,
+        "attachmentFileName": safe_scalar(attachment_probe.get("fileName"), 120),
+        "attachmentPathHash12": safe_scalar(attachment_probe.get("pathHash12"), 24),
+        "attachmentLineCount": safe_int(attachment_probe.get("lineCount")),
+        "attachmentSampleCount": len(attachment_samples),
+        "attachmentRawSecretPatternHits": safe_int(attachment_probe.get("rawSecretPatternHits")),
+        "sourceProbeStatus": source_probe_status,
+        "sourceProbeEngine": source_probe_engine,
+        "sourceProbeMatchedFileCount": safe_int(source_probe.get("matchedFileCount")),
+        "sourceProbeMatchedLineCount": safe_int(source_probe.get("matchedLineCount")),
+        "sourceProbeSampleCount": len(source_probe_samples),
+        "sourceProbeRawSecretPatternHits": safe_int(source_probe.get("rawSecretPatternHits")),
+        "artifactSecretPatternHits": artifact_secret_hits,
+        "rawSecretPatternHits": raw_secret_hits,
+        "windowsAbsPathHits": windows_abs_path_hits,
+        "pathHash": sha256_file(summary_path),
+        "failReason": "" if ok else "smb decommission debug probe contract incomplete: " + ",".join(missing),
+    }
+
+
+def peer_evidence_bus_artifact_summary(root: Path) -> dict[str, Any]:
+    path = root / "var" / "codex-smoke" / "peer-evidence-bus.json"
+    if not path.is_file():
+        return {
+            "valid": False,
+            "evidence": "peerEvidenceBusArtifactPresent=False",
+            "evidenceNeeded": [
+                "var/codex-smoke/peer-evidence-bus.json / run scripts\\goal_next_auto.ps1 -Root . -Topic mcp-control-loop"
+            ],
+        }
+    raw = read_text(path)
+    try:
+        data = json.loads(raw.lstrip("\ufeff"))
+    except json.JSONDecodeError as exc:
+        return {
+            "valid": False,
+            "evidence": f"peerEvidenceBusArtifactPresent=True;jsonValid=False;failReason={safe_scalar(exc.__class__.__name__, 80)}",
+            "evidenceNeeded": [
+                "peer evidence bus artifact is not valid JSON / rerun scripts\\goal_next_auto.ps1"
+            ],
+        }
+    prompt_pack = data.get("promptPack") if isinstance(data.get("promptPack"), dict) else {}
+    try:
+        output_count = int(data.get("outputCount", 0) or 0)
+    except Exception:
+        output_count = 0
+    try:
+        raw_secret_hits = int(data.get("rawSecretPatternHits", 0) or 0)
+    except Exception:
+        raw_secret_hits = len(SECRET_PATTERN.findall(raw))
+    target_metric = safe_scalar(data.get("targetMetric"), 80)
+    node_role = safe_scalar(data.get("nodeRole"), 80)
+    schema_ok = data.get("schemaVersion") == "awx.mcp.peer_evidence_bus.v1"
+    protocol = data.get("claudePeersProtocol") if isinstance(data.get("claudePeersProtocol"), dict) else {}
+    reference_tools = protocol.get("referenceTools") if isinstance(protocol.get("referenceTools"), list) else []
+    reference_tool_names = {str(item).strip() for item in reference_tools if str(item).strip()}
+    codex_delivery = protocol.get("codexDeliveryPolicy") if isinstance(protocol.get("codexDeliveryPolicy"), dict) else {}
+    closure = protocol.get("conversationClosure") if isinstance(protocol.get("conversationClosure"), dict) else {}
+    broker = protocol.get("brokerContract") if isinstance(protocol.get("brokerContract"), dict) else {}
+    message_safety = protocol.get("messageSafety") if isinstance(protocol.get("messageSafety"), dict) else {}
+    safe_identity = (
+        data.get("safePeerIdentityContract")
+        if isinstance(data.get("safePeerIdentityContract"), dict)
+        else {}
+    )
+    peer_identity_summary = (
+        data.get("peerIdentitySummary")
+        if isinstance(data.get("peerIdentitySummary"), dict)
+        else {}
+    )
+    web_probe_ledger = (
+        data.get("webProbeLedger")
+        if isinstance(data.get("webProbeLedger"), dict)
+        else {}
+    )
+    web_probe_refresh_packet = (
+        data.get("webProbeRefreshPacket")
+        if isinstance(data.get("webProbeRefreshPacket"), dict)
+        else {}
+    )
+    safe_identity_source_fields = {
+        safe_scalar(item, 80)
+        for item in safe_identity.get("sourceFields", [])
+        if safe_scalar(item, 80)
+    } if isinstance(safe_identity.get("sourceFields"), list) else set()
+    safe_identity_safe_fields = {
+        safe_scalar(item, 80)
+        for item in safe_identity.get("safeFields", [])
+        if safe_scalar(item, 80)
+    } if isinstance(safe_identity.get("safeFields"), list) else set()
+    safe_identity_forbidden_fields = {
+        safe_scalar(item, 80)
+        for item in safe_identity.get("forbiddenFields", [])
+        if safe_scalar(item, 80)
+    } if isinstance(safe_identity.get("forbiddenFields"), list) else set()
+    identity_resolution = (
+        safe_identity.get("identityResolution")
+        if isinstance(safe_identity.get("identityResolution"), dict)
+        else {}
+    )
+    message_envelope = (
+        safe_identity.get("messageEnvelope")
+        if isinstance(safe_identity.get("messageEnvelope"), dict)
+        else {}
+    )
+    required_source_fields = {"id", "logical_name", "cwd", "repo_name", "repo_root", "branch", "model", "summary"}
+    required_safe_fields = {
+        "peerIdHash",
+        "logicalName",
+        "repoName",
+        "branch",
+        "summaryHash",
+        "summaryLength",
+        "logicalNameCollisionCount",
+        "cwdHash",
+        "repoRootHash",
+    }
+    required_forbidden_fields = {"rawCwd", "rawRepoRoot", "rawMessageText", "rawSummary"}
+    forbidden_raw_fields_evidence = [
+        item
+        for item in ("rawCwd", "rawMessageText", "rawRepoRoot", "rawSummary")
+        if item in safe_identity_forbidden_fields
+    ]
+    identity_resolution_mode = (
+        "logical-name-preferred"
+        if identity_resolution.get("logicalNamePreferred") is True
+        else "unknown"
+    )
+    duplicate_logical_name_requires_peer_id = (
+        identity_resolution.get("duplicateLogicalNameRequiresPeerId") is True
+    )
+    ambiguous_name_resolution = safe_scalar(identity_resolution.get("ambiguousNameResolution"), 80)
+    safe_identity_ready = (
+        safe_identity.get("redactionMode") == "hash-count-and-allowlisted-labels-only"
+        and required_source_fields.issubset(safe_identity_source_fields)
+        and required_safe_fields.issubset(safe_identity_safe_fields)
+        and required_forbidden_fields.issubset(safe_identity_forbidden_fields)
+        and identity_resolution.get("logicalNamePreferred") is True
+        and identity_resolution.get("resolvePeerBeforeSend") is True
+        and duplicate_logical_name_requires_peer_id
+        and ambiguous_name_resolution == "fail-closed"
+        and message_envelope.get("storeRawText") is False
+        and message_envelope.get("storeMessageHash") is True
+        and message_envelope.get("storeMessageLength") is True
+    )
+    try:
+        peer_count = int(peer_identity_summary.get("peerCount", 0) or 0)
+    except Exception:
+        peer_count = -1
+    try:
+        logical_name_collision_count = int(peer_identity_summary.get("logicalNameCollisionCount", 0) or 0)
+    except Exception:
+        logical_name_collision_count = -1
+    peer_ambiguous_resolution = safe_scalar(peer_identity_summary.get("ambiguousNameResolution"), 80)
+    peer_identity_summary_ready = (
+        peer_count >= 0
+        and logical_name_collision_count >= 0
+        and peer_ambiguous_resolution in {"fail-closed", "not-applicable"}
+        and peer_identity_summary.get("rawIdentityStored") is False
+        and peer_identity_summary.get("rawPathStored") is False
+        and peer_identity_summary.get("rawSummaryStored") is False
+    )
+    try:
+        web_probe_source_count = int(web_probe_ledger.get("sourceCount", 0) or 0)
+    except Exception:
+        web_probe_source_count = 0
+    web_probe_allowed_domains = (
+        {safe_scalar(item, 80) for item in web_probe_ledger.get("allowedDomains", []) if safe_scalar(item, 80)}
+        if isinstance(web_probe_ledger.get("allowedDomains"), list)
+        else set()
+    )
+    web_probe_sources = web_probe_ledger.get("sources") if isinstance(web_probe_ledger.get("sources"), list) else []
+    web_probe_urls = {
+        safe_scalar(item.get("sourceUrl"), 240)
+        for item in web_probe_sources
+        if isinstance(item, dict) and safe_scalar(item.get("sourceUrl"), 240)
+    }
+    web_probe_sources_safe = all(
+        isinstance(item, dict)
+        and item.get("rawContentStored") is False
+        and item.get("fullArticleStored") is False
+        and safe_scalar(item.get("contractImpact"), 40) in {"allow", "block", "require_gate", "evidence_only"}
+        for item in web_probe_sources
+    )
+    web_probe_ledger_ready = (
+        web_probe_ledger.get("mode") == "web-probe-first"
+        and web_probe_source_count >= 4
+        and web_probe_ledger.get("rawContentStored") is False
+        and web_probe_ledger.get("rawQueryStored") is False
+        and web_probe_ledger.get("requiresRefreshBeforePatch") is True
+        and {"supabase.com", "modelcontextprotocol.io"}.issubset(web_probe_allowed_domains)
+        and "https://supabase.com/docs/guides/ai-tools/mcp" in web_probe_urls
+        and "https://supabase.com/docs/guides/api/securing-your-api" in web_probe_urls
+        and "https://modelcontextprotocol.io/docs/concepts/tools" in web_probe_urls
+        and web_probe_sources_safe
+    )
+    web_probe_refresh_targets = (
+        web_probe_refresh_packet.get("fetchTargets")
+        if isinstance(web_probe_refresh_packet.get("fetchTargets"), list)
+        else []
+    )
+    try:
+        web_probe_refresh_target_count = int(web_probe_refresh_packet.get("officialSourceCount", 0) or 0)
+    except Exception:
+        web_probe_refresh_target_count = 0
+    web_probe_refresh_urls = {
+        safe_scalar(item.get("sourceUrl"), 240)
+        for item in web_probe_refresh_targets
+        if isinstance(item, dict) and safe_scalar(item.get("sourceUrl"), 240)
+    }
+    web_probe_refresh_targets_safe = all(
+        isinstance(item, dict)
+        and item.get("rawContentStored") is False
+        and item.get("fullArticleStored") is False
+        and safe_scalar(item.get("method"), 80) in {"markdown-fetch", "browser-or-markdown-fetch"}
+        and safe_scalar(item.get("markdownUrl"), 260).startswith("https://")
+        for item in web_probe_refresh_targets
+    )
+    supabase_mcp_gate = (
+        web_probe_refresh_packet.get("supabaseMcpGate")
+        if isinstance(web_probe_refresh_packet.get("supabaseMcpGate"), dict)
+        else {}
+    )
+    browser_probe_gate = (
+        web_probe_refresh_packet.get("browserProbeGate")
+        if isinstance(web_probe_refresh_packet.get("browserProbeGate"), dict)
+        else {}
+    )
+    import_contract = (
+        web_probe_refresh_packet.get("importContract")
+        if isinstance(web_probe_refresh_packet.get("importContract"), dict)
+        else {}
+    )
+    supabase_gate_ready = (
+        supabase_mcp_gate.get("readOnly") is True
+        and supabase_mcp_gate.get("mutationAllowed") is False
+        and "SUPABASE_PROJECT_REF" in {
+            safe_scalar(item, 80)
+            for item in supabase_mcp_gate.get("requiredEnv", [])
+            if safe_scalar(item, 80)
+        }
+        and "read_only=true" in safe_scalar(supabase_mcp_gate.get("endpointTemplate"), 260)
+        and "database" in {
+            safe_scalar(item, 80)
+            for item in supabase_mcp_gate.get("featureGroups", [])
+            if safe_scalar(item, 80)
+        }
+        and supabase_mcp_gate.get("storeAccessToken") is False
+    )
+    browser_gate_ready = (
+        browser_probe_gate.get("storeRawUrl") is False
+        and browser_probe_gate.get("storeScreenshotPath") is False
+        and browser_probe_gate.get("storeDomSnapshot") is False
+    )
+    import_contract_ready = (
+        import_contract.get("storeExtractsOnly") is True
+        and int(import_contract.get("maxExtractChars", 0) or 0) <= 240
+        and {
+            "allow",
+            "block",
+            "require_gate",
+            "evidence_only",
+        }.issubset(
+            {
+                safe_scalar(item, 40)
+                for item in import_contract.get("allowedImpacts", [])
+                if safe_scalar(item, 40)
+            }
+        )
+        and import_contract.get("requiresSourceHash") is True
+    )
+    web_probe_refresh_packet_ready = (
+        web_probe_refresh_packet.get("schemaVersion") == "awx.web_probe.refresh_packet.v1"
+        and web_probe_refresh_packet.get("mode") == "read-only-official-sources"
+        and web_probe_refresh_packet.get("mutationAllowed") is False
+        and web_probe_refresh_packet.get("rawContentStored") is False
+        and web_probe_refresh_packet.get("rawQueryStored") is False
+        and web_probe_refresh_target_count >= 4
+        and web_probe_refresh_target_count == len(web_probe_refresh_targets)
+        and web_probe_urls.issubset(web_probe_refresh_urls)
+        and web_probe_refresh_targets_safe
+        and supabase_gate_ready
+        and browser_gate_ready
+        and import_contract_ready
+    )
+    protocol_ready = (
+        {
+            "list_peers",
+            "resolve_peer",
+            "send_message",
+            "close_conversation",
+            "set_summary",
+            "check_messages",
+        }.issubset(reference_tool_names)
+        and int(broker.get("defaultPort", 0) or 0) == 7899
+        and codex_delivery.get("mode") == "manual-queue-preserving"
+        and codex_delivery.get("manualCheckTool") == "check_messages"
+        and closure.get("requiresMutualClose") is True
+        and closure.get("reopenRequiresExplicitFlag") is True
+        and message_safety.get("redactedSummariesOnly") is True
+        and safe_identity_ready
+        and peer_identity_summary_ready
+        and web_probe_ledger_ready
+        and web_probe_refresh_packet_ready
+    )
+    valid = (
+        schema_ok
+        and data.get("ok") is True
+        and data.get("decision") == "peer_evidence_bus"
+        and target_metric == "harmony"
+        and node_role == "desktop"
+        and output_count >= 7
+        and prompt_pack.get("present") is True
+        and not prompt_pack.get("missingSignals")
+        and protocol_ready
+        and raw_secret_hits == 0
+    )
+    evidence = (
+        f"peerEvidenceBusArtifactPresent=True;"
+        f"schemaVersion={safe_scalar(data.get('schemaVersion'), 80)};"
+        f"ok={data.get('ok')};"
+        f"decision={safe_scalar(data.get('decision'), 80)};"
+        f"targetMetric={target_metric};"
+        f"nodeRole={node_role};"
+        f"outputCount={output_count};"
+        f"promptPackPresent={prompt_pack.get('present')};"
+        f"missingSignals={safe_csv_names(prompt_pack.get('missingSignals'))};"
+        f"claudePeersProtocol={protocol_ready};"
+        f"referenceTools={len(reference_tool_names)};"
+        f"manualCheckTool={safe_scalar(codex_delivery.get('manualCheckTool'), 80)};"
+        f"requiresMutualClose={closure.get('requiresMutualClose') is True};"
+        f"reopenRequiresExplicitFlag={closure.get('reopenRequiresExplicitFlag') is True};"
+        f"safePeerIdentityContract={safe_identity_ready};"
+        f"peerIdentitySummary={peer_identity_summary_ready};"
+        f"peerCount={peer_count};"
+        f"logicalNameCollisionCount={logical_name_collision_count};"
+        f"peerAmbiguousNameResolution={peer_ambiguous_resolution};"
+        f"webProbeLedger={web_probe_ledger_ready};"
+        f"webProbeSourceCount={web_probe_source_count};"
+        f"webProbeRefreshPacket={web_probe_refresh_packet_ready};"
+        f"webProbeRefreshTargetCount={web_probe_refresh_target_count};"
+        f"webProbeRefreshMutationAllowed={web_probe_refresh_packet.get('mutationAllowed')};"
+        f"webProbeRefreshRawContentStored={web_probe_refresh_packet.get('rawContentStored')};"
+        f"webProbeRawContentStored={web_probe_ledger.get('rawContentStored')};"
+        f"webProbeRawQueryStored={web_probe_ledger.get('rawQueryStored')};"
+        f"identityResolution={identity_resolution_mode};"
+        f"duplicateLogicalNameRequiresPeerId={duplicate_logical_name_requires_peer_id};"
+        f"ambiguousNameResolution={ambiguous_name_resolution};"
+        f"forbiddenRawFields={safe_csv_names(forbidden_raw_fields_evidence)};"
+        f"rawSecretPatternHits={raw_secret_hits};"
+        f"pathHash={sha256_file(path)}"
+    )
+    evidence_needed = []
+    if not valid:
+        evidence_needed.append(
+            "peer evidence bus artifact missing required harmony fields or is unsafe / rerun scripts\\goal_next_auto.ps1"
+        )
+    return {
+        "valid": valid,
+        "evidence": evidence,
+        "evidenceNeeded": evidence_needed,
+    }
+
+
+def web_probe_refresh_artifact_summary(root: Path) -> dict[str, Any]:
+    path = root / "var" / "codex-smoke" / "web-probe-refresh.json"
+    if not path.is_file():
+        return {
+            "valid": False,
+            "artifactHash": "",
+            "evidence": "webProbeRefreshArtifactPresent=False",
+            "evidenceNeeded": [
+                "var/codex-smoke/web-probe-refresh.json / run web_probe_refresh from peer_evidence_bus.webProbeRefreshPacket"
+            ],
+        }
+    raw = read_text(path)
+    try:
+        data = json.loads(raw.lstrip("\ufeff"))
+    except json.JSONDecodeError as exc:
+        return {
+            "valid": False,
+            "artifactHash": "",
+            "evidence": f"webProbeRefreshArtifactPresent=True;jsonValid=False;failReason={safe_scalar(exc.__class__.__name__, 80)}",
+            "evidenceNeeded": ["web probe refresh artifact is not valid JSON / rerun web_probe_refresh"],
+        }
+    sources = data.get("sources") if isinstance(data.get("sources"), list) else []
+    source_count = safe_int(data.get("sourceCount"))
+    fetched_count = safe_int(data.get("fetchedCount"))
+    failed_count = safe_int(data.get("failedCount"))
+    skipped_count = safe_int(data.get("skippedCount"))
+    missing_signal_count = safe_int(data.get("missingSignalCount"))
+    generated_at_present, fresh, age_seconds, freshness_status = artifact_freshness(
+        data.get("generatedAt"), WEB_PROBE_REFRESH_MAX_AGE_SECONDS
+    )
+    raw_secret_hits = safe_int(data.get("rawSecretPatternHits")) + len(SECRET_PATTERN.findall(raw))
+    sources_safe = all(
+        isinstance(source, dict)
+        and source.get("rawContentStored") is False
+        and source.get("fullArticleStored") is False
+        and safe_int(source.get("statusCode")) in range(200, 400)
+        and source.get("fetched") is True
+        and safe_int(source.get("contentLength")) > 0
+        and bool(safe_scalar(source.get("contentHash"), 80))
+        and not source.get("missingSignals")
+        for source in sources
+    )
+    valid = (
+        data.get("schemaVersion") == "awx.web_probe.refresh.v1"
+        and data.get("ok") is True
+        and data.get("decision") == "web_probe_refresh"
+        and data.get("mode") == "read-only-official-sources"
+        and source_count == len(sources)
+        and source_count > 0
+        and fetched_count == source_count
+        and failed_count == 0
+        and skipped_count == 0
+        and missing_signal_count == 0
+        and data.get("rawContentStored") is False
+        and data.get("rawQueryStored") is False
+        and data.get("mutationAllowed") is False
+        and generated_at_present
+        and fresh
+        and sources_safe
+        and raw_secret_hits == 0
+    )
+    artifact_hash = sha256_file(path)
+    evidence = (
+        f"webProbeRefreshArtifactPresent=True;"
+        f"schemaVersion={safe_scalar(data.get('schemaVersion'), 80)};"
+        f"ok={data.get('ok')};"
+        f"decision={safe_scalar(data.get('decision'), 80)};"
+        f"mode={safe_scalar(data.get('mode'), 80)};"
+        f"sourceCount={source_count};"
+        f"fetchedCount={fetched_count};"
+        f"failedCount={failed_count};"
+        f"skippedCount={skipped_count};"
+        f"missingSignalCount={missing_signal_count};"
+        f"rawContentStored={data.get('rawContentStored')};"
+        f"rawQueryStored={data.get('rawQueryStored')};"
+        f"mutationAllowed={data.get('mutationAllowed')};"
+        f"generatedAtPresent={generated_at_present};"
+        f"fresh={fresh};"
+        f"freshnessStatus={freshness_status};"
+        f"ageSeconds={age_seconds};"
+        f"sourcesSafe={sources_safe};"
+        f"rawSecretPatternHits={raw_secret_hits};"
+        f"pathHash={artifact_hash}"
+    )
+    evidence_needed = []
+    if not valid:
+        evidence_needed.append("web probe refresh artifact missing fresh sanitized official-source proof / rerun web_probe_refresh")
+    return {
+        "valid": valid,
+        "artifactHash": artifact_hash,
+        "evidence": evidence,
+        "evidenceNeeded": evidence_needed,
+    }
 
 
 def _path_from_json_field(root: Path, raw: Any) -> Path:
@@ -2051,10 +4791,162 @@ def goal_next_command_packet_summary(root: Path) -> dict[str, Any]:
     computer_use_present = bool(computer_use)
     computer_use_decision = safe_scalar(computer_use.get("decision"), 80)
     computer_use_next_action = safe_scalar(computer_use.get("nextAction"), 80)
+    computer_use_helper_count_only = computer_use.get("helperCountOnly") is True
+    computer_use_probe_schema_version = safe_scalar(computer_use.get("probeSchemaVersion"), 120)
+    computer_use_probe_schema_ready = (
+        computer_use_probe_schema_version == "awx.local.computer_use_count_probe.v1"
+    )
     try:
         computer_use_app_count = int(computer_use.get("appCount", 0) or 0)
     except Exception:
         computer_use_app_count = 0
+    browser_use = latest.get("browserUse")
+    if not isinstance(browser_use, dict):
+        raw_summary_browser_use = summary.get("browserUse") if isinstance(summary, dict) else {}
+        browser_use = raw_summary_browser_use if isinstance(raw_summary_browser_use, dict) else {}
+    if not isinstance(browser_use, dict) or not browser_use:
+        raw_packet_browser_use = packet.get("browserUse") if isinstance(packet, dict) else {}
+        browser_use = raw_packet_browser_use if isinstance(raw_packet_browser_use, dict) else browser_use
+    browser_use_present = bool(browser_use)
+    browser_use_decision = safe_scalar(browser_use.get("decision"), 80)
+    browser_use_next_action = safe_scalar(browser_use.get("nextAction"), 120)
+    browser_use_stores_raw_url = browser_use.get("storesRawUrl") is True
+    browser_use_stores_screenshot_path = browser_use.get("storesScreenshotPath") is True
+    local_refresh = packet.get("localInteractionSmokeRefresh")
+    if not isinstance(local_refresh, dict):
+        local_refresh = {}
+    local_refresh_raw = json.dumps(local_refresh, sort_keys=True)
+    local_refresh_script = safe_scalar(local_refresh.get("scriptPath"), 120)
+    local_refresh_command = str(local_refresh.get("command") or "")
+    local_refresh_outputs_raw = (
+        local_refresh.get("outputPaths") if isinstance(local_refresh.get("outputPaths"), list) else []
+    )
+    local_refresh_outputs = [str(item).strip() for item in local_refresh_outputs_raw if str(item).strip()]
+    local_refresh_required_env = (
+        local_refresh.get("requiredEnvNames")
+        if isinstance(local_refresh.get("requiredEnvNames"), list)
+        else []
+    )
+    local_refresh_required_env_names = [str(item).strip() for item in local_refresh_required_env if str(item).strip()]
+    local_refresh_expected_outputs = {
+        "var/codex-smoke/computer-use-smoke.json",
+        "var/codex-smoke/browser-ui-smoke.json",
+        "var/codex-smoke/local-interaction-smoke-refresh.summary.json",
+    }
+    local_refresh_command_ready = (
+        "scripts\\refresh_local_interaction_smokes.ps1" in local_refresh_command
+        or "scripts/refresh_local_interaction_smokes.ps1" in local_refresh_command
+    ) and "<computer-counts-json>" in local_refresh_command and "<browser-proof-json>" in local_refresh_command
+    local_refresh_outputs_ready = local_refresh_expected_outputs.issubset(set(local_refresh_outputs))
+    local_refresh_guard_ready = (
+        local_refresh.get("storesRawProbePayloads") is False
+        and local_refresh.get("storesRawAppNames") is False
+        and local_refresh.get("storesWindowTitles") is False
+        and local_refresh.get("storesRawUrl") is False
+        and local_refresh.get("storesScreenshotPath") is False
+        and local_refresh.get("mutationAllowed") is False
+        and not local_refresh_required_env_names
+    )
+    local_refresh_secret_hits = len(SECRET_PATTERN.findall(local_refresh_raw))
+    local_refresh_windows_abs_path_hits = len(
+        re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", local_refresh_raw)
+    )
+    local_refresh_ready = (
+        local_refresh_script == "scripts/refresh_local_interaction_smokes.ps1"
+        and local_refresh_command_ready
+        and local_refresh_outputs_ready
+        and local_refresh_guard_ready
+        and local_refresh_secret_hits == 0
+        and local_refresh_windows_abs_path_hits == 0
+    )
+    trace_memory_proof = latest.get("traceMemoryRuntimeProof")
+    if not isinstance(trace_memory_proof, dict):
+        raw_summary_trace_memory_proof = summary.get("traceMemoryRuntimeProof") if isinstance(summary, dict) else {}
+        trace_memory_proof = (
+            raw_summary_trace_memory_proof
+            if isinstance(raw_summary_trace_memory_proof, dict)
+            else {}
+        )
+    if not isinstance(trace_memory_proof, dict) or not trace_memory_proof:
+        raw_packet_trace_memory_proof = packet.get("traceMemoryRuntimeProof") if isinstance(packet, dict) else {}
+        trace_memory_proof = (
+            raw_packet_trace_memory_proof
+            if isinstance(raw_packet_trace_memory_proof, dict)
+            else trace_memory_proof
+        )
+    if not isinstance(trace_memory_proof, dict):
+        trace_memory_proof = {}
+    trace_memory_proof_raw = json.dumps(trace_memory_proof, sort_keys=True)
+    trace_memory_proof_decision = safe_scalar(trace_memory_proof.get("decision"), 80)
+    trace_memory_route_decision = safe_scalar(trace_memory_proof.get("traceMemoryRouteDecision"), 120)
+    trace_memory_cfvm_offered = safe_scalar(trace_memory_proof.get("traceMemoryCfvmOffered"), 40)
+    trace_memory_cfvm_pattern_id = safe_scalar(trace_memory_proof.get("traceMemoryCfvmPatternId"), 80)
+    trace_memory_status = safe_int(trace_memory_proof.get("status"))
+    trace_memory_seed_status = safe_int(trace_memory_proof.get("traceMemorySeedStatus"))
+    trace_memory_secret_hits = safe_int(trace_memory_proof.get("secretHits")) + len(
+        SECRET_PATTERN.findall(trace_memory_proof_raw)
+    )
+    trace_memory_raw_prompt_hits = safe_int(trace_memory_proof.get("rawPromptHits"))
+    trace_memory_raw_model_hits = safe_int(trace_memory_proof.get("rawModelHits"))
+    trace_memory_evidence_needed = {
+        str(item).strip()
+        for item in trace_memory_proof.get("evidenceNeeded", [])
+        if str(item).strip()
+    } if isinstance(trace_memory_proof.get("evidenceNeeded"), list) else set()
+    trace_memory_windows_abs_path_hits = len(
+        re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", trace_memory_proof_raw)
+    )
+    trace_memory_runtime_proof_ready = (
+        bool(trace_memory_proof)
+        and trace_memory_proof_decision == "ok"
+        and trace_memory_proof.get("present") is True
+        and trace_memory_proof.get("parsed") is True
+        and trace_memory_proof.get("ok") is True
+        and trace_memory_status == 200
+        and trace_memory_proof.get("requireTraceMemory") is True
+        and trace_memory_proof.get("seedsSelfProbe") is True
+        and trace_memory_proof.get("traceMemoryPresent") is True
+        and bool(trace_memory_route_decision)
+        and (trace_memory_cfvm_offered == "true" or bool(trace_memory_cfvm_pattern_id))
+        and trace_memory_seed_status == 200
+        and trace_memory_proof.get("mutationAllowed") is False
+        and trace_memory_proof.get("storesRawPrompt") is False
+        and trace_memory_proof.get("storesRawModel") is False
+        and trace_memory_proof.get("storesRawSsePayload") is False
+        and trace_memory_secret_hits == 0
+        and trace_memory_raw_prompt_hits == 0
+        and trace_memory_raw_model_hits == 0
+        and trace_memory_windows_abs_path_hits == 0
+    )
+    trace_memory_runtime_proof_safe_pending = (
+        bool(trace_memory_proof)
+        and not trace_memory_runtime_proof_ready
+        and trace_memory_proof_decision == "evidence_needed"
+        and (
+            trace_memory_proof.get("stale") is True
+            or trace_memory_evidence_needed == {"trace_memory_runtime_proof_stale"}
+        )
+        and trace_memory_proof.get("present") is True
+        and trace_memory_proof.get("parsed") is True
+        and trace_memory_status == 200
+        and trace_memory_proof.get("requireTraceMemory") is True
+        and trace_memory_proof.get("seedsSelfProbe") is True
+        and trace_memory_proof.get("traceMemoryPresent") is True
+        and bool(trace_memory_route_decision)
+        and (trace_memory_cfvm_offered == "true" or bool(trace_memory_cfvm_pattern_id))
+        and trace_memory_seed_status == 200
+        and trace_memory_proof.get("mutationAllowed") is False
+        and trace_memory_proof.get("storesRawPrompt") is False
+        and trace_memory_proof.get("storesRawModel") is False
+        and trace_memory_proof.get("storesRawSsePayload") is False
+        and trace_memory_secret_hits == 0
+        and trace_memory_raw_prompt_hits == 0
+        and trace_memory_raw_model_hits == 0
+        and trace_memory_windows_abs_path_hits == 0
+    )
+    trace_memory_runtime_proof_accepted = (
+        trace_memory_runtime_proof_ready or trace_memory_runtime_proof_safe_pending
+    )
 
     commands = packet.get("commands") if isinstance(packet.get("commands"), list) else []
     command_text = "\n".join(
@@ -2075,6 +4967,58 @@ def goal_next_command_packet_summary(root: Path) -> dict[str, Any]:
                 if isinstance(row, dict) and str(row.get("lane") or "").strip()
             }
         )
+    try:
+        next_action_count = int(packet.get("nextActionCount", 0) or 0)
+    except Exception:
+        next_action_count = 0
+    next_action_sources_raw = (
+        packet.get("nextActionSources")
+        if isinstance(packet.get("nextActionSources"), list)
+        else str(packet.get("nextActionSources") or "").split()
+    )
+    next_action_sources = [
+        str(item).strip()
+        for item in next_action_sources_raw
+        if str(item).strip()
+    ]
+    top_actions_raw = packet.get("topActions") if isinstance(packet.get("topActions"), list) else []
+    top_action = next((item for item in top_actions_raw if isinstance(item, dict)), {})
+    top_action_source = safe_scalar(top_action.get("source"), 80)
+    top_action_name = safe_scalar(top_action.get("action"), 120)
+    top_action_decision = safe_scalar(top_action.get("decision"), 80)
+    external_input_gate = packet.get("externalInputGate") if isinstance(packet.get("externalInputGate"), dict) else {}
+    external_input_gate_status = safe_scalar(external_input_gate.get("status"), 80)
+    external_input_gate_source = safe_scalar(external_input_gate.get("source"), 80)
+    external_input_gate_action = safe_scalar(external_input_gate.get("action"), 120)
+    external_input_gate_local_patch_justified = external_input_gate.get("localPatchJustified")
+    external_input_gate_mutation_allowed = external_input_gate.get("mutationAllowed")
+    external_input_gate_evidence_raw = (
+        external_input_gate.get("evidenceNeeded")
+        if isinstance(external_input_gate.get("evidenceNeeded"), list)
+        else []
+    )
+    external_input_gate_evidence_needed = [
+        str(item).strip()
+        for item in external_input_gate_evidence_raw
+        if str(item).strip()
+    ]
+    external_input_gate_raw = json.dumps(external_input_gate, sort_keys=True)
+    try:
+        external_input_gate_secret_hits = int(external_input_gate.get("secretHits", -1))
+    except Exception:
+        external_input_gate_secret_hits = -1
+    if external_input_gate_secret_hits >= 0:
+        external_input_gate_secret_hits += len(SECRET_PATTERN.findall(external_input_gate_raw))
+    try:
+        external_input_gate_windows_abs_path_hits = int(
+            external_input_gate.get("windowsAbsPathHits", -1)
+        )
+    except Exception:
+        external_input_gate_windows_abs_path_hits = -1
+    if external_input_gate_windows_abs_path_hits >= 0:
+        external_input_gate_windows_abs_path_hits += len(
+            re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", external_input_gate_raw)
+        )
     producer_roles = sorted(
         {
             str(row.get("role") or "").strip()
@@ -2085,6 +5029,9 @@ def goal_next_command_packet_summary(root: Path) -> dict[str, Any]:
         }
     )
     supabase_env_names: list[str] = []
+    supabase_supported_auth_modes: list[str] = []
+    supabase_manual_auth_sensitive_env_refs: list[str] = []
+    supabase_mcp_oauth_supported = False
     supabase_rows = [
         row
         for row in commands
@@ -2102,13 +5049,66 @@ def goal_next_command_packet_summary(root: Path) -> dict[str, Any]:
             name = str(item).strip()
             if name and name not in supabase_env_names:
                 supabase_env_names.append(name)
+        raw_auth_modes = (
+            row.get("supportedAuthModes")
+            if isinstance(row.get("supportedAuthModes"), list)
+            else str(row.get("supportedAuthModes") or "").split()
+        )
+        for item in raw_auth_modes:
+            name = str(item).strip()
+            if name and name not in supabase_supported_auth_modes:
+                supabase_supported_auth_modes.append(name)
+        raw_manual_auth_refs = (
+            row.get("manualAuthSensitiveEnvRefs")
+            if isinstance(row.get("manualAuthSensitiveEnvRefs"), list)
+            else str(row.get("manualAuthSensitiveEnvRefs") or "").split()
+        )
+        for item in raw_manual_auth_refs:
+            name = str(item).strip()
+            if name and name not in supabase_manual_auth_sensitive_env_refs:
+                supabase_manual_auth_sensitive_env_refs.append(name)
+        supabase_mcp_oauth_supported = supabase_mcp_oauth_supported or row.get("mcpOAuthSupported") is True
     supabase_read_only_contract_ready = False
     supabase_mcp_endpoint_template_ready = False
     supabase_docs_refs_ready = False
+    expected_supabase_contract_signals = [
+        "mcp_project_scoped_read_only",
+        "data_api_grants_required",
+        "rls_policy_required",
+        "secret_keys_backend_only",
+        "advisors_required_before_schema_claim",
+    ]
+    supabase_official_contract_signals: list[str] = []
+    expected_supabase_collection_guards = [
+        ("mutationAllowed", False),
+        ("storeRawRows", False),
+        ("requireProjectScope", True),
+        ("requireAdvisors", True),
+    ]
+    supabase_collection_guards_ready = False
+    supabase_collection_guards_text = ""
     for row in supabase_rows:
         endpoint_template = str(row.get("mcpEndpointTemplate") or "")
         docs_refs_raw = row.get("docsRefs") if isinstance(row.get("docsRefs"), list) else []
         docs_refs = [str(item) for item in docs_refs_raw if isinstance(item, str)]
+        signals_raw = row.get("officialContractSignals") if isinstance(row.get("officialContractSignals"), list) else []
+        for item in signals_raw:
+            signal = str(item).strip()
+            if signal and signal not in supabase_official_contract_signals:
+                supabase_official_contract_signals.append(signal)
+        collection_guards = row.get("collectionGuards") if isinstance(row.get("collectionGuards"), dict) else {}
+        row_collection_guards_ready = all(
+            collection_guards.get(name) is expected
+            for name, expected in expected_supabase_collection_guards
+        )
+        if row_collection_guards_ready and not supabase_collection_guards_text:
+            supabase_collection_guards_text = ",".join(
+                f"{name}={collection_guards.get(name)}"
+                for name, _expected in expected_supabase_collection_guards
+            )
+        supabase_collection_guards_ready = (
+            supabase_collection_guards_ready or row_collection_guards_ready
+        )
         row_read_only = row.get("readOnly") is True
         row_mutation_blocked = row.get("mutationAllowed") is False
         endpoint_ready = (
@@ -2123,12 +5123,98 @@ def goal_next_command_packet_summary(root: Path) -> dict[str, Any]:
         )
         supabase_mcp_endpoint_template_ready = supabase_mcp_endpoint_template_ready or endpoint_ready
         supabase_docs_refs_ready = supabase_docs_refs_ready or docs_ready
+    supabase_official_contract_signals_ready = set(expected_supabase_contract_signals).issubset(
+        set(supabase_official_contract_signals)
+    )
     external_desktop_command_ready = any(
         isinstance(row, dict)
         and str(row.get("lane") or "").strip() == "external_desktop"
         and "scripts\\external_apply_collected_evidence.ps1 -Root . -Topic mcp-control-loop"
         in str(row.get("command") or "")
         for row in commands
+    )
+    peer_evidence_bus_command_ready = any(
+        isinstance(row, dict)
+        and str(row.get("lane") or "").strip() == "peer_evidence_bus"
+        and str(row.get("role") or "").strip() == "desktop"
+        and "peer_evidence_bus" in str(row.get("command") or "")
+        and str(row.get("targetMetric") or "").strip() == "harmony"
+        for row in commands
+    )
+    web_probe_refresh_rows = [
+        row
+        for row in commands
+        if isinstance(row, dict) and str(row.get("lane") or "").strip() == "web_probe_refresh"
+    ]
+    web_probe_refresh_raw = json.dumps(web_probe_refresh_rows, sort_keys=True)
+    web_probe_refresh_command_ready = any(
+        str(row.get("role") or "").strip() == "desktop"
+        and str(row.get("action") or "").strip() == "refresh-official-source-probe"
+        and "web_probe_refresh" in str(row.get("command") or "")
+        and str(row.get("outputPath") or "").strip() == "var/codex-smoke/web-probe-refresh.json"
+        for row in web_probe_refresh_rows
+    )
+    web_probe_refresh_contract_ready = any(
+        str(row.get("targetMetric") or "").strip() == "harmony"
+        and str(row.get("mode") or "").strip() == "read-only-official-sources"
+        and row.get("rawContentStored") is False
+        and row.get("rawQueryStored") is False
+        and row.get("mutationAllowed") is False
+        and not (
+            row.get("requiredEnvNames")
+            if isinstance(row.get("requiredEnvNames"), list)
+            else str(row.get("requiredEnvNames") or "").split()
+        )
+        for row in web_probe_refresh_rows
+    )
+    web_probe_refresh_secret_hits = len(SECRET_PATTERN.findall(web_probe_refresh_raw))
+    web_probe_refresh_windows_abs_path_hits = len(
+        re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", web_probe_refresh_raw)
+    )
+    smb_debug_rows = [
+        row
+        for row in commands
+        if isinstance(row, dict) and str(row.get("lane") or "").strip() == "smb_decommission_debug_probe"
+    ]
+    smb_debug_contract = (
+        packet.get("smbDecommissionDebugProbe")
+        if isinstance(packet.get("smbDecommissionDebugProbe"), dict)
+        else {}
+    )
+    smb_debug_raw = "\n".join(
+        [
+            json.dumps(smb_debug_rows, sort_keys=True),
+            json.dumps(smb_debug_contract, sort_keys=True),
+        ]
+    )
+    smb_debug_placeholder_values = [
+        str(row.get("attachmentPathPlaceholder") or "").strip()
+        for row in smb_debug_rows
+        if isinstance(row, dict)
+    ]
+    contract_placeholder = str(smb_debug_contract.get("attachmentPathPlaceholder") or "").strip()
+    if contract_placeholder:
+        smb_debug_placeholder_values.append(contract_placeholder)
+    smb_debug_command_with_attachment_values = [
+        str(row.get("commandWithAttachment") or "")
+        for row in smb_debug_rows
+        if isinstance(row, dict)
+    ]
+    contract_command_with_attachment = str(smb_debug_contract.get("commandWithAttachment") or "")
+    if contract_command_with_attachment:
+        smb_debug_command_with_attachment_values.append(contract_command_with_attachment)
+    smb_debug_attachment_placeholder_ready = any(
+        value == "<attachment-path>" for value in smb_debug_placeholder_values
+    )
+    smb_debug_command_with_attachment_ready = any(
+        "smb_decommission_debug_probe" in value
+        and "attachmentPath" in value
+        and "<attachment-path>" in value
+        for value in smb_debug_command_with_attachment_values
+    )
+    smb_debug_secret_hits = len(SECRET_PATTERN.findall(smb_debug_raw))
+    smb_debug_windows_abs_path_hits = len(
+        re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", smb_debug_raw)
     )
     supabase_command_ready = any(
         isinstance(row, dict)
@@ -2167,14 +5253,43 @@ def goal_next_command_packet_summary(root: Path) -> dict[str, Any]:
         "decision": safe_scalar(packet.get("decision"), 80),
         "topic": safe_scalar(packet.get("topic"), 80),
         "commandCount": command_count,
+        "nextActionCount": next_action_count,
+        "nextActionSources": safe_csv_names(next_action_sources),
+        "topAction": top_action_name,
+        "topActionSource": top_action_source,
+        "topActionDecision": top_action_decision,
+        "externalInputGateStatus": external_input_gate_status,
+        "externalInputGateSource": external_input_gate_source,
+        "externalInputGateAction": external_input_gate_action,
+        "externalInputGateLocalPatchJustified": external_input_gate_local_patch_justified,
+        "externalInputGateMutationAllowed": external_input_gate_mutation_allowed,
+        "externalInputGateEvidenceNeeded": safe_csv_names(external_input_gate_evidence_needed),
+        "externalInputGateSecretHits": external_input_gate_secret_hits,
+        "externalInputGateWindowsAbsPathHits": external_input_gate_windows_abs_path_hits,
         "lanes": safe_csv_names(lanes),
         "producerRoles": safe_csv_names(producer_roles),
         "supabaseEnvNames": safe_csv_names(supabase_env_names),
+        "supabaseSupportedAuthModes": safe_csv_names(supabase_supported_auth_modes),
+        "supabaseManualAuthSensitiveEnvRefs": safe_csv_names(supabase_manual_auth_sensitive_env_refs),
+        "supabaseMcpOAuthSupported": supabase_mcp_oauth_supported,
         "supabaseCommand": supabase_command_ready,
         "supabaseReadOnlyContract": supabase_read_only_contract_ready,
         "supabaseMcpEndpointTemplate": supabase_mcp_endpoint_template_ready,
         "supabaseDocsRefs": supabase_docs_refs_ready,
+        "supabaseOfficialContractSignals": safe_csv_names(supabase_official_contract_signals),
+        "supabaseOfficialContractSignalsReady": supabase_official_contract_signals_ready,
+        "supabaseCollectionGuards": supabase_collection_guards_text,
+        "supabaseCollectionGuardsReady": supabase_collection_guards_ready,
         "externalDesktopCommand": external_desktop_command_ready,
+        "peerEvidenceBusCommand": peer_evidence_bus_command_ready,
+        "webProbeRefreshCommand": web_probe_refresh_command_ready,
+        "webProbeRefreshContract": web_probe_refresh_contract_ready,
+        "webProbeRefreshSecretHits": web_probe_refresh_secret_hits,
+        "webProbeRefreshWindowsAbsPathHits": web_probe_refresh_windows_abs_path_hits,
+        "smbDebugAttachmentPlaceholder": smb_debug_attachment_placeholder_ready,
+        "smbDebugCommandWithAttachment": smb_debug_command_with_attachment_ready,
+        "smbDebugSecretHits": smb_debug_secret_hits,
+        "smbDebugWindowsAbsPathHits": smb_debug_windows_abs_path_hits,
         "producerPlaceholders": producer_placeholders_ready,
         "supabaseSmokePresent": supabase_smoke_present,
         "supabaseSmokeParsed": supabase_smoke.get("parsed") is True,
@@ -2192,6 +5307,53 @@ def goal_next_command_packet_summary(root: Path) -> dict[str, Any]:
         "computerUseDecision": computer_use_decision,
         "computerUseNextAction": computer_use_next_action,
         "computerUseAppCount": computer_use_app_count,
+        "computerUseHelperCountOnly": computer_use_helper_count_only,
+        "computerUseProbeSchemaVersion": computer_use_probe_schema_version,
+        "computerUseProbeSchemaReady": computer_use_probe_schema_ready,
+        "browserUsePresent": browser_use_present,
+        "browserUseParsed": browser_use.get("parsed") is True,
+        "browserUseOk": browser_use.get("ok") is True,
+        "browserUseReachable": browser_use.get("reachable") is True,
+        "browserUseLocalhost": browser_use.get("localhost") is True,
+        "browserUsePublicDomain": browser_use.get("publicDomain") is True,
+        "browserUseTargetAccepted": browser_use.get("targetAccepted") is True,
+        "browserUseScreenshotCaptured": browser_use.get("screenshotCaptured") is True,
+        "browserUseTargetContentVisible": browser_use.get("targetContentVisible") is True,
+        "browserUseStale": browser_use.get("stale") is True,
+        "browserUseDecision": browser_use_decision,
+        "browserUseNextAction": browser_use_next_action,
+        "browserUseStoresRawUrl": browser_use_stores_raw_url,
+        "browserUseStoresScreenshotPath": browser_use_stores_screenshot_path,
+        "localInteractionSmokeRefreshPresent": bool(local_refresh),
+        "localInteractionSmokeRefreshReady": local_refresh_ready,
+        "localInteractionSmokeRefreshScript": local_refresh_script,
+        "localInteractionSmokeRefreshCommand": local_refresh_command_ready,
+        "localInteractionSmokeRefreshOutputs": local_refresh_outputs_ready,
+        "localInteractionSmokeRefreshNoRawPayloads": local_refresh_guard_ready,
+        "localInteractionSmokeRefreshMutationBlocked": local_refresh.get("mutationAllowed") is False,
+        "localInteractionSmokeRefreshSecretHits": local_refresh_secret_hits,
+        "localInteractionSmokeRefreshWindowsAbsPathHits": local_refresh_windows_abs_path_hits,
+        "traceMemoryRuntimeProofPresent": bool(trace_memory_proof),
+        "traceMemoryRuntimeProofReady": trace_memory_runtime_proof_ready,
+        "traceMemoryRuntimeProofSafePending": trace_memory_runtime_proof_safe_pending,
+        "traceMemoryRuntimeProofAccepted": trace_memory_runtime_proof_accepted,
+        "traceMemoryRuntimeProofDecision": trace_memory_proof_decision,
+        "traceMemoryRuntimeProofStatus": trace_memory_status,
+        "traceMemoryRuntimeProofRequired": trace_memory_proof.get("requireTraceMemory") is True,
+        "traceMemoryRuntimeProofSeedsSelfProbe": trace_memory_proof.get("seedsSelfProbe") is True,
+        "traceMemoryRuntimeProofTracePresent": trace_memory_proof.get("traceMemoryPresent") is True,
+        "traceMemoryRouteDecision": trace_memory_route_decision,
+        "traceMemoryCfvmOffered": trace_memory_cfvm_offered,
+        "traceMemoryCfvmPatternId": trace_memory_cfvm_pattern_id,
+        "traceMemorySeedStatus": trace_memory_seed_status,
+        "traceMemoryRuntimeProofMutationBlocked": trace_memory_proof.get("mutationAllowed") is False,
+        "traceMemoryRuntimeProofStoresRawPrompt": trace_memory_proof.get("storesRawPrompt") is True,
+        "traceMemoryRuntimeProofStoresRawModel": trace_memory_proof.get("storesRawModel") is True,
+        "traceMemoryRuntimeProofStoresRawSsePayload": trace_memory_proof.get("storesRawSsePayload") is True,
+        "traceMemoryRuntimeProofSecretHits": trace_memory_secret_hits,
+        "traceMemoryRuntimeProofRawPromptHits": trace_memory_raw_prompt_hits,
+        "traceMemoryRuntimeProofRawModelHits": trace_memory_raw_model_hits,
+        "traceMemoryRuntimeProofWindowsAbsPathHits": trace_memory_windows_abs_path_hits,
         "commandWindowsAbsPathHits": len(
             re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", command_text)
         ),
@@ -2217,30 +5379,146 @@ def goal_next_command_packet_ready_fail_reason(summary: dict[str, Any]) -> str:
         missing.append("commandPacketMarkdownPresent")
     if summary.get("schemaVersion") != "awx.goal_next_auto.command_packet.v1":
         missing.append("schemaVersion")
-    lanes = set(str(summary.get("lanes") or "").split(","))
-    if not {"supabase", "external_desktop", "external_producer"}.issubset(lanes):
-        for lane in ("supabase", "external_desktop", "external_producer"):
+    lanes = {item for item in str(summary.get("lanes") or "").split(",") if item}
+    try:
+        next_action_count = int(summary.get("nextActionCount", 0) or 0)
+    except Exception:
+        next_action_count = 0
+    desktop_only_no_primary = (
+        next_action_count == 0
+        and summary.get("externalInputGateStatus") in ("empty", "local_or_unknown")
+        and summary.get("externalInputGateLocalPatchJustified") is True
+    )
+    desktop_only_local_primary = (
+        next_action_count > 0
+        and summary.get("externalInputGateStatus") in ("empty", "local_or_unknown")
+        and summary.get("externalInputGateLocalPatchJustified") is True
+        and summary.get("topActionSource") == "source_health_scorecard"
+        and "source_health_scorecard" in set(str(summary.get("nextActionSources") or "").split(","))
+    )
+    desktop_only_local_preflight = (
+        next_action_count > 0
+        and summary.get("externalInputGateStatus") == "local_or_unknown"
+        and summary.get("externalInputGateLocalPatchJustified") is True
+        and summary.get("topActionSource") == "preflight"
+        and summary.get("externalInputGateSource") == "preflight"
+        and summary.get("topAction") in GOAL_NEXT_LOCAL_PREFLIGHT_ACTIONS
+        and summary.get("externalInputGateAction") == summary.get("topAction")
+        and "preflight" in set(str(summary.get("nextActionSources") or "").split(","))
+    )
+    desktop_only_local = (
+        desktop_only_no_primary
+        or desktop_only_local_primary
+        or desktop_only_local_preflight
+    )
+    external_input_gate_only = (
+        next_action_count == 0
+        and summary.get("externalInputGateStatus") == "external_input_needed"
+        and summary.get("externalInputGateSource") == "supabase_apply"
+        and summary.get("externalInputGateAction") == "set_SUPABASE_PROJECT_REF"
+        and summary.get("externalInputGateLocalPatchJustified") is False
+    )
+    external_dispatch_present = bool({"external_desktop", "external_producer"} & lanes)
+    required_lanes = {"peer_evidence_bus", "web_probe_refresh", "smb_decommission_debug_probe"}
+    if not desktop_only_local:
+        required_lanes.add("supabase")
+    if external_dispatch_present:
+        required_lanes.update({"external_desktop", "external_producer"})
+    if not required_lanes.issubset(lanes):
+        for lane in sorted(required_lanes):
             if lane not in lanes:
                 missing.append(lane)
-    if int(summary.get("commandCount", 0) or 0) < 6:
+    min_command_count = 3 if desktop_only_no_primary else 4
+    if int(summary.get("commandCount", 0) or 0) < min_command_count:
         missing.append("commandCount")
-    producer_roles = set(str(summary.get("producerRoles") or "").split(","))
-    if not {"macmini", "notebook"}.issubset(producer_roles):
+    if not desktop_only_local and not external_input_gate_only and next_action_count < 1:
+        missing.append("nextActionCount")
+    next_action_sources = set(str(summary.get("nextActionSources") or "").split(","))
+    if desktop_only_local_primary and "source_health_scorecard" not in next_action_sources:
+        missing.append("nextActionSources")
+    elif not desktop_only_local and not external_input_gate_only and not {"supabase_apply", "source_health_scorecard"}.issubset(next_action_sources):
+        missing.append("nextActionSources")
+    if desktop_only_local_primary and not str(summary.get("topAction") or "").strip():
+        missing.append("topActions")
+    elif not desktop_only_local and not external_input_gate_only and summary.get("topAction") != "set_SUPABASE_PROJECT_REF":
+        missing.append("topActions")
+    if desktop_only_local_primary and summary.get("topActionSource") != "source_health_scorecard":
+        missing.append("topActions")
+    elif not desktop_only_local and not external_input_gate_only and summary.get("topActionSource") != "supabase_apply":
+        missing.append("topActions")
+    if not desktop_only_local and summary.get("externalInputGateStatus") != "external_input_needed":
+        missing.append("externalInputGate")
+    if not desktop_only_local and summary.get("externalInputGateSource") != "supabase_apply":
+        missing.append("externalInputGate")
+    if not desktop_only_local and summary.get("externalInputGateAction") != "set_SUPABASE_PROJECT_REF":
+        missing.append("externalInputGate")
+    if not desktop_only_local and summary.get("externalInputGateLocalPatchJustified") is not False:
+        missing.append("externalInputGateLocalPatchJustified")
+    if summary.get("externalInputGateMutationAllowed") is not False:
+        missing.append("externalInputGateMutationAllowed")
+    external_gate_evidence = set(str(summary.get("externalInputGateEvidenceNeeded") or "").split(","))
+    if not desktop_only_local and not {"SUPABASE_PROJECT_REF", "read_only_supabase_mcp_or_cli_auth", "execute_sql_results", "get_advisors_results"}.issubset(external_gate_evidence):
+        missing.append("externalInputGateEvidenceNeeded")
+    try:
+        external_gate_secret_hits = int(summary.get("externalInputGateSecretHits", -1))
+    except Exception:
+        external_gate_secret_hits = -1
+    if external_gate_secret_hits != 0:
+        missing.append("externalInputGateSecretHits")
+    try:
+        external_gate_windows_abs_path_hits = int(
+            summary.get("externalInputGateWindowsAbsPathHits", -1)
+        )
+    except Exception:
+        external_gate_windows_abs_path_hits = -1
+    if external_gate_windows_abs_path_hits != 0:
+        missing.append("externalInputGateWindowsAbsPathHits")
+    producer_roles = {item for item in str(summary.get("producerRoles") or "").split(",") if item}
+    if external_dispatch_present and not {"macmini", "notebook"}.issubset(producer_roles):
         missing.append("producerRoles")
     supabase_env_names = set(str(summary.get("supabaseEnvNames") or "").split(","))
-    if not {"SUPABASE_PROJECT_REF", "SUPABASE_ACCESS_TOKEN"}.issubset(supabase_env_names):
+    if not desktop_only_local and "SUPABASE_PROJECT_REF" not in supabase_env_names:
         missing.append("supabaseEnvNames")
-    if not summary.get("supabaseCommand"):
+    supabase_auth_modes = set(str(summary.get("supabaseSupportedAuthModes") or "").split(","))
+    if not desktop_only_local and not {"supabase_mcp_oauth_session", "manual_SUPABASE_ACCESS_TOKEN"}.issubset(supabase_auth_modes):
+        missing.append("supabaseSupportedAuthModes")
+    if not desktop_only_local and "SUPABASE_ACCESS_TOKEN" not in set(str(summary.get("supabaseManualAuthSensitiveEnvRefs") or "").split(",")):
+        missing.append("supabaseManualAuthSensitiveEnvRefs")
+    if not desktop_only_local and not summary.get("supabaseMcpOAuthSupported"):
+        missing.append("supabaseMcpOAuthSupported")
+    if not desktop_only_local and not summary.get("supabaseCommand"):
         missing.append("supabaseCommand")
-    if not summary.get("supabaseReadOnlyContract"):
+    if not desktop_only_local and not summary.get("supabaseReadOnlyContract"):
         missing.append("supabaseReadOnlyContract")
-    if not summary.get("supabaseMcpEndpointTemplate"):
+    if not desktop_only_local and not summary.get("supabaseMcpEndpointTemplate"):
         missing.append("supabaseMcpEndpointTemplate")
-    if not summary.get("supabaseDocsRefs"):
+    if not desktop_only_local and not summary.get("supabaseDocsRefs"):
         missing.append("supabaseDocsRefs")
-    if not summary.get("externalDesktopCommand"):
+    if not desktop_only_local and not summary.get("supabaseOfficialContractSignalsReady"):
+        missing.append("supabaseOfficialContractSignals")
+    if not desktop_only_local and not summary.get("supabaseCollectionGuardsReady"):
+        missing.append("supabaseCollectionGuards")
+    if external_dispatch_present and not summary.get("externalDesktopCommand"):
         missing.append("externalDesktopCommand")
-    if not summary.get("producerPlaceholders"):
+    if not summary.get("peerEvidenceBusCommand"):
+        missing.append("peerEvidenceBusCommand")
+    if not summary.get("webProbeRefreshCommand"):
+        missing.append("webProbeRefreshCommand")
+    if not summary.get("webProbeRefreshContract"):
+        missing.append("webProbeRefreshContract")
+    if int(summary.get("webProbeRefreshSecretHits", 0) or 0) != 0:
+        missing.append("webProbeRefreshSecretHits")
+    if int(summary.get("webProbeRefreshWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("webProbeRefreshWindowsAbsPathHits")
+    if "smb_decommission_debug_probe" in lanes and not summary.get("smbDebugAttachmentPlaceholder"):
+        missing.append("smbDebugAttachmentPlaceholder")
+    if "smb_decommission_debug_probe" in lanes and not summary.get("smbDebugCommandWithAttachment"):
+        missing.append("smbDebugCommandWithAttachment")
+    if int(summary.get("smbDebugSecretHits", 0) or 0) != 0:
+        missing.append("smbDebugSecretHits")
+    if int(summary.get("smbDebugWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("smbDebugWindowsAbsPathHits")
+    if external_dispatch_present and not summary.get("producerPlaceholders"):
         missing.append("producerPlaceholders")
     if not summary.get("supabaseSmokePresent"):
         missing.append("supabaseSmoke")
@@ -2254,6 +5532,51 @@ def goal_next_command_packet_ready_fail_reason(summary: dict[str, Any]) -> str:
         missing.append("computerUseDecision")
     if not summary.get("computerUseOk") and not str(summary.get("computerUseNextAction") or "").strip():
         missing.append("computerUseNextAction")
+    if not summary.get("computerUseHelperCountOnly"):
+        missing.append("computerUseHelperCountOnly")
+    if not summary.get("computerUseProbeSchemaReady"):
+        missing.append("computerUseProbeSchemaVersion")
+    if not summary.get("browserUsePresent"):
+        missing.append("browserUse")
+    if not str(summary.get("browserUseDecision") or "").strip():
+        missing.append("browserUseDecision")
+    if not summary.get("browserUseOk") and not str(summary.get("browserUseNextAction") or "").strip():
+        missing.append("browserUseNextAction")
+    if summary.get("browserUseStoresRawUrl"):
+        missing.append("browserUseStoresRawUrl")
+    if summary.get("browserUseStoresScreenshotPath"):
+        missing.append("browserUseStoresScreenshotPath")
+    if not summary.get("localInteractionSmokeRefreshReady"):
+        missing.append("localInteractionSmokeRefresh")
+    if int(summary.get("localInteractionSmokeRefreshSecretHits", 0) or 0) != 0:
+        missing.append("localInteractionSmokeRefreshSecretHits")
+    if int(summary.get("localInteractionSmokeRefreshWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("localInteractionSmokeRefreshWindowsAbsPathHits")
+    trace_memory_runtime_proof_accepted = summary.get("traceMemoryRuntimeProofAccepted")
+    if trace_memory_runtime_proof_accepted is None:
+        trace_memory_runtime_proof_accepted = summary.get("traceMemoryRuntimeProofReady")
+    if not trace_memory_runtime_proof_accepted:
+        missing.append("traceMemoryRuntimeProof")
+    if not str(summary.get("traceMemoryRouteDecision") or "").strip():
+        missing.append("traceMemoryRouteDecision")
+    if not str(summary.get("traceMemoryCfvmOffered") or "").strip() and not str(
+        summary.get("traceMemoryCfvmPatternId") or ""
+    ).strip():
+        missing.append("traceMemoryCfvm")
+    if summary.get("traceMemoryRuntimeProofStoresRawPrompt"):
+        missing.append("traceMemoryRuntimeProofStoresRawPrompt")
+    if summary.get("traceMemoryRuntimeProofStoresRawModel"):
+        missing.append("traceMemoryRuntimeProofStoresRawModel")
+    if summary.get("traceMemoryRuntimeProofStoresRawSsePayload"):
+        missing.append("traceMemoryRuntimeProofStoresRawSsePayload")
+    if int(summary.get("traceMemoryRuntimeProofSecretHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofSecretHits")
+    if int(summary.get("traceMemoryRuntimeProofRawPromptHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofRawPromptHits")
+    if int(summary.get("traceMemoryRuntimeProofRawModelHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofRawModelHits")
+    if int(summary.get("traceMemoryRuntimeProofWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofWindowsAbsPathHits")
     if int(summary.get("commandWindowsAbsPathHits", 0) or 0) != 0:
         missing.append("commandWindowsAbsPathHits")
     if int(summary.get("rawSecretPatternHits", 0) or 0) != 0:
@@ -2263,6 +5586,614 @@ def goal_next_command_packet_ready_fail_reason(summary: dict[str, Any]) -> str:
 
 def goal_next_command_packet_ready(summary: dict[str, Any]) -> bool:
     return not goal_next_command_packet_ready_fail_reason(summary)
+
+
+def goal_next_collection_packet_summary(root: Path) -> dict[str, Any]:
+    latest_path = root / "var" / "codex-smoke" / "goal-next-auto.latest.json"
+    latest_raw = read_text(latest_path)
+    latest = load_json(latest_path)
+    (
+        latest_generated_at_present,
+        latest_fresh,
+        latest_age_seconds,
+        latest_freshness_status,
+    ) = artifact_freshness(latest.get("generatedAt"), GOAL_NEXT_AUTO_MAX_AGE_SECONDS)
+    packet_path_raw = str(latest.get("collectionPacketPath") or "").strip()
+    packet_path = _path_from_json_field(root, packet_path_raw)
+    if not packet_path_raw:
+        packet_path = root / "var" / "codex-smoke" / "goal-next-auto-current" / "goal-next-auto.collection-packet.json"
+    packet_raw = read_text(packet_path)
+    packet = load_json(packet_path)
+    markdown_path_raw = str(latest.get("collectionPacketMarkdownPath") or "").strip()
+    markdown_path = _path_from_json_field(root, markdown_path_raw)
+    if not markdown_path_raw:
+        markdown_path = packet_path.with_suffix(".md")
+    markdown_raw = read_text(markdown_path)
+
+    packet_topic = safe_scalar(packet.get("topic"), 80)
+    latest_topic = safe_scalar(latest.get("topic"), 80)
+    topic_matches_latest = bool(packet_topic) and (
+        packet_topic == latest_topic
+        or (not latest_topic and packet_topic == "mcp-control-loop")
+    )
+
+    supabase = packet.get("supabase") if isinstance(packet.get("supabase"), dict) else {}
+    external = packet.get("external") if isinstance(packet.get("external"), dict) else {}
+    desktop_dispatch = packet.get("desktopDispatch") if isinstance(packet.get("desktopDispatch"), dict) else {}
+    web_probe = packet.get("webProbeRefresh") if isinstance(packet.get("webProbeRefresh"), dict) else {}
+    local_refresh = (
+        packet.get("localInteractionSmokeRefresh")
+        if isinstance(packet.get("localInteractionSmokeRefresh"), dict)
+        else {}
+    )
+    computer_use = packet.get("computerUse") if isinstance(packet.get("computerUse"), dict) else {}
+    browser_use = packet.get("browserUse") if isinstance(packet.get("browserUse"), dict) else {}
+    archive = packet.get("archive") if isinstance(packet.get("archive"), dict) else {}
+    trace_memory_proof = packet.get("traceMemoryRuntimeProof")
+    if not isinstance(trace_memory_proof, dict) or not trace_memory_proof:
+        raw_latest_trace_memory_proof = latest.get("traceMemoryRuntimeProof")
+        trace_memory_proof = (
+            raw_latest_trace_memory_proof
+            if isinstance(raw_latest_trace_memory_proof, dict)
+            else {}
+        )
+    if not isinstance(trace_memory_proof, dict):
+        trace_memory_proof = {}
+    trace_memory_proof_raw = json.dumps(trace_memory_proof, sort_keys=True)
+    trace_memory_proof_decision = safe_scalar(trace_memory_proof.get("decision"), 80)
+    trace_memory_route_decision = safe_scalar(trace_memory_proof.get("traceMemoryRouteDecision"), 120)
+    trace_memory_cfvm_offered = safe_scalar(trace_memory_proof.get("traceMemoryCfvmOffered"), 40)
+    trace_memory_cfvm_pattern_id = safe_scalar(trace_memory_proof.get("traceMemoryCfvmPatternId"), 80)
+    trace_memory_status = safe_int(trace_memory_proof.get("status"))
+    trace_memory_seed_status = safe_int(trace_memory_proof.get("traceMemorySeedStatus"))
+    trace_memory_secret_hits = safe_int(trace_memory_proof.get("secretHits")) + len(
+        SECRET_PATTERN.findall(trace_memory_proof_raw)
+    )
+    trace_memory_raw_prompt_hits = safe_int(trace_memory_proof.get("rawPromptHits"))
+    trace_memory_raw_model_hits = safe_int(trace_memory_proof.get("rawModelHits"))
+    trace_memory_evidence_needed = {
+        str(item).strip()
+        for item in trace_memory_proof.get("evidenceNeeded", [])
+        if str(item).strip()
+    } if isinstance(trace_memory_proof.get("evidenceNeeded"), list) else set()
+    trace_memory_windows_abs_path_hits = len(
+        re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", trace_memory_proof_raw)
+    )
+    trace_memory_runtime_proof_ready = (
+        bool(trace_memory_proof)
+        and trace_memory_proof_decision == "ok"
+        and trace_memory_proof.get("present") is True
+        and trace_memory_proof.get("parsed") is True
+        and trace_memory_proof.get("ok") is True
+        and trace_memory_status == 200
+        and trace_memory_proof.get("requireTraceMemory") is True
+        and trace_memory_proof.get("seedsSelfProbe") is True
+        and trace_memory_proof.get("traceMemoryPresent") is True
+        and bool(trace_memory_route_decision)
+        and (trace_memory_cfvm_offered == "true" or bool(trace_memory_cfvm_pattern_id))
+        and trace_memory_seed_status == 200
+        and trace_memory_proof.get("mutationAllowed") is False
+        and trace_memory_proof.get("storesRawPrompt") is False
+        and trace_memory_proof.get("storesRawModel") is False
+        and trace_memory_proof.get("storesRawSsePayload") is False
+        and trace_memory_secret_hits == 0
+        and trace_memory_raw_prompt_hits == 0
+        and trace_memory_raw_model_hits == 0
+        and trace_memory_windows_abs_path_hits == 0
+    )
+    trace_memory_runtime_proof_safe_pending = (
+        bool(trace_memory_proof)
+        and not trace_memory_runtime_proof_ready
+        and trace_memory_proof_decision == "evidence_needed"
+        and (
+            trace_memory_proof.get("stale") is True
+            or trace_memory_evidence_needed == {"trace_memory_runtime_proof_stale"}
+        )
+        and trace_memory_proof.get("present") is True
+        and trace_memory_proof.get("parsed") is True
+        and trace_memory_status == 200
+        and trace_memory_proof.get("requireTraceMemory") is True
+        and trace_memory_proof.get("seedsSelfProbe") is True
+        and trace_memory_proof.get("traceMemoryPresent") is True
+        and bool(trace_memory_route_decision)
+        and (trace_memory_cfvm_offered == "true" or bool(trace_memory_cfvm_pattern_id))
+        and trace_memory_seed_status == 200
+        and trace_memory_proof.get("mutationAllowed") is False
+        and trace_memory_proof.get("storesRawPrompt") is False
+        and trace_memory_proof.get("storesRawModel") is False
+        and trace_memory_proof.get("storesRawSsePayload") is False
+        and trace_memory_secret_hits == 0
+        and trace_memory_raw_prompt_hits == 0
+        and trace_memory_raw_model_hits == 0
+        and trace_memory_windows_abs_path_hits == 0
+    )
+    trace_memory_runtime_proof_accepted = (
+        trace_memory_runtime_proof_ready or trace_memory_runtime_proof_safe_pending
+    )
+
+    supabase_required_env = safe_csv_names(
+        supabase.get("requiredEnvNames") if isinstance(supabase.get("requiredEnvNames"), list) else []
+    )
+    supabase_required_tools = safe_csv_names(
+        supabase.get("requiredMcpTools") if isinstance(supabase.get("requiredMcpTools"), list) else []
+    )
+    supabase_required_results = (
+        supabase.get("requiredResultNames") if isinstance(supabase.get("requiredResultNames"), list) else []
+    )
+    collection_guards = (
+        supabase.get("collectionGuards") if isinstance(supabase.get("collectionGuards"), dict) else {}
+    )
+    mcp_config = supabase.get("mcpConfig") if isinstance(supabase.get("mcpConfig"), dict) else {}
+    external_roles = safe_csv_names(
+        external.get("requiredRoles") if isinstance(external.get("requiredRoles"), list) else []
+    )
+    external_source_isolation = (
+        isinstance(external.get("requiredSourceIsolation"), dict)
+        and external["requiredSourceIsolation"].get("guard") == "PASS"
+        and external["requiredSourceIsolation"].get("sourceRootKind") == "local-worktree"
+        and external["requiredSourceIsolation"].get("directCanonicalSourceEdit") is False
+        and external["requiredSourceIsolation"].get("rawSecretPatternHits") == 0
+    )
+    dispatch_source_isolation = (
+        isinstance(desktop_dispatch.get("requiredSourceIsolation"), dict)
+        and desktop_dispatch["requiredSourceIsolation"].get("guard") == "PASS"
+        and desktop_dispatch["requiredSourceIsolation"].get("sourceRootKind") == "local-worktree"
+        and desktop_dispatch["requiredSourceIsolation"].get("directCanonicalSourceEdit") is False
+        and desktop_dispatch["requiredSourceIsolation"].get("rawSecretPatternHits") == 0
+    )
+    try:
+        web_probe_source_count = int(web_probe.get("sourceCount", 0) or 0)
+    except (TypeError, ValueError):
+        web_probe_source_count = 0
+    try:
+        web_probe_fetched_count = int(web_probe.get("fetchedCount", 0) or 0)
+    except (TypeError, ValueError):
+        web_probe_fetched_count = 0
+    try:
+        web_probe_target_count = int(web_probe.get("targetCount", web_probe_source_count) or 0)
+    except (TypeError, ValueError):
+        web_probe_target_count = 0
+    web_probe_contract_marker = web_probe.get("contractReady")
+    legacy_web_probe_proof = (
+        "contractReady" not in web_probe
+        and "refreshRequested" not in web_probe
+        and web_probe.get("present") is True
+        and web_probe.get("ok") is True
+        and web_probe_source_count >= 4
+        and web_probe_fetched_count >= 4
+    )
+    web_probe_refresh_requested = web_probe.get("refreshRequested") is True or legacy_web_probe_proof
+    web_probe_process_executed = web_probe.get("processExecuted") is True or legacy_web_probe_proof
+    web_probe_supporting_only = web_probe.get("supportingEvidenceOnly") is True
+    web_probe_artifact_hash = safe_scalar(web_probe.get("artifactHash"), 64).lower()
+    web_probe_contract_ready = (
+        (web_probe_contract_marker is True or web_probe_contract_marker is None)
+        and web_probe.get("tool") == "web_probe_refresh"
+        and web_probe.get("outputPath") == "var/codex-smoke/web-probe-refresh.json"
+        and web_probe.get("targetMetric") == "harmony"
+        and web_probe_target_count >= 4
+        and web_probe.get("rawContentStored") is False
+        and web_probe.get("rawQueryStored") is False
+        and web_probe.get("mutationAllowed") is False
+        and int(web_probe.get("secretHits", 0) or 0) == 0
+    )
+    web_probe_proof_ready = (
+        web_probe_contract_ready
+        and web_probe_refresh_requested
+        and web_probe_process_executed
+        and web_probe.get("present") is True
+        and web_probe.get("ok") is True
+        and web_probe_source_count >= 4
+        and web_probe_fetched_count >= 4
+        and web_probe.get("proofReady") is not False
+        and re.fullmatch(r"[0-9a-f]{64}", web_probe_artifact_hash) is not None
+    )
+    web_probe_boundary_ready = web_probe_contract_ready and (
+        (not web_probe_refresh_requested and not web_probe_process_executed and web_probe_supporting_only)
+        or web_probe_proof_ready
+    )
+    local_outputs = set(
+        str(item)
+        for item in (
+            local_refresh.get("outputPaths")
+            if isinstance(local_refresh.get("outputPaths"), list)
+            else []
+        )
+    )
+    local_refresh_ready = (
+        local_refresh.get("scriptPath") == "scripts/refresh_local_interaction_smokes.ps1"
+        and "var/codex-smoke/computer-use-smoke.json" in local_outputs
+        and "var/codex-smoke/browser-ui-smoke.json" in local_outputs
+        and "var/codex-smoke/local-interaction-smoke-refresh.summary.json" in local_outputs
+        and local_refresh.get("storesRawProbePayloads") is False
+        and local_refresh.get("storesRawAppNames") is False
+        and local_refresh.get("storesWindowTitles") is False
+        and local_refresh.get("storesRawUrl") is False
+        and local_refresh.get("storesScreenshotPath") is False
+        and local_refresh.get("mutationAllowed") is False
+        and int(local_refresh.get("secretHits", 0) or 0) == 0
+    )
+    computer_safe = (
+        computer_use.get("tool") == "mcp__node_repl.js"
+        and computer_use.get("outputPath") == "var/codex-smoke/computer-use-smoke.json"
+        and computer_use.get("storesRawAppNames") is False
+        and computer_use.get("storesWindowTitles") is False
+        and computer_use.get("helperCountOnly") is True
+        and safe_scalar(computer_use.get("probeSchemaVersion"), 120) == "awx.local.computer_use_count_probe.v1"
+        and int(computer_use.get("secretHits", 0) or 0) == 0
+    )
+    computer_use_probe_schema_version = safe_scalar(computer_use.get("probeSchemaVersion"), 120)
+    computer_use_probe_schema_ready = (
+        computer_use_probe_schema_version == "awx.local.computer_use_count_probe.v1"
+    )
+    browser_safe = (
+        browser_use.get("tool") == "browser.control-in-app-browser"
+        and browser_use.get("outputPath") == "var/codex-smoke/browser-ui-smoke.json"
+        and browser_use.get("storesRawUrl") is False
+        and browser_use.get("storesScreenshotPath") is False
+        and int(browser_use.get("secretHits", 0) or 0) == 0
+    )
+    archive_safe = archive.get("readOnly") is True and archive.get("mutationAllowed") is False
+    collection_raw = packet_raw + "\n" + markdown_raw
+    try:
+        packet_length = packet_path.stat().st_size if packet_path.is_file() else 0
+    except OSError:
+        packet_length = 0
+    return {
+        "latestPresent": latest_path.is_file(),
+        "latestGeneratedAt": latest_generated_at_present,
+        "latestFresh": latest_fresh,
+        "latestAgeSeconds": latest_age_seconds,
+        "latestFreshnessStatus": latest_freshness_status,
+        "collectionPacketPresent": packet_path.is_file(),
+        "collectionPacketMarkdownPresent": markdown_path.is_file(),
+        "schemaVersion": str(packet.get("schemaVersion") or ""),
+        "decision": safe_scalar(packet.get("decision"), 80),
+        "topic": packet_topic,
+        "latestTopic": latest_topic,
+        "topicMatchesLatest": topic_matches_latest,
+        "secretSafe": packet.get("secretSafe") is True,
+        "supabaseReadOnly": supabase.get("readOnly") is True,
+        "supabaseMutationAllowed": supabase.get("mutationAllowed"),
+        "supabaseRequiredEnvNames": supabase_required_env,
+        "supabaseRequiredMcpTools": supabase_required_tools,
+        "supabaseRequiredResultCount": len(supabase_required_results),
+        "supabaseMcpConfigReadOnly": mcp_config.get("readOnly") is True,
+        "supabaseMcpConfigTokenStored": mcp_config.get("tokenStored"),
+        "supabaseMcpConfigServerHost": safe_scalar(mcp_config.get("serverHost"), 80),
+        "supabaseCollectionGuards": (
+            collection_guards.get("mutationAllowed") is False
+            and collection_guards.get("storeRawRows") is False
+            and collection_guards.get("requireProjectScope") is True
+            and collection_guards.get("requireAdvisors") is True
+        ),
+        "externalRoles": external_roles,
+        "externalSourceIsolation": external_source_isolation,
+        "desktopDispatchWriteRequested": desktop_dispatch.get("writeRequested") is True,
+        "desktopDispatchIntegrityOk": desktop_dispatch.get("dispatchIntegrityOk") is True,
+        "desktopDispatchSourceIsolation": dispatch_source_isolation,
+        "webProbeRefreshReady": web_probe_boundary_ready,
+        "webProbeRefreshBoundaryReady": web_probe_boundary_ready,
+        "webProbeRefreshContractReady": web_probe_contract_ready,
+        "webProbeRefreshProofReady": web_probe_proof_ready,
+        "webProbeRefreshRequested": web_probe_refresh_requested,
+        "webProbeRefreshProcessExecuted": web_probe_process_executed,
+        "webProbeRefreshSupportingEvidenceOnly": web_probe_supporting_only,
+        "webProbeRefreshArtifactHash": web_probe_artifact_hash,
+        "webProbeRefreshTargetCount": web_probe_target_count,
+        "webProbeRefreshSourceCount": web_probe_source_count,
+        "webProbeRefreshFetchedCount": web_probe_fetched_count,
+        "localInteractionRefreshReady": local_refresh_ready,
+        "computerUseSafe": computer_safe,
+        "computerUseHelperCountOnly": computer_use.get("helperCountOnly") is True,
+        "computerUseProbeSchemaVersion": computer_use_probe_schema_version,
+        "computerUseProbeSchemaReady": computer_use_probe_schema_ready,
+        "browserUseSafe": browser_safe,
+        "archiveSafe": archive_safe,
+        "traceMemoryRuntimeProofPresent": bool(trace_memory_proof),
+        "traceMemoryRuntimeProofReady": trace_memory_runtime_proof_ready,
+        "traceMemoryRuntimeProofSafePending": trace_memory_runtime_proof_safe_pending,
+        "traceMemoryRuntimeProofAccepted": trace_memory_runtime_proof_accepted,
+        "traceMemoryRuntimeProofDecision": trace_memory_proof_decision,
+        "traceMemoryRuntimeProofStatus": trace_memory_status,
+        "traceMemoryRuntimeProofRequired": trace_memory_proof.get("requireTraceMemory") is True,
+        "traceMemoryRuntimeProofSeedsSelfProbe": trace_memory_proof.get("seedsSelfProbe") is True,
+        "traceMemoryRuntimeProofTracePresent": trace_memory_proof.get("traceMemoryPresent") is True,
+        "traceMemoryRouteDecision": trace_memory_route_decision,
+        "traceMemoryCfvmOffered": trace_memory_cfvm_offered,
+        "traceMemoryCfvmPatternId": trace_memory_cfvm_pattern_id,
+        "traceMemorySeedStatus": trace_memory_seed_status,
+        "traceMemoryRuntimeProofMutationBlocked": trace_memory_proof.get("mutationAllowed") is False,
+        "traceMemoryRuntimeProofStoresRawPrompt": trace_memory_proof.get("storesRawPrompt") is True,
+        "traceMemoryRuntimeProofStoresRawModel": trace_memory_proof.get("storesRawModel") is True,
+        "traceMemoryRuntimeProofStoresRawSsePayload": trace_memory_proof.get("storesRawSsePayload") is True,
+        "traceMemoryRuntimeProofSecretHits": trace_memory_secret_hits,
+        "traceMemoryRuntimeProofRawPromptHits": trace_memory_raw_prompt_hits,
+        "traceMemoryRuntimeProofRawModelHits": trace_memory_raw_model_hits,
+        "traceMemoryRuntimeProofWindowsAbsPathHits": trace_memory_windows_abs_path_hits,
+        "rawSecretPatternHits": len(SECRET_PATTERN.findall(collection_raw)),
+        "windowsAbsPathHits": len(re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", collection_raw)),
+        "pathHash": sha256_file(packet_path),
+        "pathLength": packet_length,
+    }
+
+
+def goal_next_collection_packet_ready_fail_reason(summary: dict[str, Any]) -> str:
+    missing: list[str] = []
+    if not summary.get("latestPresent"):
+        missing.append("latestPresent")
+    if not summary.get("latestGeneratedAt"):
+        missing.append("latestGeneratedAt")
+    if not summary.get("latestFresh"):
+        missing.append("latestFresh")
+    if summary.get("latestFreshnessStatus") != "current":
+        missing.append("latestFreshnessStatus")
+    if not summary.get("collectionPacketPresent"):
+        missing.append("collectionPacketPresent")
+    if not summary.get("collectionPacketMarkdownPresent"):
+        missing.append("collectionPacketMarkdownPresent")
+    if summary.get("schemaVersion") != "awx.goal_next_auto.collection_packet.v1":
+        missing.append("schemaVersion")
+    if not summary.get("topicMatchesLatest") and summary.get("topic") != "mcp-control-loop":
+        missing.append("topic")
+    if not summary.get("secretSafe"):
+        missing.append("secretSafe")
+    if not summary.get("supabaseReadOnly"):
+        missing.append("supabaseReadOnly")
+    if summary.get("supabaseMutationAllowed") is not False:
+        missing.append("supabaseMutationAllowed")
+    if "SUPABASE_PROJECT_REF" not in set(str(summary.get("supabaseRequiredEnvNames") or "").split(",")):
+        missing.append("supabaseRequiredEnvNames")
+    if not {"execute_sql", "get_advisors"}.issubset(set(str(summary.get("supabaseRequiredMcpTools") or "").split(","))):
+        missing.append("supabaseRequiredMcpTools")
+    if int(summary.get("supabaseRequiredResultCount", 0) or 0) < 12:
+        missing.append("supabaseRequiredResultCount")
+    if not summary.get("supabaseMcpConfigReadOnly"):
+        missing.append("supabaseMcpConfigReadOnly")
+    if summary.get("supabaseMcpConfigTokenStored") is not False:
+        missing.append("supabaseMcpConfigTokenStored")
+    if summary.get("supabaseMcpConfigServerHost") != "mcp.supabase.com":
+        missing.append("supabaseMcpConfigServerHost")
+    if not summary.get("supabaseCollectionGuards"):
+        missing.append("supabaseCollectionGuards")
+    if not {"macmini", "notebook"}.issubset(set(str(summary.get("externalRoles") or "").split(","))):
+        missing.append("externalRoles")
+    if not summary.get("externalSourceIsolation"):
+        missing.append("externalSourceIsolation")
+    if summary.get("desktopDispatchWriteRequested") and not summary.get("desktopDispatchIntegrityOk"):
+        missing.append("desktopDispatchIntegrityOk")
+    if not summary.get("desktopDispatchSourceIsolation"):
+        missing.append("desktopDispatchSourceIsolation")
+    web_probe_boundary_ready = summary.get("webProbeRefreshBoundaryReady")
+    if web_probe_boundary_ready is None:
+        web_probe_boundary_ready = summary.get("webProbeRefreshReady")
+    web_probe_contract_ready = summary.get("webProbeRefreshContractReady")
+    if web_probe_contract_ready is None:
+        web_probe_contract_ready = summary.get("webProbeRefreshReady")
+    web_probe_target_count = summary.get("webProbeRefreshTargetCount")
+    if web_probe_target_count is None:
+        web_probe_target_count = summary.get("webProbeRefreshSourceCount", 0)
+    if not web_probe_boundary_ready:
+        missing.append("webProbeRefreshBoundaryReady")
+    if not web_probe_contract_ready:
+        missing.append("webProbeRefreshContractReady")
+    if int(web_probe_target_count or 0) < 4:
+        missing.append("webProbeRefreshTargetCount")
+    if summary.get("webProbeRefreshRequested"):
+        if not summary.get("webProbeRefreshProcessExecuted"):
+            missing.append("webProbeRefreshProcessExecuted")
+        if not summary.get("webProbeRefreshProofReady"):
+            missing.append("webProbeRefreshProofReady")
+        if re.fullmatch(r"[0-9a-f]{64}", safe_scalar(summary.get("webProbeRefreshArtifactHash"), 64).lower()) is None:
+            missing.append("webProbeRefreshArtifactHash")
+        if int(summary.get("webProbeRefreshSourceCount", 0) or 0) < 4:
+            missing.append("webProbeRefreshSourceCount")
+        if int(summary.get("webProbeRefreshFetchedCount", 0) or 0) < 4:
+            missing.append("webProbeRefreshFetchedCount")
+    if not summary.get("localInteractionRefreshReady"):
+        missing.append("localInteractionRefreshReady")
+    if not summary.get("computerUseSafe"):
+        missing.append("computerUseSafe")
+    if not summary.get("computerUseHelperCountOnly"):
+        missing.append("computerUseHelperCountOnly")
+    if not summary.get("computerUseProbeSchemaReady"):
+        missing.append("computerUseProbeSchemaVersion")
+    if not summary.get("browserUseSafe"):
+        missing.append("browserUseSafe")
+    if not summary.get("archiveSafe"):
+        missing.append("archiveSafe")
+    trace_memory_runtime_proof_accepted = summary.get("traceMemoryRuntimeProofAccepted")
+    if trace_memory_runtime_proof_accepted is None:
+        trace_memory_runtime_proof_accepted = summary.get("traceMemoryRuntimeProofReady")
+    if not trace_memory_runtime_proof_accepted:
+        missing.append("traceMemoryRuntimeProof")
+    if not str(summary.get("traceMemoryRouteDecision") or "").strip():
+        missing.append("traceMemoryRouteDecision")
+    if not str(summary.get("traceMemoryCfvmOffered") or "").strip() and not str(
+        summary.get("traceMemoryCfvmPatternId") or ""
+    ).strip():
+        missing.append("traceMemoryCfvm")
+    if summary.get("traceMemoryRuntimeProofStoresRawPrompt"):
+        missing.append("traceMemoryRuntimeProofStoresRawPrompt")
+    if summary.get("traceMemoryRuntimeProofStoresRawModel"):
+        missing.append("traceMemoryRuntimeProofStoresRawModel")
+    if summary.get("traceMemoryRuntimeProofStoresRawSsePayload"):
+        missing.append("traceMemoryRuntimeProofStoresRawSsePayload")
+    if int(summary.get("traceMemoryRuntimeProofSecretHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofSecretHits")
+    if int(summary.get("traceMemoryRuntimeProofRawPromptHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofRawPromptHits")
+    if int(summary.get("traceMemoryRuntimeProofRawModelHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofRawModelHits")
+    if int(summary.get("traceMemoryRuntimeProofWindowsAbsPathHits", 0) or 0) != 0:
+        missing.append("traceMemoryRuntimeProofWindowsAbsPathHits")
+    if int(summary.get("rawSecretPatternHits", 0) or 0) != 0:
+        missing.append("rawSecretPatternHits")
+    if int(summary.get("windowsAbsPathHits", 0) or 0) != 0:
+        missing.append("windowsAbsPathHits")
+    return ", ".join(missing)
+
+
+def goal_next_collection_packet_ready(summary: dict[str, Any]) -> bool:
+    return not goal_next_collection_packet_ready_fail_reason(summary)
+
+
+def goal_next_status_summary(root: Path) -> dict[str, Any]:
+    status_path = root / "var" / "codex-smoke" / "goal-next-auto.status.json"
+    raw = read_text(status_path)
+    status = load_json(status_path)
+    (
+        status_generated_at_present,
+        status_fresh,
+        status_age_seconds,
+        status_freshness_status,
+    ) = artifact_freshness(status.get("generatedAt"), GOAL_NEXT_AUTO_MAX_AGE_SECONDS)
+    external_input_gate = (
+        status.get("externalInputGate")
+        if isinstance(status.get("externalInputGate"), dict)
+        else {}
+    )
+    external_input_gate_status = safe_scalar(external_input_gate.get("status"), 80)
+    external_input_gate_source = safe_scalar(external_input_gate.get("source"), 80)
+    external_input_gate_action = safe_scalar(external_input_gate.get("action"), 120)
+    external_input_gate_evidence_raw = (
+        external_input_gate.get("evidenceNeeded")
+        if isinstance(external_input_gate.get("evidenceNeeded"), list)
+        else []
+    )
+    external_input_gate_evidence_needed = [
+        str(item).strip()
+        for item in external_input_gate_evidence_raw
+        if str(item).strip()
+    ]
+    external_input_gate_raw = json.dumps(external_input_gate, sort_keys=True)
+    try:
+        external_input_gate_secret_hits = int(external_input_gate.get("secretHits", -1))
+    except Exception:
+        external_input_gate_secret_hits = -1
+    if external_input_gate_secret_hits >= 0:
+        external_input_gate_secret_hits += len(SECRET_PATTERN.findall(external_input_gate_raw))
+    try:
+        external_input_gate_windows_abs_path_hits = int(
+            external_input_gate.get("windowsAbsPathHits", -1)
+        )
+    except Exception:
+        external_input_gate_windows_abs_path_hits = -1
+    if external_input_gate_windows_abs_path_hits >= 0:
+        external_input_gate_windows_abs_path_hits += len(
+            re.findall(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\r\n\"']+", external_input_gate_raw)
+        )
+    try:
+        status_length = status_path.stat().st_size if status_path.is_file() else 0
+    except OSError:
+        status_length = 0
+    return {
+        "statusPresent": status_path.is_file(),
+        "statusGeneratedAt": status_generated_at_present,
+        "statusFresh": status_fresh,
+        "statusAgeSeconds": status_age_seconds,
+        "statusFreshnessStatus": status_freshness_status,
+        "schemaVersion": str(status.get("schemaVersion") or ""),
+        "latestDecision": safe_scalar(status.get("latestDecision"), 80),
+        "statusDecision": safe_scalar(status.get("statusDecision"), 80),
+        "failureClassification": safe_scalar(status.get("failureClassification"), 120),
+        "staleLatest": status.get("staleLatest") is True,
+        "firstAction": safe_scalar(status.get("firstAction"), 120),
+        "firstActionSource": safe_scalar(status.get("firstActionSource"), 80),
+        "externalInputGateStatus": external_input_gate_status,
+        "externalInputGateSource": external_input_gate_source,
+        "externalInputGateAction": external_input_gate_action,
+        "externalInputGateLocalPatchJustified": external_input_gate.get("localPatchJustified"),
+        "externalInputGateMutationAllowed": external_input_gate.get("mutationAllowed"),
+        "externalInputGateEvidenceNeeded": safe_csv_names(external_input_gate_evidence_needed),
+        "externalInputGateSecretHits": external_input_gate_secret_hits,
+        "externalInputGateWindowsAbsPathHits": external_input_gate_windows_abs_path_hits,
+        "rawSecretPatternHits": len(SECRET_PATTERN.findall(raw)),
+        "pathHash": sha256_file(status_path),
+        "pathLength": status_length,
+    }
+
+
+def goal_next_status_ready_fail_reason(summary: dict[str, Any]) -> str:
+    missing: list[str] = []
+    if not summary.get("statusPresent"):
+        missing.append("statusPresent")
+    if not summary.get("statusGeneratedAt"):
+        missing.append("statusGeneratedAt")
+    if not summary.get("statusFresh"):
+        missing.append("statusFresh")
+    if summary.get("statusFreshnessStatus") != "current":
+        missing.append("statusFreshnessStatus")
+    if summary.get("schemaVersion") != "awx.goal_next_auto.status.v1":
+        missing.append("schemaVersion")
+    if summary.get("statusDecision") not in ("evidence_needed", "desktop_only_ready", "ok"):
+        missing.append("statusDecision")
+    first_action = str(summary.get("firstAction") or "").strip()
+    first_action_source = str(summary.get("firstActionSource") or "").strip()
+    desktop_only_no_primary = (
+        first_action in ("", "evidence_needed")
+        and first_action_source in ("", "evidence_needed")
+        and summary.get("externalInputGateStatus") in ("empty", "local_or_unknown")
+        and summary.get("externalInputGateLocalPatchJustified") is True
+    )
+    desktop_only_local_primary = (
+        first_action not in ("", "evidence_needed")
+        and first_action_source == "source_health_scorecard"
+        and summary.get("externalInputGateStatus") in ("empty", "local_or_unknown")
+        and summary.get("externalInputGateLocalPatchJustified") is True
+        and summary.get("externalInputGateAction") == first_action
+    )
+    desktop_only_local_preflight = (
+        first_action in GOAL_NEXT_LOCAL_PREFLIGHT_ACTIONS
+        and first_action_source == "preflight"
+        and summary.get("externalInputGateStatus") == "local_or_unknown"
+        and summary.get("externalInputGateSource") == "preflight"
+        and summary.get("externalInputGateLocalPatchJustified") is True
+        and summary.get("externalInputGateAction") == first_action
+    )
+    desktop_only_local = (
+        desktop_only_no_primary
+        or desktop_only_local_primary
+        or desktop_only_local_preflight
+    )
+    if not desktop_only_local and summary.get("firstAction") != "set_SUPABASE_PROJECT_REF":
+        missing.append("firstAction")
+    if not desktop_only_local and summary.get("firstActionSource") != "supabase_apply":
+        missing.append("firstActionSource")
+    if not desktop_only_local and summary.get("externalInputGateStatus") != "external_input_needed":
+        missing.append("externalInputGate")
+    if not desktop_only_local and summary.get("externalInputGateSource") != "supabase_apply":
+        missing.append("externalInputGate")
+    if not desktop_only_local and summary.get("externalInputGateAction") != "set_SUPABASE_PROJECT_REF":
+        missing.append("externalInputGate")
+    if not desktop_only_local and summary.get("externalInputGateLocalPatchJustified") is not False:
+        missing.append("externalInputGateLocalPatchJustified")
+    if summary.get("externalInputGateMutationAllowed") is not False:
+        missing.append("externalInputGateMutationAllowed")
+    external_gate_evidence = set(str(summary.get("externalInputGateEvidenceNeeded") or "").split(","))
+    if not desktop_only_local and not {"SUPABASE_PROJECT_REF", "read_only_supabase_mcp_or_cli_auth", "execute_sql_results", "get_advisors_results"}.issubset(external_gate_evidence):
+        missing.append("externalInputGateEvidenceNeeded")
+    try:
+        external_gate_secret_hits = int(summary.get("externalInputGateSecretHits", -1))
+    except Exception:
+        external_gate_secret_hits = -1
+    if external_gate_secret_hits != 0:
+        missing.append("externalInputGateSecretHits")
+    try:
+        external_gate_windows_abs_path_hits = int(
+            summary.get("externalInputGateWindowsAbsPathHits", -1)
+        )
+    except Exception:
+        external_gate_windows_abs_path_hits = -1
+    if external_gate_windows_abs_path_hits != 0:
+        missing.append("externalInputGateWindowsAbsPathHits")
+    if int(summary.get("rawSecretPatternHits", 0) or 0) != 0:
+        missing.append("rawSecretPatternHits")
+    return ", ".join(missing)
+
+
+def goal_next_status_ready(summary: dict[str, Any]) -> bool:
+    return not goal_next_status_ready_fail_reason(summary)
 
 
 def db_gap_report_artifact_summary(root: Path) -> dict[str, Any]:
@@ -2963,6 +6894,48 @@ def requirement_row(
     }
 
 
+def output_requirement_matrix(
+    requirements: list[dict[str, Any]],
+    *,
+    include_supporting_evidence_details: bool = False,
+) -> list[dict[str, Any]]:
+    output_rows: list[dict[str, Any]] = []
+    for row in requirements:
+        output_row = dict(row)
+        evidence_needed = [
+            str(item)
+            for item in row.get("evidenceNeeded", [])
+            if str(item).strip()
+        ]
+        if any(is_external_producer_evidence_needed_text(item) for item in evidence_needed):
+            output_row["evidenceNeeded"] = (
+                evidence_needed
+                if include_supporting_evidence_details
+                else [
+                    compact_requirement_evidence_needed_text(item)
+                    if is_external_producer_evidence_needed_text(item)
+                    else safe_scalar(item, 160)
+                    for item in evidence_needed
+                ]
+            )
+            output_row["evidenceNeededDetails"] = (
+                evidence_needed if include_supporting_evidence_details else []
+            )
+            output_row["evidenceNeededDetailMode"] = (
+                "included" if include_supporting_evidence_details else "compact"
+            )
+            output_row["evidenceNeededDetailsOmitted"] = (
+                0 if include_supporting_evidence_details else len(evidence_needed)
+            )
+            output_row["evidenceNeededDetailHint"] = (
+                ""
+                if include_supporting_evidence_details
+                else "rerun with --include-supporting-next-actions for full requirement evidence text"
+            )
+        output_rows.append(output_row)
+    return output_rows
+
+
 def external_role_proof_requirement(
     role: str,
     external_valid_roles: set[str],
@@ -3107,6 +7080,45 @@ def build_requirement_matrix(
     db_gap_summary = db_gap_report_artifact_summary(proof_root)
     source_health_summary = source_health_scorecard_artifact_summary(proof_root)
     websoak_provider_summary = websoak_provider_disabled_artifact_summary(proof_root)
+    peer_bus_artifact = peer_evidence_bus_artifact_summary(proof_root)
+    web_probe_refresh_artifact = web_probe_refresh_artifact_summary(proof_root)
+    goal_next_collection_packet = goal_next_collection_packet_summary(proof_root)
+    web_probe_refresh_requested = goal_next_collection_packet.get("webProbeRefreshRequested") is True
+    web_probe_refresh_process_executed = goal_next_collection_packet.get("webProbeRefreshProcessExecuted") is True
+    web_probe_refresh_proof_ready = goal_next_collection_packet.get("webProbeRefreshProofReady") is True
+    web_probe_refresh_packet_hash = safe_scalar(
+        goal_next_collection_packet.get("webProbeRefreshArtifactHash"), 64
+    ).lower()
+    web_probe_refresh_artifact_hash = safe_scalar(web_probe_refresh_artifact.get("artifactHash"), 64).lower()
+    web_probe_refresh_hash_matches = (
+        bool(web_probe_refresh_packet_hash)
+        and web_probe_refresh_packet_hash == web_probe_refresh_artifact_hash
+    )
+    web_probe_refresh_current_proof = (
+        web_probe_refresh_requested
+        and web_probe_refresh_process_executed
+        and web_probe_refresh_proof_ready
+        and web_probe_refresh_artifact["valid"]
+        and web_probe_refresh_hash_matches
+    )
+    web_probe_refresh_requirement_evidence = (
+        f"refreshRequested={web_probe_refresh_requested};"
+        f"processExecuted={web_probe_refresh_process_executed};"
+        f"proofReady={web_probe_refresh_proof_ready};"
+        f"artifactHashMatches={web_probe_refresh_hash_matches};"
+        f"supportingEvidenceOnly={goal_next_collection_packet.get('webProbeRefreshSupportingEvidenceOnly')};"
+        f"{web_probe_refresh_artifact['evidence']}"
+    )
+    if web_probe_refresh_current_proof:
+        web_probe_refresh_requirement_needed: list[str] = []
+    elif not web_probe_refresh_requested:
+        web_probe_refresh_requirement_needed = [
+            "web probe refresh is optional supporting evidence and was not requested / use -RefreshWebProbe only when current official-source proof is required"
+        ]
+    else:
+        web_probe_refresh_requirement_needed = list(web_probe_refresh_artifact["evidenceNeeded"])
+    computer_use = computer_use_gui_boundary_summary(proof_root)
+    browser_use = browser_use_ui_boundary_summary(proof_root)
     return [
         requirement_row(
             "desktop-source-owner-final-verifier",
@@ -3127,6 +7139,68 @@ def build_requirement_matrix(
             "mcp-tools-resources-prompts",
             "satisfied" if checks_ok(checked, "tools.required-json-schemas", "resources.runners", "mcp.stdio-bridge", "mcp.prompt-get-role-briefs") else "incomplete",
             check_evidence(checked, "tools.required-json-schemas", "resources.runners", "mcp.stdio-bridge", "mcp.prompt-get-role-briefs"),
+        ),
+        requirement_row(
+            "peer-evidence-bus-contract",
+            "satisfied" if checks_ok(checked, "peer.evidence-bus") else "incomplete",
+            check_evidence(checked, "peer.evidence-bus"),
+        ),
+        requirement_row(
+            "peer-evidence-bus-artifact",
+            "satisfied" if peer_bus_artifact["valid"] else "evidence_needed",
+            peer_bus_artifact["evidence"],
+            peer_bus_artifact["evidenceNeeded"],
+        ),
+        requirement_row(
+            "web-probe-refresh-artifact",
+            "satisfied" if web_probe_refresh_current_proof else "evidence_needed",
+            web_probe_refresh_requirement_evidence,
+            web_probe_refresh_requirement_needed,
+        ),
+        requirement_row(
+            "computer-use-gui-proof",
+            (
+                "satisfied"
+                if computer_use.get("ready") is True
+                else "evidence_needed"
+                if computer_use.get("safePendingProof") is True
+                else "incomplete"
+            ),
+            (
+                f"artifactPath={computer_use.get('artifactPath')};"
+                f"ready={computer_use.get('ready')};"
+                f"safePendingProof={computer_use.get('safePendingProof')};"
+                f"decision={computer_use.get('decision')};"
+                f"helperReachable={computer_use.get('helperReachable')};"
+                f"helperFresh={computer_use.get('helperFresh')};"
+                f"storesAppNames={computer_use.get('storesAppNames')};"
+                f"storesWindowTitles={computer_use.get('storesWindowTitles')};"
+                f"rawSecretPatternHits={computer_use.get('rawSecretPatternHits')}"
+            ),
+            computer_use.get("evidenceNeeded", []),
+        ),
+        requirement_row(
+            "browser-ui-proof",
+            (
+                "satisfied"
+                if browser_use.get("ready") is True
+                else "evidence_needed"
+                if browser_use.get("safePendingProof") is True
+                else "incomplete"
+            ),
+            (
+                f"artifactPath={browser_use.get('artifactPath')};"
+                f"ready={browser_use.get('ready')};"
+                f"safePendingProof={browser_use.get('safePendingProof')};"
+                f"decision={browser_use.get('decision')};"
+                f"reachable={browser_use.get('reachable')};"
+                f"targetAccepted={browser_use.get('targetAccepted')};"
+                f"targetContentVisible={browser_use.get('targetContentVisible')};"
+                f"storesRawUrl={browser_use.get('storesRawUrl')};"
+                f"storesScreenshotPath={browser_use.get('storesScreenshotPath')};"
+                f"secretPatternHits={browser_use.get('secretPatternHits')}"
+            ),
+            browser_use.get("evidenceNeeded", []),
         ),
         requirement_row(
             "agent-db-snapshot-contract",
@@ -3234,6 +7308,16 @@ def build_requirement_matrix(
             check_evidence(checked, "goal-next.command-packet"),
         ),
         requirement_row(
+            "goal-next-auto-collection-packet",
+            "satisfied" if checks_ok(checked, "goal-next.collection-packet") else "incomplete",
+            check_evidence(checked, "goal-next.collection-packet"),
+        ),
+        requirement_row(
+            "goal-next-auto-status",
+            "satisfied" if checks_ok(checked, "goal-next.status") else "incomplete",
+            check_evidence(checked, "goal-next.status"),
+        ),
+        requirement_row(
             "archive-search-two-pass-index",
             "satisfied" if archive_index.exists() and checks_ok(checked, "archive.index-path-resolution") else "evidence_needed",
             check_evidence(checked, "archive.index-path-resolution"),
@@ -3315,6 +7399,10 @@ def build_requirement_matrix(
 def completion_audit_next_actions(
     requirements: list[dict[str, Any]],
     evidence_needed: list[str],
+    *,
+    include_external_producer_actions: bool = False,
+    include_optional_ui_actions: bool = False,
+    include_supabase_live_proof_actions: bool = False,
 ) -> list[str]:
     actions: list[str] = []
     requirement_by_id = {str(row.get("id") or ""): row for row in requirements}
@@ -3340,7 +7428,9 @@ def completion_audit_next_actions(
         add("rerun_archive_search")
 
     supabase_status = str(requirement_by_id.get("supabase-project-scope", {}).get("status") or "")
-    if supabase_status == "evidence_needed" or "supabase mcp project_ref" in evidence_text:
+    if include_supabase_live_proof_actions and (
+        supabase_status == "evidence_needed" or "supabase mcp project_ref" in evidence_text
+    ):
         supabase_scope_evidence = str(requirement_by_id.get("supabase-project-scope", {}).get("evidence") or "")
         if "projectRefTemplateMode=True" in supabase_scope_evidence:
             add("set_SUPABASE_PROJECT_REF")
@@ -3354,15 +7444,16 @@ def completion_audit_next_actions(
         add("run_supabase_readonly_snapshot_smoke")
         add("run_supabase_context_probe")
         add("run_supabase_schema_snapshot")
-        add("run_supabase_readonly_sql_bundle")
-        add("run_supabase_get_advisors_readonly")
-        add("import_supabase_query_results")
-        add("populate_supabase_query_results_file")
-        add("rerun_supabase_schema_snapshot_import")
-        add("rerun_db_gap_scanner")
+        if include_external_producer_actions:
+            add("run_supabase_readonly_sql_bundle")
+            add("run_supabase_get_advisors_readonly")
+            add("import_supabase_query_results")
+            add("populate_supabase_query_results_file")
+            add("rerun_supabase_schema_snapshot_import")
+            add("rerun_db_gap_scanner")
 
     supabase_live_status = str(requirement_by_id.get("supabase-live-db-structure-proof", {}).get("status") or "")
-    if (
+    if include_supabase_live_proof_actions and (
         supabase_live_status == "evidence_needed"
         or "supabase live schema snapshot" in evidence_text
         or "supabase execute_sql result sets missing" in evidence_text
@@ -3402,8 +7493,24 @@ def completion_audit_next_actions(
         add("set_AWX_TRACE_SNAPSHOT_BASE_URL")
         add("rerun_harmony_scan_with_runtime_probe")
 
+    computer_status = str(requirement_by_id.get("computer-use-gui-proof", {}).get("status") or "")
+    if include_optional_ui_actions and (
+        computer_status == "evidence_needed" or "computer use gui smoke evidence needed" in evidence_text
+    ):
+        add("collect-computer-use-gui-proof")
+        add("rerun_local_interaction_smoke_refresh")
+
+    browser_status = str(requirement_by_id.get("browser-ui-proof", {}).get("status") or "")
+    if include_optional_ui_actions and (
+        browser_status == "evidence_needed" or "browser ui smoke evidence needed" in evidence_text
+    ):
+        add("collect-browser-dom-proof")
+        add("rerun_local_interaction_smoke_refresh")
+
     producer_status = str(requirement_by_id.get("producer-external-proof", {}).get("status") or "")
-    if producer_status == "evidence_needed" or "external" in evidence_text or "producer" in evidence_text:
+    if include_external_producer_actions and (
+        producer_status == "evidence_needed" or "external" in evidence_text or "producer" in evidence_text
+    ):
         if "producer source root" in evidence_text or "producer_roots" in evidence_text:
             add("verify_or_override_producer_roots")
         for role in EXTERNAL_PRODUCER_ROLES:
@@ -3477,8 +7584,10 @@ def supabase_live_proof_next_action(root: Path, completion_actions: list[str]) -
         ),
         "requiredEnv": [
             {"name": "SUPABASE_PROJECT_REF", "sensitive": False},
-            {"name": "SUPABASE_ACCESS_TOKEN", "sensitive": True},
         ],
+        "mcpOAuthSupported": True,
+        "supportedAuthModes": ["supabase_mcp_oauth_session", "manual_SUPABASE_ACCESS_TOKEN"],
+        "manualAuthSensitiveEnvRefs": ["SUPABASE_ACCESS_TOKEN"],
         "requiredMcpTools": ["execute_sql", "get_advisors"],
         "artifactPaths": artifact_paths,
         "queryCount": bounded_int(packet.get("queryCount"), len(required_result_names), 0, 100),
@@ -3545,6 +7654,7 @@ def external_producer_proof_next_action(root: Path, role: str, topic: str = "mcp
     topic_slug = slug(topic)
     evidence_dir = root / "data" / "agent-handoff" / "mcp-control-tower"
     proof_dir = root / "__patch_drop__" / "external-node-proof"
+    producer_canonical_root = "<desktop-canonical-root>"
     return {
         "action": "collect-external-evidence-files",
         "nodeRole": "desktop",
@@ -3570,11 +7680,12 @@ def external_producer_proof_next_action(root: Path, role: str, topic: str = "mcp
         "producerCommands": [
             (
                 "python scripts/awx_mcp_node_smoke.py "
-                f"--root <producer-local-worktree> --canonical-root {root} --node-role {role_slug}"
+                f"--root <producer-local-worktree> --canonical-root {producer_canonical_root} "
+                f"--node-role {role_slug}"
             ),
             (
                 "python scripts/awx_mcp_producer_handoff.py "
-                f"--source-root <producer-local-worktree> --canonical-root {root} "
+                f"--source-root <producer-local-worktree> --canonical-root {producer_canonical_root} "
                 "--patchdrop-root <PatchDrop> --producer-script <PatchDrop>\\producer_bundle.py "
                 f"--node-role {role_slug} --topic {topic_slug} --pathspec <relative/source/path>"
             ),
@@ -3631,25 +7742,7 @@ def source_contract_next_action_details(root: Path) -> list[dict[str, Any]]:
 
 def completion_audit_next_action_details(root: Path, next_actions: list[str]) -> list[dict[str, Any]]:
     details: list[dict[str, Any]] = source_contract_next_action_details(root)
-    supabase_actions = {
-        "set_project_ref_in_mcp_config",
-        "complete_supabase_mcp_oauth_flow",
-        "install_supabase_cli_or_use_mcp_execute_sql",
-        "link_supabase_cli_project_ref",
-        "authenticate_supabase_mcp_or_cli",
-        "run_supabase_readonly_snapshot_smoke",
-        "run_supabase_context_probe",
-        "run_supabase_schema_snapshot",
-        "run_supabase_readonly_sql_bundle",
-        "run_supabase_get_advisors_readonly",
-        "import_supabase_query_results",
-        "populate_supabase_query_results_file",
-        "rerun_supabase_schema_snapshot_import",
-        "set_SUPABASE_PROJECT_REF",
-        "execute_each_query_once",
-        "collect_get_advisors_rows",
-    }
-    if any(action in supabase_actions for action in next_actions):
+    if any(is_supabase_live_proof_next_action(action) for action in next_actions):
         details.append(supabase_live_proof_next_action(root, next_actions))
     if any(action in ARCHIVE_INDEX_NEXT_ACTIONS for action in next_actions):
         details.append(archive_index_proof_next_action(next_actions))
@@ -3780,7 +7873,7 @@ def latest_dispatch_topic(root: Path) -> str:
     return packets[0].name.removesuffix("-desktop-dispatch.json")
 
 
-def latest_dispatch_packet_for_role(root: Path, role: str) -> dict[str, Any]:
+def latest_dispatch_packet_for_role(root: Path, role: str, topic: str = "") -> dict[str, Any]:
     dispatch_dir = root / "__patch_drop__" / "dispatch"
     if not dispatch_dir.exists():
         return {}
@@ -3790,6 +7883,8 @@ def latest_dispatch_packet_for_role(root: Path, role: str) -> dict[str, Any]:
         reverse=True,
     )
     packets = filter_dispatch_packets(packets)
+    if topic:
+        packets = [path for path in packets if path.name == f"{slug(topic)}-desktop-dispatch.json"]
     for packet_path in packets:
         packet = load_json(packet_path)
         if not isinstance(packet, dict):
@@ -3817,12 +7912,12 @@ def filter_dispatch_packets(packets: list[Path]) -> list[Path]:
         return packets
     without_ignored = [path for path in packets if not is_ignored_dispatch_fixture(path)]
     operational = [path for path in without_ignored if not is_test_dispatch_packet(path)]
-    return without_ignored or operational or packets
+    return operational or without_ignored or packets
 
 
 FORBIDDEN_PATCH_PATH_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(^|/)(apikey\.txt|apikey\.ps1)$", re.IGNORECASE), "secret-setup"),
-    (re.compile(r"(^|/)\.env($|[./])", re.IGNORECASE), "secret-env"),
+    (re.compile(r"(^|/)\.env[^/]*(?:/|$)", re.IGNORECASE), "secret-env"),
     (re.compile(r"(^|/)pages/api/", re.IGNORECASE), "nextjs-pages-api"),
     (re.compile(r"(^|/)(\.gradle|build|node_modules|\.next|\.turbo|\.swc)(/|$)", re.IGNORECASE), "shared-cache-build-output"),
     (re.compile(r"\.(p12|jks)$", re.IGNORECASE), "keystore"),
@@ -3842,12 +7937,16 @@ def patch_target_paths(path: Path) -> list[str]:
     text = read_text(path).lstrip("\ufeff")
     paths: list[str] = []
     seen: set[str] = set()
+    hunk_started = False
     for line in text.splitlines():
         candidates: list[str] = []
         if line.startswith("diff --git "):
+            hunk_started = False
             parts = line.split()
             candidates.extend(parts[2:4])
-        elif line.startswith("+++ ") or line.startswith("--- "):
+        elif line.startswith("@@ "):
+            hunk_started = True
+        elif not hunk_started and (line.startswith("+++ ") or line.startswith("--- ")):
             candidates.append(line[4:].split("\t", 1)[0])
         elif line.startswith("rename from ") or line.startswith("rename to "):
             candidates.append(line.split(" ", 2)[2])
@@ -3862,14 +7961,7 @@ def patch_target_paths(path: Path) -> list[str]:
 
 
 def is_unsafe_patch_target(target: str) -> bool:
-    parts = [part for part in target.replace("\\", "/").split("/") if part]
-    return (
-        ".." in parts
-        or target.startswith("/")
-        or target.startswith("//")
-        or target.startswith("\\\\")
-        or re.match(r"^[A-Za-z]:", target) is not None
-    )
+    return not is_canonical_repo_relative_patch_path(target)
 
 
 def forbidden_patch_paths(path: Path) -> list[dict[str, str]]:
@@ -3887,6 +7979,246 @@ def forbidden_patch_paths(path: Path) -> list[dict[str, str]]:
 
 def diff_header_count(path: Path) -> int:
     return len(re.findall(r"(?m)^diff --git ", read_text(path).lstrip("\ufeff")))
+
+
+def empty_patch_mode_summary() -> dict[str, int]:
+    return {
+        "filemodeLineCount": 0,
+        "allowedNewFileCount": 0,
+        "filemodeViolationCount": 0,
+    }
+
+
+def patch_mode_summary(path: Path) -> dict[str, int]:
+    return patch_mode_summary_text(read_text(path))
+
+
+def patch_mode_summary_text(patch_text: str) -> dict[str, int]:
+    text = patch_text.lstrip("\ufeff")
+    blocks: list[list[str]] = []
+    preamble: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            if current is not None:
+                blocks.append(current)
+            current = [line]
+        elif current is None:
+            preamble.append(line)
+        else:
+            current.append(line)
+    if current is not None:
+        blocks.append(current)
+
+    mode_header = re.compile(r"^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$")
+    preamble_modes = [line for line in preamble if mode_header.match(line)]
+    total = len(preamble_modes)
+    allowed = 0
+    violations = len(preamble_modes)
+    seen_targets: set[str] = set()
+    for block in blocks:
+        mode_lines = [line for line in block if mode_header.match(line)]
+        total += len(mode_lines)
+        envelope = patch_envelope_lines(block)
+        has_old_null = "--- /dev/null" in envelope
+        has_new_null = "+++ /dev/null" in envelope
+        if has_new_null or (has_old_null and not mode_lines):
+            violations += max(1, len(mode_lines))
+            continue
+        if not mode_lines:
+            continue
+        header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0]) if block else None
+        target = header.group(1) if header is not None and header.group(1) == header.group(2) else ""
+        if is_canonical_new_file_block(block, mode_lines) and target not in seen_targets:
+            seen_targets.add(target)
+            allowed += 1
+        else:
+            violations += len(mode_lines)
+    return {
+        "filemodeLineCount": total,
+        "allowedNewFileCount": allowed,
+        "filemodeViolationCount": violations,
+    }
+
+
+def patch_envelope_lines(lines: list[str]) -> list[str]:
+    first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), len(lines))
+    return lines[:first_hunk]
+
+
+def is_canonical_repo_relative_patch_path(value: str) -> bool:
+    if not value or value != value.replace("\\", "/"):
+        return False
+    if value.startswith(("/", "//")) or re.match(r"^[A-Za-z]:", value):
+        return False
+    if re.search(r"[\x00-\x20\x7f\"<>:|?*]", value):
+        return False
+    return all(
+        part not in {"", ".", ".."}
+        and not part.endswith((".", " "))
+        and re.match(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)", part, re.IGNORECASE) is None
+        for part in value.split("/")
+    )
+
+
+def is_canonical_new_file_block(block: list[str], mode_lines: list[str]) -> bool:
+    if not block or mode_lines != ["new file mode 100644"]:
+        return False
+    header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0])
+    if header is None or header.group(1) != header.group(2):
+        return False
+    target = header.group(1)
+    if not is_canonical_repo_relative_patch_path(target):
+        return False
+    if any(pattern.search(target) for pattern, _ in FORBIDDEN_PATCH_PATH_PATTERNS):
+        return False
+    envelope = patch_envelope_lines(block)
+    old_headers = [line for line in envelope if line.startswith("--- ")]
+    new_headers = [line for line in envelope if line.startswith("+++ ")]
+    if old_headers != ["--- /dev/null"] or new_headers != [f"+++ b/{target}"]:
+        return False
+    if not has_canonical_new_file_hunk(block):
+        return False
+    return not any(
+        line.startswith(("rename from ", "rename to ", "copy from ", "copy to "))
+        or line == "GIT binary patch"
+        or (line.startswith("Binary files ") and line.endswith(" differ"))
+        for line in block
+    )
+
+
+def has_exact_hunk_sequence(lines: list[str], *, require_new_file: bool) -> bool:
+    first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), -1)
+    if first_hunk < 0:
+        return False
+    envelope = lines[:first_hunk]
+    old_indexes = [index for index, line in enumerate(envelope) if line.startswith("--- ")]
+    new_indexes = [index for index, line in enumerate(envelope) if line.startswith("+++ ")]
+    if len(old_indexes) != 1 or len(new_indexes) != 1 or new_indexes[0] != old_indexes[0] + 1:
+        return False
+    if first_hunk != new_indexes[0] + 1:
+        return False
+    index = first_hunk
+    hunk_count = 0
+    header_pattern = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$")
+    while index < len(lines):
+        header = header_pattern.fullmatch(lines[index])
+        if header is None:
+            return False
+        old_start = int(header.group(1))
+        old_expected = int(header.group(2)) if header.group(2) is not None else 1
+        new_start = int(header.group(3))
+        new_expected = int(header.group(4)) if header.group(4) is not None else 1
+        if require_new_file and (hunk_count != 0 or old_start != 0 or old_expected != 0 or new_start != 1 or new_expected <= 0):
+            return False
+        hunk_count += 1
+        index += 1
+        old_actual = 0
+        new_actual = 0
+        old_eof_marked = False
+        new_eof_marked = False
+        while index < len(lines) and not lines[index].startswith("@@ "):
+            line = lines[index]
+            if line == r"\ No newline at end of file":
+                if index == 0 or not lines[index - 1].startswith((" ", "+", "-")):
+                    return False
+                if any(candidate.startswith("@@ ") for candidate in lines[index + 1 :]):
+                    return False
+                previous_kind = lines[index - 1][0]
+                if previous_kind == "-":
+                    if old_eof_marked or new_eof_marked:
+                        return False
+                    old_eof_marked = True
+                elif previous_kind == "+":
+                    if new_eof_marked:
+                        return False
+                    new_eof_marked = True
+                else:
+                    if old_eof_marked or new_eof_marked:
+                        return False
+                    old_eof_marked = True
+                    new_eof_marked = True
+                index += 1
+                continue
+            if not line or line[0] not in {" ", "+", "-"}:
+                return False
+            if new_eof_marked or (old_eof_marked and line[0] != "+"):
+                return False
+            if require_new_file and line[0] != "+":
+                return False
+            if line[0] in {" ", "-"}:
+                old_actual += 1
+            if line[0] in {" ", "+"}:
+                new_actual += 1
+            if old_actual > old_expected or new_actual > new_expected:
+                return False
+            index += 1
+        if old_actual != old_expected or new_actual != new_expected:
+            return False
+    return hunk_count == 1 if require_new_file else hunk_count > 0
+
+
+def has_canonical_new_file_hunk(lines: list[str]) -> bool:
+    return has_exact_hunk_sequence(lines, require_new_file=True)
+
+
+def patch_structure_violation_count_text(patch_text: str) -> int:
+    text = patch_text.lstrip("\ufeff")
+    blocks: list[list[str]] = []
+    preamble: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            if current is not None:
+                blocks.append(current)
+            current = [line]
+        elif current is None:
+            preamble.append(line)
+        else:
+            current.append(line)
+    if current is not None:
+        blocks.append(current)
+    violations = 1 if any(line.strip() for line in preamble) or not blocks else 0
+    seen_targets: set[str] = set()
+    for block in blocks:
+        header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0])
+        if header is None or header.group(1) != header.group(2):
+            violations += 1
+            continue
+        target = header.group(1)
+        if not is_canonical_repo_relative_patch_path(target) or target in seen_targets:
+            violations += 1
+            continue
+        seen_targets.add(target)
+        envelope = patch_envelope_lines(block)
+        old_headers = [line for line in envelope if line.startswith("--- ")]
+        new_headers = [line for line in envelope if line.startswith("+++ ")]
+        mode_lines = [
+            line
+            for line in block
+            if re.match(r"^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$", line)
+        ]
+        if old_headers == ["--- /dev/null"]:
+            if not is_canonical_new_file_block(block, mode_lines):
+                violations += 1
+        elif old_headers != [f"--- a/{target}"] or new_headers != [f"+++ b/{target}"]:
+            violations += 1
+        elif not has_exact_hunk_sequence(block, require_new_file=False):
+            violations += 1
+    parsed = subprocess.run(
+        ["git", "apply", "--numstat", "--whitespace=nowarn", "-"],
+        input=text.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if parsed.returncode != 0:
+        violations += 1
+    return violations
+
+
+def binary_patch_marker_count(path: Path) -> int:
+    return len(re.findall(r"(?m)^(GIT binary patch|Binary files .+ differ)$", read_text(path)))
 
 
 def validate_external_producer_bundle(
@@ -3915,14 +8247,22 @@ def validate_external_producer_bundle(
     raw_secret_hits = 0
     for path in paths.values():
         if path.is_file():
-            raw_secret_hits += len(SECRET_PATTERN.findall(read_text(path)))
+            raw_secret_hits += len(PATCH_SECRET_PATTERN.findall(read_text(path)))
     if raw_secret_hits:
         failures.append("secret-leak-risk")
+    mode_summary = patch_mode_summary(paths["patch"]) if paths["patch"].is_file() else empty_patch_mode_summary()
+    if mode_summary["filemodeViolationCount"]:
+        failures.append("filemode-blocked")
+    binary_markers = binary_patch_marker_count(paths["patch"]) if paths["patch"].is_file() else 0
+    if binary_markers:
+        failures.append("binary-patch-blocked")
     forbidden_paths = forbidden_patch_paths(paths["patch"]) if paths["patch"].is_file() else []
     if forbidden_paths:
         failures.append("forbidden-path:" + ",".join(sorted({item["reason"] for item in forbidden_paths})))
     diff_headers = diff_header_count(paths["patch"]) if paths["patch"].is_file() else 0
     if paths["patch"].is_file() and paths["patch"].stat().st_size > 0 and diff_headers == 0:
+        failures.append("producer-patch-not-unified-diff")
+    elif paths["patch"].is_file() and patch_structure_violation_count_text(read_text(paths["patch"])):
         failures.append("producer-patch-not-unified-diff")
 
     manifest = load_json(paths["manifest"]) if paths["manifest"].is_file() else {}
@@ -3930,15 +8270,24 @@ def validate_external_producer_bundle(
     if manifest:
         if manifest.get("schemaVersion") != "patchdrop-producer-v3":
             failures.append("producer-manifest-schema")
-        if str(manifest.get("node", "")).lower() != role_slug:
+        if manifest.get("topic") != topic_slug:
+            failures.append("producer-manifest-topic")
+        if manifest.get("slug") != topic_slug:
+            failures.append("producer-manifest-slug")
+        if manifest.get("node") != role_slug:
             failures.append("producer-manifest-node")
-        if str(manifest.get("activePatch", "")) != f"{bundle}.patch":
+        if manifest.get("activePatch") != f"{bundle}.patch":
             failures.append("producer-active-patch-mismatch")
-        if str(manifest.get("desktopFinalProof", "")) != "evidence_needed":
+        if manifest.get("desktopFinalProof") != "evidence_needed":
             failures.append("producer-desktop-proof-not-pending")
         source_root_input_hash = str(manifest.get("sourceRootInputHash") or "")
+        source_root_hash = str(manifest.get("sourceRootHash") or "")
+        if re.fullmatch(r"[a-f0-9]{64}", source_root_input_hash) is None:
+            failures.append("producer-source-root-input-hash-invalid")
+        if re.fullmatch(r"[a-f0-9]{64}", source_root_hash) is None:
+            failures.append("producer-source-root-hash-invalid")
         if expected_source_root_hash:
-            if not source_root_input_hash:
+            if not source_root_input_hash or not source_root_hash:
                 failures.append("producer-source-root-hash-missing")
             elif source_root_input_hash != expected_source_root_hash:
                 failures.append("producer-source-root-mismatch")
@@ -3946,7 +8295,7 @@ def validate_external_producer_bundle(
         git_root_ok = (
             isolation.get("gitRootPresent") is True
             and isolation.get("gitRootMatchesSourceRoot") is True
-            and bool(str(isolation.get("gitRootHash") or ""))
+            and isolation.get("gitRootHash") == source_root_hash
         )
         if not git_root_ok:
             failures.append("producer-git-root-missing")
@@ -3958,6 +8307,20 @@ def validate_external_producer_bundle(
             and isolation.get("directCanonicalSourceEdit") is False
         ):
             failures.append("producer-source-isolation-violation")
+        verification = manifest.get("verification") if isinstance(manifest.get("verification"), dict) else {}
+        expected_metrics = {
+            "diffHeaderCount": diff_headers,
+            "filemodeLineCount": mode_summary["filemodeLineCount"],
+            "allowedNewFileCount": mode_summary["allowedNewFileCount"],
+            "filemodeViolationCount": mode_summary["filemodeViolationCount"],
+            "forbiddenPathCount": len(forbidden_paths),
+            "secretPatternHits": raw_secret_hits,
+            "rawSecretPatternHits": raw_secret_hits,
+        }
+        for metric_name, expected_metric in expected_metrics.items():
+            metric_value = verification.get(metric_name)
+            if type(metric_value) is not int or metric_value != expected_metric:
+                failures.append("producer-manifest-verification-" + metric_name)
     elif paths["manifest"].is_file():
         failures.append("producer-manifest-invalid")
 
@@ -4001,6 +8364,10 @@ def validate_external_producer_bundle(
         "sidecarsComplete": not missing,
         "shaVerified": sha_verified,
         "rawSecretPatternHits": raw_secret_hits,
+        "filemodeLineCount": mode_summary["filemodeLineCount"],
+        "allowedNewFileCount": mode_summary["allowedNewFileCount"],
+        "filemodeViolationCount": mode_summary["filemodeViolationCount"],
+        "binaryPatchMarkerCount": binary_markers,
         "diffHeaderCount": diff_headers,
         "forbiddenPathCount": len(forbidden_paths),
         "expectedSourceRootHash": expected_source_root_hash[:12],
@@ -4104,11 +8471,26 @@ def validate_external_node_smoke(
     missing_tools = sorted(REQUIRED_NODE_SMOKE_TOOLS - step_tools)
     if missing_tools:
         failures.append("missing-tools:" + ",".join(missing_tools))
+    unallowlisted_step_count = sum(
+        1
+        for step in steps
+        if isinstance(step, dict) and bool(set(step) - NODE_SMOKE_STEP_FIELDS)
+    )
+    if unallowlisted_step_count:
+        failures.append(f"unallowlisted-step-fields:count={unallowlisted_step_count}")
+    terminal_steps = [step for step in steps if node_smoke_step_has_terminal_outcome(step)]
+    invalid_step_count = len(steps) - len(terminal_steps)
+    if invalid_step_count:
+        failures.append(f"invalid-step-shape:count={invalid_step_count}")
+    terminal_tools = {str(step.get("toolName", "")) for step in terminal_steps}
+    missing_terminal_tools = sorted(REQUIRED_NODE_SMOKE_TOOLS - terminal_tools)
+    if missing_terminal_tools:
+        failures.append("missing-terminal-outcome:" + ",".join(missing_terminal_tools))
     for tool_name, allowed_decisions in NODE_SMOKE_DECISION_ALLOWLIST.items():
         matching_steps = [
             step
-            for step in steps
-            if isinstance(step, dict) and str(step.get("toolName", "")) == tool_name
+            for step in terminal_steps
+            if str(step.get("toolName", "")) == tool_name
         ]
         if matching_steps and not any(
             str(step.get("decision", "")) in allowed_decisions
@@ -4118,10 +8500,9 @@ def validate_external_node_smoke(
     for tool_name, fallback_decisions in NODE_SMOKE_FALLBACK_DECISIONS.items():
         fallback_steps = [
             step
-            for step in steps
+            for step in terminal_steps
             if (
-                isinstance(step, dict)
-                and str(step.get("toolName", "")) == tool_name
+                str(step.get("toolName", "")) == tool_name
                 and str(step.get("decision", "")) in fallback_decisions
             )
         ]
@@ -4129,11 +8510,10 @@ def validate_external_node_smoke(
             failures.append(tool_name.replace("_", "-") + "-local-fallback")
 
     restore_blocked = any(
-        isinstance(step, dict)
-        and step.get("toolName") == "archive_restore"
+        step.get("toolName") == "archive_restore"
         and step.get("decision") == "restore_target_blocked"
         and step.get("failReason") == "smb-conflict-risk"
-        for step in steps
+        for step in terminal_steps
     )
     if role in {"macmini", "notebook", "read-only"} and not restore_blocked:
         failures.append("restore-block-missing")
@@ -4143,6 +8523,39 @@ def validate_external_node_smoke(
         "restoreBlocked": restore_blocked,
         "failReason": ",".join(failures),
     }
+
+
+def node_smoke_step_has_terminal_outcome(step: Any) -> bool:
+    if not isinstance(step, dict) or set(step) != NODE_SMOKE_STEP_FIELDS:
+        return False
+    tool_name = step.get("toolName")
+    decision = step.get("decision")
+    fail_reason = step.get("failReason")
+    evidence_needed = step.get("evidence_needed")
+    exit_code = step.get("exitCode")
+    output_count = step.get("outputCount")
+    elapsed_ms = step.get("elapsedMs")
+    return (
+        isinstance(tool_name, str)
+        and tool_name in REQUIRED_NODE_SMOKE_TOOLS
+        and isinstance(step.get("ok"), bool)
+        and isinstance(step.get("localFallbackPresent"), bool)
+        and isinstance(decision, str)
+        and 0 < len(decision) <= 120
+        and isinstance(fail_reason, str)
+        and len(fail_reason) <= 120
+        and isinstance(evidence_needed, str)
+        and len(evidence_needed) <= 2000
+        and isinstance(exit_code, int)
+        and not isinstance(exit_code, bool)
+        and -(2**31) <= exit_code < 2**31
+        and isinstance(output_count, int)
+        and not isinstance(output_count, bool)
+        and 0 <= output_count <= 1_000_000
+        and isinstance(elapsed_ms, int)
+        and not isinstance(elapsed_ms, bool)
+        and 0 <= elapsed_ms <= 86_400_000
+    )
 
 
 def validate_external_producer_handoff(
@@ -4236,7 +8649,7 @@ def validate_external_producer_handoff(
     }
 
 
-def dispatch_artifact_summary(root: Path) -> dict[str, Any]:
+def dispatch_artifact_summary(root: Path, topic: str = "") -> dict[str, Any]:
     dispatch_dir = root / "__patch_drop__" / "dispatch"
     packets = (
         sorted(path for path in dispatch_dir.glob("*-desktop-dispatch.json") if path.is_file())
@@ -4244,6 +8657,9 @@ def dispatch_artifact_summary(root: Path) -> dict[str, Any]:
         else []
     )
     packets = filter_dispatch_packets(packets)
+    if topic:
+        expected_name = f"{slug(topic)}-desktop-dispatch.json"
+        packets = [path for path in packets if path.name == expected_name]
     if not packets:
         return {
             "ok": False,
@@ -4326,6 +8742,9 @@ def dispatch_artifact_summary(root: Path) -> dict[str, Any]:
             f"{topic_slug}-desktop-intake.ps1",
             f"{topic_slug}-handoff.md",
         ]
+        source_health_queue_name = Path(str(index.get("sourceHealthProducerQueue") or "")).name
+        if source_health_queue_name:
+            expected_covered.insert(1, source_health_queue_name)
         if covered_names != expected_covered or sidecar_name in covered_names:
             return False
         sidecar_hashes: dict[str, str] = {}
@@ -4671,7 +9090,7 @@ def dispatch_artifact_summary(root: Path) -> dict[str, Any]:
             and contract.get("outputMode") == "patchdrop-unified-diff-sidecars"
             and contract.get("directCanonicalSourceEditAllowed") is False
             and contract.get("desktopFinalProof") == "evidence_needed"
-            and PATCHDROP_HANDOFF_REQUIRED_ARTIFACTS.issubset(required)
+            and set(PATCHDROP_HANDOFF_REQUIRED_ARTIFACTS).issubset(required)
         )
 
     def desktop_intake_policy(command_path: Path, topic: str) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
@@ -4689,7 +9108,11 @@ def dispatch_artifact_summary(root: Path) -> dict[str, Any]:
         if len(command_lines) < 2:
             return (False, False, False, False, False, False, False)
         topic_slug = slug(topic)
-        topic_pinned = all("topic" in line and topic_slug in line for line in command_lines)
+        topic_assignment = re.compile(
+            rf"(?:^|[;{{])\s*topic\s*=\s*(?:'{re.escape(topic_slug)}'|\"{re.escape(topic_slug)}\")(?=\s*(?:[;}}]|$))",
+            re.IGNORECASE,
+        )
+        topic_pinned = all(topic_assignment.search(line) is not None for line in command_lines)
         producer_bundles_required = all(
             "require_producer_bundles" in line and "$true" in line
             for line in command_lines
@@ -4712,6 +9135,17 @@ def dispatch_artifact_summary(root: Path) -> dict[str, Any]:
             and "source-lease-begin-failed" in runtime_text
             and "exit $LeaseBeginExit" in runtime_text
         )
+        artifact_gate = (
+            "$EvidenceDir =" in runtime_text
+            and "Open-AwxCoordinationHandle" in runtime_text
+            and ".evidence-intake.lock" in runtime_text
+            and "$EvidenceHandle.Dispose()" in runtime_text
+            and "source_edit_session.ps1" not in runtime_text
+        )
+        artifact_index = runtime_text.find("evidence-intake-lock-busy")
+        artifact_fail_closed = artifact_gate and 0 <= artifact_index < intake_index and "exit 4" in runtime_text
+        source_lease_gate = source_lease_gate or artifact_gate
+        source_lease_fail_closed = source_lease_fail_closed or artifact_fail_closed
         audit_index = text.find("external_evidence_audit")
         completion_index = text.find("awx_mcp_completion_audit.py")
         intake_exit_index = text.find("$IntakeExit = $LASTEXITCODE")
@@ -5093,7 +9527,14 @@ def dispatch_artifact_summary(root: Path) -> dict[str, Any]:
     }
 
 
-def audit(root: Path) -> dict[str, Any]:
+def audit(
+    root: Path,
+    *,
+    require_supabase_proof: bool = False,
+    include_supporting_next_actions: bool = False,
+    evidence_dir: Path | None = None,
+    topic: str = "",
+) -> dict[str, Any]:
     root = root.resolve()
     manifest_path = root / "main" / "resources" / "mcp" / "awx-control-tower-tools.json"
     manifest = load_json(manifest_path)
@@ -5112,7 +9553,9 @@ def audit(root: Path) -> dict[str, Any]:
         root / "data" / "agent-handoff" / "mcp-control-tower",
         root / "__patch_drop__" / "external-node-proof",
     ]
-    producer_bundle_topic = latest_dispatch_topic(root)
+    if evidence_dir is not None:
+        proof_dirs = [(root / evidence_dir).resolve()]
+    producer_bundle_topic = slug(topic) if topic else latest_dispatch_topic(root)
     external_valid_roles: set[str] = set()
     external_handoff_valid_roles: set[str] = set()
     external_bundle_valid_roles: set[str] = set()
@@ -5131,7 +9574,7 @@ def audit(root: Path) -> dict[str, Any]:
             proof_data = json.loads(raw_proof.lstrip("\ufeff"))
         except json.JSONDecodeError:
             proof_data = {}
-        dispatch_packet = latest_dispatch_packet_for_role(root, role)
+        dispatch_packet = latest_dispatch_packet_for_role(root, role, topic)
         expected_source_root_hash = str(dispatch_packet.get("sourceRootInputHash") or "")
         if not expected_source_root_hash:
             expected_source_root = str(dispatch_packet.get("sourceRoot") or "").strip()
@@ -5282,13 +9725,15 @@ def audit(root: Path) -> dict[str, Any]:
         and "producer.kit_export" in tools.get("producer_kit_export", {}).get("aliases", [])
         and "desktop.dispatch_packet" in tools.get("desktop_dispatch_packet", {}).get("aliases", [])
         and "desktop.control_loop" in tools.get("desktop_control_loop", {}).get("aliases", [])
+        and "peer.evidence_bus" in tools.get("peer_evidence_bus", {}).get("aliases", [])
+        and "peer.evidence" in tools.get("peer_evidence_bus", {}).get("aliases", [])
     )
     add_check(
         checked,
         failures,
         "tools.task-aliases",
         aliases_ok,
-        "archive.search/archive.restore/verify_boot/build_error_miner/external.evidence_intake/external.evidence_audit/producer.command_plan/producer.kit_export/desktop.dispatch_packet/desktop.control_loop aliases",
+        "archive.search/archive.restore/verify_boot/build_error_miner/external.evidence_intake/external.evidence_audit/producer.command_plan/producer.kit_export/desktop.dispatch_packet/desktop.control_loop/peer.evidence_bus aliases",
         "task aliases are incomplete",
     )
 
@@ -5477,14 +9922,84 @@ def audit(root: Path) -> dict[str, Any]:
             token in janitor_tests_text
             for token in (
                 "missing-meta inventory reports MISSING_META",
+                "missing-manifest apply emits guard",
                 "filemode guard emits blocked",
                 "sha mismatch guard emits mismatch",
+                "manifest activePatch mismatch emits guard",
+                "source isolation guard emits blocked",
                 "report-only inventory marks supporting evidence",
                 "real patchdrop untouched",
             )
         ),
-        "janitor_tests.ps1 covers MISSING_META, filemode-blocked, sha mismatch, nested report-only visibility, and no-real-PatchDrop-mutation probes",
-        "janitor regression probes for missing metadata, filemode blocking, or SHA mismatch are missing",
+        "janitor_tests.ps1 covers MISSING_META, missing-manifest, filemode-blocked, sha mismatch, manifest activePatch, sourceIsolation guard, nested report-only visibility, and no-real-PatchDrop-mutation probes",
+        "janitor regression probes for missing metadata, missing manifest, filemode blocking, SHA mismatch, manifest activePatch, or sourceIsolation guard are missing",
+    )
+    producer_promoter_text = read_text(
+        root / "__patch_drop__" / "janitor_promote_producer_pending.ps1"
+    )
+    producer_promoter_tests_text = read_text(
+        root / "__patch_drop__" / "janitor_promote_producer_pending_tests.ps1"
+    )
+    source_edit_session_text = read_text(
+        root / "__patch_drop__" / "source_edit_session.ps1"
+    )
+    producer_promoter_test_names = (
+        "Test-CompleteBundlePromotes",
+        "Test-ShaMismatchFailsClosed",
+        "Test-UnsafeIsolationFailsClosed",
+        "Test-ExistingTopLevelPatchFailsClosed",
+        "Test-HiddenTopLevelPatchFailsClosed",
+        "Test-ActiveLeaseFailsClosed",
+        "Test-CorruptLeaseFailsClosed",
+        "Test-PromotionLockBlocksNewLease",
+        "Test-GitApplyCheckFailsClosed",
+        "Test-MalformedManifestFailsClosed",
+        "Test-TargetCollisionFailsClosed",
+        "Test-MidPublishFailureRollsBack",
+        "Test-DesktopLeaseBlockedAfterPromotion",
+    )
+    add_check(
+        checked,
+        failures,
+        "janitor.producer-promotion",
+        all(
+            token in producer_promoter_text
+            for token in (
+                "[janitor][promoted]",
+                "producer-sha256-mismatch",
+                "producer-source-isolation-blocked",
+                "promotion-queue-blocked",
+                "sourceLeaseBlockingCount",
+                "git -C $Root apply --check",
+                ".promotion.lock",
+                "promotion-rollback-incomplete",
+                "promotion-rolled-back",
+                ".awx-patchdrop-test-root",
+            )
+        )
+        and all(
+            producer_promoter_tests_text.count(test_name) >= 2
+            for test_name in producer_promoter_test_names
+        )
+        and all(
+            token in source_edit_session_text
+            for token in (
+                ".promotion.lock",
+                "[source-edit-session][promotion-lock-busy]",
+                "[source-edit-session][patch-queue-blocked]",
+            )
+        )
+        and all(
+            token in producer_promoter_tests_text
+            for token in (
+                "foreach ($failureKind in @('report', 'patch'))",
+                "promoted SHA matches all four top-level artifacts",
+                "top-level patch allows matching desktop-consumer lease",
+                "hidden top-level patch blocks desktop source-owner lease",
+            )
+        ),
+        "producer pending promotion is explicit, lease/queue/SHA/sourceIsolation/apply-check/rollback gated, and the dedicated fail-closed suite declares and invokes every required case",
+        "janitor_promote_producer_pending.ps1, its shared lease lock, or its invoked fail-closed promotion contract cases are missing",
     )
     three_node_smoke_text = read_text(root / "__patch_drop__" / "three_node_patchdrop_smoke.ps1")
     add_check(
@@ -5657,7 +10172,10 @@ def audit(root: Path) -> dict[str, Any]:
                 '"sourceIsolation"',
                 '"promotionReady"',
                 '"producer-source-isolation-violation"',
-                '"producer-desktop-proof-not-pending"',
+                "expected_active_patch",
+                "expected_source_root_hash",
+                "actual_patch",
+                "actual_secret_hits",
                 '"sourceRootKind"',
                 '"local-worktree"',
                 '"desktopFinalProof"',
@@ -5694,7 +10212,8 @@ def audit(root: Path) -> dict[str, Any]:
                 "PRODUCER_FAIL_RE",
                 "producer_fail_reason",
                 '"producer-bundle-failed"',
-                '"failReason": producer_fail',
+                "bundle_fail_reasons",
+                '"failReason": ",".join(bundle_fail_reasons)',
             )
         ),
         "producer handoff propagates producer-local bundle failure classes into redacted failReason",
@@ -5758,14 +10277,20 @@ def audit(root: Path) -> dict[str, Any]:
         all(
             token in toolbox_text
             for token in (
-                "filemode_line_count(paths[\"patch\"])",
+                "patch_mode_summary(paths[\"patch\"])",
                 '"filemodeLineCount"',
+                '"allowedNewFileCount"',
+                '"filemodeViolationCount"',
                 '"filemode-blocked"',
             )
         )
-        and '"filemodeLineCount"' in manifest_text,
-        "producer bundle validation rejects filemode headers before external evidence is complete",
-        "producer bundle validation does not fail-close filemode patch bodies",
+        and all(
+            token in producer_bundle_py_text and token in producer_bundle_ps_text
+            for token in ("allowedNewFileCount", "filemodeViolationCount")
+        )
+        and all(token in manifest_text for token in ('"filemodeLineCount"', '"allowedNewFileCount"', '"filemodeViolationCount"')),
+        "producer bundle validation allows canonical 100644 additions and rejects unsafe mode drift before external evidence is complete",
+        "producer bundle validation does not distinguish canonical additions from unsafe filemode patch bodies",
     )
     add_check(
         checked,
@@ -5811,8 +10336,8 @@ def audit(root: Path) -> dict[str, Any]:
             for token in (
                 "is_unsafe_patch_target",
                 '"unsafe-path"',
-                "target.startswith(\"/\")",
-                "target.startswith(\"\\\\\\\\\")",
+                "return not is_canonical_repo_relative_patch_path(target)",
+                "not part.endswith",
             )
         ),
         "producer bundle validation rejects traversal, absolute, and UNC patch targets",
@@ -5844,8 +10369,10 @@ def audit(root: Path) -> dict[str, Any]:
         and "completionReady" in json.dumps(tools.get("desktop_control_loop", {}), sort_keys=True)
         and "completionAuditNextActions" in json.dumps(tools.get("desktop_control_loop", {}), sort_keys=True)
         and "harmonyScan" in json.dumps(tools.get("desktop_control_loop", {}), sort_keys=True)
-        and "harmonyScanNextActions" in json.dumps(tools.get("desktop_control_loop", {}), sort_keys=True),
-        "desktop_control_loop combines source_scan + dispatch + external_evidence_audit with localReady/completionReady split, completionAuditNextActions, harmonyScan, harmonyScanNextActions, and Desktop final proof pending",
+        and "harmonyScanNextActions" in json.dumps(tools.get("desktop_control_loop", {}), sort_keys=True)
+        and "peerEvidenceBus" in json.dumps(tools.get("desktop_control_loop", {}), sort_keys=True)
+        and "peerEvidenceBusNextActions" in json.dumps(tools.get("desktop_control_loop", {}), sort_keys=True),
+        "desktop_control_loop combines source_scan + dispatch + external_evidence_audit with localReady/completionReady split, completionAuditNextActions, harmonyScan, harmonyScanNextActions, peerEvidenceBus, peerEvidenceBusNextActions, and Desktop final proof pending",
         "Desktop control loop tool/schema is missing",
     )
     add_check(
@@ -5860,12 +10387,12 @@ def audit(root: Path) -> dict[str, Any]:
         and "rev-parse --show-toplevel" in toolbox_text
         and "producer-kit.manifest.json" in toolbox_text
         and "producer-kit-manifest-missing" in toolbox_text
-        and "producer-kit-manifest-mismatch" in toolbox_text
+        and "producer-kit-manifest-sha-mismatch" in toolbox_text
         and "desktopFinalProof" in json.dumps(tools.get("producer_kit_export", {}), sort_keys=True),
         "producer_kit_export writes a redacted PatchDrop producer kit with installer git-root preflight, manifest verification, and Desktop proof pending",
         "producer kit export tool/schema is missing",
     )
-    dispatch_summary = dispatch_artifact_summary(root)
+    dispatch_summary = dispatch_artifact_summary(root, topic=topic)
     add_check(
         checked,
         failures,
@@ -6609,13 +11136,84 @@ def audit(root: Path) -> dict[str, Any]:
             f"ageSeconds={source_health_scorecard.get('ageSeconds')};"
             f"nextSingleAction={source_health_scorecard.get('nextSingleAction')};"
             f"nextSourceAction={source_health_scorecard.get('nextSourceAction')};"
+            f"failurePatternKind={source_health_scorecard.get('failurePatternKind')};"
+            f"patternId={source_health_scorecard.get('patternId')};"
+            f"amplifiedSignalScore={source_health_scorecard.get('amplifiedSignalScore')};"
+            f"producerValidationQueueSchema={source_health_scorecard.get('producerValidationQueueSchema')};"
+            f"producerValidationQueueAssignmentCount={source_health_scorecard.get('producerValidationQueueAssignmentCount')};"
+            f"producerValidationQueueRoles={source_health_scorecard.get('producerValidationQueueRoles')};"
+            f"producerValidationQueueMaxDurationHours={source_health_scorecard.get('producerValidationQueueMaxDurationHours')};"
+            f"producerValidationQueueRuntimeProductBehavior={source_health_scorecard.get('producerValidationQueueRuntimeProductBehavior')};"
+            f"producerValidationQueuePatternReady={source_health_scorecard.get('producerValidationQueuePatternReady')};"
+            f"producerValidationQueueTraceKeysReady={source_health_scorecard.get('producerValidationQueueTraceKeysReady')};"
+            f"producerValidationQueueAmplifierTraceKeysReady={source_health_scorecard.get('producerValidationQueueAmplifierTraceKeysReady')};"
+            f"producerValidationQueueAmplifierTraceKeys={source_health_scorecard.get('producerValidationQueueAmplifierTraceKeys')};"
+            f"producerValidationQueueEvidenceArtifactsReady={source_health_scorecard.get('producerValidationQueueEvidenceArtifactsReady')};"
+            f"producerValidationQueueEvidenceSinksReady={source_health_scorecard.get('producerValidationQueueEvidenceSinksReady')};"
+            f"producerValidationQueueEvidenceSinks={source_health_scorecard.get('producerValidationQueueEvidenceSinks')};"
+            f"producerValidationQueuePatchDropManifestReady={source_health_scorecard.get('producerValidationQueuePatchDropManifestReady')};"
+            f"producerValidationQueueDebugEventNdjsonReady={source_health_scorecard.get('producerValidationQueueDebugEventNdjsonReady')};"
+            f"producerValidationQueueIsolationReady={source_health_scorecard.get('producerValidationQueueIsolationReady')};"
+            f"producerValidationQueuePositiveAmplifiedScore={source_health_scorecard.get('producerValidationQueuePositiveAmplifiedScore')};"
+            f"producerValidationQueueSecretPatternHits={source_health_scorecard.get('producerValidationQueueSecretPatternHits')};"
+            f"producerValidationQueueWindowsAbsPathHits={source_health_scorecard.get('producerValidationQueueWindowsAbsPathHits')};"
+            f"failurePatternEvidenceArtifactsSchema={source_health_scorecard.get('failurePatternEvidenceArtifactsSchema')};"
+            f"failurePatternEvidenceArtifactsReady={source_health_scorecard.get('failurePatternEvidenceArtifactsReady')};"
+            f"failurePatternDebugEventNdjsonPresent={source_health_scorecard.get('failurePatternDebugEventNdjsonPresent')};"
+            f"failurePatternDebugEventNdjsonEventType={source_health_scorecard.get('failurePatternDebugEventNdjsonEventType')};"
+            f"failurePatternDebugEventNdjsonPatternReady={source_health_scorecard.get('failurePatternDebugEventNdjsonPatternReady')};"
+            f"failurePatternDebugEventNdjsonTraceKeysReady={source_health_scorecard.get('failurePatternDebugEventNdjsonTraceKeysReady')};"
+            f"failurePatternDebugEventNdjsonAmplifierKeysReady={source_health_scorecard.get('failurePatternDebugEventNdjsonAmplifierKeysReady')};"
+            f"failurePatternDebugEventStoreReady={source_health_scorecard.get('failurePatternDebugEventStoreReady')};"
+            f"failurePatternCfvmFailurePatternReady={source_health_scorecard.get('failurePatternCfvmFailurePatternReady')};"
+            f"failurePatternPatchDropManifestPresent={source_health_scorecard.get('failurePatternPatchDropManifestPresent')};"
+            f"failurePatternPatchDropManifestSchema={source_health_scorecard.get('failurePatternPatchDropManifestSchema')};"
+            f"failurePatternPatchDropManifestHashMatches={source_health_scorecard.get('failurePatternPatchDropManifestHashMatches')};"
+            f"failurePatternPatchDropManifestRoles={source_health_scorecard.get('failurePatternPatchDropManifestRoles')};"
+            f"failurePatternPatchDropManifestEvidenceSinksReady={source_health_scorecard.get('failurePatternPatchDropManifestEvidenceSinksReady')};"
+            f"failurePatternPatchDropManifestSourceIsolation={source_health_scorecard.get('failurePatternPatchDropManifestSourceIsolation')};"
+            f"failurePatternEvidenceArtifactsMaxDurationHours={source_health_scorecard.get('failurePatternEvidenceArtifactsMaxDurationHours')};"
+            f"failurePatternEvidenceArtifactsRuntimeProductBehavior={source_health_scorecard.get('failurePatternEvidenceArtifactsRuntimeProductBehavior')};"
+            f"failurePatternEvidenceArtifactsProducerExecutionObserved={source_health_scorecard.get('failurePatternEvidenceArtifactsProducerExecutionObserved')};"
+            f"failurePatternEvidenceArtifactsRuntimeScoreClaim={source_health_scorecard.get('failurePatternEvidenceArtifactsRuntimeScoreClaim')};"
+            f"failurePatternEvidenceArtifactsSecretPatternHits={source_health_scorecard.get('failurePatternEvidenceArtifactsSecretPatternHits')};"
+            f"failurePatternEvidenceArtifactsWindowsAbsPathHits={source_health_scorecard.get('failurePatternEvidenceArtifactsWindowsAbsPathHits')};"
+            f"sourceHealthValidationLoopSchema={source_health_scorecard.get('sourceHealthValidationLoopSchema')};"
+            f"sourceHealthValidationLoopReady={source_health_scorecard.get('sourceHealthValidationLoopReady')};"
+            f"sourceHealthValidationLoopEvidenceSinksReady={source_health_scorecard.get('sourceHealthValidationLoopEvidenceSinksReady')};"
+            f"sourceHealthValidationLoopEvidenceSinks={source_health_scorecard.get('sourceHealthValidationLoopEvidenceSinks')};"
+            f"sourceHealthValidationLoopGeneratedAt={source_health_scorecard.get('sourceHealthValidationLoopGeneratedAt')};"
+            f"sourceHealthValidationLoopFresh={source_health_scorecard.get('sourceHealthValidationLoopFresh')};"
+            f"sourceHealthValidationLoopFreshnessStatus={source_health_scorecard.get('sourceHealthValidationLoopFreshnessStatus')};"
+            f"sourceHealthValidationLoopTimeboxKind={source_health_scorecard.get('sourceHealthValidationLoopTimeboxKind')};"
+            f"sourceHealthValidationLoopMaxDurationHours={source_health_scorecard.get('sourceHealthValidationLoopMaxDurationHours')};"
+            f"sourceHealthValidationLoopRuntimeProductBehavior={source_health_scorecard.get('sourceHealthValidationLoopRuntimeProductBehavior')};"
+            f"sourceHealthValidationLoopMutationAllowed={source_health_scorecard.get('sourceHealthValidationLoopMutationAllowed')};"
+            f"sourceHealthValidationLoopCycleCount={source_health_scorecard.get('sourceHealthValidationLoopCycleCount')};"
+            f"sourceHealthValidationLoopCyclesPresent={source_health_scorecard.get('sourceHealthValidationLoopCyclesPresent')};"
+            f"sourceHealthValidationLoopCycleRows={source_health_scorecard.get('sourceHealthValidationLoopCycleRows')};"
+            f"sourceHealthValidationLoopCyclePatternReady={source_health_scorecard.get('sourceHealthValidationLoopCyclePatternReady')};"
+            f"sourceHealthValidationLoopNearestFailurePatternKind={source_health_scorecard.get('sourceHealthValidationLoopNearestFailurePatternKind')};"
+            f"sourceHealthValidationLoopNearestPatternId={source_health_scorecard.get('sourceHealthValidationLoopNearestPatternId')};"
+            f"sourceHealthValidationLoopProducerRoles={source_health_scorecard.get('sourceHealthValidationLoopProducerRoles')};"
+            f"sourceHealthValidationLoopAmplifierTraceKeysReady={source_health_scorecard.get('sourceHealthValidationLoopAmplifierTraceKeysReady')};"
+            f"sourceHealthValidationLoopSidecarsReady={source_health_scorecard.get('sourceHealthValidationLoopSidecarsReady')};"
+            f"sourceHealthValidationLoopHashMatches={source_health_scorecard.get('sourceHealthValidationLoopHashMatches')};"
+            f"sourceHealthValidationLoopSecretPatternHits={source_health_scorecard.get('sourceHealthValidationLoopSecretPatternHits')};"
+            f"sourceHealthValidationLoopWindowsAbsPathHits={source_health_scorecard.get('sourceHealthValidationLoopWindowsAbsPathHits')};"
             f"completionAudit={source_health_scorecard.get('completionAudit')};"
+            f"completionAuditSupportingEvidenceActionMode={source_health_scorecard.get('completionAuditSupportingEvidenceActionMode')};"
+            f"completionAuditSupportingEvidenceNextActionsOmitted={source_health_scorecard.get('completionAuditSupportingEvidenceNextActionsOmitted')};"
+            f"completionAuditSupportingEvidenceActionHint={source_health_scorecard.get('completionAuditSupportingEvidenceActionHint')};"
             f"nextActionDetailsCount={source_health_scorecard.get('nextActionDetailsCount')};"
             f"supabaseLiveProofDetail={source_health_scorecard.get('supabaseLiveProofDetail')};"
             f"supabaseLiveProofReadOnly={source_health_scorecard.get('supabaseLiveProofReadOnly')};"
             f"supabaseLiveProofMutationBlocked={source_health_scorecard.get('supabaseLiveProofMutationBlocked')};"
             f"supabaseLiveProofMcpEndpointTemplate={source_health_scorecard.get('supabaseLiveProofMcpEndpointTemplate')};"
             f"requiredEnv={source_health_scorecard.get('requiredEnv')};"
+            f"supportedAuthModes={source_health_scorecard.get('supportedAuthModes')};"
+            f"manualAuthSensitiveEnvRefs={source_health_scorecard.get('manualAuthSensitiveEnvRefs')};"
+            f"mcpOAuthSupported={source_health_scorecard.get('mcpOAuthSupported')};"
             f"requiredMcpTools={source_health_scorecard.get('requiredMcpTools')};"
             f"requiredResultNames={source_health_scorecard.get('requiredResultNameCount')};"
             f"queryCount={source_health_scorecard.get('queryCount')};"
@@ -6644,9 +11242,51 @@ def audit(root: Path) -> dict[str, Any]:
             f"broadRuntimeTests={source_health_scorecard.get('broadRuntimeTestCount')};"
             f"broadRuntimeFailures={source_health_scorecard.get('broadRuntimeTestFailureCount')};"
             f"broadRuntimeErrors={source_health_scorecard.get('broadRuntimeTestErrorCount')};"
+            f"localInteractionProof={source_health_scorecard.get('localInteractionProof')};"
+            f"localInteractionComputerReady={source_health_scorecard.get('localInteractionComputerReady')};"
+            f"localInteractionBrowserReady={source_health_scorecard.get('localInteractionBrowserReady')};"
+            f"localInteractionRefreshReady={source_health_scorecard.get('localInteractionRefreshReady')};"
+            f"externalInputGateProof={source_health_scorecard.get('externalInputGateProof')};"
+            f"externalInputGateObserved={source_health_scorecard.get('externalInputGateObserved')};"
+            f"externalInputGateBoundaryReady={source_health_scorecard.get('externalInputGateBoundaryReady')};"
+            f"externalInputGateStatus={source_health_scorecard.get('externalInputGateStatus')};"
+            f"externalInputGateSource={source_health_scorecard.get('externalInputGateSource')};"
+            f"externalInputGateAction={source_health_scorecard.get('externalInputGateAction')};"
+            f"externalInputGateLocalPatchJustified={source_health_scorecard.get('externalInputGateLocalPatchJustified')};"
+            f"externalInputGateMutationAllowed={source_health_scorecard.get('externalInputGateMutationAllowed')};"
+            f"externalInputGateEvidenceNeeded={source_health_scorecard.get('externalInputGateEvidenceNeeded')};"
+            f"externalInputGateSecretPatternHits={source_health_scorecard.get('externalInputGateSecretPatternHits')};"
+            f"goalNextStatusProof={source_health_scorecard.get('goalNextStatusProof')};"
+            f"goalNextStatusObserved={source_health_scorecard.get('goalNextStatusObserved')};"
+            f"goalNextStatusFresh={source_health_scorecard.get('goalNextStatusFresh')};"
+            f"goalNextStatusBoundaryReady={source_health_scorecard.get('goalNextStatusBoundaryReady')};"
+            f"goalNextStatusDecision={source_health_scorecard.get('goalNextStatusDecision')};"
+            f"goalNextStatusFirstAction={source_health_scorecard.get('goalNextStatusFirstAction')};"
+            f"goalNextStatusExternalInputGateStatus={source_health_scorecard.get('goalNextStatusExternalInputGateStatus')};"
+            f"goalNextStatusExternalInputGateAction={source_health_scorecard.get('goalNextStatusExternalInputGateAction')};"
+            f"goalNextStatusSecretPatternHits={source_health_scorecard.get('goalNextStatusSecretPatternHits')};"
+            f"goalNextStatusWindowsAbsPathHits={source_health_scorecard.get('goalNextStatusWindowsAbsPathHits')};"
+            f"goalNextCollectionPacketProof={source_health_scorecard.get('goalNextCollectionPacketProof')};"
+            f"goalNextCollectionPacketBoundaryReady={source_health_scorecard.get('goalNextCollectionPacketBoundaryReady')};"
+            f"goalNextCollectionPacketSupabaseEnv={source_health_scorecard.get('goalNextCollectionPacketSupabaseEnv')};"
+            f"goalNextCollectionPacketMcpTools={source_health_scorecard.get('goalNextCollectionPacketMcpTools')};"
+            f"goalNextCollectionPacketExternalRoles={source_health_scorecard.get('goalNextCollectionPacketExternalRoles')};"
+            f"goalNextCollectionPacketWebProbeReady={source_health_scorecard.get('goalNextCollectionPacketWebProbeReady')};"
+            f"goalNextCollectionPacketComputerSafe={source_health_scorecard.get('goalNextCollectionPacketComputerSafe')};"
+            f"goalNextCollectionPacketBrowserSafe={source_health_scorecard.get('goalNextCollectionPacketBrowserSafe')};"
+            f"goalNextCollectionPacketSecretPatternHits={source_health_scorecard.get('goalNextCollectionPacketSecretPatternHits')};"
+            f"goalNextCollectionPacketWindowsAbsPathHits={source_health_scorecard.get('goalNextCollectionPacketWindowsAbsPathHits')};"
+            f"peerEvidenceBusProof={source_health_scorecard.get('peerEvidenceBusProof')};"
+            f"peerEvidenceBusContractReady={source_health_scorecard.get('peerEvidenceBusContractReady')};"
+            f"peerEvidenceBusArtifactReady={source_health_scorecard.get('peerEvidenceBusArtifactReady')};"
+            f"peerEvidenceBusTargetMetric={source_health_scorecard.get('peerEvidenceBusTargetMetric')};"
             f"bytes={source_health_scorecard.get('pathLength', 0)};"
             f"pathHash={str(source_health_scorecard.get('pathHash', ''))[:12]};"
             f"rawSecretPatternHits={source_health_scorecard.get('rawSecretPatternHits', 0)};"
+            f"localInteractionWindowsAbsPathHits={source_health_scorecard.get('localInteractionWindowsAbsPathHits', 0)};"
+            f"externalInputGateWindowsAbsPathHits={source_health_scorecard.get('externalInputGateWindowsAbsPathHits', 0)};"
+            f"peerEvidenceBusWindowsAbsPathHits={source_health_scorecard.get('peerEvidenceBusWindowsAbsPathHits', 0)};"
+            f"peerEvidenceBusSecretPatternHits={source_health_scorecard.get('peerEvidenceBusSecretPatternHits', 0)};"
             f"nextActionDetailsWindowsAbsPathHits={source_health_scorecard.get('nextActionDetailsWindowsAbsPathHits', 0)};"
             f"nextSourceActionDetailsWindowsAbsPathHits={source_health_scorecard.get('nextSourceActionDetailsWindowsAbsPathHits', 0)}"
         ),
@@ -6673,11 +11313,36 @@ def audit(root: Path) -> dict[str, Any]:
             f"decision={goal_next_packet.get('decision')};"
             f"topic={goal_next_packet.get('topic')};"
             f"commandCount={goal_next_packet.get('commandCount')};"
+            f"nextActionCount={goal_next_packet.get('nextActionCount')};"
+            f"nextActionSources={goal_next_packet.get('nextActionSources')};"
+            f"topAction={goal_next_packet.get('topAction')};"
+            f"topActionSource={goal_next_packet.get('topActionSource')};"
+            f"topActionDecision={goal_next_packet.get('topActionDecision')};"
+            f"externalInputGateStatus={goal_next_packet.get('externalInputGateStatus')};"
+            f"externalInputGateSource={goal_next_packet.get('externalInputGateSource')};"
+            f"externalInputGateAction={goal_next_packet.get('externalInputGateAction')};"
+            f"externalInputGateLocalPatchJustified={goal_next_packet.get('externalInputGateLocalPatchJustified')};"
+            f"externalInputGateMutationAllowed={goal_next_packet.get('externalInputGateMutationAllowed')};"
+            f"externalInputGateEvidenceNeeded={goal_next_packet.get('externalInputGateEvidenceNeeded')};"
+            f"externalInputGateSecretHits={goal_next_packet.get('externalInputGateSecretHits')};"
+            f"externalInputGateWindowsAbsPathHits={goal_next_packet.get('externalInputGateWindowsAbsPathHits')};"
             f"lanes={goal_next_packet.get('lanes')};"
             f"producerRoles={goal_next_packet.get('producerRoles')};"
             f"supabaseEnvNames={goal_next_packet.get('supabaseEnvNames')};"
+            f"supabaseSupportedAuthModes={goal_next_packet.get('supabaseSupportedAuthModes')};"
+            f"supabaseManualAuthSensitiveEnvRefs={goal_next_packet.get('supabaseManualAuthSensitiveEnvRefs')};"
+            f"supabaseMcpOAuthSupported={goal_next_packet.get('supabaseMcpOAuthSupported')};"
             f"supabaseCommand={goal_next_packet.get('supabaseCommand')};"
             f"externalDesktopCommand={goal_next_packet.get('externalDesktopCommand')};"
+            f"peerEvidenceBusCommand={goal_next_packet.get('peerEvidenceBusCommand')};"
+            f"webProbeRefreshCommand={goal_next_packet.get('webProbeRefreshCommand')};"
+            f"webProbeRefreshContract={goal_next_packet.get('webProbeRefreshContract')};"
+            f"webProbeRefreshSecretHits={goal_next_packet.get('webProbeRefreshSecretHits', 0)};"
+            f"webProbeRefreshWindowsAbsPathHits={goal_next_packet.get('webProbeRefreshWindowsAbsPathHits', 0)};"
+            f"smbDebugAttachmentPlaceholder={goal_next_packet.get('smbDebugAttachmentPlaceholder')};"
+            f"smbDebugCommandWithAttachment={goal_next_packet.get('smbDebugCommandWithAttachment')};"
+            f"smbDebugSecretHits={goal_next_packet.get('smbDebugSecretHits', 0)};"
+            f"smbDebugWindowsAbsPathHits={goal_next_packet.get('smbDebugWindowsAbsPathHits', 0)};"
             f"producerPlaceholders={goal_next_packet.get('producerPlaceholders')};"
             f"supabaseSmokePresent={goal_next_packet.get('supabaseSmokePresent')};"
             f"supabaseSmokeMcpDecision={goal_next_packet.get('supabaseSmokeMcpDecision')};"
@@ -6685,12 +11350,58 @@ def audit(root: Path) -> dict[str, Any]:
             f"supabaseReadOnlyContract={goal_next_packet.get('supabaseReadOnlyContract')};"
             f"supabaseMcpEndpointTemplate={goal_next_packet.get('supabaseMcpEndpointTemplate')};"
             f"supabaseDocsRefs={goal_next_packet.get('supabaseDocsRefs')};"
+            f"supabaseOfficialContractSignals={goal_next_packet.get('supabaseOfficialContractSignals')};"
+            f"supabaseCollectionGuards={goal_next_packet.get('supabaseCollectionGuards')};"
             f"computerUsePresent={goal_next_packet.get('computerUsePresent')};"
             f"computerUseDecision={goal_next_packet.get('computerUseDecision')};"
             f"computerUseOk={goal_next_packet.get('computerUseOk')};"
             f"computerUseReachable={goal_next_packet.get('computerUseReachable')};"
             f"computerUseStale={goal_next_packet.get('computerUseStale')};"
             f"computerUseAppCount={goal_next_packet.get('computerUseAppCount')};"
+            f"computerUseHelperCountOnly={goal_next_packet.get('computerUseHelperCountOnly')};"
+            f"computerUseProbeSchemaVersion={goal_next_packet.get('computerUseProbeSchemaVersion')};"
+            f"computerUseProbeSchemaReady={goal_next_packet.get('computerUseProbeSchemaReady')};"
+            f"browserUsePresent={goal_next_packet.get('browserUsePresent')};"
+            f"browserUseDecision={goal_next_packet.get('browserUseDecision')};"
+            f"browserUseOk={goal_next_packet.get('browserUseOk')};"
+            f"browserUseReachable={goal_next_packet.get('browserUseReachable')};"
+            f"browserUseLocalhost={goal_next_packet.get('browserUseLocalhost')};"
+            f"browserUsePublicDomain={goal_next_packet.get('browserUsePublicDomain')};"
+            f"browserUseTargetAccepted={goal_next_packet.get('browserUseTargetAccepted')};"
+            f"browserUseScreenshotCaptured={goal_next_packet.get('browserUseScreenshotCaptured')};"
+            f"browserUseTargetContentVisible={goal_next_packet.get('browserUseTargetContentVisible')};"
+            f"browserUseStale={goal_next_packet.get('browserUseStale')};"
+            f"browserUseStoresRawUrl={goal_next_packet.get('browserUseStoresRawUrl')};"
+            f"browserUseStoresScreenshotPath={goal_next_packet.get('browserUseStoresScreenshotPath')};"
+            f"localInteractionSmokeRefreshReady={goal_next_packet.get('localInteractionSmokeRefreshReady')};"
+            f"localInteractionSmokeRefreshScript={goal_next_packet.get('localInteractionSmokeRefreshScript')};"
+            f"localInteractionSmokeRefreshCommand={goal_next_packet.get('localInteractionSmokeRefreshCommand')};"
+            f"localInteractionSmokeRefreshOutputs={goal_next_packet.get('localInteractionSmokeRefreshOutputs')};"
+            f"localInteractionSmokeRefreshNoRawPayloads={goal_next_packet.get('localInteractionSmokeRefreshNoRawPayloads')};"
+            f"localInteractionSmokeRefreshMutationBlocked={goal_next_packet.get('localInteractionSmokeRefreshMutationBlocked')};"
+            f"localInteractionSmokeRefreshSecretHits={goal_next_packet.get('localInteractionSmokeRefreshSecretHits', 0)};"
+            f"localInteractionSmokeRefreshWindowsAbsPathHits={goal_next_packet.get('localInteractionSmokeRefreshWindowsAbsPathHits', 0)};"
+            f"traceMemoryRuntimeProofPresent={goal_next_packet.get('traceMemoryRuntimeProofPresent')};"
+            f"traceMemoryRuntimeProofReady={goal_next_packet.get('traceMemoryRuntimeProofReady')};"
+            f"traceMemoryRuntimeProofSafePending={goal_next_packet.get('traceMemoryRuntimeProofSafePending')};"
+            f"traceMemoryRuntimeProofAccepted={goal_next_packet.get('traceMemoryRuntimeProofAccepted')};"
+            f"traceMemoryRuntimeProofDecision={goal_next_packet.get('traceMemoryRuntimeProofDecision')};"
+            f"traceMemoryRuntimeProofStatus={goal_next_packet.get('traceMemoryRuntimeProofStatus')};"
+            f"traceMemoryRuntimeProofRequired={goal_next_packet.get('traceMemoryRuntimeProofRequired')};"
+            f"traceMemoryRuntimeProofSeedsSelfProbe={goal_next_packet.get('traceMemoryRuntimeProofSeedsSelfProbe')};"
+            f"traceMemoryRuntimeProofTracePresent={goal_next_packet.get('traceMemoryRuntimeProofTracePresent')};"
+            f"traceMemoryRouteDecision={goal_next_packet.get('traceMemoryRouteDecision')};"
+            f"traceMemoryCfvmOffered={goal_next_packet.get('traceMemoryCfvmOffered')};"
+            f"traceMemoryCfvmPatternId={goal_next_packet.get('traceMemoryCfvmPatternId')};"
+            f"traceMemorySeedStatus={goal_next_packet.get('traceMemorySeedStatus')};"
+            f"traceMemoryRuntimeProofMutationBlocked={goal_next_packet.get('traceMemoryRuntimeProofMutationBlocked')};"
+            f"traceMemoryRuntimeProofStoresRawPrompt={goal_next_packet.get('traceMemoryRuntimeProofStoresRawPrompt')};"
+            f"traceMemoryRuntimeProofStoresRawModel={goal_next_packet.get('traceMemoryRuntimeProofStoresRawModel')};"
+            f"traceMemoryRuntimeProofStoresRawSsePayload={goal_next_packet.get('traceMemoryRuntimeProofStoresRawSsePayload')};"
+            f"traceMemoryRuntimeProofSecretHits={goal_next_packet.get('traceMemoryRuntimeProofSecretHits', 0)};"
+            f"traceMemoryRuntimeProofRawPromptHits={goal_next_packet.get('traceMemoryRuntimeProofRawPromptHits', 0)};"
+            f"traceMemoryRuntimeProofRawModelHits={goal_next_packet.get('traceMemoryRuntimeProofRawModelHits', 0)};"
+            f"traceMemoryRuntimeProofWindowsAbsPathHits={goal_next_packet.get('traceMemoryRuntimeProofWindowsAbsPathHits', 0)};"
             f"bytes={goal_next_packet.get('pathLength', 0)};"
             f"pathHash={str(goal_next_packet.get('pathHash', ''))[:12]};"
             f"commandWindowsAbsPathHits={goal_next_packet.get('commandWindowsAbsPathHits', 0)};"
@@ -6699,6 +11410,123 @@ def audit(root: Path) -> dict[str, Any]:
         (
             "goal-next-auto command packet missing, stale, incomplete, or unsafe: "
             f"{goal_next_command_packet_ready_fail_reason(goal_next_packet)}"
+        ),
+    )
+    goal_next_collection_packet = goal_next_collection_packet_summary(root)
+    add_check(
+        checked,
+        failures,
+        "goal-next.collection-packet",
+        goal_next_collection_packet_ready(goal_next_collection_packet),
+        (
+            f"latestPresent={goal_next_collection_packet.get('latestPresent')};"
+            f"latestGeneratedAt={goal_next_collection_packet.get('latestGeneratedAt')};"
+            f"latestFresh={goal_next_collection_packet.get('latestFresh')};"
+            f"latestFreshnessStatus={goal_next_collection_packet.get('latestFreshnessStatus')};"
+            f"latestAgeSeconds={goal_next_collection_packet.get('latestAgeSeconds')};"
+            f"collectionPacketPresent={goal_next_collection_packet.get('collectionPacketPresent')};"
+            f"collectionPacketMarkdownPresent={goal_next_collection_packet.get('collectionPacketMarkdownPresent')};"
+            f"schemaVersion={goal_next_collection_packet.get('schemaVersion')};"
+            f"decision={goal_next_collection_packet.get('decision')};"
+            f"topic={goal_next_collection_packet.get('topic')};"
+            f"secretSafe={goal_next_collection_packet.get('secretSafe')};"
+            f"supabaseReadOnly={goal_next_collection_packet.get('supabaseReadOnly')};"
+            f"supabaseMutationAllowed={goal_next_collection_packet.get('supabaseMutationAllowed')};"
+            f"supabaseRequiredEnvNames={goal_next_collection_packet.get('supabaseRequiredEnvNames')};"
+            f"supabaseRequiredMcpTools={goal_next_collection_packet.get('supabaseRequiredMcpTools')};"
+            f"supabaseRequiredResultCount={goal_next_collection_packet.get('supabaseRequiredResultCount')};"
+            f"supabaseMcpConfigReadOnly={goal_next_collection_packet.get('supabaseMcpConfigReadOnly')};"
+            f"supabaseMcpConfigTokenStored={goal_next_collection_packet.get('supabaseMcpConfigTokenStored')};"
+            f"supabaseMcpConfigServerHost={goal_next_collection_packet.get('supabaseMcpConfigServerHost')};"
+            f"supabaseCollectionGuards={goal_next_collection_packet.get('supabaseCollectionGuards')};"
+            f"externalRoles={goal_next_collection_packet.get('externalRoles')};"
+            f"externalSourceIsolation={goal_next_collection_packet.get('externalSourceIsolation')};"
+            f"desktopDispatchWriteRequested={goal_next_collection_packet.get('desktopDispatchWriteRequested')};"
+            f"desktopDispatchIntegrityOk={goal_next_collection_packet.get('desktopDispatchIntegrityOk')};"
+            f"desktopDispatchSourceIsolation={goal_next_collection_packet.get('desktopDispatchSourceIsolation')};"
+            f"webProbeRefreshReady={goal_next_collection_packet.get('webProbeRefreshReady')};"
+            f"webProbeRefreshBoundaryReady={goal_next_collection_packet.get('webProbeRefreshBoundaryReady')};"
+            f"webProbeRefreshContractReady={goal_next_collection_packet.get('webProbeRefreshContractReady')};"
+            f"webProbeRefreshProofReady={goal_next_collection_packet.get('webProbeRefreshProofReady')};"
+            f"webProbeRefreshRequested={goal_next_collection_packet.get('webProbeRefreshRequested')};"
+            f"webProbeRefreshProcessExecuted={goal_next_collection_packet.get('webProbeRefreshProcessExecuted')};"
+            f"webProbeRefreshSupportingEvidenceOnly={goal_next_collection_packet.get('webProbeRefreshSupportingEvidenceOnly')};"
+            f"webProbeRefreshArtifactHash={goal_next_collection_packet.get('webProbeRefreshArtifactHash')};"
+            f"webProbeRefreshTargetCount={goal_next_collection_packet.get('webProbeRefreshTargetCount')};"
+            f"webProbeRefreshSourceCount={goal_next_collection_packet.get('webProbeRefreshSourceCount')};"
+            f"webProbeRefreshFetchedCount={goal_next_collection_packet.get('webProbeRefreshFetchedCount')};"
+            f"localInteractionRefreshReady={goal_next_collection_packet.get('localInteractionRefreshReady')};"
+            f"computerUseSafe={goal_next_collection_packet.get('computerUseSafe')};"
+            f"computerUseHelperCountOnly={goal_next_collection_packet.get('computerUseHelperCountOnly')};"
+            f"computerUseProbeSchemaVersion={goal_next_collection_packet.get('computerUseProbeSchemaVersion')};"
+            f"computerUseProbeSchemaReady={goal_next_collection_packet.get('computerUseProbeSchemaReady')};"
+            f"browserUseSafe={goal_next_collection_packet.get('browserUseSafe')};"
+            f"archiveSafe={goal_next_collection_packet.get('archiveSafe')};"
+            f"traceMemoryRuntimeProofPresent={goal_next_collection_packet.get('traceMemoryRuntimeProofPresent')};"
+            f"traceMemoryRuntimeProofReady={goal_next_collection_packet.get('traceMemoryRuntimeProofReady')};"
+            f"traceMemoryRuntimeProofSafePending={goal_next_collection_packet.get('traceMemoryRuntimeProofSafePending')};"
+            f"traceMemoryRuntimeProofAccepted={goal_next_collection_packet.get('traceMemoryRuntimeProofAccepted')};"
+            f"traceMemoryRuntimeProofDecision={goal_next_collection_packet.get('traceMemoryRuntimeProofDecision')};"
+            f"traceMemoryRuntimeProofStatus={goal_next_collection_packet.get('traceMemoryRuntimeProofStatus')};"
+            f"traceMemoryRuntimeProofRequired={goal_next_collection_packet.get('traceMemoryRuntimeProofRequired')};"
+            f"traceMemoryRuntimeProofSeedsSelfProbe={goal_next_collection_packet.get('traceMemoryRuntimeProofSeedsSelfProbe')};"
+            f"traceMemoryRuntimeProofTracePresent={goal_next_collection_packet.get('traceMemoryRuntimeProofTracePresent')};"
+            f"traceMemoryRouteDecision={goal_next_collection_packet.get('traceMemoryRouteDecision')};"
+            f"traceMemoryCfvmOffered={goal_next_collection_packet.get('traceMemoryCfvmOffered')};"
+            f"traceMemoryCfvmPatternId={goal_next_collection_packet.get('traceMemoryCfvmPatternId')};"
+            f"traceMemorySeedStatus={goal_next_collection_packet.get('traceMemorySeedStatus')};"
+            f"traceMemoryRuntimeProofMutationBlocked={goal_next_collection_packet.get('traceMemoryRuntimeProofMutationBlocked')};"
+            f"traceMemoryRuntimeProofStoresRawPrompt={goal_next_collection_packet.get('traceMemoryRuntimeProofStoresRawPrompt')};"
+            f"traceMemoryRuntimeProofStoresRawModel={goal_next_collection_packet.get('traceMemoryRuntimeProofStoresRawModel')};"
+            f"traceMemoryRuntimeProofStoresRawSsePayload={goal_next_collection_packet.get('traceMemoryRuntimeProofStoresRawSsePayload')};"
+            f"traceMemoryRuntimeProofSecretHits={goal_next_collection_packet.get('traceMemoryRuntimeProofSecretHits', 0)};"
+            f"traceMemoryRuntimeProofRawPromptHits={goal_next_collection_packet.get('traceMemoryRuntimeProofRawPromptHits', 0)};"
+            f"traceMemoryRuntimeProofRawModelHits={goal_next_collection_packet.get('traceMemoryRuntimeProofRawModelHits', 0)};"
+            f"traceMemoryRuntimeProofWindowsAbsPathHits={goal_next_collection_packet.get('traceMemoryRuntimeProofWindowsAbsPathHits', 0)};"
+            f"bytes={goal_next_collection_packet.get('pathLength', 0)};"
+            f"pathHash={str(goal_next_collection_packet.get('pathHash', ''))[:12]};"
+            f"windowsAbsPathHits={goal_next_collection_packet.get('windowsAbsPathHits', 0)};"
+            f"rawSecretPatternHits={goal_next_collection_packet.get('rawSecretPatternHits', 0)}"
+        ),
+        (
+            "goal-next-auto collection packet missing, stale, incomplete, or unsafe: "
+            f"{goal_next_collection_packet_ready_fail_reason(goal_next_collection_packet)}"
+        ),
+    )
+    goal_next_status = goal_next_status_summary(root)
+    add_check(
+        checked,
+        failures,
+        "goal-next.status",
+        goal_next_status_ready(goal_next_status),
+        (
+            f"statusPresent={goal_next_status.get('statusPresent')};"
+            f"statusGeneratedAt={goal_next_status.get('statusGeneratedAt')};"
+            f"statusFresh={goal_next_status.get('statusFresh')};"
+            f"statusFreshnessStatus={goal_next_status.get('statusFreshnessStatus')};"
+            f"statusAgeSeconds={goal_next_status.get('statusAgeSeconds')};"
+            f"schemaVersion={goal_next_status.get('schemaVersion')};"
+            f"latestDecision={goal_next_status.get('latestDecision')};"
+            f"statusDecision={goal_next_status.get('statusDecision')};"
+            f"failureClassification={goal_next_status.get('failureClassification')};"
+            f"staleLatest={goal_next_status.get('staleLatest')};"
+            f"firstAction={goal_next_status.get('firstAction')};"
+            f"firstActionSource={goal_next_status.get('firstActionSource')};"
+            f"externalInputGateStatus={goal_next_status.get('externalInputGateStatus')};"
+            f"externalInputGateSource={goal_next_status.get('externalInputGateSource')};"
+            f"externalInputGateAction={goal_next_status.get('externalInputGateAction')};"
+            f"externalInputGateLocalPatchJustified={goal_next_status.get('externalInputGateLocalPatchJustified')};"
+            f"externalInputGateMutationAllowed={goal_next_status.get('externalInputGateMutationAllowed')};"
+            f"externalInputGateEvidenceNeeded={goal_next_status.get('externalInputGateEvidenceNeeded')};"
+            f"externalInputGateSecretHits={goal_next_status.get('externalInputGateSecretHits')};"
+            f"externalInputGateWindowsAbsPathHits={goal_next_status.get('externalInputGateWindowsAbsPathHits')};"
+            f"bytes={goal_next_status.get('pathLength', 0)};"
+            f"pathHash={str(goal_next_status.get('pathHash', ''))[:12]};"
+            f"rawSecretPatternHits={goal_next_status.get('rawSecretPatternHits', 0)}"
+        ),
+        (
+            "goal-next-auto status artifact missing, stale, incomplete, or unsafe: "
+            f"{goal_next_status_ready_fail_reason(goal_next_status)}"
         ),
     )
     websoak_provider_smoke = websoak_provider_disabled_artifact_summary(root)
@@ -6884,6 +11712,100 @@ def audit(root: Path) -> dict[str, Any]:
         "prompts/get renders actionable role briefs for producer-local PatchDrop work",
         "MCP prompts/get does not return actionable role instructions",
     )
+    peer_bus_summary = peer_evidence_bus_contract_summary(root, tools, manifest_text, toolbox_text, stdio_text)
+    add_check(
+        checked,
+        failures,
+        "peer.evidence-bus",
+        bool(peer_bus_summary.get("ok")),
+        (
+            f"manifestTool={peer_bus_summary.get('manifestTool')};"
+            f"stdioHandler={peer_bus_summary.get('stdioHandler')};"
+            f"desktopControlLoop={peer_bus_summary.get('desktopControlLoop')};"
+            f"promptPackPresent={peer_bus_summary.get('promptPackPresent')};"
+            f"laneCount={peer_bus_summary.get('laneCount')};"
+            f"supabaseLane={peer_bus_summary.get('supabaseLane')};"
+            f"browserLane={peer_bus_summary.get('browserLane')};"
+            f"computerLane={peer_bus_summary.get('computerLane')};"
+            f"superpowersLane={peer_bus_summary.get('superpowersLane')};"
+            f"claudePeersProtocolSchema={peer_bus_summary.get('claudePeersProtocolSchema')};"
+            f"safePeerIdentitySchema={peer_bus_summary.get('safePeerIdentitySchema')};"
+            f"peerIdentitySummarySchema={peer_bus_summary.get('peerIdentitySummarySchema')};"
+            f"webProbeLedgerSchema={peer_bus_summary.get('webProbeLedgerSchema')};"
+            f"webProbeRefreshPacketSchema={peer_bus_summary.get('webProbeRefreshPacketSchema')};"
+            f"rawSecretPatternHits={peer_bus_summary.get('rawSecretPatternHits')}"
+        ),
+        str(peer_bus_summary.get("failReason") or "peer evidence bus contract incomplete"),
+    )
+    web_probe_summary = web_probe_refresh_contract_summary(tools, toolbox_text, stdio_text)
+    add_check(
+        checked,
+        failures,
+        "web.probe-refresh",
+        bool(web_probe_summary.get("ok")),
+        (
+            f"manifestTool={web_probe_summary.get('manifestTool')};"
+            f"stdioHandler={web_probe_summary.get('stdioHandler')};"
+            f"readOnly={web_probe_summary.get('readOnly')};"
+            f"requiredOutputCount={web_probe_summary.get('requiredOutputCount')};"
+            f"rawContentStoredFalse={web_probe_summary.get('rawContentStoredFalse')};"
+            f"rawQueryStoredFalse={web_probe_summary.get('rawQueryStoredFalse')};"
+            f"mutationAllowedFalse={web_probe_summary.get('mutationAllowedFalse')};"
+            f"rawSecretPatternHits={web_probe_summary.get('rawSecretPatternHits')}"
+        ),
+        str(web_probe_summary.get("failReason") or "web probe refresh contract incomplete"),
+    )
+    smb_probe_summary = smb_decommission_debug_probe_contract_summary(root, tools, toolbox_text, stdio_text)
+    add_check(
+        checked,
+        failures,
+        "smb.decommission-debug-probe",
+        bool(smb_probe_summary.get("ok")),
+        (
+            f"manifestTool={smb_probe_summary.get('manifestTool')};"
+            f"readOnly={smb_probe_summary.get('readOnly')};"
+            f"desktopOnly={smb_probe_summary.get('desktopOnly')};"
+            f"aliasesReady={smb_probe_summary.get('aliasesReady')};"
+            f"outputSchemaReady={smb_probe_summary.get('outputSchemaReady')};"
+            f"toolboxHandler={smb_probe_summary.get('toolboxHandler')};"
+            f"stdioHandler={smb_probe_summary.get('stdioHandler')};"
+            f"scriptPresent={smb_probe_summary.get('scriptPresent')};"
+            f"scriptGuardReady={smb_probe_summary.get('scriptGuardReady')};"
+            f"summaryArtifact={smb_probe_summary.get('summaryArtifact')};"
+            f"eventsArtifact={smb_probe_summary.get('eventsArtifact')};"
+            f"viewerArtifact={smb_probe_summary.get('viewerArtifact')};"
+            f"viewerArtifactPath={smb_probe_summary.get('viewerArtifactPath')};"
+            f"summaryFresh={smb_probe_summary.get('summaryFresh')};"
+            f"summaryFreshnessStatus={smb_probe_summary.get('summaryFreshnessStatus')};"
+            f"summaryAgeSeconds={smb_probe_summary.get('summaryAgeSeconds')};"
+            f"schemaVersion={smb_probe_summary.get('schemaVersion')};"
+            f"decision={smb_probe_summary.get('decision')};"
+            f"mutationAllowed={smb_probe_summary.get('mutationAllowed')};"
+            f"writeDispatch={smb_probe_summary.get('writeDispatch')};"
+            f"writeProducerKit={smb_probe_summary.get('writeProducerKit')};"
+            f"producerBundlesRequired={smb_probe_summary.get('producerBundlesRequired')};"
+            f"browserStatus={smb_probe_summary.get('browserStatus')};"
+            f"computerStatus={smb_probe_summary.get('computerStatus')};"
+            f"supabaseProjectScope={smb_probe_summary.get('supabaseProjectScope')};"
+            f"attachmentProbeStatus={smb_probe_summary.get('attachmentProbeStatus')};"
+            f"attachmentFileName={smb_probe_summary.get('attachmentFileName')};"
+            f"attachmentPathHash12={smb_probe_summary.get('attachmentPathHash12')};"
+            f"attachmentLineCount={smb_probe_summary.get('attachmentLineCount')};"
+            f"attachmentSampleCount={smb_probe_summary.get('attachmentSampleCount')};"
+            f"attachmentRawSecretPatternHits={smb_probe_summary.get('attachmentRawSecretPatternHits')};"
+            f"sourceProbeStatus={smb_probe_summary.get('sourceProbeStatus')};"
+            f"sourceProbeEngine={smb_probe_summary.get('sourceProbeEngine')};"
+            f"sourceProbeMatchedFileCount={smb_probe_summary.get('sourceProbeMatchedFileCount')};"
+            f"sourceProbeMatchedLineCount={smb_probe_summary.get('sourceProbeMatchedLineCount')};"
+            f"sourceProbeSampleCount={smb_probe_summary.get('sourceProbeSampleCount')};"
+            f"sourceProbeRawSecretPatternHits={smb_probe_summary.get('sourceProbeRawSecretPatternHits')};"
+            f"artifactSecretPatternHits={smb_probe_summary.get('artifactSecretPatternHits')};"
+            f"windowsAbsPathHits={smb_probe_summary.get('windowsAbsPathHits')};"
+            f"rawSecretPatternHits={smb_probe_summary.get('rawSecretPatternHits')};"
+            f"pathHash={str(smb_probe_summary.get('pathHash', ''))[:12]}"
+        ),
+        str(smb_probe_summary.get("failReason") or "smb decommission debug probe contract incomplete"),
+    )
     add_check(
         checked,
         failures,
@@ -7036,9 +11958,12 @@ def audit(root: Path) -> dict[str, Any]:
         checked,
         failures,
         "computer-use.gui-proof-boundary",
-        computer_use.get("ready") is True,
+        computer_use.get("ready") is True or computer_use.get("safePendingProof") is True,
         (
             f"artifactPath={computer_use.get('artifactPath')};"
+            f"ready={computer_use.get('ready')};"
+            f"safePendingProof={computer_use.get('safePendingProof')};"
+            f"decision={computer_use.get('decision')};"
             f"promptPack={computer_use.get('promptPack')};"
             f"guiOnly={computer_use.get('guiOnly')};"
             f"noTerminalAutomation={computer_use.get('noTerminalAutomation')};"
@@ -7055,10 +11980,43 @@ def audit(root: Path) -> dict[str, Any]:
             f"storesWindowTitles={computer_use.get('storesWindowTitles')};"
             f"appCount={computer_use.get('appCount')};"
             f"targetableWindowCount={computer_use.get('targetableWindowCount')};"
+            f"nextAction={computer_use.get('nextAction')};"
             f"helperSecretPatternHits={computer_use.get('helperSecretPatternHits')};"
             f"rawSecretPatternHits={computer_use.get('rawSecretPatternHits')}"
         ),
         "Computer Use prompt/helper boundary is missing, stale, unsafe for source work, or leaks secrets",
+    )
+
+    browser_use = browser_use_ui_boundary_summary(root)
+    add_check(
+        checked,
+        failures,
+        "browser-use.ui-proof-boundary",
+        browser_use.get("ready") is True or browser_use.get("safePendingProof") is True,
+        (
+            f"artifactPath={browser_use.get('artifactPath')};"
+            f"ready={browser_use.get('ready')};"
+            f"safePendingProof={browser_use.get('safePendingProof')};"
+            f"artifactPresent={browser_use.get('artifactPresent')};"
+            f"artifactGeneratedAt={browser_use.get('artifactGeneratedAt')};"
+            f"artifactFresh={browser_use.get('artifactFresh')};"
+            f"artifactFreshnessStatus={browser_use.get('artifactFreshnessStatus')};"
+            f"artifactAgeSeconds={browser_use.get('artifactAgeSeconds')};"
+            f"schemaVersion={browser_use.get('schemaVersion')};"
+            f"decision={browser_use.get('decision')};"
+            f"reachable={browser_use.get('reachable')};"
+            f"targetAccepted={browser_use.get('targetAccepted')};"
+            f"localhost={browser_use.get('localhost')};"
+            f"publicDomain={browser_use.get('publicDomain')};"
+            f"screenshotCaptured={browser_use.get('screenshotCaptured')};"
+            f"targetContentVisible={browser_use.get('targetContentVisible')};"
+            f"browserSurface={browser_use.get('browserSurface')};"
+            f"storesRawUrl={browser_use.get('storesRawUrl')};"
+            f"storesScreenshotPath={browser_use.get('storesScreenshotPath')};"
+            f"nextAction={browser_use.get('nextAction')};"
+            f"secretPatternHits={browser_use.get('secretPatternHits')}"
+        ),
+        "Browser UI proof boundary is missing, stale, not target-accepted, not visible, or leaks raw URL/screenshot data",
     )
 
     pages_api_paths = [str(path.relative_to(root)) for path in walk_paths(root) if path_has_pages_api(path.relative_to(root))]
@@ -7156,6 +12114,23 @@ def audit(root: Path) -> dict[str, Any]:
         f"rawSecretPatternHits={raw_secret_hits}",
         "high-confidence secret pattern found in control tower surfaces",
     )
+    tool_readiness = checks_ok(
+        checked,
+        "tools.required-json-schemas",
+        "tools.audit-log-inputs",
+        "audit.redacted-fields",
+        "toolbox.generic-audit-log",
+    )
+    tool_execution_evidence = tool_execution_evidence_summary(
+        root,
+        REQUIRED_TOOLS,
+        readiness=tool_readiness,
+    )
+    if not tool_execution_evidence["evidenceObserved"]:
+        evidence_needed.append(
+            "MCP tool execution audit evidence needed / run each required tool with "
+            "audit_log=.codex/awx-control-tower.audit.jsonl, then rerun the completion audit"
+        )
     requirements = build_requirement_matrix(
         checked,
         evidence_needed,
@@ -7166,21 +12141,118 @@ def audit(root: Path) -> dict[str, Any]:
         root,
         supabase_smoke,
     )
-    next_actions = completion_audit_next_actions(requirements, evidence_needed)
+    primary_evidence_needed = [
+        item for item in evidence_needed if not is_external_producer_evidence_needed_text(item)
+    ]
+    supporting_evidence_needed = [
+        item for item in evidence_needed if is_external_producer_evidence_needed_text(item)
+    ]
+    supporting_evidence_needed_details = (
+        supporting_evidence_needed if include_supporting_next_actions else []
+    )
+    supporting_evidence_needed_output = (
+        supporting_evidence_needed
+        if include_supporting_next_actions
+        else [
+            compact_supporting_evidence_needed_text(item)
+            for item in supporting_evidence_needed
+        ]
+    )
+    next_actions = completion_audit_next_actions(
+        requirements,
+        primary_evidence_needed,
+        include_supabase_live_proof_actions=require_supabase_proof,
+    )
+    all_next_actions = completion_audit_next_actions(
+        requirements,
+        evidence_needed,
+        include_external_producer_actions=True,
+        include_optional_ui_actions=True,
+        include_supabase_live_proof_actions=True,
+    )
+    candidate_supporting_evidence_next_actions = [
+        action
+        for action in all_next_actions
+        if action not in next_actions
+        and (
+            is_external_producer_next_action(action)
+            or is_optional_ui_proof_next_action(action)
+            or is_supabase_live_proof_next_action(action)
+        )
+    ]
     next_action_details = completion_audit_next_action_details(root, next_actions)
+    supporting_evidence_next_actions = (
+        candidate_supporting_evidence_next_actions
+        if include_supporting_next_actions
+        else []
+    )
+    supporting_evidence_next_action_details = (
+        completion_audit_next_action_details(root, supporting_evidence_next_actions)
+        if include_supporting_next_actions
+        else []
+    )
+    output_requirements = output_requirement_matrix(
+        requirements,
+        include_supporting_evidence_details=include_supporting_next_actions,
+    )
+    hard_failure_rows = hard_failures(
+        failures,
+        require_supabase_proof=require_supabase_proof,
+    )
+    optional_evidence_failure_rows = optional_evidence_failures(
+        failures,
+        require_supabase_proof=require_supabase_proof,
+    )
+    local_ready = len(hard_failure_rows) == 0
 
     return {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-        "ok": len(failures) == 0,
-        "status": "local_control_tower_ready" if len(failures) == 0 else "local_control_tower_incomplete",
+        "ok": local_ready,
+        "status": "local_control_tower_ready" if local_ready else "local_control_tower_incomplete",
         "rootHash": stable_hash(str(root)),
         "checked": checked,
-        "requirements": requirements,
-        "failures": failures,
-        "evidence_needed": evidence_needed,
+        "requirements": output_requirements,
+        "failures": hard_failure_rows,
+        "allFailures": failures,
+        "hardFailures": hard_failure_rows,
+        "optionalEvidenceFailures": optional_evidence_failure_rows,
+        "evidence_needed": primary_evidence_needed,
+        "supportingEvidenceNeeded": supporting_evidence_needed_output,
+        "supportingEvidenceNeededDetails": supporting_evidence_needed_details,
+        "supportingEvidenceNeededDetailMode": (
+            "included" if include_supporting_next_actions else "compact"
+        ),
+        "supportingEvidenceNeededDetailsOmitted": (
+            0 if include_supporting_next_actions else len(supporting_evidence_needed)
+        ),
+        "supportingEvidenceNeededDetailHint": (
+            ""
+            if include_supporting_next_actions
+            else "rerun with --include-supporting-next-actions for full supporting evidence text"
+        ),
         "nextActions": next_actions,
         "nextActionDetails": next_action_details,
+        "supportingEvidenceNextActions": supporting_evidence_next_actions,
+        "supportingEvidenceNextActionDetails": supporting_evidence_next_action_details,
+        "supportingEvidenceActionMode": (
+            "included" if include_supporting_next_actions else "manual_opt_in"
+        ),
+        "supportingEvidenceNextActionsOmitted": (
+            0
+            if include_supporting_next_actions
+            else len(candidate_supporting_evidence_next_actions)
+        ),
+        "supportingEvidenceActionHint": (
+            ""
+            if include_supporting_next_actions
+            else "rerun with --include-supporting-next-actions for manual external evidence commands"
+        ),
+        "supabaseLiveProofRequired": require_supabase_proof,
+        "completionSemantics": "readiness_and_execution_evidence_are_independent",
+        "toolReadinessStatus": "ready" if tool_readiness else "incomplete",
+        "executionEvidenceStatus": tool_execution_evidence["status"],
+        "toolExecutionEvidence": tool_execution_evidence,
         "rawSecretPatternHits": raw_secret_hits,
     }
 
@@ -7189,8 +12261,28 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Audit local AWX MCP control tower completion evidence.")
     parser.add_argument("--root", default=".", help="Repository root to audit.")
     parser.add_argument("--output", default="", help="Optional path to write the audit JSON artifact.")
+    parser.add_argument(
+        "--require-supabase-proof",
+        action="store_true",
+        help="Promote read-only Supabase live proof from supporting evidence to primary next actions.",
+    )
+    parser.add_argument(
+        "--include-supporting-next-actions",
+        action="store_true",
+        help="Include manual supporting Supabase/UI/producer evidence commands in the JSON output.",
+    )
+    parser.add_argument("--evidence-dir", type=Path, default=None, help="Exact task evidence directory; no legacy proof fallback when set.")
+    parser.add_argument("--topic", default="", help="Exact dispatch topic for task proof binding.")
     args = parser.parse_args()
-    result = audit(Path(args.root))
+    with read_text_cache_scope() as cache_stats:
+        result = audit(
+            Path(args.root),
+            require_supabase_proof=args.require_supabase_proof,
+            evidence_dir=args.evidence_dir,
+            topic=args.topic,
+            include_supporting_next_actions=args.include_supporting_next_actions,
+        )
+        result["readTextCache"] = cache_stats
     output = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     if args.output:
         output_path = Path(args.output)

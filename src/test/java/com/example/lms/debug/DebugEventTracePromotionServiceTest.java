@@ -17,6 +17,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DebugEventTracePromotionServiceTest {
@@ -503,6 +504,332 @@ class DebugEventTracePromotionServiceTest {
         assertEquals(Boolean.TRUE, event.data().get("promotedFromTraceStore"));
         assertFalse(event.toString().contains("private prompt"));
         assertFalse(event.toString().contains("rawPrompt"));
+    }
+
+    @Test
+    void promotesStageBoundaryBreadcrumbRowsAsDebugEvents() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = Map.of(
+                "mla.breadcrumb.step.search", Map.of(
+                        "stage", "search",
+                        "failureClass", "after-filter-starvation",
+                        "reasonCode", "after_filter_starvation",
+                        "queryHash12", "abcdef123456",
+                        "queryLength", 42,
+                        "returnedCount", 4,
+                        "afterFilterCount", 0,
+                        "rawPrompt", "ownerToken=private-token"),
+                "rawPrompt", "ownerToken=private-token");
+
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        DebugEvent event = store.list(5).stream()
+                .filter(e -> e.probe() == DebugProbeType.WEB_SEARCH)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(DebugEventLevel.WARN, event.level());
+        assertEquals("ChatApiController.stream.final", event.where());
+        assertEquals("stage_boundary", event.data().get("stage"));
+        assertEquals("search", event.data().get("boundaryStage"));
+        assertEquals("after-filter-starvation", event.data().get("failureClass"));
+        assertEquals("after_filter_starvation", event.data().get("reasonCode"));
+        assertEquals("abcdef123456", event.data().get("queryHash12"));
+        assertEquals(42, event.data().get("queryLength"));
+        assertEquals(Boolean.TRUE, event.data().get("promotedFromTraceStore"));
+        assertFalse(event.toString().contains("ownerToken"));
+        assertFalse(event.toString().contains("private-token"));
+        assertFalse(event.toString().contains("rawPrompt"));
+    }
+
+    @Test
+    void routesStageBoundaryBreadcrumbsToTheirOwningDebugProbe() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = Map.of(
+                "mla.breadcrumb.step.request", Map.of(
+                        "stage", "request", "failureClass", "context-missing", "reasonCode", "context_missing"),
+                "mla.breadcrumb.step.orchestration", Map.of(
+                        "stage", "orchestration", "failureClass", "fallback", "reasonCode", "fallback"),
+                "mla.breadcrumb.step.search", Map.of(
+                        "stage", "search", "failureClass", "zero-result", "reasonCode", "zero_result"),
+                "mla.breadcrumb.step.prompt", Map.of(
+                        "stage", "prompt",
+                        "failureClass", "context-missing",
+                        "reasonCode", "context_missing"),
+                "mla.breadcrumb.step.llm", Map.of(
+                        "stage", "llm",
+                        "failureClass", "timeout",
+                        "reasonCode", "timeout"),
+                "mla.breadcrumb.step.sse", Map.of(
+                        "stage", "sse", "failureClass", "fallback", "reasonCode", "empty_final_text"),
+                "mla.breadcrumb.step.verification", Map.of(
+                        "stage", "verification",
+                        "status", "fail_soft",
+                        "failureClass", "catch",
+                        "reasonCode", "judge_call_failed",
+                        "judgeLane", "fact_status_classifier",
+                        "judgeFailSoftLaneCount", 1,
+                        "judgeCallAttempted", true,
+                        "verificationOutcomeKnown", false,
+                        "redacted", true));
+
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        List<DebugEvent> events = store.list(10);
+        assertEquals(DebugProbeType.CONTEXT_PROPAGATION, boundaryEvent(events, "request").probe());
+        assertEquals(DebugProbeType.ORCHESTRATION, boundaryEvent(events, "orchestration").probe());
+        assertEquals(DebugProbeType.WEB_SEARCH, boundaryEvent(events, "search").probe());
+        assertEquals(DebugProbeType.PROMPT, boundaryEvent(events, "prompt").probe());
+        assertEquals(DebugProbeType.MODEL_GUARD, boundaryEvent(events, "llm").probe());
+        assertEquals(DebugProbeType.GENERIC, boundaryEvent(events, "sse").probe());
+        assertEquals(DebugProbeType.GENERIC, boundaryEvent(events, "verification").probe());
+    }
+
+    @Test
+    void rejectsStageBoundaryRowWhenKeyAndPayloadStageDisagree() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = Map.of(
+                "mla.breadcrumb.step.search", Map.of(
+                        "stage", "llm",
+                        "failureClass", "timeout",
+                        "reasonCode", "timeout"));
+
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        assertTrue(store.list(5).isEmpty(),
+                "the allowlisted key suffix must remain authoritative for probe ownership");
+    }
+
+    @Test
+    void ignoresMalformedAndSuccessfulStageBoundaryRowsInsteadOfWarning() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = Map.of(
+                "mla.breadcrumb.step.prompt", Map.of(
+                        "stage", "prompt",
+                        "status", "PASS",
+                        "reasonCode", "verified"),
+                "mla.breadcrumb.step.llm", Map.of(
+                        "stage", "llm",
+                        "reasonCode", "timeout"));
+
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        assertTrue(store.list(5).isEmpty(),
+                "rows without an allowlisted failureClass must not become WARN events");
+    }
+
+    @Test
+    void ignoresUnknownStageBoundaryRow() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = Map.of(
+                "mla.breadcrumb.step.untrusted", Map.of(
+                        "stage", "untrusted",
+                        "failureClass", "catch",
+                        "reasonCode", "unknown_stage"));
+
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        assertTrue(store.list(5).isEmpty(),
+                "only the stage-boundary allowlist may select an AI debug probe");
+    }
+
+    @Test
+    void promotesSameBoundaryFailureOnlyOnceAcrossPhaseSnapshots() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = Map.of(
+                "mla.breadcrumb.step.prompt", Map.of(
+                        "stage", "prompt",
+                        "failureClass", "context-missing",
+                        "reasonCode", "context_missing"));
+
+        service.promoteChatTrace("pre_llm", meta, "ChatApiController.stream.preLlm");
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        long boundaryEvents = store.list(5).stream()
+                .filter(e -> "prompt".equals(e.data().get("boundaryStage")))
+                .count();
+        assertEquals(1L, boundaryEvents,
+                "phase snapshots must not double-count the same failure in AI debug metrics");
+    }
+
+    @Test
+    void preservesChangedBoundaryEvidenceAcrossPhaseSnapshots() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> preMeta = Map.of(
+                "mla.breadcrumb.step.search", Map.of(
+                        "stage", "search",
+                        "failureClass", "after-filter-starvation",
+                        "reasonCode", "after_filter_starvation",
+                        "returnedCount", 4,
+                        "afterFilterCount", 0));
+        Map<String, Object> finalMeta = Map.of(
+                "mla.breadcrumb.step.search", Map.of(
+                        "stage", "search",
+                        "failureClass", "after-filter-starvation",
+                        "reasonCode", "after_filter_starvation",
+                        "returnedCount", 7,
+                        "afterFilterCount", 0));
+
+        service.promoteChatTrace("pre_llm", preMeta, "ChatApiController.stream.preLlm");
+        service.promoteChatTrace("final", finalMeta, "ChatApiController.stream.final");
+        service.promoteChatTrace("final", finalMeta, "ChatApiController.stream.final");
+
+        List<DebugEvent> events = store.list(5).stream()
+                .filter(e -> "search".equals(e.data().get("boundaryStage")))
+                .toList();
+        assertEquals(2, events.size(),
+                "changed allowlisted evidence must survive while an unchanged repeat remains deduped");
+        assertTrue(events.stream().anyMatch(e -> Integer.valueOf(4).equals(e.data().get("returnedCount"))));
+        assertTrue(events.stream().anyMatch(e -> Integer.valueOf(7).equals(e.data().get("returnedCount"))));
+    }
+
+    @Test
+    void promotesVerificationFailSoftScalarsWithoutInventingOutcome() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = Map.of(
+                "mla.breadcrumb.step.verification", Map.of(
+                        "stage", "verification",
+                        "status", "fail_soft",
+                        "failureClass", "catch",
+                        "reasonCode", "judge_call_failed",
+                        "judgeLane", "both",
+                        "judgeFailSoftLaneCount", 2,
+                        "judgeCallAttempted", true,
+                        "verificationOutcomeKnown", false,
+                        "redacted", true,
+                        "rawPrompt", "ownerToken=private-token"));
+
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        DebugEvent event = boundaryEvent(store.list(5), "verification");
+        assertEquals(DebugProbeType.GENERIC, event.probe());
+        assertEquals(DebugEventLevel.WARN, event.level());
+        assertEquals("verification.judge", event.data().get("layer"));
+        assertEquals("fail_soft", event.data().get("status"));
+        assertEquals("both", event.data().get("judgeLane"));
+        assertEquals(2, event.data().get("judgeFailSoftLaneCount"));
+        assertFalse(event.data().containsKey("judgeFailureCount"));
+        assertEquals(Boolean.TRUE, event.data().get("judgeCallAttempted"));
+        assertEquals(Boolean.FALSE, event.data().get("verificationOutcomeKnown"));
+        assertEquals(Boolean.TRUE, event.data().get("redacted"));
+        assertFalse(event.data().containsKey("verificationOutcome"));
+        assertFalse(event.toString().contains("ownerToken"));
+        assertFalse(event.toString().contains("private-token"));
+        assertFalse(event.toString().contains("rawPrompt"));
+    }
+
+    @Test
+    void boundaryOnlyPromotionDoesNotEmitStaleLocalLlmOperatorAction() throws Exception {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = verificationAndLocalLlmTrace();
+
+        invokeBoundaryOnlyPromotion(service, "final", meta, "ChatApiController.stream.final");
+
+        List<DebugEvent> events = store.list(10);
+        assertEquals(1, events.size());
+        assertEquals("verification", events.get(0).data().get("boundaryStage"));
+        assertTrue(events.stream().noneMatch(event -> event.data().containsKey("localLlmNextAction")));
+    }
+
+    @Test
+    void fullPromotionAfterBoundaryOnlyDedupesBoundaryAndKeepsOtherSignals() throws Exception {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+        Map<String, Object> meta = verificationAndLocalLlmTrace();
+
+        invokeBoundaryOnlyPromotion(service, "final", meta, "ChatApiController.stream.final");
+        service.promoteChatTrace("final", meta, "ChatApiController.stream.final");
+
+        List<DebugEvent> events = store.list(10);
+        assertEquals(1L, events.stream()
+                .filter(event -> "verification".equals(event.data().get("boundaryStage")))
+                .count());
+        assertEquals(1L, events.stream()
+                .filter(event -> "inspect_local_llm".equals(event.data().get("localLlmNextAction")))
+                .count());
+    }
+
+    @Test
+    void rejectsIncoherentVerificationFailSoftTuplesBeforeWarnPromotion() {
+        List<Map<String, Object>> invalidRows = List.of(
+                Map.<String, Object>of(
+                        "stage", "verification", "status", "PASS",
+                        "failureClass", "catch", "reasonCode", "verified",
+                        "judgeLane", "fact_status_classifier", "judgeFailSoftLaneCount", 1,
+                        "judgeCallAttempted", true, "verificationOutcomeKnown", true, "redacted", true),
+                Map.<String, Object>of(
+                        "stage", "verification", "status", "fail_soft",
+                        "failureClass", "catch", "reasonCode", "judge_call_failed",
+                        "judgeLane", "both", "judgeFailSoftLaneCount", 1,
+                        "judgeCallAttempted", false, "verificationOutcomeKnown", false, "redacted", true),
+                Map.<String, Object>of(
+                        "stage", "verification", "status", "fail_soft",
+                        "failureClass", "provider-disabled", "reasonCode", "judge_model_unavailable",
+                        "judgeLane", "claim_verifier", "judgeFailSoftLaneCount", 1,
+                        "judgeCallAttempted", true, "verificationOutcomeKnown", false, "redacted", true),
+                Map.<String, Object>of(
+                        "stage", "verification", "status", "fail_soft",
+                        "failureClass", "fallback", "reasonCode", "judge_fail_soft",
+                        "judgeLane", "fact_status_classifier", "judgeFailSoftLaneCount", 1,
+                        "judgeCallAttempted", false, "verificationOutcomeKnown", false, "redacted", true));
+
+        for (Map<String, Object> row : invalidRows) {
+            DebugEventStore store = enabledDebugEventStore();
+            DebugEventTracePromotionService service = new DebugEventTracePromotionService(store);
+
+            service.promoteChatTrace("final", Map.of("mla.breadcrumb.step.verification", row),
+                    "ChatApiController.stream.final");
+
+            assertTrue(store.list(5).isEmpty(), "incoherent tuple must fail closed: " + row);
+        }
+    }
+
+    private static DebugEvent boundaryEvent(List<DebugEvent> events, String stage) {
+        return events.stream()
+                .filter(e -> stage.equals(e.data().get("boundaryStage")))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static Map<String, Object> verificationAndLocalLlmTrace() {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("mla.breadcrumb.step.verification", Map.of(
+                "stage", "verification",
+                "status", "fail_soft",
+                "failureClass", "catch",
+                "reasonCode", "judge_call_failed",
+                "judgeLane", "fact_status_classifier",
+                "judgeFailSoftLaneCount", 1,
+                "judgeCallAttempted", true,
+                "verificationOutcomeKnown", false,
+                "redacted", true));
+        meta.put("llm.localSmoke.operatorAction.triggered", true);
+        meta.put("llm.localSmoke.operatorAction.triggerReason", "latency_risk");
+        meta.put("llm.localSmoke.operatorAction.failureClass", "local_llm_risk");
+        meta.put("llm.localSmoke.operatorAction.nextAction", "inspect_local_llm");
+        meta.put("llm.localSmoke.operatorAction.actionScore", 60);
+        return meta;
+    }
+
+    private static void invokeBoundaryOnlyPromotion(
+            DebugEventTracePromotionService service,
+            String phase,
+            Map<String, Object> traceMeta,
+            String where) throws Exception {
+        java.lang.reflect.Method method = java.util.Arrays.stream(service.getClass().getMethods())
+                .filter(candidate -> "promoteStageBoundaryBreadcrumbsOnly".equals(candidate.getName()))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(method, "stage-boundary-only promotion API must exist");
+        method.invoke(service, phase, traceMeta, where);
     }
 
     private static DebugEventStore enabledDebugEventStore() {

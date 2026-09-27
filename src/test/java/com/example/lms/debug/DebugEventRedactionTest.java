@@ -202,6 +202,25 @@ class DebugEventRedactionTest {
     }
 
     @Test
+    void storeSuppressedTraceIncludesSafeStageAndErrorType() throws Exception {
+        String rawStage = "debugEventStore.logJson " + com.example.lms.test.SecretFixtures.openAiKey();
+        Method method = DebugEventStore.class.getDeclaredMethod("traceSuppressed", String.class, Throwable.class);
+        method.setAccessible(true);
+
+        method.invoke(null, rawStage, new IllegalArgumentException("raw " + com.example.lms.test.SecretFixtures.openAiKey()));
+
+        Object safeStage = TraceStore.get("debugEvent.store.suppressed.stage");
+        assertTrue(String.valueOf(safeStage).startsWith("hash:"));
+        assertEquals(Boolean.TRUE, TraceStore.get("debugEvent.store.suppressed." + safeStage));
+        assertEquals("IllegalArgumentException", TraceStore.get("debugEvent.store.suppressed.errorType"));
+        assertEquals("IllegalArgumentException",
+                TraceStore.get("debugEvent.store.suppressed." + safeStage + ".errorType"));
+        assertEquals(1L, TraceStore.get("debugEvent.store.suppressed.count"));
+        assertEquals(1L, TraceStore.get("debugEvent.store.suppressed." + safeStage + ".count"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(com.example.lms.test.SecretFixtures.openAiKey()));
+    }
+
+    @Test
     void internalFailSoftLogsDoNotRenderThrowableToString() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/debug/DebugEventStore.java"));
 
@@ -219,6 +238,12 @@ class DebugEventRedactionTest {
         assertTrue(source.contains("traceSuppressed(\"debugEventStore.stackTrace\", ignore);"));
         assertTrue(source.contains("traceSuppressed(\"debugEventStore.traceContext.sid\", traceError);"));
         assertTrue(source.contains("traceSuppressed(\"debugEventStore.traceContext.traceId\", traceError);"));
+        assertTrue(source.contains("TraceStore.put(\"debugEvent.store.suppressed.stage\", safeStage);"));
+        assertTrue(source.contains("TraceStore.put(\"debugEvent.store.suppressed.errorType\", errorType);"));
+        assertTrue(source.contains("TraceStore.put(\"debugEvent.store.suppressed.\" + safeStage, true);"));
+        assertTrue(source.contains(
+                "TraceStore.put(\"debugEvent.store.suppressed.\" + safeStage + \".errorType\", errorType);"));
+        assertTrue(source.contains("TraceStore.inc(\"debugEvent.store.suppressed.count\");"));
         assertTrue(source.contains("LOG.debug(\"DebugEvent suppressed stage={} errorHash={} errorLength={}"));
 
         String sanitizer = Files.readString(Path.of("main/java/com/example/lms/debug/DebugEventSanitizer.java"));
