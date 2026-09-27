@@ -17,8 +17,9 @@ jobs:
       - name: Run miner (if logs uploaded as artifact)
         run: |
           mkdir -p analysis
-          python tools/build_error_miner.py scan --in "${{ github.workspace }}/build-logs" --out analysis/ci_build_error_report || true
+          python tools/build_error_miner.py scan --in "${{ github.workspace }}/build-logs" --out analysis/ci_build_error_report
       - name: Upload report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-error-report
