@@ -34,6 +34,7 @@ public enum AuxBlockedReason {
     FAILURE_COOLDOWN("failure-cooldown", 85),
 
     AUX_DEGRADED("aux-degraded", 80),
+    CHEAP_SEARCH_MODE("cheap-search-mode", 75),
     STRIKE("strike-mode", 70),
     COMPRESSION("compression-mode", 60),
 
@@ -108,6 +109,9 @@ public enum AuxBlockedReason {
         }
         if (ctx.isAuxDegraded()) {
             best = bestOf(best, AUX_DEGRADED);
+        }
+        if (ctx.isCheapSearchMode()) {
+            best = bestOf(best, CHEAP_SEARCH_MODE);
         }
         if (ctx.isBypassMode()) {
             best = bestOf(best, BYPASS);
