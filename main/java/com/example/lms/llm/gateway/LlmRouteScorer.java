@@ -49,10 +49,12 @@ public class LlmRouteScorer {
         return switch (failure) {
             case RATE_LIMIT_COOLDOWN -> 20;
             case TIMEOUT_SOFT, SOFT_CIRCUIT_OPEN -> 25;
+            case RESPONSE_MODEL_UNVERIFIED -> 10;
             case PROVIDER_ERROR, STREAM_ERROR, UNKNOWN -> 35;
-            case AUTH_MISSING, HEALTH_DOWN, MODEL_MISSING, VRAM_OOM, DISABLED -> 100;
+            case AUTH_MISSING, HEALTH_DOWN, GPU_DEVICE_LOST, MODEL_MISSING, MODEL_STORE_UNAVAILABLE,
+                    VRAM_OOM, DISABLED -> 100;
             case CONTEXT_TOO_SMALL, EMBEDDING_DIM_MISMATCH, LOCAL_UNSUPPORTED_MANAGED_RAG -> 100;
-            case NONE, CANCELLED_NEUTRAL -> 0;
+            case NONE, CANCELLED_NEUTRAL, BAD_REQUEST -> 0;
         };
     }
 }

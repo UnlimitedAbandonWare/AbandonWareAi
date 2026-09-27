@@ -5,15 +5,24 @@ import com.example.lms.service.rag.SelfAskPlanner;
 import com.example.lms.trace.SafeRedactor;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 public class QueryBurstExpander {
     private static final String KO_GALAXY = text(0xAC24, 0xB7ED, 0xC2DC);
     private static final String KO_TRIFOLD = text(0xD2B8, 0xB77C, 0xC774, 0xD3F4, 0xB4DC);
     private static final String KO_RUMOR = text(0xB8E8, 0xBA38);
+    private static final List<LaneVariant> LANE_VARIANTS = List.of(
+            new LaneVariant("conservative", "STRICT", "conservative official source"),
+            new LaneVariant("evidence-first", "VERIFY", "evidence first source verification"),
+            new LaneVariant("contradiction-check", "COUNTEREXAMPLE", "contradiction check counterexample"));
+    private static final List<String> LANE_PROFILES = LANE_VARIANTS.stream()
+            .map(LaneVariant::profile)
+            .toList();
     private final SelfAskPlanner planner;
 
     public QueryBurstExpander() {
@@ -30,7 +39,7 @@ public class QueryBurstExpander {
 
         String base = sanitize(seed);
         if (base.isBlank()) {
-            traceExtremeZBurst(0, min, max, "blank_query");
+            traceExtremeZBurst(0, min, max, "blank_query", List.of());
             return List.of();
         }
 
@@ -65,6 +74,9 @@ public class QueryBurstExpander {
 
         if (hasKo) {
             addSuffixes(out, base, koreanSuffixes(), max);
+            addLaneVariants(out, base, max);
+        } else {
+            addLaneVariants(out, base, max);
         }
         if (hasEn && !primaryKo) {
             addSuffixes(out, base, List.of("official", "announcement", "release", "release date",
@@ -95,6 +107,7 @@ public class QueryBurstExpander {
         if (list.size() > max) {
             return list.subList(0, max);
         }
+        traceExtremeZBurst(list.size(), min, max, "", list);
         return list;
     }
 
@@ -103,14 +116,15 @@ public class QueryBurstExpander {
             List<String> planned = planner.plan(base, max);
             List<String> normalized = normalize(planned, max);
             if (!normalized.isEmpty()) {
-                traceExtremeZBurst(normalized.size(), min, max, "");
+                traceExtremeZBurst(normalized.size(), min, max, "", normalized);
                 return normalized;
             }
-            traceExtremeZBurst(1, min, max, "planner_empty");
+            traceExtremeZBurst(1, min, max, "planner_empty", List.of(base));
             return List.of(base);
         } catch (RuntimeException e) {
             traceExtremeZBurst(1, min, max,
-                    SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "planner_error"));
+                    SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "planner_error"),
+                    List.of(base));
             return List.of(base);
         }
     }
@@ -132,12 +146,58 @@ public class QueryBurstExpander {
         return List.copyOf(out);
     }
 
-    private static void traceExtremeZBurst(int count, int min, int max, String bypassReason) {
+    private static void traceExtremeZBurst(int count, int min, int max, String bypassReason, List<String> variants) {
         TraceStore.put("extremeZ.burstExpand.count", Math.max(0, count));
         TraceStore.put("extremeZ.burstExpand.min", Math.max(1, min));
         TraceStore.put("extremeZ.burstExpand.max", Math.max(1, max));
+        TraceStore.put("extremeZ.burstExpand.laneProfiles", LANE_PROFILES);
+        TraceStore.put("extremeZ.burstExpand.laneVariantProfiles", laneVariantProfiles(variants));
         TraceStore.put("extremeZ.burstExpand.bypassReason",
                 SafeRedactor.traceLabelOrFallback(bypassReason, ""));
+    }
+
+    private static void addLaneVariants(Set<String> out, String base, int max) {
+        if (out.size() >= max || base == null || base.isBlank()) {
+            return;
+        }
+        for (LaneVariant variant : LANE_VARIANTS) {
+            if (out.size() >= max) {
+                break;
+            }
+            out.add(base + " " + variant.suffix());
+        }
+    }
+
+    private static List<Map<String, Object>> laneVariantProfiles(List<String> variants) {
+        if (variants == null || variants.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String variant : variants) {
+            String safeVariant = sanitize(variant);
+            if (safeVariant.isBlank()) {
+                continue;
+            }
+            String lower = safeVariant.toLowerCase(Locale.ROOT);
+            for (LaneVariant laneVariant : LANE_VARIANTS) {
+                if (!lower.endsWith(laneVariant.suffix())) {
+                    continue;
+                }
+                String hash = SafeRedactor.hash12(safeVariant);
+                String key = laneVariant.profile() + "|" + String.valueOf(hash);
+                if (!seen.add(key)) {
+                    continue;
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("rank", out.size() + 1);
+                row.put("profile", laneVariant.profile());
+                row.put("role", laneVariant.role());
+                row.put("queryHash12", hash == null ? "" : hash);
+                out.add(row);
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static List<String> koreanSuffixes() {
@@ -212,5 +272,8 @@ public class QueryBurstExpander {
 
     private static String text(int... codePoints) {
         return new String(codePoints, 0, codePoints.length);
+    }
+
+    private record LaneVariant(String profile, String role, String suffix) {
     }
 }

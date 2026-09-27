@@ -1,5 +1,6 @@
 package com.example.lms.orchestration;
 
+import com.example.lms.api.ChatAttachmentQuestionDetector;
 import com.example.lms.domain.enums.AnswerMode;
 import com.example.lms.plan.PlanHintApplier;
 import com.example.lms.rag.model.QueryDomain;
@@ -53,14 +54,14 @@ public class WorkflowOrchestrator {
 
     public String ensurePlanSelected(GuardContext ctx, AnswerMode answerMode,
                                     QueryDomain domain, String userQuery,
-                                    boolean hasDocumentEvidence) {
+                                    boolean hasAttachments) {
         if (ctx == null) return null;
         if (ctx.getPlanId() != null && !ctx.getPlanId().isBlank()) {
             return ctx.getPlanId();
         }
 
         String selected = enabled
-                ? selectPlan(ctx, answerMode, domain, userQuery, hasDocumentEvidence)
+                ? selectPlan(ctx, answerMode, domain, userQuery, hasAttachments)
                 : defaultPlanId;
 
         if (selected == null || selected.isBlank()) {
@@ -83,7 +84,7 @@ public class WorkflowOrchestrator {
 
     private String selectPlan(GuardContext ctx, AnswerMode answerMode,
                               QueryDomain domain, String userQuery,
-                              boolean hasDocumentEvidence) {
+                              boolean hasAttachments) {
         // Priority 1) SENSITIVE → safe
         if (domain == QueryDomain.SENSITIVE) {
             return safePlanId;
@@ -101,7 +102,7 @@ public class WorkflowOrchestrator {
 
         // Priority 3) uploaded-document questions use a document evidence plan unless
         // an explicit header/plan already selected a different route.
-        if (hasDocumentEvidence && looksDocumentEvidence(userQuery)) {
+        if (hasAttachments && ChatAttachmentQuestionDetector.looksLikeAttachmentQuestion(userQuery)) {
             TraceStore.put("plan.documentEvidence", true);
             return documentPlanId;
         }
@@ -168,32 +169,18 @@ public class WorkflowOrchestrator {
         return lower.equals("free") || lower.equals("cost") || lower.equals("cheap") || lower.equals("cost-saver");
     }
 
-    private static boolean looksDocumentEvidence(String q) {
-        if (q == null || q.isBlank()) return false;
-        String lower = q.toLowerCase(Locale.ROOT);
-        return lower.contains("attachment")
-                || lower.contains("uploaded")
-                || lower.contains("upload")
-                || lower.contains("file")
-                || lower.contains("document")
-                || lower.contains("pdf")
-                || lower.contains("zip")
-                || lower.contains("첨부")
-                || lower.contains("파일")
-                || lower.contains("문서")
-                || lower.matches(".*\\.(txt|md|pdf|doc|docx|xlsx|csv|json|xml|zip|jpg|jpeg|png|gif)\\b.*");
-    }
-
     private static boolean looksCostOrFast(String q) {
         if (q == null || q.isBlank()) return false;
         String lower = q.toLowerCase(Locale.ROOT);
-        return lower.matches(".*(빠르게|빨리|간단히|짧게|요약|한\\s*줄|tldr|quick|fast|cheap|저렴|비용|cost).*" );
+        // Keep English word boundaries and common speed/cost inflections.
+        return lower.matches(".*(빠르게|빨리|간단히|짧게|요약|한\\s*줄|(?<![a-z])(?:tldr|quick(?:ly|er|est)?|fast(?:er|est)?|cheap(?:er|est|ly)?|cost(?:s|ed|ing|ly)?)(?![a-z])|저렴|비용).*" );
     }
 
     private static boolean looksFinance(String q) {
         if (q == null || q.isBlank()) return false;
         String lower = q.toLowerCase(Locale.ROOT);
-        return lower.matches(".*(주식|코인|가상자산|비트코인|이더리움|btc|eth|nasdaq|s&p|etf|per|p/e|배당|환율|금리|채권|재무|실적|시가총액).*" );
+        // Bound Latin symbols by letters while retaining numeric and Korean suffixes.
+        return lower.matches(".*(주식|코인|가상자산|비트코인|이더리움|(?<![a-z])(?:btc|eth(?:ereum)?|nasdaq|s&p|etf|per|p/e)(?![a-z])|배당|환율|금리|채권|재무|실적|시가총액).*" );
     }
 
     private static boolean looksLegalOrOfficial(String q) {

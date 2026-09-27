@@ -26,6 +26,7 @@ import org.slf4j.Logger;
  * implementation returns an empty {@link Optional}.
  */
 @Component
+@org.springframework.context.annotation.Primary
 public class KakaoReverseGeocodingClient implements ReverseGeocodingClient {
     private static final Logger log = LoggerFactory.getLogger(KakaoReverseGeocodingClient.class);
 

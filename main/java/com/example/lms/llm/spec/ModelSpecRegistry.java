@@ -7,8 +7,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -23,6 +28,7 @@ public class ModelSpecRegistry {
     private final ObjectMapper objectMapper;
     private final LlmGatewayProperties properties;
     private final ConcurrentHashMap<String, ModelSpecSnapshot> snapshots = new ConcurrentHashMap<>();
+    private final Object persistenceLock = new Object();
 
     public ModelSpecRegistry(ObjectMapper objectMapper, LlmGatewayProperties properties) {
         this.objectMapper = objectMapper;
@@ -76,20 +82,58 @@ public class ModelSpecRegistry {
         if (objectMapper == null || properties == null || !StringUtils.hasText(properties.getSpecRegistry().getPath())) {
             return;
         }
-        try {
-            Path path = Path.of(properties.getSpecRegistry().getPath()).toAbsolutePath().normalize();
-            Path parent = path.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), snapshotMap());
-        } catch (Exception ex) {
+        synchronized (persistenceLock) {
+            Path temporary = null;
             try {
-                TraceStore.put("llm.gateway.spec.persistFailure", "llm_gateway_spec_persist_failed");
-            } catch (Exception traceError) {
-                LOG.log(System.Logger.Level.DEBUG,
-                        "Model spec registry telemetry skipped stage=persist_failure_trace errorType=" + errorType(traceError));
+                Path path = Path.of(properties.getSpecRegistry().getPath()).toAbsolutePath().normalize();
+                Path parent = path.getParent();
+                if (parent == null) {
+                    throw new IOException("model-spec-parent-unavailable");
+                }
+                Files.createDirectories(parent);
+                temporary = Files.createTempFile(parent, temporaryPrefix(path), ".tmp");
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), snapshotMap());
+                try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                    channel.force(true);
+                }
+                moveIntoPlace(temporary, path);
+                temporary = null;
+            } catch (Exception ex) {
+                try {
+                    TraceStore.put("llm.gateway.spec.persistFailure", "llm_gateway_spec_persist_failed");
+                } catch (Exception traceError) {
+                    LOG.log(System.Logger.Level.DEBUG,
+                            "Model spec registry telemetry skipped stage=persist_failure_trace errorType=" + errorType(traceError));
+                }
+            } finally {
+                if (temporary != null) {
+                    try {
+                        Files.deleteIfExists(temporary);
+                    } catch (Exception cleanupError) {
+                        LOG.log(System.Logger.Level.DEBUG,
+                                "Model spec registry cleanup skipped stage=persist_temp_cleanup errorType="
+                                        + errorType(cleanupError));
+                    }
+                }
             }
+        }
+    }
+
+    private static String temporaryPrefix(Path target) {
+        Path fileName = target.getFileName();
+        String prefix = "." + (fileName == null ? "model-spec" : fileName) + ".";
+        return prefix.length() >= 3 ? prefix : "spec.";
+    }
+
+    private static void moveIntoPlace(Path temporary, Path target) throws IOException {
+        try {
+            Files.move(
+                    temporary,
+                    target,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException unsupported) {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 

@@ -108,6 +108,7 @@ public class FaithfulnessMetricController {
             out.put("harmony.achievementPct", snapshot.achievementPct());
             putMetricTrace("harmony.score.lastComputed", snapshot.harmonyScore());
         } catch (Exception ex) {
+            traceSuppressed("harmonyScore", ex);
             out.put("harmony.score", "evidence_needed:" + ex.getClass().getSimpleName());
         }
     }
@@ -156,5 +157,14 @@ public class FaithfulnessMetricController {
 
     private static String safeLabel(Object value, String fallback) {
         return SafeRedactor.traceLabelOrFallback(value == null ? "" : String.valueOf(value), fallback);
+    }
+
+    private static void traceSuppressed(String stage, Throwable failure) {
+        String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
+        String errorType = failure == null ? "unknown" : failure.getClass().getSimpleName();
+        TraceStore.put("faithfulness.metric.suppressed.stage", safeStage);
+        TraceStore.put("faithfulness.metric.suppressed.errorType", errorType);
+        TraceStore.put("faithfulness.metric.suppressed." + safeStage, true);
+        TraceStore.put("faithfulness.metric.suppressed." + safeStage + ".errorType", errorType);
     }
 }

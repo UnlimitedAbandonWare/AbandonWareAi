@@ -32,7 +32,6 @@ public record OrchestrationSignals(
                 // ChatWorkflow TraceStore 호환 필드
                 boolean highRisk,
                 double irregularity,
-                double userFrustrationScore,
                 List<String> reasons) {
         private static final System.Logger LOG = System.getLogger(OrchestrationSignals.class.getName());
 
@@ -115,14 +114,12 @@ public record OrchestrationSignals(
 
                 double irr = (ctx != null) ? ctx.getIrregularityScore() : 0.0;
 
-                boolean frustration = looksFrustrated(query);
-
                 // ✅ STRIKE: hard-failure 중심 (soft-degrade만으로는 STRIKE 금지)
                 // - STRIKE = safe 플랜 강제 + Guard 강화 + 기능 대폭 축소
                 // [PATCH]
                 // - webLimited(한 provider down)는 compression으로 처리
                 // - irreg 임계치 상향으로 보조단 미작동 시에도 STRIKE 진입 억제
-                boolean strike = auxHardDown || webBothDown || frustration || irr >= 0.60
+                boolean strike = auxHardDown || webBothDown || irr >= 0.60
                                 || (ctx != null && ctx.isHighRiskQuery());
 
                 // ✅ COMPRESSION: strike + soft-degrade 포함
@@ -210,8 +207,6 @@ public record OrchestrationSignals(
                         reasons.add("bypass_silent_failure=" + String.format(Locale.ROOT, "%.2f", irr));
                 else if (silentFailureCandidate && noiseEscapedSilentFailure)
                         reasons.add("bypass_silent_failure_noiseEscape=" + String.format(Locale.ROOT, "%.2f", irr));
-                if (frustration)
-                        reasons.add("user_frustration");
                 if (irr > 0.0)
                         reasons.add("irregularity=" + String.format(Locale.ROOT, "%.2f", irr));
                 if (ctx != null && ctx.isHighRiskQuery())
@@ -232,7 +227,6 @@ public record OrchestrationSignals(
                                 // 새로 추가된 필드들
                                 (ctx != null && ctx.isHighRiskQuery()), // highRisk
                                 irr, // irregularity
-                                frustration ? 1.0 : 0.0, // userFrustrationScore
                                 reasons); // reasons (List<String>)
                 applyExecutionPlan(ctx, signals);
                 return signals;
@@ -268,7 +262,6 @@ public record OrchestrationSignals(
                         boolean silentBypassGate = hasReasonPrefix("bypass_silent_failure=");
 
                         double irr = clamp01(this.irregularity);
-                        double fr = clamp01(this.userFrustrationScore);
                         double hr = this.highRisk ? 1.0 : 0.0;
 
                         List<Factor> factors = new ArrayList<>();
@@ -288,8 +281,6 @@ public record OrchestrationSignals(
                                         "Disambiguation breaker-open"));
                         factors.add(new Factor("irregularity", irr, 2.0, 1.3,
                                         "irregularity score"));
-                        factors.add(new Factor("userFrustration", fr, 1.0, 0.3,
-                                        "user frustration heuristic"));
                         factors.add(new Factor("highRisk", hr, 1.2, 0.6,
                                         "high-risk query"));
                         factors.add(new Factor("silentBypassGate", silentBypassGate ? 1.0 : 0.0, 0.0, 1.5,
@@ -494,30 +485,6 @@ public record OrchestrationSignals(
 
         private static record Factor(String name, double value, double wStrike, double wBypass, String note) {
         }
-
-        private static boolean looksFrustrated(String q) {
-                if (q == null)
-                        return false;
-                String s = q.trim();
-                if (s.isEmpty())
-                        return false;
-                String lower = s.toLowerCase(Locale.ROOT);
-                // KO + EN quick heuristics
-                return lower.contains("왜") && (lower.contains("안") || lower.contains("안돼"))
-                                || lower.contains("또")
-                                || lower.contains("빨리")
-                                || lower.contains("제발")
-                                || lower.contains("에러")
-                                || lower.contains("망했")
-                                || lower.contains("timeout")
-                                || lower.contains("timed out")
-                                || lower.contains("error")
-                                || lower.contains("failed")
-                                || lower.contains("cannot")
-                                || lower.contains("can't")
-                                || lower.contains("stuck");
-        }
-
 
         // MERGE_HOOK:PROJ_AGENT::ORCH_PARTS_TABLE_EMIT
         /**

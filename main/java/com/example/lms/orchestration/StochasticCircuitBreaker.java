@@ -22,7 +22,7 @@ public class StochasticCircuitBreaker {
         double risk = clamp01(riskScore);
         double roll = deterministicRoll(key);
         double probability = risk >= threshold ? Math.min(0.85d, 0.35d + risk * 0.50d) : risk * 0.20d;
-        boolean explore = roll <= probability;
+        boolean explore = roll < probability;
         try {
             TraceStore.put("dualGear.stochastic.risk", risk);
             TraceStore.put("dualGear.stochastic.threshold", threshold);

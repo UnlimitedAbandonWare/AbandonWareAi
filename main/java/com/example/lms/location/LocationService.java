@@ -85,6 +85,9 @@ public class LocationService {
         rec.setEnabled(enabled);
         rec.setUpdatedAt(Instant.now());
         consentRepo.save(rec);
+        if (!enabled) {
+            lastResolved.remove(userId);
+        }
     }
 
     /**

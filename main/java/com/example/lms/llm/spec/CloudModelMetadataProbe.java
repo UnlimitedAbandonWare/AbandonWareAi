@@ -1,53 +1,29 @@
 package com.example.lms.llm.spec;
 
+import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import org.springframework.stereotype.Component;
 
-import java.time.Instant;
-import java.util.ArrayList;
+import java.net.URI;
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-public record ModelSpecSnapshot(
-        String provider,
-        String model,
-        String endpointHost,
-        Integer contextTokens,
-        Integer embeddingDim,
-        List<String> capabilities,
-        Map<String, Object> metadata,
-        Instant observedAt) {
+@Component
+public class CloudModelMetadataProbe {
+
+    private static final System.Logger LOG = System.getLogger(CloudModelMetadataProbe.class.getName());
     private static final java.util.regex.Pattern ENV_NAME =
             java.util.regex.Pattern.compile("[A-Z_][A-Z0-9_]{1,127}");
 
-    public ModelSpecSnapshot {
-        provider = safe(provider);
-        model = safe(model);
-        endpointHost = safe(endpointHost);
-        capabilities = capabilities == null ? List.of() : List.copyOf(capabilities);
-        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
-        observedAt = observedAt == null ? Instant.now() : observedAt;
-    }
-
-    public static ModelSpecSnapshot of(
+    public ModelSpecSnapshot fromCatalogEntry(
             String provider,
+            String baseUrl,
             String model,
-            String endpointHost,
             Integer contextTokens,
-            Integer embeddingDim,
             Collection<String> capabilities,
             Map<String, ?> metadata) {
-        List<String> caps = new ArrayList<>();
-        if (capabilities != null) {
-            for (String capability : capabilities) {
-                String safe = safe(capability);
-                if (safe != null) {
-                    caps.add(safe);
-                }
-            }
-        }
         Map<String, Object> safeMeta = new LinkedHashMap<>();
         if (metadata != null) {
             for (Map.Entry<String, ?> entry : metadata.entrySet()) {
@@ -60,20 +36,24 @@ public record ModelSpecSnapshot(
                 }
             }
         }
-        return new ModelSpecSnapshot(provider, model, endpointHost, contextTokens, embeddingDim, caps, safeMeta, Instant.now());
+        safeMeta.putIfAbsent("source", "cloud_catalog");
+        return ModelSpecSnapshot.of(provider, model, endpointHost(baseUrl), contextTokens, null, capabilities, safeMeta);
     }
 
-    public String key() {
-        return key(provider, model);
-    }
-
-    public static String key(String provider, String model) {
-        String p = safe(provider);
-        String m = safe(model);
-        if (p == null || m == null) {
+    private static String endpointHost(String rawBaseUrl) {
+        if (rawBaseUrl == null || rawBaseUrl.isBlank()) {
             return null;
         }
-        return p.toLowerCase(Locale.ROOT) + ":" + m.toLowerCase(Locale.ROOT);
+        try {
+            String host = URI.create(rawBaseUrl.trim()).getHost();
+            return host == null ? null : host.toLowerCase(Locale.ROOT);
+        } catch (Exception ex) {
+            TraceStore.put("llm.gateway.spec.cloud.suppressed.endpoint_host", true);
+            TraceStore.put("llm.gateway.spec.cloud.suppressed.endpoint_host.errorType", errorType(ex));
+            LOG.log(System.Logger.Level.DEBUG,
+                    "Cloud model metadata probe skipped stage=endpoint_host errorType=" + errorType(ex));
+            return null;
+        }
     }
 
     private static boolean publicCatalogScalar(String key, Object value) {
@@ -110,15 +90,10 @@ public record ModelSpecSnapshot(
         return SafeRedactor.diagnosticValue(key, value);
     }
 
-    private static String safe(String value) {
-        if (value == null) {
-            return null;
+    private static String errorType(Throwable error) {
+        if (error instanceof IllegalArgumentException) {
+            return "invalid_url";
         }
-        String trimmed = value.trim();
-        if (trimmed.isEmpty()) {
-            return null;
-        }
-        String redacted = SafeRedactor.redact(trimmed).replace('\n', ' ').replace('\r', ' ');
-        return redacted.length() > 160 ? redacted.substring(0, 160) : redacted;
+        return error == null ? "unknown" : SafeRedactor.traceLabelOrFallback(error.getClass().getSimpleName(), "unknown");
     }
 }

@@ -8,8 +8,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -766,6 +771,7 @@ public class RgbSoakReportService {
     }
 
     private Path writeReportFile(RgbSoakReport report) {
+        Path staged = null;
         try {
             String dir = props.getSoakReportDir();
             if (dir == null || dir.isBlank()) dir = "./soak_reports";
@@ -777,12 +783,36 @@ public class RgbSoakReportService {
             String name = YYYYMMDD.format(d) + "_rgb.json";
             Path out = outDir.resolve(name);
 
-            om.writerWithDefaultPrettyPrinter().writeValue(out.toFile(), report);
+            staged = Files.createTempFile(outDir, name + ".", ".tmp");
+            om.writerWithDefaultPrettyPrinter().writeValue(staged.toFile(), report);
+            try (FileChannel channel = FileChannel.open(staged, StandardOpenOption.WRITE)) {
+                channel.force(true);
+            }
+            replaceReport(staged, out);
+            staged = null;
             return out;
         } catch (Exception e) {
             log.warn("[RGB] failed to write report file. errorHash={} errorLength={}",
                     com.example.lms.trace.SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             return null;
+        } finally {
+            if (staged != null) {
+                try {
+                    Files.deleteIfExists(staged);
+                } catch (Exception cleanupFailure) {
+                    log.warn("[RGB] failed to remove staged report. errorHash={} errorLength={}",
+                            com.example.lms.trace.SafeRedactor.hashValue(messageOf(cleanupFailure)),
+                            messageLength(cleanupFailure));
+                }
+            }
+        }
+    }
+
+    private static void replaceReport(Path staged, Path out) throws IOException {
+        try {
+            Files.move(staged, out, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException unsupported) {
+            Files.move(staged, out, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 

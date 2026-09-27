@@ -3,8 +3,11 @@ package com.example.lms.llm.gateway;
 public enum LlmFailureClass {
     NONE,
     AUTH_MISSING,
+    BAD_REQUEST,
     HEALTH_DOWN,
+    GPU_DEVICE_LOST,
     MODEL_MISSING,
+    MODEL_STORE_UNAVAILABLE,
     VRAM_OOM,
     TIMEOUT_SOFT,
     SOFT_CIRCUIT_OPEN,
@@ -15,13 +18,16 @@ public enum LlmFailureClass {
     EMBEDDING_DIM_MISMATCH,
     LOCAL_UNSUPPORTED_MANAGED_RAG,
     STREAM_ERROR,
+    RESPONSE_MODEL_UNVERIFIED,
     DISABLED,
     UNKNOWN;
 
     public boolean routeBlocking() {
         return this == AUTH_MISSING
                 || this == HEALTH_DOWN
+                || this == GPU_DEVICE_LOST
                 || this == MODEL_MISSING
+                || this == MODEL_STORE_UNAVAILABLE
                 || this == VRAM_OOM
                 || this == CONTEXT_TOO_SMALL
                 || this == EMBEDDING_DIM_MISMATCH

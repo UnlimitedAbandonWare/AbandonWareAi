@@ -38,6 +38,7 @@ public class PersistentChatMemory implements ChatMemory {
     public List<ChatMessage> messages() {
         return msgRepo.findBySessionIdOrderByCreatedAtAsc(Long.valueOf(sessionId))
                 .stream()
+                .filter(m -> !PATH_ROLE.equals(m.getRole()))
                 .map(m -> "user".equals(m.getRole())
                         ? UserMessage.from(m.getContent())
                         : AiMessage.from(m.getContent()))

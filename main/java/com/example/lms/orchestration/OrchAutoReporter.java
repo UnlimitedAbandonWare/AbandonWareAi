@@ -1663,7 +1663,7 @@ public final class OrchAutoReporter {
         if (f.equalsIgnoreCase("webBothDown") || f.equalsIgnoreCase("webRateLimited")) {
             return GroupKey.WEB_PIPELINE;
         }
-        if (f.equalsIgnoreCase("irregularity") || f.equalsIgnoreCase("userFrustration") || f.equalsIgnoreCase("highRisk")
+        if (f.equalsIgnoreCase("irregularity") || f.equalsIgnoreCase("highRisk")
                 || f.equalsIgnoreCase("silentBypassGate")) {
             return GroupKey.RISK_GATES;
         }
