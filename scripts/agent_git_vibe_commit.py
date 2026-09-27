@@ -123,6 +123,7 @@ def build_plan(repo: Path, directory: Path, paths: list[str], args,
         "secretTotal": staged.get("secretTotal", 0),
         "worktreeCounts": staged.get("worktreeCounts", {}),
         "intendedRemote": staged.get("intendedRemote"),
+        "forbiddenRemote": staged.get("forbiddenRemote"),
         "originMismatch": staged.get("originMismatch"),
         "steps": [],
     }
@@ -142,7 +143,11 @@ def build_plan(repo: Path, directory: Path, paths: list[str], args,
         argv += ["--path", path]
     plan["steps"].append({"step": "commit", "argv": argv})
 
-    if lock_report["action"] not in ("absent", "would-clear"):
+    if staged.get("forbiddenRemote"):
+        plan["deferredReason"] = "forbidden-remote"
+    elif staged.get("originMismatch"):
+        plan["deferredReason"] = "origin-mismatch"
+    elif lock_report["action"] not in ("absent", "would-clear"):
         plan["deferredReason"] = "index-lock"
     elif not message_ok:
         plan["deferredReason"] = "message-missing-reason-verify-constraint"
@@ -171,6 +176,11 @@ def orchestrate(args) -> dict:
     directory = gate.git_dir(repo)
     if directory is None or not (directory / "HEAD").exists():
         return deferred("not-a-git-repo", 3)
+    remote = gate.remote_status(repo)
+    if remote["forbiddenRemote"]:
+        return deferred("forbidden-remote", 2, remote=remote)
+    if remote["originMismatch"]:
+        return deferred("origin-mismatch", 2, remote=remote)
     paths, failure = normalize_paths(args.path)
     if failure is not None:
         return failure
