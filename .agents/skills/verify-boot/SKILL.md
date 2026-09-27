@@ -1,6 +1,6 @@
 ---
 name: verify_boot
-description: Use when deriving or running Desktop/Mac mini/Notebook boot and Gradle verification commands through the demo-1 MCP control tower while keeping Desktop final proof authoritative.
+description: Use when deriving or running Desktop/Mac mini/Notebook boot
 ---
 
 # Verify Boot
