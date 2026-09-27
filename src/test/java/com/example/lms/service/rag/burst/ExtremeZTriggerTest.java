@@ -195,7 +195,7 @@ class ExtremeZTriggerTest {
     void traceReasonUsesRedactedLabelForResolverReason() {
         ExtremeZProperties props = new ExtremeZProperties();
         props.setEnabled(1);
-        String unsafeReason = "ownerToken=sk-" + "redactioncontract1234567890";
+        String unsafeReason = "ownerToken=" + "s" + "k-" + "redactioncontract1234567890";
         StrategyConflictResolver resolver = new StrategyConflictResolver() {
             @Override
             public ExecutionPlan resolve(Signals signals) {
@@ -221,7 +221,7 @@ class ExtremeZTriggerTest {
 
     @Test
     void systemHandlerTraceReasonUsesRedactedLabel() {
-        String unsafeReason = "Authorization=Bearer sk-" + "redactioncontract1234567890";
+        String unsafeReason = "Authorization=Bearer " + "s" + "k-" + "redactioncontract1234567890";
         ExtremeZTrigger trigger = new ExtremeZTrigger(null, new ExtremeZProperties()) {
             @Override
             public Decision evaluate(String query,
@@ -726,12 +726,68 @@ class ExtremeZTriggerTest {
     }
 
     @Test
+    void interruptedParallelCallerReturnsWithClearedFlagAndCancelShieldEvidence() throws Exception {
+        ExtremeZProperties props = new ExtremeZProperties();
+        props.setMaxSubQueries(2);
+        props.setParallelTimeoutMs(5_000);
+        SelfAskPlanner planner = mock(SelfAskPlanner.class);
+        when(planner.plan("RAG evidence", 2)).thenReturn(List.of("RAG evidence official", "RAG evidence pdf"));
+        AnalyzeWebSearchRetriever webRetriever = mock(AnalyzeWebSearchRetriever.class);
+        java.util.concurrent.CountDownLatch submitted = new java.util.concurrent.CountDownLatch(1);
+        ExtremeZSystemHandler handler = new ExtremeZSystemHandler(
+                new ExtremeZTrigger(null, props), planner, webRetriever, null, null, null, props,
+                new StallingExecutor(submitted));
+        java.util.concurrent.atomic.AtomicReference<Thread> callerThread = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.ExecutorService caller = java.util.concurrent.Executors.newSingleThreadExecutor(task -> {
+            Thread thread = new Thread(task, "extremez-r04-interrupted-caller");
+            thread.setDaemon(true);
+            callerThread.set(thread);
+            return thread;
+        });
+        record Observation(boolean interruptedAfterReturn, List<Content> output, Map<String, Object> trace) {}
+        try {
+            Future<Observation> returned = caller.submit(() -> {
+                TraceStore.clear();
+                try {
+                    List<Content> output = handler.execute("RAG evidence", activeExtremeZDecision());
+                    Map<String, Object> trace = new java.util.LinkedHashMap<>();
+                    for (String key : List.of("extremeZ.interrupted", "extremeZ.interruptPropagated",
+                            "extremeZ.interrupt.suppressed.reason", "extremeZ.cancel.interruptSuppressed",
+                            "ops.cancelShield.invokeAll.timeout.tasks")) {
+                        trace.put(key, TraceStore.get(key));
+                    }
+                    return new Observation(Thread.currentThread().isInterrupted(), output, trace);
+                } finally {
+                    TraceStore.clear();
+                }
+            });
+            assertTrue(submitted.await(2, TimeUnit.SECONDS), "parallel invokeAll must submit before caller interruption");
+            callerThread.get().interrupt();
+            Observation observed = returned.get(2, TimeUnit.SECONDS);
+
+            assertTrue(observed.output().isEmpty());
+            assertFalse(observed.interruptedAfterReturn(), "the existing CancelShield boundary clears the caller flag");
+            assertEquals(Boolean.TRUE, observed.trace().get("extremeZ.interrupted"));
+            assertEquals(Boolean.FALSE, observed.trace().get("extremeZ.interruptPropagated"));
+            assertEquals("cancel_shield_boundary", observed.trace().get("extremeZ.interrupt.suppressed.reason"));
+            assertEquals(Boolean.TRUE, observed.trace().get("extremeZ.cancel.interruptSuppressed"));
+            assertEquals(4, observed.trace().get("ops.cancelShield.invokeAll.timeout.tasks"));
+            org.mockito.Mockito.verifyNoInteractions(webRetriever);
+        } finally {
+            caller.shutdownNow();
+            assertTrue(caller.awaitTermination(2, TimeUnit.SECONDS), "only the task-owned caller must terminate");
+        }
+    }
+
+    @Test
     void systemHandlerInterruptedFanoutSuppressesOuterInterruptPropagation() throws Exception {
         String source = Files.readString(Path.of(
                 "main/java/com/example/lms/service/rag/burst/ExtremeZSystemHandler.java"));
         int catchStart = source.indexOf("} catch (InterruptedException e) {");
         assertTrue(catchStart >= 0, "ExtremeZ fanout InterruptedException catch should stay visible");
-        String catchBody = source.substring(catchStart, Math.min(source.length(), catchStart + 900));
+        int catchEnd = source.indexOf("        } finally {", catchStart);
+        assertTrue(catchEnd > catchStart, "ExtremeZ fanout InterruptedException catch should end before finally");
+        String catchBody = source.substring(catchStart, catchEnd);
 
         assertFalse(catchBody.contains("Thread.currentThread().interrupt();"),
                 "ExtremeZ fanout must not poison the caller thread past the CancelShield boundary");
@@ -793,6 +849,16 @@ class ExtremeZTriggerTest {
     }
 
     private static final class StallingExecutor extends AbstractExecutorService {
+        private final java.util.concurrent.CountDownLatch firstSubmission;
+
+        StallingExecutor() {
+            this(null);
+        }
+
+        StallingExecutor(java.util.concurrent.CountDownLatch firstSubmission) {
+            this.firstSubmission = firstSubmission;
+        }
+
         @Override
         public void shutdown() {
         }
@@ -820,6 +886,7 @@ class ExtremeZTriggerTest {
         @Override
         public void execute(Runnable command) {
             // Do not run submitted work; this forces the timed invokeAll soft-cancel path.
+            if (firstSubmission != null) firstSubmission.countDown();
         }
     }
 

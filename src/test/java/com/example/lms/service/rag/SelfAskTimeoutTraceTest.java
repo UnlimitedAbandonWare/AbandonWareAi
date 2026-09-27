@@ -16,16 +16,28 @@ class SelfAskTimeoutTraceTest {
     }
 
     @Test
-    void recordCancelSuppressedSanitizesSensitiveStageLabel() {
+    void recordCancellationRequestedSanitizesSensitiveStageLabel() throws Exception {
         String secret = "sk-" + "selfAskTimeoutStageSecret123456789";
 
-        SelfAskTimeoutTrace.recordCancelSuppressed("stage=" + secret, 25L, "query " + secret, true);
+        java.lang.reflect.Method method = SelfAskTimeoutTrace.class.getDeclaredMethod(
+                "recordCancellationRequested",
+                String.class,
+                long.class,
+                String.class,
+                boolean.class,
+                boolean.class);
+        method.setAccessible(true);
+        method.invoke(null, "stage=" + secret, 25L, "query " + secret, false, true);
 
         Object stage = TraceStore.get("selfask.timeout.stage");
         String trace = String.valueOf(TraceStore.getAll());
         assertTrue(String.valueOf(stage).startsWith("hash:"));
         assertEquals(stage, TraceStore.get("selfask.timeout.errorType"));
-        assertEquals(stage, TraceStore.get("selfask.timeout.cancelSuppressed.errorType"));
+        assertEquals(Boolean.TRUE, TraceStore.get("selfask.timeout.cancelRequested"));
+        assertEquals(Boolean.TRUE, TraceStore.get("selfask.timeout.cancelInterrupt"));
+        assertEquals(Boolean.TRUE, TraceStore.get("selfask.timeout.cancelAccepted"));
+        assertEquals(Boolean.FALSE, TraceStore.get("selfask.timeout.callerInterrupted"));
+        assertFalse(TraceStore.getAll().containsKey("selfask.timeout.cancelSuppressed"));
         assertFalse(trace.contains(secret));
     }
 }

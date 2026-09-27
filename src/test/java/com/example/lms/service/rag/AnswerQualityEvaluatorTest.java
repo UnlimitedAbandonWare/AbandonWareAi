@@ -2,12 +2,15 @@ package com.example.lms.service.rag;
 
 import com.example.lms.metrics.FaithfulnessMetricSnapshotStore;
 import com.example.lms.search.TraceStore;
+import dev.langchain4j.data.document.Metadata;
+import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.rag.content.Content;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -67,6 +70,24 @@ class AnswerQualityEvaluatorTest {
         assertEquals("IllegalStateException", TraceStore.get("rag.answerQuality.suppressed.errorType"));
         assertEquals("IllegalStateException", TraceStore.get("rag.answerQuality.suppressed.isSufficient.errorType"));
         assertFalse(TraceStore.getAll().toString().contains("raw embedding secret"));
+    }
+
+    @Test
+    void evaluateRetrievalAbstainsWhenSimilarityEvaluationIsUnavailable() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(anyString()))
+                .thenThrow(new IllegalStateException("embedding unavailable"));
+        AnswerQualityEvaluator evaluator = new AnswerQualityEvaluator(embeddingModel);
+        List<Content> docs = List.of(
+                Content.from(TextSegment.from("first evidence", Metadata.from(Map.of("url", "https://one.example")))),
+                Content.from(TextSegment.from("second evidence", Metadata.from(Map.of("url", "https://two.example"))))
+        );
+
+        AnswerQualityEvaluator.RetrievalEvaluation ev =
+                evaluator.evaluateRetrieval("what is corrective rag", docs, 2, 0.5, 2);
+
+        assertEquals(AnswerQualityEvaluator.Decision.ABSTAIN, ev.decision());
+        assertEquals("evaluation_unavailable", ev.reason());
     }
 
     @Test

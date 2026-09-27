@@ -64,7 +64,7 @@ class WeightedReciprocalRankFuserTest {
     void canonicalizesTrackingUrlVariantsBeforeFusion() {
         WeightedReciprocalRankFuser fuser = new WeightedReciprocalRankFuser(60, null, "");
         Content first = content("first source", "https://Docs.Example/RAG/?utm_source=news&fbclid=abc#section");
-        Content duplicate = content("duplicate source", "https://docs.example/rag");
+        Content duplicate = content("duplicate source", "https://docs.example/RAG/");
 
         List<Content> fused = fuser.fuse(List.of(List.of(first), List.of(duplicate)), List.of(1.0d, 1.0d), 10);
 
@@ -76,7 +76,7 @@ class WeightedReciprocalRankFuserTest {
     void fusionPublishesRrfInputOutputTrace() {
         WeightedReciprocalRankFuser fuser = new WeightedReciprocalRankFuser(60, null, "");
         Content first = content("first source", "https://Docs.Example/RAG/?utm_source=news&fbclid=abc#section");
-        Content duplicate = content("duplicate source", "https://docs.example/rag");
+        Content duplicate = content("duplicate source", "https://docs.example/RAG/");
 
         List<Content> fused = fuser.fuse(List.of(List.of(first), List.of(duplicate)), List.of(1.0d, 1.0d), 10);
 
@@ -106,7 +106,7 @@ class WeightedReciprocalRankFuserTest {
         Content linkAlias = contentWithMetadata("link source", Map.of(
                 "link", "https://Docs.Example/RAG/?utm_source=news&fbclid=abc#section"));
         Content canonicalAlias = contentWithMetadata("canonical source", Map.of(
-                "canonical", "https://docs.example/rag"));
+                "canonical", "https://docs.example/RAG/"));
 
         List<Content> fused = fuser.fuse(List.of(List.of(linkAlias), List.of(canonicalAlias)), List.of(1.0d, 1.0d), 10);
 

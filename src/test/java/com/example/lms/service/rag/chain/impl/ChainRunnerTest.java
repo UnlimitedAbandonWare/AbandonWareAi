@@ -15,6 +15,7 @@ import com.example.lms.service.rag.chain.ChainContext;
 import com.example.lms.service.rag.chain.ChainOutcome;
 import com.example.lms.service.rag.chain.ImagePromptGroundingHandler;
 import com.example.lms.service.rag.chain.LocationInterceptHandler;
+import com.example.lms.trace.SafeRedactor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -57,7 +58,8 @@ class ChainRunnerTest {
 
         List<DebugEvent> events = store.list(5);
         DebugEvent event = events.stream()
-                .filter(e -> "chainrunner.failsoft.IllegalStateException".equals(e.fingerprint()))
+                .filter(e -> SafeRedactor.hashValue("chainrunner.failsoft.IllegalStateException")
+                        .equals(e.fingerprint()))
                 .findFirst()
                 .orElseThrow();
 

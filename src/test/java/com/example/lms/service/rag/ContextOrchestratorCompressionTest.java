@@ -165,6 +165,33 @@ class ContextOrchestratorCompressionTest {
     }
 
     @Test
+    void promptCompositionMetadataIsCarriedIntoPromptContextBeforeBuilder() {
+        RecordingPromptCompressor compressor = new RecordingPromptCompressor();
+        compressor.contextRefinementSummary = "reason=selected,candidates=3,selected=ensemble_trace_best";
+        compressor.contextRefinementSignals = Map.of("needleKeptRatio", 0.25d);
+        OverdriveGuard guard = mock(OverdriveGuard.class);
+        when(guard.shouldActivate(eq("GraphRAG KG"), anyList())).thenReturn(true);
+        PromptBuilder builder = (contexts, question) -> {
+            assertEquals(1, contexts.size());
+            assertEquals("reason=selected,candidates=3,selected=ensemble_trace_best",
+                    contexts.get(0).contextRefinementSummary());
+            assertEquals(0.25d, contexts.get(0).contextRefinementSignals().get("needleKeptRatio"), 1e-9);
+            return "metadata-carried";
+        };
+        ContextOrchestrator orchestrator = new ContextOrchestrator(builder);
+        ReflectionTestUtils.setField(orchestrator, "promptContextCompressor", compressor);
+        ReflectionTestUtils.setField(orchestrator, "overdriveGuard", guard);
+
+        String prompt = orchestrator.orchestrate(
+                "GraphRAG KG",
+                List.of(),
+                List.of(uncompressed("GraphRAG KG useful evidence")),
+                Map.of());
+
+        assertEquals("metadata-carried", prompt);
+    }
+
+    @Test
     void emptyCandidatesPublishContextStarvationTrace() {
         PromptBuilder builder = (contexts, question) -> "empty-context";
         ContextOrchestrator orchestrator = new ContextOrchestrator(builder);
@@ -222,6 +249,8 @@ class ContextOrchestratorCompressionTest {
     private static final class RecordingPromptCompressor extends DynamicContextCompressor {
         int composeCalls;
         int memoryCompressCalls;
+        String contextRefinementSummary = "";
+        Map<String, Double> contextRefinementSignals = Map.of();
 
         RecordingPromptCompressor() {
             super(new NovaOrchestrationProperties());
@@ -232,7 +261,9 @@ class ContextOrchestratorCompressionTest {
             composeCalls++;
             return new PromptContextComposition(webDocs, ragDocs,
                     new CompositionDecision(true, true, "recording", 1.0d, "test", "", 0,
-                            size(webDocs), size(ragDocs), size(webDocs), size(ragDocs), Map.of(), false));
+                            size(webDocs), size(ragDocs), size(webDocs), size(ragDocs), Map.of(), false),
+                    contextRefinementSummary,
+                    contextRefinementSignals);
         }
 
         @Override

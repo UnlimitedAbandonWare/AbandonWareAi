@@ -148,6 +148,7 @@ class SelfAskPlannerTest {
 
     @Test
     void regenerateLaneUsesSameMetadataAndSingleTargetLane() {
+        TraceStore.clear();
         SelfAskPlanner planner = new SelfAskPlanner(null, null);
 
         java.util.Optional<SelfAskPlanner.SubQuestion> regenerated = planner.regenerateLane(
@@ -164,6 +165,12 @@ class SelfAskPlannerTest {
         assertEquals("alias_synonym", sq.meta.get("intentAxis"));
         assertEquals("RELAXED", sq.meta.get("consensusRole"));
         assertEquals("true", sq.meta.get("fallback"));
+        assertEquals("IllegalStateException", TraceStore.get("selfask.regenerate.reason"));
+        assertEquals(1, TraceStore.get("selfask.regenerate.maxAttempts"));
+        assertEquals("ER", TraceStore.get("selfask.regenerate.lane"));
+        assertEquals(Boolean.TRUE, TraceStore.get("selfask.regenerate.fallback"));
+        assertTrue(((Number) TraceStore.get("selfask.regenerate.timeoutMs")).longValue() <= 500L);
+        TraceStore.clear();
     }
 
     @Test

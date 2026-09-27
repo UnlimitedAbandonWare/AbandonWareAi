@@ -1,15 +1,19 @@
 package com.example.lms.service.rag.chain;
 
 import com.example.lms.dto.AttachmentDto;
+import com.example.lms.file.FileIngestionService;
 import com.example.lms.prompt.PromptContext;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.AttachmentOwnerIdentity;
 import com.example.lms.service.AttachmentService;
 import com.example.lms.service.rag.chain.impl.DefaultChainContext;
+import com.example.lms.storage.LocalFileStorageService;
 import com.example.lms.telemetry.MlaBreadcrumb;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -20,11 +24,16 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AttachmentContextHandlerTraceTest {
+    private static final AttachmentOwnerIdentity OWNER =
+            AttachmentOwnerIdentity.forAnonymous("chain-owner");
 
     @AfterEach
     void clearTrace() {
@@ -32,12 +41,35 @@ class AttachmentContextHandlerTraceTest {
     }
 
     @Test
+    void deletedSessionAttachmentCannotReachPromptDocuments() {
+        LocalFileStorageService storage = mock(LocalFileStorageService.class);
+        when(storage.save(any(), eq("chat"))).thenReturn("/uploads/chat/deleted.txt");
+        when(storage.delete(any())).thenReturn(true);
+        AttachmentService service = new AttachmentService(storage, new FileIngestionService());
+        AttachmentDto saved = service.saveAll(List.of(new MockMultipartFile(
+                "files", "deleted.txt", "text/plain", new byte[] {42})), OWNER).get(0);
+        assertTrue(service.attachToSession("sid-deleted", List.of(saved.id()), OWNER));
+        assertTrue(service.deleteForSession(saved.id(), "sid-deleted", OWNER));
+
+        DefaultChainContext context = new DefaultChainContext(
+                "sid-deleted", "user", "question", PromptContext.builder().build(),
+                null, null, OWNER);
+        ChainOutcome outcome = new AttachmentContextHandler(service)
+                .handle(context, next -> ChainOutcome.SUCCESS_PASS);
+
+        assertEquals(ChainOutcome.SUCCESS_PASS, outcome);
+        assertTrue(service.findBySession("sid-deleted", OWNER).isEmpty());
+        assertTrue(context.promptContext().localDocs().isEmpty());
+        assertEquals("no_attachments", TraceStore.get("cihRag.iqrDisabledReason"));
+    }
+
+    @Test
     void handlePublishesCihRagAttachmentTrace() {
         AttachmentService attachmentService = mock(AttachmentService.class);
-        when(attachmentService.findBySession("sid-1")).thenReturn(List.of(
+        when(attachmentService.findBySession("sid-1", OWNER)).thenReturn(List.of(
                 new AttachmentDto("a1", "one.txt", 12L, "text/plain", "/a1"),
                 new AttachmentDto("a2", "two.txt", 15L, "text/plain", "/a2")));
-        when(attachmentService.asDocumentsForSession(List.of("a1", "a2"), "sid-1"))
+        when(attachmentService.asDocumentsForSession(List.of("a1", "a2"), "sid-1", OWNER))
                 .thenReturn(List.of(Document.from(
                         "ontology evidence for iqr",
                         new Metadata(Map.of("source", "attachment", "name", "one.txt")))));
@@ -48,7 +80,7 @@ class AttachmentContextHandlerTraceTest {
 
         assertEquals(ChainOutcome.SUCCESS_PASS, outcome);
         assertEquals(2, ctx.attachments);
-        verify(attachmentService).asDocumentsForSession(List.of("a1", "a2"), "sid-1");
+        verify(attachmentService).asDocumentsForSession(List.of("a1", "a2"), "sid-1", OWNER);
         assertEquals(2, TraceStore.get("cihRag.activeFileCount"));
         assertEquals(0, TraceStore.get("cihRag.skippedFileCount"));
         assertEquals(1, TraceStore.get("cihRag.iqrIterations"));
@@ -67,10 +99,10 @@ class AttachmentContextHandlerTraceTest {
     @Test
     void handleTracesAttachmentSkipAndIqrEmptyReason() {
         AttachmentService attachmentService = mock(AttachmentService.class);
-        when(attachmentService.findBySession("sid-2")).thenReturn(List.of(
+        when(attachmentService.findBySession("sid-2", OWNER)).thenReturn(List.of(
                 new AttachmentDto("a1", "one.txt", 12L, "text/plain", "/a1"),
                 new AttachmentDto("a2", "two.txt", 15L, "text/plain", "/a2")));
-        when(attachmentService.asDocumentsForSession(List.of("a1"), "sid-2")).thenReturn(List.of());
+        when(attachmentService.asDocumentsForSession(List.of("a1"), "sid-2", OWNER)).thenReturn(List.of());
         RecordingContext ctx = new RecordingContext("sid-2", true);
         AttachmentContextHandler handler = new AttachmentContextHandler(attachmentService);
 
@@ -81,7 +113,7 @@ class AttachmentContextHandlerTraceTest {
         assertEquals(1, TraceStore.get("cihRag.activeFileCount"));
         assertEquals(1, TraceStore.get("cihRag.skippedFileCount"));
         assertEquals("IllegalStateException", TraceStore.get("cihRag.attachment.skipReason.1"));
-        verify(attachmentService).asDocumentsForSession(List.of("a1"), "sid-2");
+        verify(attachmentService).asDocumentsForSession(List.of("a1"), "sid-2", OWNER);
         assertEquals(1, TraceStore.get("cihRag.iqrIterations"));
         assertEquals("no_attachment_docs", TraceStore.get("cihRag.iqrDisabledReason"));
         assertEquals("bi_encoder_unavailable", TraceStore.get("cihRag.biEncoderDisabledReason"));
@@ -94,7 +126,7 @@ class AttachmentContextHandlerTraceTest {
     void handleCarriesExistingMlaBreadcrumbCountIntoCihRagTrace() {
         MlaBreadcrumb.appendSseEvent("chunk", "safe payload");
         AttachmentService attachmentService = mock(AttachmentService.class);
-        when(attachmentService.findBySession("sid-3")).thenReturn(List.of());
+        when(attachmentService.findBySession("sid-3", OWNER)).thenReturn(List.of());
         AttachmentContextHandler handler = new AttachmentContextHandler(attachmentService);
 
         ChainOutcome outcome = handler.handle(new RecordingContext("sid-3"), next -> ChainOutcome.SUCCESS_PASS);
@@ -113,22 +145,24 @@ class AttachmentContextHandlerTraceTest {
         Document attachmentDoc = Document.from(
                 "attachment evidence for prompt builder",
                 new Metadata(Map.of("source", "attachment", "name", "attachment.txt")));
-        when(attachmentService.findBySession("sid-local")).thenReturn(List.of(
+        when(attachmentService.findBySession("sid-local", OWNER)).thenReturn(List.of(
                 new AttachmentDto("a-local", "attachment.txt", 21L, "text/plain", "/attachment")));
-        when(attachmentService.asDocumentsForSession(List.of("a-local"), "sid-local"))
+        when(attachmentService.asDocumentsForSession(List.of("a-local"), "sid-local", OWNER))
                 .thenReturn(List.of(attachmentDoc));
         DefaultChainContext ctx = new DefaultChainContext(
                 "sid-local",
                 "user",
                 "message",
                 PromptContext.builder().localDocs(List.of(existing)).build(),
-                null);
+                null,
+                null,
+                OWNER);
         AttachmentContextHandler handler = new AttachmentContextHandler(attachmentService);
 
         ChainOutcome outcome = handler.handle(ctx, next -> ChainOutcome.SUCCESS_PASS);
 
         assertEquals(ChainOutcome.SUCCESS_PASS, outcome);
-        verify(attachmentService).asDocumentsForSession(List.of("a-local"), "sid-local");
+        verify(attachmentService).asDocumentsForSession(List.of("a-local"), "sid-local", OWNER);
         assertEquals(List.of(existing, attachmentDoc), ctx.promptContext().localDocs());
         assertEquals(1, TraceStore.get("cihRag.iqrIterations"));
         assertEquals(1, TraceStore.get("cihRag.localDocCount"));
@@ -147,6 +181,25 @@ class AttachmentContextHandlerTraceTest {
         assertTrue(source.contains("TraceStore.put(\"cihRag.suppressed.errorType\", safeErrorType);"));
         assertTrue(source.contains("TraceStore.put(\"cihRag.suppressed.\" + safeStage, true);"));
         assertTrue(source.contains("TraceStore.put(\"cihRag.suppressed.\" + safeStage + \".errorType\", safeErrorType);"));
+    }
+
+    @Test
+    void foreignOwnerLookupFailsClosedBeforeAttachmentExtraction() {
+        AttachmentService attachmentService = mock(AttachmentService.class);
+        AttachmentOwnerIdentity foreign = AttachmentOwnerIdentity.forAnonymous("foreign-owner");
+        when(attachmentService.findBySession("sid-owner", foreign)).thenReturn(List.of());
+        RecordingContext ctx = new RecordingContext("sid-owner", false, foreign);
+        AttachmentContextHandler handler = new AttachmentContextHandler(attachmentService);
+
+        ChainOutcome outcome = handler.handle(ctx, next -> ChainOutcome.SUCCESS_PASS);
+
+        assertEquals(ChainOutcome.SUCCESS_PASS, outcome);
+        assertEquals(0, ctx.attachments);
+        verify(attachmentService).findBySession("sid-owner", foreign);
+        verify(attachmentService, never()).asDocumentsForSession(
+                org.mockito.ArgumentMatchers.anyList(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(AttachmentOwnerIdentity.class));
     }
 
     @Test
@@ -170,6 +223,7 @@ class AttachmentContextHandlerTraceTest {
     private static final class RecordingContext implements ChainContext {
         private final String sessionId;
         private final boolean failSecondAttachment;
+        private final AttachmentOwnerIdentity ownerIdentity;
         private int attachments;
 
         private RecordingContext(String sessionId) {
@@ -177,8 +231,16 @@ class AttachmentContextHandlerTraceTest {
         }
 
         private RecordingContext(String sessionId, boolean failSecondAttachment) {
+            this(sessionId, failSecondAttachment, OWNER);
+        }
+
+        private RecordingContext(
+                String sessionId,
+                boolean failSecondAttachment,
+                AttachmentOwnerIdentity ownerIdentity) {
             this.sessionId = sessionId;
             this.failSecondAttachment = failSecondAttachment;
+            this.ownerIdentity = ownerIdentity;
         }
 
         @Override
@@ -189,6 +251,11 @@ class AttachmentContextHandlerTraceTest {
         @Override
         public String userId() {
             return "user";
+        }
+
+        @Override
+        public AttachmentOwnerIdentity attachmentOwnerIdentity() {
+            return ownerIdentity;
         }
 
         @Override

@@ -25,6 +25,14 @@ class PromptAssetServicePublicContractTest {
     }
 
     @Test
+    void publicTraitResolverRejectsTraversalOutsideTraitAssets() {
+        PromptAssetService service = new PromptAssetService(new DefaultResourceLoader());
+
+        assertTrue(service.resolveTraitText("stuff11_ko").contains("stuff11"));
+        assertNull(service.resolveTraitText("../system/projection.final"));
+    }
+
+    @Test
     void trustedResolverKeepsLiteralFallbackForInternalPlansOnly() {
         PromptAssetService service = new PromptAssetService(new DefaultResourceLoader());
 

@@ -22,6 +22,8 @@ class RagUtilityFailSoftBreadcrumbTest {
                 "DedupUtil", "canonicalUrl");
         assertStage(read("main/java/com/example/lms/service/rag/fusion/RerankCanonicalizer.java"),
                 "RerankCanonicalizer", "canonicalKey");
+        assertStage(read("main/java/com/abandonware/ai/service/rag/fusion/RerankCanonicalizer.java"),
+                "RerankCanonicalizer", "canonicalKey");
         assertStage(read("main/java/com/example/lms/service/rag/fusion/RrfFusion.java"),
                 "RrfFusion", "canonicalizeUrl");
     }
