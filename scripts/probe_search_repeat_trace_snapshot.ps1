@@ -1,5 +1,5 @@
 param(
-    [string]$BaseUrl = "http://localhost:8080",
+    [string]$BaseUrl = "",
     [string]$ProbePath = "/api/probe/search",
     [ValidateRange(1, 50)]
     [int]$Repeat = 3,
@@ -67,6 +67,16 @@ function Get-ParamValue {
 if ([string]::IsNullOrWhiteSpace($AdminToken)) {
     Write-Error "[AWX][probe][repeat] evidence_needed: set PROBE_ADMIN_TOKEN or pass -AdminToken for X-Probe-Token."
     exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:APP_PUBLIC_BASE_URL)) {
+        $BaseUrl = $env:APP_PUBLIC_BASE_URL
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:PUBLIC_BASE_URL)) {
+        $BaseUrl = $env:PUBLIC_BASE_URL
+    } else {
+        $BaseUrl = "http://localhost:8080"
+    }
 }
 
 $uri = $BaseUrl.TrimEnd("/") + "/" + $ProbePath.TrimStart("/")

@@ -2,8 +2,14 @@ import argparse
 import datetime as _dt
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+if __package__:
+    from .harmony_catch_contract import classify_java_catches, summarize_catches
+else:
+    from harmony_catch_contract import classify_java_catches, summarize_catches
 
 
 ACTIVE_JAVA_ROOTS = (
@@ -22,20 +28,6 @@ SUBSYSTEMS = {
     "S08_Adapter": ("LangChain4j", "OpenAI", "OpenAi", "VersionPurity", "PromptBuilder"),
 }
 
-CATCH_RE = re.compile(r"catch\s*\(([^)]*)\)\s*\{", re.MULTILINE)
-BROAD_CATCH_RE = re.compile(r"\b(?:Exception|Throwable|RuntimeException)\b")
-CATCH_TRACE_LOOKAHEAD_LINES = 32
-TRACE_OR_BREADCRUMB_RE = re.compile(
-    r"TraceStore|DebugEventStore|log\.|logger\.|breadcrumb|Breadcrumb|"
-    r"logSuppressed|trace[A-Za-z0-9_]*\s*\(|recordProviderError\s*\(|"
-    r"recordCachedLlmWorkerThrowable\s*\(|recordDebugEvent[A-Za-z0-9_]*\s*\(|"
-    r"recordNoiseFilterFallback\s*\(|"
-    r"INVALID_NUMBER_SUPPRESSOR\.accept\s*\(|"
-    r"Suppressions|MDC\.put|"
-    r"reason|disabledReason|failureClass|checkpoint|AWX",
-    re.IGNORECASE,
-)
-RETHROW_RE = re.compile(r"\bthrow\b")
 SECRET_RE = re.compile(
     r"sk-[A-Za-z0-9_-]{20,}|"
     r"AIza[0-9A-Za-z_-]{20,}|"
@@ -83,34 +75,16 @@ def _subsystem_hits(text: str) -> dict[str, int]:
     return hits
 
 
-def _looks_like_java_catch_arg(arg: str) -> bool:
-    # Exclude JavaScript snippets embedded in Java text blocks, such as
-    # catch(e) and Promise.catch(function(){...}).
-    cleaned = " ".join((arg or "").split())
-    return bool(cleaned and (" " in cleaned or "|" in cleaned))
-
-
-def _catch_pressure(lines: list[str], text: str) -> tuple[int, int, int, int]:
-    catch_count = 0
-    catch_without_trace = 0
-    broad_count = 0
-    broad_without_trace = 0
-    for match in CATCH_RE.finditer(text):
-        catch_arg = match.group(1)
-        if not _looks_like_java_catch_arg(catch_arg):
-            continue
-        catch_count += 1
-        is_broad = bool(BROAD_CATCH_RE.search(catch_arg))
-        if is_broad:
-            broad_count += 1
-        start_line = text[: match.start()].count("\n")
-        window = "\n".join(lines[start_line : min(len(lines), start_line + CATCH_TRACE_LOOKAHEAD_LINES)])
-        has_trace = bool(TRACE_OR_BREADCRUMB_RE.search(window) or RETHROW_RE.search(window))
-        if not has_trace:
-            catch_without_trace += 1
-            if is_broad:
-                broad_without_trace += 1
-    return catch_count, catch_without_trace, broad_count, broad_without_trace
+def _catch_pressure(path: Path, root: Path, text: str) -> tuple[int, int, int, int]:
+    summary = summarize_catches(
+        classify_java_catches(path=path, root=root, text=text)
+    )
+    return (
+        summary["catchBlockCount"],
+        summary["catchWithoutBreadcrumbCount"],
+        summary["broadCatchCount"],
+        summary["broadCatchWithoutLocalBreadcrumbCount"],
+    )
 
 
 def _is_llm_transport_or_trace_boundary(relative_path: str, text: str) -> bool:
@@ -169,6 +143,10 @@ def _aspect_risk_score(
     return round(min(1.0, score), 4)
 
 
+def _is_spring_aspect(text: str) -> bool:
+    return bool(re.search(r"(?m)^\s*@Aspect\b", text))
+
+
 def build_report(root: Path) -> dict[str, Any]:
     root = root.resolve()
     java_files = _java_files(root)
@@ -189,7 +167,7 @@ def build_report(root: Path) -> dict[str, Any]:
         lines = text.splitlines()
         rel = _relative(root, path)
         hits = _subsystem_hits(text)
-        c, c_without, broad, broad_without = _catch_pressure(lines, text)
+        c, c_without, broad, broad_without = _catch_pressure(path, root, text)
         if c_without or broad_without:
             catch_pressure_files.append(
                 {
@@ -210,7 +188,7 @@ def build_report(root: Path) -> dict[str, Any]:
                     "hitScore": sum(hits.values()),
                 }
             )
-        if "@Aspect" in text or rel.endswith("Aspect.java"):
+        if _is_spring_aspect(text):
             aspect_files += 1
             explicit_order = "@Order" in text or "Ordered." in text or "getOrder(" in text
             if explicit_order:
@@ -268,6 +246,43 @@ def build_report(root: Path) -> dict[str, Any]:
         ),
         reverse=True,
     )
+    runtime_large_evidence = sorted(
+        (
+            {
+                "file": row["file"],
+                "lines": int(row["lines"]),
+                "subsystems": list(row["subsystems"]),
+                "hitScore": int(row["hitScore"]),
+            }
+            for row in runtime_large_cross
+        ),
+        key=lambda row: (row["file"].casefold(), row["file"]),
+    )
+    broad_catch_evidence = sorted(
+        (
+            {
+                "file": row["file"],
+                "lines": int(row["lines"]),
+                "broadCatchBlocks": int(row["broadCatchBlocks"]),
+                "broadCatchWithoutLocalBreadcrumbApprox": int(
+                    row["broadCatchWithoutLocalBreadcrumbApprox"]
+                ),
+            }
+            for row in catch_pressure_files
+            if int(row["broadCatchWithoutLocalBreadcrumbApprox"]) > 0
+        ),
+        key=lambda row: (row["file"].casefold(), row["file"]),
+    )
+    manual_prompt_evidence = sorted(
+        (
+            {
+                "file": row["file"],
+                "lines": int(row["lines"]),
+            }
+            for row in manual_prompt_candidates
+        ),
+        key=lambda row: (row["file"].casefold(), row["file"]),
+    )
     critical_unordered_aspects = [
         row
         for row in unordered_aspects
@@ -307,6 +322,11 @@ def build_report(root: Path) -> dict[str, Any]:
         "topUnorderedAspectHotspots": unordered_aspects[:30],
         "manualPromptCandidateCount": len(manual_prompt_candidates),
         "manualPromptCandidateFiles": manual_prompt_candidates[:30],
+        "ledgerEvidence": {
+            "runtimeCrossSubsystemLargeFiles": runtime_large_evidence,
+            "broadCatchWithoutLocalBreadcrumbFiles": broad_catch_evidence,
+            "manualPromptCandidateFiles": manual_prompt_evidence,
+        },
         "secretPatternHits": secret_hits,
         "decision": "pressure_report",
     }
@@ -322,11 +342,40 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    root = Path(args.root)
-    report = build_report(root)
+    root = Path(args.root).resolve()
     output = Path(args.output)
-    if not output.is_absolute():
-        output = root / output
+    if output.is_absolute():
+        output = output.resolve()
+    else:
+        output = (root / output).resolve()
+        try:
+            output.relative_to(root)
+        except ValueError:
+            print(
+                "[AWX][harmony-pressure] output-invalid "
+                "reason=output-relative-outside-root",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            link_count = output.stat().st_nlink
+        except FileNotFoundError:
+            link_count = 0
+        except OSError:
+            print(
+                "[AWX][harmony-pressure] output-invalid "
+                "reason=output-relative-inspection-failed",
+                file=sys.stderr,
+            )
+            return 2
+        if output.is_file() and link_count > 1:
+            print(
+                "[AWX][harmony-pressure] output-invalid "
+                "reason=output-relative-hardlink",
+                file=sys.stderr,
+            )
+            return 2
+    report = build_report(root)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"[AWX][harmony-pressure] report={output}")
