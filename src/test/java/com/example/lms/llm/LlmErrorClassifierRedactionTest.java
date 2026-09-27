@@ -12,6 +12,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class LlmErrorClassifierRedactionTest {
 
     @Test
+    void quotaIsNonRetryableWithoutRetainingProviderMessageOrCredentials() {
+        String sentinel = com.example.lms.test.SecretFixtures.openAiKey();
+        String body = "{\"error\":{\"code\":\"insufficient_quota\",\"message\":\"free_limit_reached: "
+                + sentinel + " synthetic-private-detail\"}}";
+        LlmErrorClassifier.Result result = LlmErrorClassifier.classify(new RuntimeException("outer",
+                new dev.langchain4j.exception.HttpException(429, body)));
+        assertFalse(result.retryable());
+        assertTrue("NON_REPLAYABLE".equals(result.code()));
+        assertFalse(result.shortMessage().contains(sentinel));
+        assertFalse(result.shortMessage().contains("synthetic-private-detail"));
+    }
+
+    @Test
     void shortMessageMasksSecretsBeforeReturningTraceableText() {
         String rawKey = "" + com.example.lms.test.SecretFixtures.openAiKey() + "";
         RuntimeException ex = new RuntimeException("auth header Bearer " + rawKey + " failed upstream");

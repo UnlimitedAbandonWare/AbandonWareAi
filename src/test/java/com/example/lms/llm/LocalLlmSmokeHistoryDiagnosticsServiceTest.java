@@ -1,5 +1,8 @@
 package com.example.lms.llm;
 
+import com.example.lms.search.TraceStore;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -18,11 +21,22 @@ class LocalLlmSmokeHistoryDiagnosticsServiceTest {
     @TempDir
     Path temp;
 
+    @BeforeEach
+    void clearTraceBefore() {
+        TraceStore.clear();
+    }
+
+    @AfterEach
+    void clearTraceAfter() {
+        TraceStore.clear();
+    }
+
     @Test
     void snapshotReadsLatestSmokeHistoryWithoutRawPromptModelBodyOrPaths() throws Exception {
         Path dir = temp.resolve("build/desktop/reports/local-llm-smoke-goal-continuation");
         Files.createDirectories(dir);
-        Files.writeString(dir.resolve("local-llm-generation.json"), """
+        Path report = dir.resolve("local-llm-generation.json");
+        Files.writeString(report, """
                 {
                   "ok": true,
                   "endpointHost": "127.0.0.1:11434",
@@ -70,6 +84,7 @@ class LocalLlmSmokeHistoryDiagnosticsServiceTest {
                   "rawBody": "choices raw body should not surface"
                 }
                 """, StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(report, java.nio.file.attribute.FileTime.from(java.time.Instant.now()));
         Files.writeString(dir.resolve("local-llm-generation.history.jsonl"),
                 """
                 {"modelHash":"hash:model","promptHash":"hash:prompt","openAiScore":15,"openAiVerdict":"blank_response","nativeScore":100,"nativeVerdict":"usable","recommendedRoute":"native_ollama","debugTrigger":true,"negativeSignalCount":1,"secretPatternHits":0,"rawModel":"qwen3:8b","rawPrompt":"AWX_OK Authorization=private-token"}
@@ -82,6 +97,8 @@ class LocalLlmSmokeHistoryDiagnosticsServiceTest {
         assertEquals(true, snapshot.get("historyFound"));
         assertTrue(String.valueOf(snapshot.get("reportPathHash")).startsWith("hash:"));
         assertFalse(String.valueOf(snapshot).contains(temp.toString()), String.valueOf(snapshot));
+        assertEquals(false, snapshot.get("reportStale"));
+        assertTrue(((Number) snapshot.get("reportAgeMs")).longValue() >= 0L);
 
         Map<?, ?> latest = map(snapshot.get("latest"));
         assertEquals("native_ollama", latest.get("recommendedRoute"));
@@ -120,12 +137,14 @@ class LocalLlmSmokeHistoryDiagnosticsServiceTest {
     void snapshotReadsPowerShellUtf8BomReportAndHistoryRows() throws Exception {
         Path dir = temp.resolve("build/desktop/reports/local-llm-smoke-goal-ui");
         Files.createDirectories(dir);
-        Files.writeString(dir.resolve("local-llm-generation.json"),
+        Path report = dir.resolve("local-llm-generation.json");
+        Files.writeString(report,
                 "\uFEFF{\"recommendedRoute\":\"native_ollama\",\"debugTrigger\":true,"
                         + "\"attemptScores\":{\"openAiCompatible\":{\"score\":15,\"verdict\":\"blank_response\"},"
                         + "\"nativeOllama\":{\"score\":100,\"verdict\":\"usable\"}},"
                         + "\"cumulativeSignals\":{\"sampleCount\":1,\"thresholdExceeded\":true}}",
                 StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(report, java.nio.file.attribute.FileTime.from(java.time.Instant.now()));
         Files.writeString(dir.resolve("local-llm-generation.history.jsonl"),
                 "\uFEFF{\"recommendedRoute\":\"native_ollama\",\"openAiScore\":15,"
                         + "\"openAiVerdict\":\"blank_response\",\"nativeScore\":100,"
@@ -144,10 +163,37 @@ class LocalLlmSmokeHistoryDiagnosticsServiceTest {
     }
 
     @Test
+    void snapshotRecordsRedactedBreadcrumbForMalformedHistoryRows() throws Exception {
+        Path dir = temp.resolve("build/desktop/reports/local-llm-smoke-malformed-history");
+        Files.createDirectories(dir);
+        Path report = dir.resolve("local-llm-generation.json");
+        Files.writeString(report,
+                "{\"recommendedRoute\":\"native_ollama\"}",
+                StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(report, java.nio.file.attribute.FileTime.from(java.time.Instant.now()));
+        Files.writeString(dir.resolve("local-llm-generation.history.jsonl"),
+                "{\"recommendedRoute\":\"native_ollama\"\n",
+                StandardCharsets.UTF_8);
+
+        Map<String, Object> snapshot = new LocalLlmSmokeHistoryDiagnosticsService(temp).snapshot(5);
+
+        assertEquals(true, snapshot.get("reportFound"));
+        List<?> history = list(snapshot.get("history"));
+        assertEquals(1, history.size());
+        assertEquals(true, map(history.get(0)).get("parseSkipped"));
+        assertEquals(Boolean.TRUE, TraceStore.get("localLlm.smokeHistory.suppressed.history_row_parse"));
+        assertEquals("JsonEOFException",
+                TraceStore.get("localLlm.smokeHistory.suppressed.history_row_parse.errorType"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(temp.toString()));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("native_ollama"));
+    }
+
+    @Test
     void snapshotFindsHostSplitGradleSmokeReports() throws Exception {
         Path dir = temp.resolve("build/desktop-sse-e2e/reports/local-llm-smoke-sse-e2e");
         Files.createDirectories(dir);
-        Files.writeString(dir.resolve("local-llm-generation.json"), """
+        Path report = dir.resolve("local-llm-generation.json");
+        Files.writeString(report, """
                 {
                   "recommendedRoute": "native_ollama",
                   "debugTrigger": true,
@@ -163,6 +209,7 @@ class LocalLlmSmokeHistoryDiagnosticsServiceTest {
                   }
                 }
                 """, StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(report, java.nio.file.attribute.FileTime.from(java.time.Instant.now()));
 
         Map<String, Object> snapshot = new LocalLlmSmokeHistoryDiagnosticsService(temp).snapshot(5);
 
@@ -173,6 +220,35 @@ class LocalLlmSmokeHistoryDiagnosticsServiceTest {
         assertEquals(true, operatorAction.get("triggered"));
         assertEquals("threshold_exceeded", operatorAction.get("triggerReason"));
         assertEquals("prefer_native_ollama_route", operatorAction.get("nextAction"));
+    }
+
+    @Test
+    void snapshotMarksOldSmokeReportAsSupportingStaleEvidence() throws Exception {
+        Path dir = temp.resolve("verification/local-llm-smoke");
+        Files.createDirectories(dir);
+        Path report = dir.resolve("local-llm-generation.json");
+        Files.writeString(report, """
+                {
+                  "recommendedRoute": "native_ollama",
+                  "debugTrigger": true,
+                  "negativeSignalCount": 1,
+                  "attemptScores": {
+                    "openAiCompatible": {"score": 15, "verdict": "blank_response", "negativeSignal": true},
+                    "nativeOllama": {"score": 100, "verdict": "usable"}
+                  },
+                  "cumulativeSignals": {"sampleCount": 1, "thresholdExceeded": true}
+                }
+                """, StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(report,
+                java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(java.time.Duration.ofHours(2))));
+
+        Map<String, Object> snapshot = new LocalLlmSmokeHistoryDiagnosticsService(temp).snapshot(1);
+
+        assertEquals(true, snapshot.get("reportFound"));
+        assertEquals(true, snapshot.get("reportStale"));
+        assertEquals("supporting_stale", snapshot.get("evidenceMode"));
+        assertTrue(((Number) snapshot.get("reportAgeMs")).longValue()
+                >= java.time.Duration.ofHours(1).toMillis());
     }
 
     @SuppressWarnings("unchecked")

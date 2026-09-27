@@ -11,10 +11,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenAiChatModelRedactionContractTest {
@@ -95,5 +97,30 @@ class OpenAiChatModelRedactionContractTest {
 
         assertEquals("", out);
         assertEquals(0, calls.get());
+    }
+
+    @Test
+    void localModelOfficialEndpointGuardIsIndependentOfDefaultLocale() {
+        WebClient client = WebClient.builder()
+                .exchangeFunction(request -> {
+                    throw new AssertionError("startup validation must not call the provider");
+                })
+                .build();
+        OpenAiChatModel model = new OpenAiChatModel(client);
+        ReflectionTestUtils.setField(model, "apiKey", "");
+        ReflectionTestUtils.setField(model, "baseUrl", "HTTPS://API.OPENAI.COM");
+        ReflectionTestUtils.setField(model, "defaultModel", "QWEN2.5");
+        ReflectionTestUtils.setField(model, "ownerToken", "");
+        ReflectionTestUtils.setField(model, "allowedHosts", "");
+        ReflectionTestUtils.setField(model, "requireAuthForRemote", true);
+
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+
+            assertThrows(IllegalStateException.class, model::normaliseAndValidate);
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 }

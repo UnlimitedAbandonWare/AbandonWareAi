@@ -67,4 +67,15 @@ class DynamicChatModelFactoryRedactionContractTest {
         assertTrue(source.contains("import com.example.lms.config.ConfigValueGuards;"));
         assertTrue(source.contains("ConfigValueGuards.isMissingLocalOpenAiCompatKey(apiKeyForCall)"));
     }
+
+    @Test
+    void springConstructorIsExplicitWhenRuntimeHealthTrackerIsFinal() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/llm/DynamicChatModelFactory.java"));
+
+        assertFalse(source.contains("@RequiredArgsConstructor"));
+        assertTrue(source.contains("import org.springframework.beans.factory.annotation.Autowired;"));
+        assertTrue(source.contains("@Autowired\n    public DynamicChatModelFactory(Environment env,"));
+        assertTrue(source.contains("ModelRuntimeHealthTracker modelRuntimeHealthTracker)"));
+        assertTrue(source.contains("this.modelRuntimeHealthTracker = modelRuntimeHealthTracker == null"));
+    }
 }

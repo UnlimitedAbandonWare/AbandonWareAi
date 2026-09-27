@@ -1,15 +1,11 @@
 package com.example.lms.learning.gemini;
 
-import com.example.lms.guard.KeyResolver;
+import com.example.lms.guard.ProviderCredentialResolver;
 import com.example.lms.search.TraceStore;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -19,7 +15,7 @@ class GeminiClientRedactionContractTest {
 
     @Test
     void translateFailureFallbackRedactsSecretLikeInputText() {
-        GeminiClient client = new GeminiClient(WebClient.builder(), new KeyResolver(new MockEnvironment()));
+        GeminiClient client = client(new MockEnvironment(), request -> Mono.error(new AssertionError("no wire")));
         String rawKey = "sk-" + "1234567890abcdef1234";
 
         String result = client.translate("translate " + rawKey, "en", "ko").block();
@@ -33,7 +29,7 @@ class GeminiClientRedactionContractTest {
 
     @Test
     void generateFailureFallbackUsesHashAndLengthOnly() {
-        GeminiClient client = new GeminiClient(WebClient.builder(), new KeyResolver(new MockEnvironment()));
+        GeminiClient client = client(new MockEnvironment(), request -> Mono.error(new AssertionError("no wire")));
 
         String result = client.generate("prompt with ownerToken=raw-secret").block();
 
@@ -49,10 +45,12 @@ class GeminiClientRedactionContractTest {
         TraceStore.clear();
         try {
             MockEnvironment env = new MockEnvironment()
-                    .withProperty("gemini.api-key", "AIza" + "1234567890abcdef1234567890");
-            WebClient.Builder builder = WebClient.builder()
-                    .exchangeFunction(request -> Mono.error(new IllegalStateException("ownerToken=raw-secret")));
-            GeminiClient client = new GeminiClient(builder, new KeyResolver(env));
+                    .withProperty("gemini.api-key", "AIza" + "1234567890abcdef1234567890")
+                    .withProperty("gemini.gateway.preflight.enabled", "false")
+                    .withProperty("gemini.gateway.purpose.keyword-training.enabled", "true");
+            GeminiClient client = client(
+                    env,
+                    request -> Mono.error(new IllegalStateException("ownerToken=raw-secret")));
 
             GeminiClient.KeywordVariantsResult result = client.keywordVariantsWithMeta(
                     "prompt with ownerToken=raw-secret",
@@ -61,10 +59,8 @@ class GeminiClientRedactionContractTest {
                     java.time.Duration.ofMillis(50));
 
             assertTrue(result.variants().isEmpty());
-            assertEquals("keywordVariants", TraceStore.get("gemini.suppressed.stage"));
-            assertEquals("IllegalStateException", TraceStore.get("gemini.suppressed.errorType"));
-            assertTrue(String.valueOf(TraceStore.get("gemini.suppressed.messageHash")).startsWith("hash:"));
-            assertEquals("ownerToken=raw-secret".length(), TraceStore.get("gemini.suppressed.messageLength"));
+            assertEquals("IllegalStateException", TraceStore.get("provider.status.gemini.errorClass"));
+            assertEquals("provider-error", TraceStore.get("provider.status.gemini.fallbackReason"));
             String trace = String.valueOf(TraceStore.getAll());
             assertFalse(trace.contains("ownerToken=raw-secret"), trace);
             assertFalse(trace.contains("1234567890abcdef1234567890"), trace);
@@ -73,30 +69,14 @@ class GeminiClientRedactionContractTest {
         }
     }
 
-    @Test
-    void generatedPromptCallsitesUseStageSpecificPromptNames() throws Exception {
-        String source = Files.readString(
-                Path.of("main/java/com/example/lms/learning/gemini/GeminiClient.java"),
-                StandardCharsets.UTF_8);
-
-        assertFalse(source.contains("String prompt = \"Translate"));
-        assertFalse(source.contains("String prompt = \"\"\""));
-        assertTrue(source.contains("String translationPrompt = \"Translate"));
-        assertTrue(source.contains("return postToGemini(translationPrompt)"));
-        assertTrue(source.contains("String keywordVariantPrompt = \"\"\""));
-        assertTrue(source.contains("entity = postToGeminiEntity(keywordVariantPrompt)"));
-        assertTrue(source.contains("traceKeywordVariantSuppressed(e)"));
-    }
-
-    @Test
-    void failSoftLogsUseHashAndLengthOnly() throws Exception {
-        String source = Files.readString(
-                Path.of("main/java/com/example/lms/learning/gemini/GeminiClient.java"),
-                StandardCharsets.UTF_8);
-
-        assertFalse(source.contains("SafeRedactor.safeMessage(e.getMessage(), 240)"));
-        assertTrue(source.contains("[Gemini] translate API failed. errorHash={} errorLength={}"));
-        assertTrue(source.contains("[Gemini] generate API failed. errorHash={} errorLength={}"));
-        assertTrue(source.contains("SafeRedactor.hashValue(messageOf(e)), messageLength(e)"));
+    private static GeminiClient client(
+            MockEnvironment environment,
+            org.springframework.web.reactive.function.client.ExchangeFunction exchangeFunction) {
+        environment.withProperty("gemini.gateway.enabled", "true");
+        GeminiGateway gateway = new GeminiGateway(
+                WebClient.builder().exchangeFunction(exchangeFunction),
+                new ProviderCredentialResolver(environment),
+                environment);
+        return new GeminiClient(gateway);
     }
 }

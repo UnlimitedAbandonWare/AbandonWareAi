@@ -3,15 +3,17 @@ package com.example.lms.llm;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModelCapabilitiesTest {
 
     @Test
     void defaultLocalChatModelUsesInstalledGemma4RoleDefault() {
         assertEquals("gemma4:26b", ModelCapabilities.DEFAULT_LOCAL_CHAT_MODEL);
-        assertEquals("qwen3:8b", ModelCapabilities.DEFAULT_LOCAL_FAST_MODEL);
-        assertEquals("qwen3:30b", ModelCapabilities.DEFAULT_LOCAL_JUDGE_MODEL);
-        assertEquals("qwen3-coder:30b", ModelCapabilities.DEFAULT_LOCAL_CODER_MODEL);
+        assertEquals("qwen3.5:9b", ModelCapabilities.DEFAULT_LOCAL_FAST_MODEL);
+        assertEquals("smtek/Qwen3.8-27B:Q3_K_XL", ModelCapabilities.DEFAULT_LOCAL_JUDGE_MODEL);
+        assertEquals("smtek/Qwen3.8-27B:Q3_K_XL", ModelCapabilities.DEFAULT_LOCAL_CODER_MODEL);
         assertEquals("qwen3-vl:8b", ModelCapabilities.DEFAULT_LOCAL_VISION_MODEL);
         assertEquals("qwen3-embedding:4b", ModelCapabilities.DEFAULT_LOCAL_EMBEDDING_MODEL);
     }
@@ -32,6 +34,14 @@ class ModelCapabilitiesTest {
     void canonicalModelNameStripsOnlyTrailingOrchestrationTags() {
         assertEquals("gemma4:31b-it-q4_K_M",
                 ModelCapabilities.canonicalModelName("lc:gemma4:31b-it-q4_K_M:fallback:evidence"));
+    }
+
+    @Test
+    void placeholderModelIdsAreNotLocalChatModels() {
+        assertFalse(ModelCapabilities.isLocalChatModelId("model"));
+        assertFalse(ModelCapabilities.isLocalChatModelId("unknown"));
+        assertFalse(ModelCapabilities.isLocalChatModelId("${LLM_CHAT_MODEL}"));
+        assertTrue(ModelCapabilities.isLocalChatModelId("gemma4:26b"));
     }
 
     @Test

@@ -51,6 +51,8 @@ class LocalLlmGatewayHeadersTest {
         assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken("https://api.openai.com/v1"));
         assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken("https://api.groq.com/openai/v1"));
         assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken("https://api.cerebras.ai/v1"));
+        assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken("https://generativelanguage.googleapis.com/v1beta/openai"));
+        assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken("https://api.mistral.ai/v1"));
         assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken("https://api.openrouter.ai/api/v1"));
         assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken("https://opencode.ai/zen/v1"));
         assertTrue(LocalLlmGatewaySecurity.shouldAttachOwnerToken("http://localhost:11434/v1"));
@@ -67,6 +69,12 @@ class LocalLlmGatewayHeadersTest {
         assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken(
                 "https://api.openrouter.ai/api/v1",
                 "api.openrouter.ai"));
+        assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken(
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                "generativelanguage.googleapis.com"));
+        assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken(
+                "https://api.mistral.ai/v1",
+                "api.mistral.ai"));
         assertFalse(LocalLlmGatewaySecurity.shouldAttachOwnerToken(
                 "https://opencode.ai/zen/v1",
                 "opencode.ai"));
