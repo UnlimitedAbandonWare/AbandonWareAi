@@ -90,6 +90,7 @@ public class ModelSettingsController {
         String model = modelId == null ? "" : modelId;
         String message = messageOf(failure);
         TraceStore.put("api.modelSettings.rejected", true);
+        TraceStore.inc("api.modelSettings.rejected.count");
         TraceStore.put("api.modelSettings.skipped.reason", "model_setting_rejected");
         TraceStore.put("api.modelSettings.modelHash", SafeRedactor.hashValue(model));
         TraceStore.put("api.modelSettings.modelLength", model.length());

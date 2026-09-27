@@ -39,6 +39,7 @@ public class SearchFeedbackController {
 
     private static void traceRejected(String reason) {
         TraceStore.put("api.searchFeedback.rejected", true);
+        TraceStore.inc("api.searchFeedback.rejected.count");
         TraceStore.put("api.searchFeedback.skipped.reason", reason);
     }
 }

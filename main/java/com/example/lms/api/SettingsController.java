@@ -1,13 +1,12 @@
 package com.example.lms.api;
 
-import com.example.lms.domain.ConfigurationSetting;
-import com.example.lms.repository.ConfigurationSettingRepository;
+import com.example.lms.service.SettingsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
-import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 
@@ -19,52 +18,63 @@ import java.util.stream.Collectors;
 // ✅ 클래스 이름을 파일명과 동일하게 SettingsController로 수정했습니다.
 public class SettingsController {
 
-    private final ConfigurationSettingRepository configurationSettingRepository;
+    /**
+     * 공개 허용 설정 키 — UI가 실제로 읽고 쓰는 값만 나열한다.
+     * SYSTEM_PROMPT 원문, API 키/토큰, 자격증명류 및 알 수 없는 DB 키는
+     * GET 응답에도, POST 저장에도 포함하지 않는다.
+     */
+    private static final Set<String> PUBLIC_SETTING_KEYS = Set.of(
+            SettingsService.KEY_TEMPERATURE,
+            SettingsService.KEY_TOP_P,
+            SettingsService.KEY_FREQUENCY_PENALTY,
+            SettingsService.KEY_PRESENCE_PENALTY,
+            SettingsService.KEY_OPENAI_MODEL,
+            SettingsService.KEY_FINE_TUNED_MODEL,
+            "chat.defaults.useWebSearch",
+            "chat.ragAnswerPolicy");
+
+    private final SettingsService settingsService;
 
     /**
-     * 모든 설정을 'configuration_settings' 테이블에서 조회합니다.
-     * 이제 UI를 열 때 항상 최신 설정값을 불러옵니다.
+     * 공개 가능한 설정만 'configuration_settings' 기반(기본값 + DB override)으로 반환합니다.
+     * 내부 키는 allowlist에 없으므로 절대 노출되지 않습니다.
      *
-     * @return DB에 저장된 모든 설정을 Key-Value 형태의 Map으로 반환
+     * @return 공개 설정 Key-Value Map
      */
     @GetMapping
     public ResponseEntity<Map<String, String>> getAllSettings() {
-        List<ConfigurationSetting> settings = configurationSettingRepository.findAll();
-
-        Map<String, String> settingMap = settings.stream()
-                .collect(Collectors.toMap(
-                        ConfigurationSetting::getSettingKey,
-                        ConfigurationSetting::getSettingValue
-                ));
+        Map<String, String> all = settingsService.getAllSettings();
+        Map<String, String> settingMap = PUBLIC_SETTING_KEYS.stream()
+                .filter(all::containsKey)
+                .collect(Collectors.toMap(k -> k, all::get));
 
         return ResponseEntity.ok(settingMap);
     }
 
     /**
-     * 받은 설정들을 'configuration_settings' 테이블에 저장(업데이트)합니다.
-     * 조회와 저장이 동일한 테이블을 사용하도록 통일되었습니다.
+     * 공개 allowlist 안의 설정만 저장합니다. allowlist 밖 키가 하나라도 있으면
+     * 전체 요청을 거부해 내부/비밀 키의 우회 저장을 막습니다.
      *
      * @param settingsToSave 프론트엔드에서 받은 설정값 Map
      * @return 성공 메시지
      */
     @PostMapping
-    @Transactional // 여러 건의 저장을 하나의 트랜잭션으로 처리
     public ResponseEntity<Map<String, String>> saveAllSettings(@RequestBody Map<String, String> settings) {
 
         if (settings == null) {
             return ResponseEntity.badRequest().body(Map.of("message", "settings body is required"));
         }
 
-        settings.forEach((k, v) -> {
-            ConfigurationSetting entity =
-                    configurationSettingRepository
-                            .findById(k)                       // ① 존재 여부 확인
-                            .orElseGet(() ->                  // ② 없으면 새로 생성
-                                    new ConfigurationSetting(k, null));
+        Set<String> rejected = settings.keySet().stream()
+                .filter(k -> !PUBLIC_SETTING_KEYS.contains(k))
+                .collect(Collectors.toCollection(TreeSet::new));
+        if (!rejected.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "message", "unsupported setting keys",
+                    "rejected", String.join(",", rejected)));
+        }
 
-            entity.setSettingValue(v);                    // ③ 값만 갱신
-            configurationSettingRepository.save(entity);  //   INSERT 또는 UPDATE
-        });
+        settingsService.saveAllSettings(settings);
 
         return ResponseEntity.ok(
                 Map.of("message", "설정이 저장되었습니다.")

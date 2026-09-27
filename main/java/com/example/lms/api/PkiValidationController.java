@@ -4,6 +4,8 @@ import com.example.lms.service.PkiValidationStorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -20,6 +22,23 @@ public class PkiValidationController {
     private static final System.Logger LOG = System.getLogger(PkiValidationController.class.getName());
 
     private final PkiValidationStorageService storageService;
+
+    @GetMapping("/{fileName}")
+    public ResponseEntity<byte[]> download(@PathVariable String fileName) {
+        try {
+            return storageService.read(fileName)
+                    .map(content -> ResponseEntity.ok()
+                            .contentType(MediaType.TEXT_PLAIN)
+                            .body(content))
+                    .orElseGet(() -> ResponseEntity.notFound().build());
+        } catch (IllegalArgumentException e) {
+            traceSuppressed("pkiRead.badRequest", e);
+            return ResponseEntity.badRequest().build();
+        } catch (RuntimeException e) {
+            traceSuppressed("pkiRead.runtime", e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<FileUploadResponse> upload(@RequestParam("file") MultipartFile file) {

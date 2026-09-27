@@ -21,6 +21,7 @@ import java.util.Map;
 @ConditionalOnProperty(prefix = "soak", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class SoakApiController {
     private static final System.Logger LOG = System.getLogger(SoakApiController.class.getName());
+    private static final int MAX_TOP_K = 100;
 
     private final SoakTestService service;
     private final ObjectProvider<TrainingJobRunner> autoEvolveRunner;
@@ -34,7 +35,7 @@ public class SoakApiController {
     @GetMapping("/run")
     public ResponseEntity<SoakReport> run(@RequestParam(defaultValue = "10") int k,
                                           @RequestParam(defaultValue = "all") String topic) {
-        return ResponseEntity.ok(service.run(k, topic));
+        return ResponseEntity.ok(service.run(normalizeTopK(k), topic));
     }
 
     /**
@@ -49,7 +50,11 @@ public class SoakApiController {
     @GetMapping("/quick")
     public ResponseEntity<SoakQuickReport> quick(@RequestParam(defaultValue = "10") int k,
                                                  @RequestParam(defaultValue = "all") String topic) {
-        return ResponseEntity.ok(service.runQuick(k, topic));
+        return ResponseEntity.ok(service.runQuick(normalizeTopK(k), topic));
+    }
+
+    private static int normalizeTopK(int requested) {
+        return Math.max(1, Math.min(requested, MAX_TOP_K));
     }
 
     /**

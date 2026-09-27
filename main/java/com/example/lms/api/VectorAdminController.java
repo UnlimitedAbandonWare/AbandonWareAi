@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -340,7 +341,9 @@ public class VectorAdminController {
         TranslationMemory tm = memoryRepo.findById(id).orElse(null);
         if (tm == null) return ResponseEntity.notFound().build();
 
-        String st = (req == null || req.status() == null) ? "" : req.status().trim().toUpperCase();
+        String st = (req == null || req.status() == null)
+                ? ""
+                : req.status().trim().toUpperCase(Locale.ROOT);
         if (st.isBlank()) st = "ACTIVE";
 
         TranslationMemory.MemoryStatus ns;

@@ -34,6 +34,66 @@ public class TasksApiController {
     private final JobService jobService;
     private final N8nNotifier notifier;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.fasterxml.jackson.databind.ObjectMapper jobMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private ChatGenerationAdmissionFilter costs;
+    private void checkNewWorkCost() { if (costs != null) costs.costCheckCurrentRequest().run(); }
+
+    @jakarta.annotation.PostConstruct
+    void registerPersistedWork() {
+        jobService.registerHandler("task_ask", new JobService.JobHandler() {
+            public String execute(String json) throws Exception {
+                TaskAskRequest req = jobMapper.readValue(json, TaskAskRequest.class);
+                ChatRequestDto chatReq = toChatRequest(req);
+                var result = chatService.continueChat(chatReq);
+                return jobMapper.writeValueAsString(new ChatResponseDto(result.content(), chatReq.getSessionId(), result.modelUsed(), result.ragUsed()));
+            }
+            public boolean needsCompletion(String json) throws Exception {
+                String url = jobMapper.readValue(json, TaskAskRequest.class).callbackUrl();
+                return url != null && !url.isBlank();
+            }
+            public boolean completed(String id, String request, String result) throws Exception {
+                return notifier.notifyAcknowledged(jobMapper.readValue(request, TaskAskRequest.class).callbackUrl(),
+                        callbackPayload(id, jobMapper.readValue(result, ChatResponseDto.class)));
+            }
+        });
+    }
+
+    @GetMapping("/{taskId}")
+    public ResponseEntity<?> task(@PathVariable String taskId) {
+        return jobService.find(taskId, currentOwner()).<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping(value = "/{taskId}/result", produces = "application/json")
+    public ResponseEntity<?> result(@PathVariable String taskId) {
+        String owner = currentOwner();
+        var snapshot = jobService.find(taskId, owner);
+        if (snapshot.isEmpty()) return ResponseEntity.notFound().build();
+        return jobService.result(taskId, owner).<ResponseEntity<?>>map(body -> ResponseEntity.ok()
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON).body(body))
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "result_not_ready", "state", snapshot.get().state())));
+    }
+
+    @PostMapping("/{taskId}/cancel")
+    public ResponseEntity<?> cancelTask(@PathVariable String taskId) {
+        String owner = currentOwner();
+        if (jobService.find(taskId, owner).isEmpty()) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(Map.of("cancelRequested", jobService.cancel(taskId, owner)));
+    }
+
+    @ExceptionHandler(org.springframework.dao.DataAccessException.class)
+    public ResponseEntity<?> jobStoreUnavailable() {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error", "job_store_unavailable"));
+    }
+
+    private static String currentOwner() {
+        var authentication = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return org.apache.commons.codec.digest.DigestUtils.sha256Hex(
+                authentication == null ? "system-job" : authentication.getName());
+    }
+
     /**
      * Handle a synchronous ask request. The message is delegated to
      * {@link ChatService#continueChat(ChatRequestDto)} and the response
@@ -53,6 +113,7 @@ public class TasksApiController {
             return ResponseEntity.badRequest()
                     .body(new ChatResponseDto("bad_request", null, "missing_message", false));
         }
+        checkNewWorkCost();
         try {
             ChatRequestDto chatReq = toChatRequest(req);
             var result = chatService.continueChat(chatReq);
@@ -87,8 +148,9 @@ public class TasksApiController {
      * @param req the task request
      * @return an accepted response containing the new task identifier
      */
+    public ResponseEntity<Map<String, String>> askAsync(TaskAskRequest req) {return askAsync(req,null);}
     @PostMapping("/ask/async")
-    public ResponseEntity<Map<String, String>> askAsync(@RequestBody TaskAskRequest req) {
+    public ResponseEntity<Map<String, String>> askAsync(@RequestBody TaskAskRequest req,@RequestHeader(value="Idempotency-Key",required=false) String idempotencyKey) {
         if (req == null) {
             return ResponseEntity.badRequest().body(Map.of(
                     "error", "bad_request",
@@ -99,10 +161,25 @@ public class TasksApiController {
                     "error", "bad_request",
                     "code", "missing_message"));
         }
+        if(idempotencyKey!=null){
+            if(!idempotencyKey.matches("[A-Za-z0-9._:-]{1,128}"))return ResponseEntity.badRequest().body(Map.of("error","invalid_idempotency_key"));
+            var auth=org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+            if(auth==null||!auth.isAuthenticated()||auth instanceof org.springframework.security.authentication.AnonymousAuthenticationToken)return ResponseEntity.status(401).body(Map.of("error","authentication_required"));
+            try{
+                String owner=currentOwner(),fingerprint=taskFingerprint(req);
+                var existing=jobService.findAdmission("task_ask",owner,idempotencyKey,fingerprint);
+                var admission=existing.orElseGet(()->{checkNewWorkCost();return jobService.enqueueOnce("task_ask",req,Map.of("ownerHash",owner),req.sid()==null?null:req.sid().toString(),idempotencyKey,fingerprint);});
+                boolean active=java.util.Set.of("PENDING","RUNNING","CANCEL_REQUESTED").contains(admission.state());
+                return ResponseEntity.status(active?202:200).cacheControl(org.springframework.http.CacheControl.noStore()).location(java.net.URI.create("/v1/tasks/"+admission.taskId()))
+                        .body(Map.of("taskId",admission.taskId(),"state",admission.state(),"replayed",Boolean.toString(admission.replayed()),"resultUrl","/v1/tasks/"+admission.taskId()+"/result"));
+            }catch(JobService.IdempotencyConflict conflict){return ResponseEntity.status(409).body(Map.of("error","idempotency_conflict"));}
+            catch(UnsupportedOperationException unsupported){return ResponseEntity.status(503).body(Map.of("error","durable_idempotency_required"));}
+        }
+        checkNewWorkCost();
         String jobId = jobService.enqueue(
                 "task_ask",
                 req,
-                null,
+                Map.of("ownerHash", currentOwner()),
                 (req.sid() == null ? null : String.valueOf(req.sid())));
         if (jobId == null || jobId.isBlank()) {
             traceAsyncJobEnqueueFailed(req);
@@ -110,7 +187,10 @@ public class TasksApiController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                     "error", "job_enqueue_failed"));
         }
-        // Launch background execution
+        if (jobService.runsPersistedJobs()) {
+            return ResponseEntity.accepted().location(java.net.URI.create("/v1/tasks/" + jobId)).body(Map.of("taskId", jobId));
+        }
+        // Explicit development implementations retain the legacy execution contract.
         jobService.executeAsync(jobId, () -> {
             ChatRequestDto chatReq = toChatRequest(req);
             var result = chatService.continueChat(chatReq);
@@ -132,6 +212,14 @@ public class TasksApiController {
             }
         });
         return ResponseEntity.accepted().body(Map.of("taskId", jobId));
+    }
+    private String taskFingerprint(TaskAskRequest req){
+        // Preserve meaningful interior whitespace, nullable automatic flags and callback semantics.
+        // Only NFC and CRLF/LF normalize text; ignored legacy history is not an execution input.
+        Map<String,Object> fields=new java.util.TreeMap<>();
+        fields.put("message",java.text.Normalizer.normalize(req.message().replace("\r\n","\n"),java.text.Normalizer.Form.NFC));
+        fields.put("useRag",req.useRag());fields.put("useWebSearch",req.useWebSearch());fields.put("sid",req.sid());fields.put("model",req.model());fields.put("callbackUrl",req.callbackUrl());
+        try{return org.apache.commons.codec.digest.DigestUtils.sha256Hex(jobMapper.writeValueAsBytes(fields));}catch(Exception invalid){throw new IllegalArgumentException("invalid_task_request");}
     }
 
     private static Map<String, Object> callbackPayload(String jobId, ChatResponseDto res) {
@@ -158,6 +246,7 @@ public class TasksApiController {
 
     private static void traceAsyncJobEnqueueFailed(TaskAskRequest req) {
         TraceStore.put("api.tasks.async.jobEnqueueFailed", true);
+        TraceStore.inc("api.tasks.async.jobEnqueueFailed.count");
         TraceStore.put("api.tasks.async.skipped.reason", "job_enqueue_failed");
         TraceStore.put("api.tasks.async.messageLength",
                 req == null || req.message() == null ? 0 : req.message().length());

@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.RecordComponent;
+import java.util.Objects;
 import java.util.Optional;
 
 
@@ -40,7 +41,24 @@ public class ArtPlateEvolver {
             double match,
             double latencyPenalty,
             double errorPenalty,
-            int samples) {
+            int heuristicMass,
+            int samples,
+            double verifiedGain) {
+
+        // The legacy seven-argument form carries request heuristics, never A/B samples.
+        public ScoreCard(double authority, double novelty, double fusionDiversity,
+                         double match, double latencyPenalty, double errorPenalty,
+                         int heuristicMass) {
+            this(authority, novelty, fusionDiversity, match, latencyPenalty, errorPenalty,
+                    Math.max(0, heuristicMass), 0, Double.NaN);
+        }
+
+        public static ScoreCard measured(double authority, double novelty, double fusionDiversity,
+                                         double match, double latencyPenalty, double errorPenalty,
+                                         int samples, double verifiedGain) {
+            return new ScoreCard(authority, novelty, fusionDiversity, match, latencyPenalty,
+                    errorPenalty, 0, Math.max(0, samples), verifiedGain);
+        }
 
         public double composite() {
             double score = 0.30d * clamp01(authority)
@@ -184,7 +202,14 @@ public class ArtPlateEvolver {
                 TraceStore.put("sse.source", "fallback_to_deterministic");
                 return deterministicFallback(bucket, base, nextState);
             }
+            if (!sameSurface(base, mutated)) {
+                TraceStore.put("sse.guard.accepted", false);
+                TraceStore.put("sse.bypassReason", "guard_rejected_candidate");
+                TraceStore.put("artplate.propose.skipReason", "guard_rejected_candidate");
+                return deterministicFallback(bucket, base, nextState);
+            }
             TraceStore.put("sse.source", "sse_block");
+            TraceStore.put("sse.guard.accepted", true);
             traceProposal(bucket == null ? PlateFailureBucket.NO_EVIDENCE : bucket, base, mutated);
             return new SseProposal(Optional.of(mutated), nextState);
         } catch (RuntimeException ex) {
@@ -227,7 +252,11 @@ public class ArtPlateEvolver {
         double score = card.composite();
         int percent;
         String reason;
-        if (score >= 0.80d && card.samples() >= 10) {
+        String gateReason = adoptionGateReason(candidate, card);
+        if (!gateReason.isBlank()) {
+            percent = 0;
+            reason = gateReason;
+        } else if (score >= 0.80d && card.samples() >= 10) {
             percent = 50;
             reason = "scorecard_promote_50";
         } else if (score >= 0.62d && card.samples() >= 8) {
@@ -313,9 +342,15 @@ public class ArtPlateEvolver {
         if (candidate != null) {
             TraceStore.put("moe.evolver.candidate.id", safeLabel(candidate.id(), "unknown"));
         }
+        TraceStore.put("artplate.scorecard.heuristicMass", card == null ? 0 : Math.max(0, card.heuristicMass()));
         TraceStore.put("artplate.scorecard.samples", card == null ? 0 : Math.max(0, card.samples()));
+        TraceStore.put("artplate.scorecard.gainVerified", card != null
+                && Double.isFinite(card.verifiedGain()) && card.verifiedGain() > 0.0d);
         TraceStore.put("artplate.scorecard.authority", card == null ? 0.0d : clamp01(card.authority()));
         TraceStore.put("artplate.scorecard.match", card == null ? 0.0d : clamp01(card.match()));
+        String guardReason = adoptionGateReason(candidate, card);
+        TraceStore.put("artplate.rollout.guard.accepted", candidate != null && guardReason.isBlank());
+        TraceStore.put("artplate.rollout.guard.reason", safeLabel(guardReason, ""));
     }
 
     private static void traceRouting(RolloutDecision decision, boolean routed, int bucket, String reason) {
@@ -387,6 +422,46 @@ public class ArtPlateEvolver {
         }
         String normalized = name.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "");
         return "prompttemplate".equals(normalized);
+    }
+
+    private static boolean sameSurface(ArtPlateSpec base, ArtPlateSpec mutated) {
+        if (base == null || mutated == null) {
+            return false;
+        }
+        return Objects.equals(base.intent(), mutated.intent())
+                && Objects.equals(base.domainAllow(), mutated.domainAllow())
+                && Objects.equals(base.modelCandidates(), mutated.modelCandidates())
+                && base.includeHistory() == mutated.includeHistory()
+                && base.includeDraft() == mutated.includeDraft()
+                && base.includePrevAnswer() == mutated.includePrevAnswer()
+                && within(mutated.webTopK(), 1, 16)
+                && within(mutated.vecTopK(), 1, 32)
+                && within(mutated.webBudgetMs(), 300, 5000)
+                && within(mutated.vecBudgetMs(), 300, 5000);
+    }
+
+    private static String adoptionGateReason(ArtPlateSpec candidate, ScoreCard card) {
+        if (candidate == null) {
+            return "candidate_null";
+        }
+        ScoreCard safeCard = card == null ? ScoreCard.neutral() : card;
+        if (Math.max(0, safeCard.samples()) < Math.max(1, candidate.minEvidence())) {
+            return "evidence_gate_failed";
+        }
+        if (clamp01(safeCard.authority()) < clamp01(candidate.authorityFloor())) {
+            return "authority_gate_failed";
+        }
+        if (clamp01(safeCard.match()) < 0.50d) {
+            return "citation_gate_failed";
+        }
+        if (!Double.isFinite(safeCard.verifiedGain()) || safeCard.verifiedGain() <= 0.0d) {
+            return "verified_gain_missing";
+        }
+        return "";
+    }
+
+    private static boolean within(int value, int low, int high) {
+        return value >= low && value <= high;
     }
 
     private static String safeLabel(String value, String fallback) {
