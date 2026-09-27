@@ -2,6 +2,7 @@ package com.example.lms.service.rag;
 
 import static com.example.lms.service.rag.HybridRetrieverMetadata.*;
 
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.lms.service.rag.fusion.ReciprocalRankFuser;
@@ -187,9 +188,23 @@ public class HybridRetriever implements ContentRetriever {
     private double qualityMinScore;
     @Value("${hybrid.max-parallel:3}")
     private int maxParallel;
+    @Value("${hybrid.executor.queue-capacity:64}")
+    private int executorQueueCapacity = 64;
+    @Value("${hybrid.executor.shutdown-wait-ms:1000}")
+    private long executorShutdownWaitMs = 1_000L;
+    @Value("${hybrid.request-timeout-ms:120000}")
+    private long hybridRequestTimeoutMs = 120_000L;
+    @Value("${hybrid.max-branches:64}")
+    private int maxBranches = 64;
+    private static final java.util.concurrent.atomic.AtomicLong EXECUTOR_THREAD_IDS =
+            new java.util.concurrent.atomic.AtomicLong();
+    private final Object retrievalExecutorLock = new Object();
+    private volatile java.util.concurrent.ThreadPoolExecutor retrievalExecutor;
 
     @Value("${hybrid.min-relatedness:0.01}") // ???굿????닳뵣 ??ш낄援?????????
     private double minRelatedness;
+    @Value("${hybrid.relatedness-filter.fail-soft:false}")
+    private boolean relatednessFilterFailSoft;
     // ?????? 癲ル슢?꾤땟??? rrf(??れ삀??? | softmax
     @Value("${retrieval.fusion.mode:rrf}")
     private String fusionMode;
@@ -491,8 +506,7 @@ public class HybridRetriever implements ContentRetriever {
                     .orElse(null);
 
             md = Optional.ofNullable(query)
-                    .map(Query::metadata)
-                    .map(HybridRetrieverMetadata::toMap)
+                    .map(QueryUtils::metadata)
                     .orElse(Map.of());
         } catch (Exception ignore) {
             log.debug("[HybridRetriever] fail-soft stage={}", "retrieve.metadata");
@@ -938,8 +952,9 @@ public class HybridRetriever implements ContentRetriever {
      */
     @Deprecated // ????????濡ろ떟????????濚밸Ŧ遊???濡ろ뜑?灌鍮???影?낅궢??????嶺뚮ㅎ???? ???)
     public List<Content> retrieveProgressive(String question, String sessionKey, int limit) {
+        long integrityStarted = System.nanoTime();
         if (question == null || question.isBlank()) {
-            return List.of(Content.from("[??癲ル슣????"));
+            return emptyEvidence("hybrid_progressive", "invalid_input", integrityStarted);
         }
         final int top = Math.max(1, limit);
 
@@ -1113,7 +1128,7 @@ public class HybridRetriever implements ContentRetriever {
         } catch (Exception e) {
             log.error("[Hybrid] retrieveProgressive failed (sidHash={}, queryHash12={}, queryLength={}) errHash={} errLength={}",
                     SafeRedactor.hashValue(sessionKey), SafeRedactor.hash12(question), question == null ? 0 : question.length(), SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
-            return List.of(Content.from("[?濡ろ떟???????곸씔]"));
+            return emptyEvidence("hybrid_progressive", "provider_hard_failure", integrityStarted);
         }
     }
 
@@ -1137,8 +1152,9 @@ public class HybridRetriever implements ContentRetriever {
      */
     public java.util.List<Content> retrieveProgressive(String question, String sessionKey, int limit,
             java.util.Map<String, Object> metaHints) {
+        long integrityStarted = System.nanoTime();
         if (question == null || question.isBlank()) {
-            return java.util.List.of(Content.from("[??癲ル슣????"));
+            return emptyEvidence("hybrid_progressive", "invalid_input", integrityStarted);
         }
         final int top = Math.max(1, limit);
 
@@ -1333,7 +1349,7 @@ public class HybridRetriever implements ContentRetriever {
         } catch (Exception e) {
             log.error("[Hybrid] retrieveProgressive failed (sidHash={}, queryHash12={}, queryLength={}) errHash={} errLength={}",
                     SafeRedactor.hashValue(sessionKey), SafeRedactor.hash12(question), question == null ? 0 : question.length(), SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
-            return java.util.List.of(Content.from("[?濡ろ떟???????곸씔]"));
+            return emptyEvidence("hybrid_progressive", "provider_hard_failure", integrityStarted);
         }
     }
 
@@ -1342,6 +1358,234 @@ public class HybridRetriever implements ContentRetriever {
      */
     public List<Content> retrieveAll(List<String> queries, int limit) {
         return retrieveAll(queries, limit, "__TRANSIENT__", null);
+    }
+
+    private java.util.concurrent.ThreadPoolExecutor retrievalExecutor() {
+        java.util.concurrent.ThreadPoolExecutor current = retrievalExecutor;
+        if (current != null && !current.isShutdown() && !current.isTerminated()) return current;
+        synchronized (retrievalExecutorLock) {
+            current = retrievalExecutor;
+            if (current == null || current.isShutdown() || current.isTerminated()) {
+                int workers = Math.max(1, Math.min(32, maxParallel));
+                int queueCapacity = Math.max(1, Math.min(1_024, executorQueueCapacity));
+                java.util.concurrent.ThreadFactory factory = task -> {
+                    Thread thread = new Thread(
+                            null,
+                            task,
+                            "awx-hybrid-retrieval-" + EXECUTOR_THREAD_IDS.incrementAndGet(),
+                            0L,
+                            false);
+                    thread.setDaemon(true);
+                    return thread;
+                };
+                retrievalExecutor = current = new java.util.concurrent.ThreadPoolExecutor(
+                        workers,
+                        workers,
+                        0L,
+                        java.util.concurrent.TimeUnit.MILLISECONDS,
+                        new java.util.concurrent.ArrayBlockingQueue<>(queueCapacity),
+                        factory,
+                        new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+            }
+            return current;
+        }
+    }
+
+    @PreDestroy
+    void shutdownRetrievalExecutor() {
+        shutdownRetrievalExecutor(executorShutdownWaitMs);
+    }
+
+    private boolean shutdownRetrievalExecutor(long awaitMs) {
+        java.util.concurrent.ThreadPoolExecutor current;
+        synchronized (retrievalExecutorLock) {
+            current = retrievalExecutor;
+            retrievalExecutor = null;
+        }
+        if (current == null) return true;
+        current.shutdown();
+        boolean terminated = awaitExecutorTermination(current, awaitMs);
+        if (!terminated) {
+            current.shutdownNow();
+            terminated = awaitExecutorTermination(current, awaitMs);
+        }
+        TraceStore.put("hybrid.executor.lifecycle.terminated", terminated);
+        return terminated;
+    }
+
+    private static boolean awaitExecutorTermination(
+            java.util.concurrent.ThreadPoolExecutor executor,
+            long awaitMs) {
+        try {
+            return executor.awaitTermination(Math.max(1L, awaitMs), java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static long remainingBudgetMillis(
+            com.abandonware.ai.addons.budget.TimeBudget requestBudget,
+            long localDeadlineNanos) {
+        long remainingNanos = localDeadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0L) return 0L;
+        long millis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remainingNanos);
+        long localRemainingMs = Math.max(1L, millis);
+        return requestBudget == null
+                ? localRemainingMs
+                : Math.min(requestBudget.remainingMillis(), localRemainingMs);
+    }
+
+    private static String timeoutReason(boolean requestDeadlineDominates) {
+        return requestDeadlineDominates
+                ? "request_deadline_exhausted"
+                : "provider_timeout";
+    }
+
+    private int retrievalBranchLimit() {
+        return Math.max(1, Math.min(256, maxBranches));
+    }
+
+    private static long deadlineNanos(long timeoutMs) {
+        long now = System.nanoTime();
+        long delta = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(1L, timeoutMs));
+        if (delta > 0L && now > Long.MAX_VALUE - delta) return Long.MAX_VALUE;
+        return now + delta;
+    }
+
+    private static java.util.List<Content> flattenWithinLimit(
+            java.util.List<java.util.List<Content>> buckets,
+            int limit) {
+        java.util.List<Content> out = new java.util.ArrayList<>();
+        if (buckets == null) return out;
+        int boundedLimit = Math.max(1, limit);
+        for (java.util.List<Content> bucket : buckets) {
+            if (bucket == null) continue;
+            for (Content content : bucket) {
+                if (content == null) continue;
+                out.add(content);
+                if (out.size() >= boundedLimit) return out;
+            }
+        }
+        return out;
+    }
+
+    private static void traceHybridExecutor(
+            String terminalReason,
+            java.util.concurrent.ThreadPoolExecutor executor,
+            int submitted,
+            int completed,
+            int providerFailures) {
+        TraceStore.put("hybrid.executor.terminalReason", terminalReason);
+        TraceStore.put("hybrid.executor.submittedCount", submitted);
+        TraceStore.put("hybrid.executor.completedCount", completed);
+        TraceStore.put("hybrid.executor.providerHardFailureCount", providerFailures);
+        TraceStore.put("hybrid.executor.poolSize", executor == null ? 0 : executor.getPoolSize());
+        TraceStore.put("hybrid.executor.activeCount", executor == null ? 0 : executor.getActiveCount());
+        TraceStore.put("hybrid.executor.queueSize", executor == null ? 0 : executor.getQueue().size());
+        TraceStore.put("hybrid.executor.queueCapacity", executor == null ? 0
+                : executor.getQueue().size() + executor.getQueue().remainingCapacity());
+    }
+
+    private void resetRetrievalExecutorForTest(int workers, int queueCapacity) {
+        shutdownRetrievalExecutor(1_000L);
+        this.maxParallel = Math.max(1, workers);
+        this.executorQueueCapacity = Math.max(1, queueCapacity);
+    }
+
+    private boolean shutdownRetrievalExecutorForTest(long awaitMs) {
+        return shutdownRetrievalExecutor(awaitMs);
+    }
+
+    private java.util.Map<String, Integer> retrievalExecutorMetricsForTest() {
+        java.util.concurrent.ThreadPoolExecutor current = retrievalExecutor;
+        return java.util.Map.of(
+                "poolSize", current == null ? 0 : current.getPoolSize(),
+                "active", current == null ? 0 : current.getActiveCount(),
+                "queued", current == null ? 0 : current.getQueue().size(),
+                "queueCapacity", current == null ? Math.max(1, executorQueueCapacity)
+                        : current.getQueue().size() + current.getQueue().remainingCapacity());
+    }
+
+    private record BranchResult(int index, java.util.List<Content> contents) {}
+
+    private static final class BranchFuture
+            extends java.util.concurrent.FutureTask<BranchResult> {
+        private final java.util.concurrent.BlockingQueue<Integer> completed;
+        private final int branchIndex;
+
+        private BranchFuture(
+                java.util.concurrent.Callable<BranchResult> task,
+                java.util.concurrent.BlockingQueue<Integer> completed,
+                int branchIndex) {
+            super(task);
+            this.completed = completed;
+            this.branchIndex = branchIndex;
+        }
+
+        @Override
+        protected void done() {
+            completed.offer(branchIndex);
+        }
+    }
+
+    private java.util.concurrent.Callable<BranchResult> branchTask(
+            String query,
+            Object sessionKey,
+            java.util.Map<String, Object> metaHints,
+            int branchIndex,
+            boolean applyPrefuseCap,
+            int fuseLimit,
+            com.abandonware.ai.addons.budget.TimeBudget requestBudget,
+            long localDeadlineNanos,
+            java.util.concurrent.atomic.AtomicBoolean deadlineHit,
+            java.util.concurrent.atomic.AtomicInteger providerFailures) {
+        return com.example.lms.infra.exec.ContextPropagation.wrapCallable(() -> {
+            Thread.interrupted();
+            try {
+                if (remainingBudgetMillis(requestBudget, localDeadlineNanos) <= 0L) {
+                    deadlineHit.set(true);
+                    return new BranchResult(branchIndex, java.util.List.of());
+                }
+                java.util.List<Content> acc = new java.util.ArrayList<>();
+                try {
+                    java.util.Map<String, Object> md = new java.util.HashMap<>();
+                    if (metaHints != null && !metaHints.isEmpty()) md.putAll(metaHints);
+                    if (applyPrefuseCap) {
+                        int web = metaInt(md, "webTopK", -1);
+                        if (web > fuseLimit) md.put("webTopK", String.valueOf(fuseLimit));
+                        int vector = metaInt(md, "vecTopK", -1);
+                        if (vector > fuseLimit) md.put("vecTopK", String.valueOf(fuseLimit));
+                        int vectorAlias = metaInt(md, "vectorTopK", -1);
+                        if (vectorAlias > fuseLimit) md.put("vectorTopK", String.valueOf(fuseLimit));
+                        int kg = metaInt(md, "kgTopK", -1);
+                        if (kg > fuseLimit) md.put("kgTopK", String.valueOf(fuseLimit));
+                    }
+                    md.put("subQuery", "true");
+                    md.put("branchIndex", branchIndex);
+                    md.put("queryHash12", SafeRedactor.hash12(query));
+                    dev.langchain4j.rag.query.Query subQuery =
+                            QueryUtils.buildQuery(query, sessionKey, null, md);
+                    handlerChain.handle(subQuery, acc);
+                } catch (java.util.concurrent.CancellationException cancelled) {
+                    throw cancelled;
+                } catch (Exception failure) {
+                    providerFailures.incrementAndGet();
+                    recordHybridBranchFailure(branchIndex, query, failure, "handler");
+                    log.warn("[Hybrid] handler branch failed queryHash12={} errorHash={} errorLength={}",
+                            SafeRedactor.hash12(query), SafeRedactor.hashValue(String.valueOf(failure)),
+                            String.valueOf(failure).length());
+                }
+                if (applyPrefuseCap && acc.size() > fuseLimit) {
+                    return new BranchResult(
+                            branchIndex,
+                            new java.util.ArrayList<>(acc.subList(0, fuseLimit)));
+                }
+                return new BranchResult(branchIndex, acc);
+            } finally {
+                Thread.interrupted();
+            }
+        });
     }
 
     /**
@@ -1354,8 +1598,16 @@ public class HybridRetriever implements ContentRetriever {
      */
     public List<Content> retrieveAll(List<String> queries, int limit, Object sessionKey,
             java.util.Map<String, Object> metaHints) {
+        long integrityStarted = System.nanoTime();
         if (queries == null || queries.isEmpty()) {
-            return java.util.List.of();
+            return emptyEvidence("hybrid_all", "invalid_input", integrityStarted);
+        }
+        int branchLimit = retrievalBranchLimit();
+        if (queries.size() > branchLimit) {
+            TraceStore.put("hybrid.executor.branchCount", queries.size());
+            TraceStore.put("hybrid.executor.branchLimit", branchLimit);
+            traceHybridExecutor("branch_budget_exceeded", null, 0, 0, 0);
+            return emptyEvidence("hybrid_all", "branch_budget_exceeded", integrityStarted);
         }
 
         final Object sid = (sessionKey != null ? sessionKey : "__TRANSIENT__");
@@ -1404,6 +1656,22 @@ public class HybridRetriever implements ContentRetriever {
 
         final int fuseLimit = Math.max(1, effectiveLimit);
         final boolean applyPrefuseCap = prefuseCap > 0;
+        final com.abandonware.ai.addons.budget.TimeBudget requestBudget =
+                com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        final long initialRequestRemainingMs = requestBudget == null
+                ? Long.MAX_VALUE
+                : requestBudget.remainingMillis();
+        final boolean requestDeadlineDominates = requestBudget != null
+                && initialRequestRemainingMs <= Math.max(1L, hybridRequestTimeoutMs);
+        final long localDeadlineNanos = deadlineNanos(hybridRequestTimeoutMs);
+        final java.util.concurrent.atomic.AtomicBoolean deadlineHit =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicInteger providerFailures =
+                new java.util.concurrent.atomic.AtomicInteger();
+        String terminalReason = "success";
+        int submittedCount = 0;
+        int completedCount = 0;
+        java.util.concurrent.ThreadPoolExecutor executorForTrace = null;
 
         try {
             java.util.List<java.util.List<Content>> results;
@@ -1411,6 +1679,11 @@ public class HybridRetriever implements ContentRetriever {
                 log.warn("[Hybrid] debug.sequential=true ??handlerChain ??筌?鍮?????덈틖");
                 results = new java.util.ArrayList<>();
                 for (int branchIndex = 0; branchIndex < queries.size(); branchIndex++) {
+                    if (remainingBudgetMillis(requestBudget, localDeadlineNanos) <= 0L) {
+                        deadlineHit.set(true);
+                        terminalReason = timeoutReason(requestDeadlineDominates);
+                        break;
+                    }
                     String q = queries.get(branchIndex);
                     java.util.List<Content> acc = new java.util.ArrayList<>();
                     try {
@@ -1438,16 +1711,83 @@ public class HybridRetriever implements ContentRetriever {
                         md.put("branchIndex", branchIndex);
                         md.put("queryHash12", SafeRedactor.hash12(q));
                         dev.langchain4j.rag.query.Query subQ = QueryUtils.buildQuery(q, sid, null, md);
-                        handlerChain.handle(subQ, acc);
+                        java.util.concurrent.ThreadPoolExecutor pool = retrievalExecutor();
+                        executorForTrace = pool;
+                        java.util.concurrent.BlockingQueue<Integer> completion =
+                                new java.util.concurrent.ArrayBlockingQueue<>(1);
+                        java.util.List<Content> branchAccumulator = acc;
+                        final int sequentialBranchIndex = branchIndex;
+                        BranchFuture future = new BranchFuture(
+                                com.example.lms.infra.exec.ContextPropagation.wrapCallable(() -> {
+                                    Thread.interrupted();
+                                    try {
+                                        handlerChain.handle(subQ, branchAccumulator);
+                                        return new BranchResult(sequentialBranchIndex, branchAccumulator);
+                                    } finally {
+                                        Thread.interrupted();
+                                    }
+                                }),
+                                completion,
+                                sequentialBranchIndex);
+                        try {
+                            pool.execute(future);
+                            submittedCount++;
+                        } catch (java.util.concurrent.RejectedExecutionException saturated) {
+                            terminalReason = "executor_saturated";
+                            traceHybridExecutor(
+                                    terminalReason, pool, submittedCount, completedCount,
+                                    providerFailures.get());
+                            return emptyEvidence("hybrid_all", terminalReason, integrityStarted);
+                        }
+                        long remainingMs = remainingBudgetMillis(requestBudget, localDeadlineNanos);
+                        Integer completedIndex;
+                        try {
+                            completedIndex = completion.poll(
+                                    remainingMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        } catch (InterruptedException interrupted) {
+                            future.cancel(false);
+                            pool.purge();
+                            Thread.currentThread().interrupt();
+                            traceHybridExecutor(
+                                    "caller_cancelled", pool, submittedCount, completedCount,
+                                    providerFailures.get());
+                            java.util.concurrent.CancellationException cancelled =
+                                    new java.util.concurrent.CancellationException("caller_cancelled");
+                            cancelled.initCause(interrupted);
+                            throw cancelled;
+                        }
+                        if (completedIndex == null) {
+                            deadlineHit.set(true);
+                            terminalReason = timeoutReason(requestDeadlineDominates);
+                            future.cancel(false);
+                            pool.purge();
+                            break;
+                        }
+                        try {
+                            acc = future.get().contents();
+                        } catch (java.util.concurrent.ExecutionException completedFailure) {
+                            if (completedFailure.getCause()
+                                    instanceof java.util.concurrent.CancellationException cancelled) {
+                                traceHybridExecutor(
+                                        "provider_cancelled", pool, submittedCount, completedCount,
+                                        providerFailures.get());
+                                throw cancelled;
+                            }
+                            throw completedFailure;
+                        }
 
                         if (applyPrefuseCap && acc.size() > fuseLimit) {
                             acc = new java.util.ArrayList<>(acc.subList(0, fuseLimit));
                         }
+                    } catch (java.util.concurrent.CancellationException cancelled) {
+                        throw cancelled;
                     } catch (Exception e) {
+                        providerFailures.incrementAndGet();
                         recordHybridBranchFailure(branchIndex, q, e, "handler");
                         log.warn("[Hybrid] handler branch failed queryHash12={} errorHash={} errorLength={}", SafeRedactor.hash12(q), SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
                     }
                     results.add(acc);
+                    completedCount++;
                 }
             } else {
                 // ??れ삀??? ????モ뵲 ?怨뚮옖筌??????덈틖 (???살쓴???? ??????ヂ???)
@@ -1455,17 +1795,30 @@ public class HybridRetriever implements ContentRetriever {
                 // UAW: ?怨뚮옖筌????獄쏅똻???딅텑??????MDC/GuardContext/TraceStore ??ш낄援?怨ル쨬??쎛 ??熬곣뱿逾쏉┼?
                 // handlerChain??"pass癲? ?袁⑸즵????嚥▲꺂???좊읈? ?濡ろ뜏????뽰씀? 0???⑥????嚥?竊??嚥▲꺂痢????읐???⑤８痢??좊읈? ????덊렡.
                 // ContextPropagation???⑥??task????좊즴?????釉먯뒜?????쒙쭕????爾?????덉쉐???????筌먲퐢??
-                java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(
-                        Math.max(1, this.maxParallel));
+                java.util.concurrent.ThreadPoolExecutor pool = retrievalExecutor();
+                executorForTrace = pool;
+                java.util.concurrent.BlockingQueue<Integer> completionOrder =
+                        new java.util.concurrent.ArrayBlockingQueue<>(Math.max(1, queries.size()));
                 try {
-                    java.util.List<java.util.concurrent.CompletableFuture<java.util.List<Content>>> futures =
+                    java.util.List<BranchFuture> futures =
                             new java.util.ArrayList<>(queries.size());
 
                     for (int branchIndex = 0; branchIndex < queries.size(); branchIndex++) {
+                        if (remainingBudgetMillis(requestBudget, localDeadlineNanos) <= 0L) {
+                            deadlineHit.set(true);
+                            terminalReason = timeoutReason(requestDeadlineDominates);
+                            break;
+                        }
                         String q = queries.get(branchIndex);
                         final int branchIdx = branchIndex;
-                        futures.add(java.util.concurrent.CompletableFuture.supplyAsync(
+                        try {
+                            java.util.function.Supplier<java.util.List<Content>> branchSupplier =
                                 com.example.lms.infra.exec.ContextPropagation.wrapSupplier(() -> {
+                                    Thread.interrupted();
+                                    if (remainingBudgetMillis(requestBudget, localDeadlineNanos) <= 0L) {
+                                        deadlineHit.set(true);
+                                        return java.util.List.of();
+                                    }
                                     java.util.List<Content> acc = new java.util.ArrayList<>();
                                     try {
                                         java.util.Map<String, Object> md = new java.util.HashMap<>();
@@ -1493,33 +1846,119 @@ public class HybridRetriever implements ContentRetriever {
                                         md.put("queryHash12", SafeRedactor.hash12(q));
                                         dev.langchain4j.rag.query.Query subQ = QueryUtils.buildQuery(q, sid, null, md);
                                         handlerChain.handle(subQ, acc);
+                                    } catch (java.util.concurrent.CancellationException cancelled) {
+                                        throw cancelled;
                                     } catch (Exception e) {
+                                        providerFailures.incrementAndGet();
                                         log.debug("[HybridRetriever] fail-soft stage={}", "retrieveAll.async.handler");
                                         recordHybridBranchFailure(branchIdx, q, e, "handler");
                                         log.warn("[Hybrid] handler branch failed queryHash12={} errorHash={} errorLength={}", SafeRedactor.hash12(q), SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
                                     }
 
                                     if (applyPrefuseCap && acc.size() > fuseLimit) {
+                                        Thread.interrupted();
                                         return new java.util.ArrayList<>(acc.subList(0, fuseLimit));
                                     }
+                                    Thread.interrupted();
                                     return acc;
-                                }), pool));
+                                });
+                            BranchFuture submitted = new BranchFuture(
+                                    () -> {
+                                        Thread.interrupted();
+                                        try {
+                                            return new BranchResult(branchIdx, branchSupplier.get());
+                                        } finally {
+                                            Thread.interrupted();
+                                        }
+                                    },
+                                    completionOrder,
+                                    branchIdx);
+                            pool.execute(submitted);
+                            futures.add(submitted);
+                            submittedCount++;
+                        } catch (java.util.concurrent.RejectedExecutionException saturated) {
+                            futures.forEach(future -> future.cancel(false));
+                            pool.purge();
+                            terminalReason = "executor_saturated";
+                            traceHybridExecutor(
+                                    terminalReason, pool, submittedCount, completedCount,
+                                    providerFailures.get());
+                            return emptyEvidence("hybrid_all", terminalReason, integrityStarted);
+                        }
                     }
 
-                    java.util.List<java.util.List<Content>> joined = new java.util.ArrayList<>(futures.size());
-                    for (int i = 0; i < futures.size(); i++) {
-                        try {
-                            joined.add(futures.get(i).join());
-                        } catch (Exception e) {
-                            log.debug("[HybridRetriever] fail-soft stage={}", "retrieveAll.async.join");
-                            String branchQuery = (i >= 0 && i < queries.size()) ? queries.get(i) : "";
-                            recordHybridBranchFailure(i, branchQuery, e, "missing_future");
-                            joined.add(java.util.List.<Content>of());
+                    java.util.List<java.util.List<Content>> joined = new java.util.ArrayList<>(
+                            java.util.Collections.nCopies(queries.size(), java.util.List.of()));
+                    while (completedCount < submittedCount) {
+                        long remainingMs = remainingBudgetMillis(requestBudget, localDeadlineNanos);
+                        if (remainingMs <= 0L) {
+                            deadlineHit.set(true);
+                            terminalReason = timeoutReason(requestDeadlineDominates);
+                            break;
                         }
+                        Integer completedIndex;
+                        try {
+                            completedIndex = completionOrder.poll(
+                                    remainingMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        } catch (InterruptedException interrupted) {
+                            futures.forEach(future -> future.cancel(false));
+                            pool.purge();
+                            Thread.currentThread().interrupt();
+                            traceHybridExecutor(
+                                    "caller_cancelled", pool, submittedCount, completedCount,
+                                    providerFailures.get());
+                            java.util.concurrent.CancellationException cancelled =
+                                    new java.util.concurrent.CancellationException("caller_cancelled");
+                            cancelled.initCause(interrupted);
+                            throw cancelled;
+                        }
+                        if (completedIndex == null) {
+                            deadlineHit.set(true);
+                            terminalReason = timeoutReason(requestDeadlineDominates);
+                            break;
+                        }
+                        completedCount++;
+                        try {
+                            joined.set(completedIndex, futures.get(completedIndex).get().contents());
+                        } catch (java.util.concurrent.CancellationException cancelled) {
+                            if ("success".equals(terminalReason)) terminalReason = "provider_cancelled";
+                        } catch (InterruptedException interrupted) {
+                            futures.forEach(future -> future.cancel(false));
+                            pool.purge();
+                            Thread.currentThread().interrupt();
+                            traceHybridExecutor(
+                                    "caller_cancelled", pool, submittedCount, completedCount,
+                                    providerFailures.get());
+                            java.util.concurrent.CancellationException cancelled =
+                                    new java.util.concurrent.CancellationException("caller_cancelled");
+                            cancelled.initCause(interrupted);
+                            throw cancelled;
+                        } catch (java.util.concurrent.ExecutionException e) {
+                            if (e.getCause() instanceof java.util.concurrent.CancellationException cancelled) {
+                                futures.forEach(future -> future.cancel(false));
+                                pool.purge();
+                                traceHybridExecutor(
+                                        "provider_cancelled", pool, submittedCount, completedCount,
+                                        providerFailures.get());
+                                throw cancelled;
+                            }
+                            log.debug("[HybridRetriever] fail-soft stage={}", "retrieveAll.async.join");
+                            String branchQuery = completedIndex < queries.size()
+                                    ? queries.get(completedIndex) : "";
+                            providerFailures.incrementAndGet();
+                            recordHybridBranchFailure(completedIndex, branchQuery, e, "missing_future");
+                        }
+                    }
+                    if (deadlineHit.get()) {
+                        terminalReason = timeoutReason(requestDeadlineDominates);
+                        futures.forEach(future -> {
+                            if (!future.isDone()) future.cancel(false);
+                        });
+                        pool.purge();
                     }
                     results = joined;
                 } finally {
-                    pool.shutdown();
+                    pool.purge();
                 }
             }
 
@@ -1527,25 +1966,119 @@ public class HybridRetriever implements ContentRetriever {
             boolean useSoftmax = "softmax".equalsIgnoreCase(fusionMode)
                     && ("minmax".equalsIgnoreCase(softmaxCalibration)
                             || "isotonic".equalsIgnoreCase(softmaxCalibration));
-            if (useSoftmax) {
-                String q0 = queries.get(0); // representative query (approximation)
-                return fuseWithSoftmax(results, fuseLimit, q0);
+            java.util.List<Content> fused = java.util.List.of();
+            long fusionRemainingMs = remainingBudgetMillis(requestBudget, localDeadlineNanos);
+            if (deadlineHit.get() || fusionRemainingMs <= 0L) {
+                deadlineHit.set(true);
+                terminalReason = timeoutReason(requestDeadlineDominates);
+                fused = flattenWithinLimit(results, fuseLimit);
+            } else {
+                boolean useWeighted = weightedFuser != null &&
+                        ("weighted-rrf".equalsIgnoreCase(fusionMode) ||
+                                "rrf-weighted".equalsIgnoreCase(fusionMode) ||
+                                "weighted".equalsIgnoreCase(fusionMode));
+                java.util.List<java.util.List<Content>> fusionInput = results;
+                java.util.concurrent.ThreadPoolExecutor pool = retrievalExecutor();
+                executorForTrace = pool;
+                java.util.concurrent.Future<java.util.List<Content>> fusionFuture;
+                try {
+                    fusionFuture = pool.submit(com.example.lms.infra.exec.ContextPropagation.wrapCallable(() -> {
+                        Thread.interrupted();
+                        try {
+                            if (useSoftmax) {
+                                return fuseWithSoftmax(fusionInput, fuseLimit, queries.get(0));
+                            }
+                            return useWeighted
+                                    ? weightedFuser.fuse(fusionInput, fuseLimit)
+                                    : fuser.fuse(fusionInput, fuseLimit);
+                        } finally {
+                            Thread.interrupted();
+                        }
+                    }));
+                    TraceStore.put("hybrid.executor.fusionSubmitted", true);
+                } catch (java.util.concurrent.RejectedExecutionException saturated) {
+                    terminalReason = "executor_saturated";
+                    fused = flattenWithinLimit(fusionInput, fuseLimit);
+                    fusionFuture = null;
+                }
+                if (fusionFuture != null) {
+                    try {
+                        fused = fusionFuture.get(
+                                fusionRemainingMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    } catch (java.util.concurrent.TimeoutException timeout) {
+                        deadlineHit.set(true);
+                        terminalReason = timeoutReason(requestDeadlineDominates);
+                        fusionFuture.cancel(false);
+                        pool.purge();
+                        fused = flattenWithinLimit(fusionInput, fuseLimit);
+                    } catch (InterruptedException interrupted) {
+                        fusionFuture.cancel(false);
+                        pool.purge();
+                        Thread.currentThread().interrupt();
+                        traceHybridExecutor(
+                                "caller_cancelled", pool, submittedCount, completedCount,
+                                providerFailures.get());
+                        java.util.concurrent.CancellationException cancelled =
+                                new java.util.concurrent.CancellationException("caller_cancelled");
+                        cancelled.initCause(interrupted);
+                        throw cancelled;
+                    } catch (java.util.concurrent.CancellationException cancelled) {
+                        traceHybridExecutor(
+                                "provider_cancelled", pool, submittedCount, completedCount,
+                                providerFailures.get());
+                        throw cancelled;
+                    } catch (java.util.concurrent.ExecutionException failed) {
+                        Throwable cause = failed.getCause();
+                        if (cause instanceof java.util.concurrent.CancellationException cancelled) {
+                            traceHybridExecutor(
+                                    "provider_cancelled", pool, submittedCount, completedCount,
+                                    providerFailures.get());
+                            throw cancelled;
+                        }
+                        if (cause instanceof Exception exception) throw exception;
+                        if (cause instanceof Error error) throw error;
+                        throw new RuntimeException(cause);
+                    }
+                }
             }
-
-            boolean useWeighted = weightedFuser != null &&
-                    ("weighted-rrf".equalsIgnoreCase(fusionMode) ||
-                            "rrf-weighted".equalsIgnoreCase(fusionMode) ||
-                            "weighted".equalsIgnoreCase(fusionMode));
-            if (useWeighted) {
-                return weightedFuser.fuse(results, fuseLimit);
+            if ("success".equals(terminalReason) && providerFailures.get() > 0) {
+                terminalReason = (fused == null || fused.isEmpty())
+                        ? "provider_hard_failure"
+                        : "partial_provider_hard_failure";
             }
-            return fuser.fuse(results, fuseLimit);
+            traceHybridExecutor(
+                    terminalReason, executorForTrace, submittedCount, completedCount,
+                    providerFailures.get());
+            if ((fused == null || fused.isEmpty()) && !"success".equals(terminalReason)) {
+                return emptyEvidence("hybrid_all", terminalReason, integrityStarted);
+            }
+            return fused == null ? java.util.List.of() : fused;
+        } catch (java.util.concurrent.CancellationException cancelled) {
+            throw cancelled;
         } catch (Exception e) {
             log.debug("[HybridRetriever] fail-soft stage={}", "retrieveAll.outer");
             log.error("[Hybrid] retrieveAll ????됰꽡 errorHash={} errorLength={}", SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
-            return java.util.List.of(Content.from("[?濡ろ떟???????곸씔]"));
+            String reason = deadlineHit.get()
+                    ? timeoutReason(requestDeadlineDominates)
+                    : "provider_hard_failure";
+            traceHybridExecutor(
+                    reason, executorForTrace, submittedCount, completedCount,
+                    providerFailures.get() + (deadlineHit.get() ? 0 : 1));
+            return emptyEvidence("hybrid_all", reason, integrityStarted);
         }
     } // retrieveAll ??
+
+    private static List<Content> emptyEvidence(String source, String reason, long started) {
+        TraceStore.put("retrieval.integrity.source", source);
+        TraceStore.put("retrieval.integrity.inputCount", 0);
+        TraceStore.put("retrieval.integrity.filteredCount", 0);
+        TraceStore.put("retrieval.integrity.finalUsedCount", 0);
+        TraceStore.put("retrieval.integrity.fallbackStage", "none");
+        TraceStore.put("retrieval.integrity.emptyReason", reason);
+        TraceStore.put("retrieval.integrity.elapsedMs",
+                Math.max(0L, (System.nanoTime() - started) / 1_000_000L));
+        return List.of();
+    }
 
     // ??????????????????????????????????????????????????????????????????????????????????????????
     // ???ㅺ컼????れ삀??뫢??濡ろ떟??? CognitiveState/PromptContext???袁⑸즵??????얜?????嶺뚮Ĳ??????怨뚮옖筌???濡ろ떟???
@@ -1661,8 +2194,8 @@ public class HybridRetriever implements ContentRetriever {
             }
             uniq.putIfAbsent(key, c);
         }
-        // Safety net: restore filtered candidates when strict filtering empties output.
-        if (uniq.isEmpty() && !dropped.isEmpty()) {
+        // Compatibility safety net: restore only under an explicit operator policy.
+        if (uniq.isEmpty() && !dropped.isEmpty() && relatednessFilterFailSoft) {
             log.warn("[Hybrid] 癲ル슢?꾤땟????濡ろ떟????濡ろ뜏????뽰씀? minRelatedness({}) 雅?퍔瑗띰㎖?뱁맪???⑥????ш낄援?轅곗땡??녠텤嶺? Safety Net ?袁⑸즵獒뺣끆???筌뚯슦肉????ㅼ굣筌?{}???怨뚮옖甕걔?? queryHash12={} queryLength={}",
                     minRelatedness, Math.min(topK, dropped.size()),
                     SafeRedactor.hash12(queryText), queryText == null ? 0 : queryText.length());
@@ -1683,6 +2216,11 @@ public class HybridRetriever implements ContentRetriever {
                     break;
                 }
             }
+            TraceStore.put("retrieval.integrity.relatednessFailSoft", true);
+            TraceStore.put("retrieval.integrity.relatednessRestoredCount", uniq.size());
+        } else if (uniq.isEmpty() && !dropped.isEmpty()) {
+            TraceStore.put("retrieval.integrity.relatednessRejectedCount", dropped.size());
+            TraceStore.put("retrieval.integrity.emptyReason", "relatedness_filtered_empty");
         }
 
         // 2) ?濡ろ뜑???1癲???雅?(???⑤챶?뺧┼?candidates ??숆강筌???????

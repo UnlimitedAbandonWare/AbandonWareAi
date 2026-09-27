@@ -1,681 +1,254 @@
+package com.example.lms.service.onnx;
 
-
-        package com.example.lms.service.onnx;
-
-import ai.onnxruntime.OnnxTensor;
-import ai.onnxruntime.OrtEnvironment;
-import ai.onnxruntime.OrtSession;
-import ai.onnxruntime.OnnxValue;
 import com.example.lms.search.TraceStore;
-import com.example.lms.service.onnx.tokenizer.CrossEncoderTokenizer;
 import com.example.lms.trace.SafeRedactor;
 import jakarta.annotation.PostConstruct;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
 
-
-
-
-/**
- * Service that encapsulates a local ONNX runtime session for cross-encoder inference.
- *
- * <p>This service is responsible for loading a serialized ONNX model from a
- * configurable location and providing a simple {@link #predict(String[], String[])}
- * API to score query-document pairs. In the absence of a domain-specific
- * tokeniser and model, this implementation falls back to a lightweight
- * lexical similarity metric. The ONNX session is initialised in
- * {@link #init()} and remains active for the lifetime of the application.</p>
- */
 @Service
-// 개선: onnx 백엔드일 때에만 서비스 생성(선택)
 @ConditionalOnExpression(
         "('${abandonware.reranker.backend:embedding-model}' == 'onnx-runtime' "
                 + "or '${abandonware.reranker.backend:embedding-model}' == 'onnx') "
                 + "and '${abandonware.reranker.onnx.runtime-enabled:false}' == 'true'")
 public class OnnxRuntimeService {
-
-    // 개선: 로거 추가
     private static final Logger log = LoggerFactory.getLogger(OnnxRuntimeService.class);
     private static final int MIN_MODEL_BYTES = 1_000_000;
-    private static final String PLACEHOLDER_DISABLED_REASON = "placeholder_or_too_small_model";
 
-    /**
-     * Model file path.  Supports both the newer abandonware property and the
-     * legacy {@code onnx.model-path} key for backwards compatibility.  The
-     * nested shim resolves the abandonware key first and falls back to
-     * the legacy key when unspecified.
-     */
-    @Value("${abandonware.reranker.onnx.model-path:${onnx.model-path:}}")
-    private String modelPath;
-
-    /**
-     * Execution provider name (e.g. cpu, cuda, tensorrt).  Supports
-     * resolution via both abandonware and legacy keys.  Defaults to
-     * {@code cpu}.
-     */
     @Value("${abandonware.reranker.onnx.execution-provider:${onnx.execution-provider:cpu}}")
     private String executionProvider;
 
-    /** Optional CUDA device selection; -1 = default device */
-    @Value("${abandonware.reranker.onnx.device-id:${onnx.device-id:${zsys.onnx.gpu-id:-1}}}")
-    private int deviceId;
-
-    private OrtEnvironment env;
-    private OrtSession session;
-    /**
-     * Indicates whether an ONNX model has been successfully loaded. When
-     * {@code false} the service will always fall back to lexical scoring.
-     */
-    private volatile boolean available;
-    private volatile String disabledReason = "";
-
-    /**
-     * Path to the vocabulary used by the wordpiece tokenizer.  Supports
-     * resolution via abandonware and legacy keys.  When unspecified the
-     * tokenizer will be disabled and lexical scoring will be used.
-     */
-    @Value("${abandonware.reranker.onnx.vocab-path:${onnx.vocab-path:}}")
-    private String vocabPath;
-
-    /**
-     * Maximum sequence length for tokenised inputs.  Longer sequences are
-     * truncated.  Supports both abandonware and legacy keys.  Defaults to
-     * 256.
-     */
     @Value("${abandonware.reranker.onnx.max-seq-len:${onnx.max-seq-len:256}}")
     private int maxSeqLen;
 
-    /** 안전 차단: 토크나이저 투입 전 원문 하드 컷(문자 단위) */
-    @Value("${abandonware.reranker.onnx.max-chars:800}")
-    private int maxChars;
-
-    /**
-     * Whether to normalise raw model logits via a sigmoid function.  When
-     * enabled the first element of the output tensor is passed through
-     * {@code 1/(1+e^-x)} to produce a value in the range [0,1].  Defaults
-     * to {@code true}.  Only applied when the ONNX backend is active.
-     */
-    @Value("${abandonware.reranker.onnx.normalize:true}")
-    private boolean normalize;
-
-    // Fail-closed: false면 폴백 없이 즉시 예외
     @Value("${abandonware.reranker.onnx.fallback-enabled:true}")
     private boolean fallbackEnabled;
 
-    // Names of model inputs and outputs captured during session initialisation
-    private java.util.List<String> inputNames;
-    private java.util.List<String> outputNames;
+    @Value("${abandonware.reranker.onnx.normalize:true}")
+    private boolean normalize;
 
-    /** Tokeniser used to convert query/document pairs into model inputs. */
-    private CrossEncoderTokenizer tokenizer;
+    @Value("${abandonware.reranker.onnx.model-path:${onnx.model-path:}}")
+    private String modelPath;
 
-    /**
-     * Initialise the ONNX environment and session. If the model path is
-     * configured with a {@code classpath:} prefix it will be resolved from
-     * the application resources; otherwise it will be treated as a file
-     * system path. Execution provider selection is based on the
-     * {@link #executionProvider} property: {@code cpu} uses the default
-     * provider, {@code cuda} enables CUDA support and {@code tensorrt} uses
-     * TensorRT when available.
-     */
+    private volatile String disabledReason = "onnxruntime_dependency_unavailable";
+
     @PostConstruct
     public void init() {
-        try {
-            log.info("[AWX2AF2][gpu][onnx] runtimeEnabled=true backend=onnx-runtime provider={} deviceId={} modelPathConfigured={} action=init",
-                    normalizeProvider(executionProvider), deviceId, modelPath != null && !modelPath.isBlank());
-            // If no model path is provided there is nothing to initialise.  Leave
-            // available=false so callers will fall back to lexical scoring.
-            if (modelPath == null || modelPath.isBlank()) {
-                markModelDisabled("model_path_missing", 0);
-                log.info("[AWX2AF2][gpu][onnx] runtimeEnabled=true backend=onnx-runtime provider={} deviceId={} modelPathConfigured=false action=skip reason=model_path_missing",
-                        normalizeProvider(executionProvider), deviceId);
-                // fail-closed: throw when fallback is disabled
-                if (!fallbackEnabled) {
-                    throw new IllegalStateException("ONNX model path missing and fallback disabled");
-                }
-                return;
-            }
-            // Attempt to load the vocabulary for the wordpiece tokenizer.  When
-            // absent or failing to read the tokenizer will remain null and
-            // lexical scoring will be used.  Suppress any exceptions.
-            if (vocabPath != null && !vocabPath.isBlank()) {
-                try (InputStream vs = open(vocabPath)) {
-                    if (vs != null) {
-                        this.tokenizer = new com.example.lms.service.onnx.tokenizer.WordpieceTokenizer(vs);
-                    }
-                } catch (Exception e) {
-                    this.tokenizer = null;
-                    // fail-closed: abort initialisation when fallback disabled
-                    if (!fallbackEnabled) {
-                        throw new IllegalStateException("ONNX vocab load failed and fallback disabled", e);
-                    }
-                }
-            }
-            // Open and read the model bytes.  Use InputStream so classpath: is
-            // supported in both exploded and packaged modes.
-            try (InputStream m = open(modelPath)) {
-                if (m == null) {
-                    markModelDisabled("model_path_not_resolvable", 0);
-                    if (!fallbackEnabled) {
-                        throw new IllegalStateException("ONNX model path not resolvable and fallback disabled");
-                    }
-                    return;
-                }
-                byte[] bytes = m.readAllBytes();
-                if (isPlaceholderOrTooSmallModel(bytes)) {
-                    markModelDisabled(PLACEHOLDER_DISABLED_REASON, bytes.length);
-                    if (!fallbackEnabled) {
-                        throw new IllegalStateException("ONNX " + PLACEHOLDER_DISABLED_REASON + " and fallback disabled");
-                    }
-                    return;
-                }
-                // Always obtain an OrtEnvironment only after the configured model passes
-                // cheap placeholder checks.
-                this.env = OrtEnvironment.getEnvironment();
-                // Attempt to create an in-memory session.  If this fails the
-                // session remains null but we still mark available=true so that
-                // scorePair() can compute alternative scores.
-                try {
-                    OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-                    String ep = normalizeProvider(executionProvider);
-                    try {
-                        if ("cuda".equals(ep)) {
-                            if (deviceId >= 0) {
-                                opts.addCUDA(deviceId);
-                                log.info("[AWX2AF2][gpu][onnx] provider=cuda deviceId={} action=session_create", deviceId);
-                            } else {
-                                opts.addCUDA();
-                                log.info("[AWX2AF2][gpu][onnx] provider=cuda deviceId=default action=session_create");
-                            }
-                        } else {
-                            log.info("[AWX2AF2][gpu][onnx] provider={} action=session_create", ep);
-                        }
-                        this.session = env.createSession(bytes, opts);
-                    } catch (Throwable t) {
-                        log.warn("[AWX2AF2][gpu][onnx] provider={} action=cpu_fallback errorHash={} errorLength={}",
-                                ep, SafeRedactor.hashValue(messageOf(t)), messageLength(t));
-                        this.session = env.createSession(bytes, new OrtSession.SessionOptions());
-                    }
-                } catch (Throwable t) {
-                    log.debug("[ONNX] fail-soft stage={}", "session.create");
-                    markSessionDisabled(t, bytes.length);
-                }
-            }
-            // Consider the service available only when a valid session exists.
-            this.available = (this.session != null);
-            if (this.available) {
-                this.disabledReason = "";
-            }
-            // capture input and output names when a session has been created
-            if (this.session != null) {
-                this.inputNames  = new java.util.ArrayList<>(this.session.getInputInfo().keySet());
-                this.outputNames = new java.util.ArrayList<>(this.session.getOutputInfo().keySet());
-            }
-            log.info("[AWX2AF2][gpu][onnx] runtimeEnabled=true backend=onnx-runtime provider={} deviceId={} sessionAvailable={} action=ready",
-                    normalizeProvider(executionProvider), deviceId, this.available);
-        } catch (Throwable t) {
-            this.available = false;
-            this.session = null;
-            this.disabledReason = SafeRedactor.traceLabelOrFallback("initialisation_failed", "unknown");
-            log.warn("[AWX2AF2][gpu][onnx] action=initialisation_failed fallbackEnabled={} errorHash={} errorLength={}",
-                    fallbackEnabled, SafeRedactor.hashValue(messageOf(t)), messageLength(t));
-            // fail-closed: rethrow when fallback disabled
-            if (!fallbackEnabled) {
-                throw new IllegalStateException("ONNX initialisation failed and fallback disabled", t);
-            }
-        }
-    }
-
-    private String normalizeProvider(String provider) {
-        return (provider == null || provider.isBlank()) ? "cpu" : provider.trim().toLowerCase();
-    }
-
-    private static String messageOf(Throwable error) {
-        return error == null ? "" : String.valueOf(error.getMessage());
-    }
-
-    private static int messageLength(Throwable error) {
-        return messageOf(error).length();
-    }
-
-    /**
-     * Resolve a model path that may be prefixed with {@code classpath:}.
-     *
-     * @param path the configured path
-     * @return a file system path suitable for {@link OrtSession#createSession(String, OrtSession.SessionOptions)}
-     */
-    // 수정: throws 제거, 내부에서 안전 처리
-    private String resolveModelPath(String path) {
-        if (path == null || path.isBlank()) {
-            return null;
-        }
-        String trimmed = path.trim();
-        String prefix = "classpath:";
-        if (trimmed.startsWith(prefix)) {
-            String location = trimmed.substring(prefix.length());
-            Resource resource = new ClassPathResource(location);
-            if (!resource.exists()) {
-                log.warn("[ONNX] classpath resource not found resourceHash={}", SafeRedactor.hashValue(location));
-                return null;
-            }
-            try {
-                // 개발환경(Exploded)에서는 파일 경로가 나옴
-                return resource.getFile().getAbsolutePath();
-            } catch (IOException e) {
-                // 패키징(JAR)된 경우 getFile() 불가 → 여기서는 로드 건너뛰고 폴백
-                log.warn("[ONNX] resource is not a file (likely inside JAR). Skipping ONNX load.");
-                return null;
-            }
-        }
-        return trimmed;
-    }
-
-    private void markModelDisabled(String reason, int modelBytes) {
-        this.available = false;
-        this.session = null;
-        this.disabledReason = SafeRedactor.traceLabelOrFallback(reason, "unknown");
-        TraceStore.put("rerank.onnx.ready", false);
-        TraceStore.put("rerank.onnx.disabledReason", this.disabledReason);
-        TraceStore.put("onnx.status", "disabled");
-        TraceStore.put("onnx.disabledReason", this.disabledReason);
-        TraceStore.put("rerank.onnx.modelBytes", modelBytes);
-        log.warn("[AWX2AF2][gpu][onnx] action=disabled reason={} fallbackEnabled={} modelPathConfigured={} modelPathHash={} modelBytes={}",
-                reason,
-                fallbackEnabled,
-                modelPath != null && !modelPath.isBlank(),
-                SafeRedactor.hashValue(modelPath),
-                modelBytes);
-    }
-
-    private void markSessionDisabled(Throwable t, int modelBytes) {
-        String reason = "session_create_failed";
-        this.available = false;
-        this.session = null;
-        this.disabledReason = SafeRedactor.traceLabelOrFallback(reason, "unknown");
-        TraceStore.put("rerank.onnx.ready", false);
-        TraceStore.put("rerank.onnx.disabledReason", this.disabledReason);
-        TraceStore.put("onnx.status", "disabled");
-        TraceStore.put("onnx.disabledReason", this.disabledReason);
-        TraceStore.put("rerank.onnx.sessionFailed", true);
-        TraceStore.put("rerank.onnx.sessionFailureClass", SafeRedactor.traceLabelOrFallback(
-                t == null ? "" : t.getClass().getSimpleName(), "unknown"));
-        TraceStore.put("rerank.onnx.modelBytes", modelBytes);
-        log.warn("[AWX2AF2][gpu][onnx] action=session_disabled reason={} fallbackEnabled={} provider={} modelPathConfigured={} modelPathHash={} modelBytes={} errorType={}",
-                reason,
-                fallbackEnabled,
-                normalizeProvider(executionProvider),
-                modelPath != null && !modelPath.isBlank(),
-                SafeRedactor.hashValue(modelPath),
-                modelBytes,
-                SafeRedactor.traceLabelOrFallback(t == null ? "" : t.getClass().getSimpleName(), "unknown"));
-    }
-
-    static boolean isPlaceholderOrTooSmallModel(byte[] bytes) {
-        if (bytes == null || bytes.length < MIN_MODEL_BYTES) {
-            return true;
-        }
-        int len = Math.min(bytes.length, 256);
-        String head = new String(bytes, 0, len, StandardCharsets.UTF_8);
-        return head.contains("ONNXPLACEHOLDER");
-    }
-
-    /**
-     * Open an input stream from a path that may be prefixed with
-     * {@code classpath:}.  When the prefix is present the resource is
-     * resolved from the Spring classpath.  When the prefix is absent the
-     * argument is treated as a file system location.  If the resource
-     * cannot be resolved {@code null} is returned.
-     *
-     * @param path the location to open
-     * @return an {@link InputStream} or {@code null} if not found
-     */
-    private InputStream open(String path) {
-        if (path == null || path.isBlank()) return null;
-        String trimmed = path.trim();
-        String prefix = "classpath:";
-        try {
-            if (trimmed.startsWith(prefix)) {
-                String location = trimmed.substring(prefix.length());
-                Resource resource = new ClassPathResource(location);
-                if (!resource.exists()) return null;
-                return resource.getInputStream();
-            }
-            // file system path
-            return new java.io.FileInputStream(trimmed);
-        } catch (Exception e) {
-            log.debug("[ONNX] fail-soft stage={}", "open");
-            return null;
-        }
-    }
-
-    /**
-     * Return {@code true} when a model has been initialised.  Note that the
-     * underlying OrtSession may be {@code null} if the model failed to
-     * initialise, but callers can still rely on this flag to indicate that
-     * alternative scoring (e.g. inverted lexical similarity) should be used.
-     */
-    public boolean available() {
-        return available;
-    }
-
-    /**
-     * Alias for {@link #available()}.  Some callers check the service state
-     * via {@code active()} rather than {@code available()}.  To preserve
-     * backwards compatibility we expose this additional accessor.
-     *
-     * @return {@code true} when the ONNX model session has been successfully
-     *         initialised, {@code false} otherwise
-     */
-    public boolean active() {
-        return available;
-    }
-
-    /**
-     * Predict confidence scores for a batch of query-document pairs.
-     *
-     * <p>The returned matrix has shape {@code [queries.length][documents.length]}. Each entry
-     * represents a similarity score between the corresponding query and document. If an ONNX
-     * model is available and compatible with the input format, it can be invoked here. In the
-     * absence of such a model, a simple Jaccard similarity over whitespace-delimited tokens
-     * is used as a fallback. The output scores are in the range {@code [0,1]}.</p>
-     *
-     * @param queries   an array of query strings
-     * @param documents an array of document strings
-     * @return a 2D float array of confidence scores
-     */
-    public float[][] predict(String[] queries, String[] documents) {
-        int m = (queries == null ? 0 : queries.length);
-        int n = (documents == null ? 0 : documents.length);
-        float[][] result = new float[m][n];
-        if (m == 0 || n == 0) {
-            return result;
-        }
-        // If the model is not available or the session failed to load, fall back to
-        // lexical Jaccard similarity.  When the model is available use the
-        // scorePair API to compute a similarity score for each query/document
-        // combination.  scorePair() already handles model invocation and
-        // fallback internally, returning a double in the range [0,1].
-        boolean useModel = available && session != null;
-        for (int i = 0; i < m; i++) {
-            String q = queries[i] == null ? "" : queries[i];
-            for (int j = 0; j < n; j++) {
-                String d = documents[j] == null ? "" : documents[j];
-                if (useModel) {
-                    result[i][j] = (float) scorePair(q, d);
-                } else {
-                    result[i][j] = computeJaccardSimilarity(q, d);
-                }
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Compute a simple Jaccard similarity between two strings. The strings are
-     * tokenised on non-word characters and converted to lower case. The
-     * similarity is defined as {@code |intersection| / |union|}. When both
-     * strings are empty the similarity defaults to {@code 0.0f}.
-     *
-     * @param q the query string
-     * @param d the document string
-     * @return a similarity score in {@code [0,1]}
-     */
-    private float computeJaccardSimilarity(String q, String d) {
-        if (q == null || d == null) {
-            return 0.0f;
-        }
-        String[] qTokens = Arrays.stream(q.toLowerCase().split("\\W+")).filter(s -> !s.isBlank()).toArray(String[]::new);
-        String[] dTokens = Arrays.stream(d.toLowerCase().split("\\W+")).filter(s -> !s.isBlank()).toArray(String[]::new);
-        if (qTokens.length == 0 || dTokens.length == 0) {
-            return 0.0f;
-        }
-        Set<String> qSet = new HashSet<>(Arrays.asList(qTokens));
-        Set<String> dSet = new HashSet<>(Arrays.asList(dTokens));
-        Set<String> intersection = new HashSet<>(qSet);
-        intersection.retainAll(dSet);
-        Set<String> union = new HashSet<>(qSet);
-        union.addAll(dSet);
-        if (union.isEmpty()) {
-            return 0.0f;
-        }
-        return (float) intersection.size() / (float) union.size();
-    }
-
-    /**
-     * Simple container for encoded inputs.  Each field corresponds to a model
-     * input: {@code inputIds}, {@code attn} (attention mask) and
-     * {@code tokenTypes} (segment IDs).  This record mirrors the
-     * {@link com.example.lms.service.onnx.tokenizer.CrossEncoderTokenizer.Encoded} record but
-     * exists here to avoid leaking the external type.
-     */
-    private record Enc(int[] inputIds, int[] attn, int[] tokenTypes) {}
-
-    /**
-     * Encode a query/document pair into integer arrays suitable for feeding to
-     * the ONNX model.  When no tokenizer is available this returns empty
-     * arrays to signal fallback.
-     */
-    private Enc encodePair(String q, String d, int maxSeq) {
-        if (this.tokenizer == null) {
-            return new Enc(new int[0], new int[0], new int[0]);
-        }
-        try {
-            CrossEncoderTokenizer.Encoded enc =
-                    this.tokenizer.encodePair(q == null ? "" : q, d == null ? "" : d, maxSeq);
-            return new Enc(enc.inputIds(), enc.attentionMask(), enc.tokenTypeIds());
-        } catch (Exception e) {
-            log.debug("[ONNX] fail-soft stage={}", "encodePair");
-            return new Enc(new int[0], new int[0], new int[0]);
-        }
-    }
-
-    /** Convert an int[] to a long[] for ONNX tensor creation. */
-    private long[] toLong(int[] ints) {
-        long[] arr = new long[ints.length];
-        for (int i = 0; i < ints.length; i++) arr[i] = ints[i];
-        return arr;
-    }
-
-    /** Pick the first matching name from a set of input names. */
-    private String pick(java.util.Set<String> names, String preferred) {
-        if (names.contains(preferred)) return preferred;
-        // fall back to the first name
-        return names.iterator().next();
-    }
-
-    /** Flatten a tensor of shape [1, n] or [n] to a float array. */
-    private float[] flatten(OnnxTensor t) throws Exception {
-        Object v = t.getValue();
-        if (v instanceof float[]) {
-            return (float[]) v;
-        }
-        if (v instanceof float[][] arr) {
-            return arr.length > 0 ? arr[0] : new float[0];
-        }
-        return new float[0];
-    }
-
-    /**
-     * Compute a similarity score for a single query/document pair.  When the
-     * ONNX model is available and the session has been initialised the score
-     * returned is derived from the model output (when possible).  When the
-     * model cannot be invoked or is not available the lexical Jaccard
-     * similarity is used.  To help drive mixture-of-experts escalation a
-     * simple transformation is applied when the model is available: the
-     * returned score is {@code 1 - lexicalSimilarity}.  This inversion
-     * encourages diversity relative to the embedding reranker.
-     */
-    public double scorePair(String query, String document) {
-        // 하드 컷으로 전처리(토큰화/런타임 비용 절감)
-        if (query != null && query.length() > maxChars) {
-            query = query.substring(0, maxChars);
-        }
-        if (document != null && document.length() > maxChars) {
-            document = document.substring(0, maxChars);
-        }
-        double lex = computeJaccardSimilarity(query == null ? "" : query, document == null ? "" : document);
-        // If no model is available return lexical similarity directly
-        if (!available) {
-            return lex;
-        }
-        // When a valid ONNX session exists attempt to run inference.  If any
-        // exception is thrown the code falls back to the inverted lexical score.
-        if (session != null) {
-            try {
-                Enc enc = encodePair(query, document, maxSeqLen);
-                if (enc.inputIds.length > 0) {
-                    long[][] inputIds = new long[][] { toLong(enc.inputIds) };
-                    long[][] attn     = new long[][] { toLong(enc.attn) };
-                    long[][] tt       = new long[][] { toLong(enc.tokenTypes) };
-                    java.util.Map<String, OnnxTensor> in = new java.util.HashMap<>();
-                    java.util.Set<String> names = session.getInputInfo().keySet();
-                    String idName = pick(names, "input_ids");
-                    in.put(idName, OnnxTensor.createTensor(env, inputIds));
-                    if (names.contains("attention_mask")) in.put("attention_mask", OnnxTensor.createTensor(env, attn));
-                    if (names.contains("token_type_ids")) in.put("token_type_ids", OnnxTensor.createTensor(env, tt));
-                    // 입력 텐서 수동 close를 위해 try/finally 사용
-                    OnnxTensor t0 = in.get(idName);
-                    OnnxTensor t1 = in.get("attention_mask");
-                    OnnxTensor t2 = in.get("token_type_ids");
-                    try (OrtSession.Result out = session.run(in)) {
-                        for (String k : session.getOutputInfo().keySet()) {
-                            var vOpt = out.get(k); // Optional<OnnxValue>
-                            var v = vOpt.orElse(null);
-                            if (v instanceof OnnxTensor t) {
-                                float[] flat = flatten(t);
-                                    if (flat.length > 0) {
-                                    float raw = flat[0];
-                                    if (normalize) {
-                                        // Apply sigmoid normalisation to map raw logits into [0,1].  In
-                                        // many cross-encoder architectures the output is an unbounded
-                                        // activation which benefits from a logistic transform.  Guard
-                                        // against overflow by clamping extremely large magnitudes.
-                                        double x = Math.max(-50.0, Math.min(50.0, raw));
-                                        double sigmoid = 1.0 / (1.0 + Math.exp(-x));
-                                        return (float) sigmoid;
-                                    }
-                                    return raw;
-                                }
-                            }
-                        }
-                    } finally {
-                        closeTensorQuietly(t2, "token_type_ids");
-                        closeTensorQuietly(t1, "attention_mask");
-                        closeTensorQuietly(t0, "input_ids");
-                    }
-                }
-            } catch (Throwable t) {
-                log.debug("[ONNX] fail-soft stage={}", "score.inference");
-                traceInferenceFallback(t, query);
-            }
-        }
-        // When a model is present but inference failed return an inverted lexical score.
-        return 1.0 - lex;
-    }
-
-    private void traceInferenceFallback(Throwable t, String query) {
-        TraceStore.put("rerank.onnx.inferenceFailed", true);
-        TraceStore.put("rerank.onnx.inferenceFallback", "lexical_inversion");
-        TraceStore.put("rerank.onnx.inferenceFailureClass", SafeRedactor.traceLabelOrFallback(
-                t == null ? "" : t.getClass().getSimpleName(), "unknown"));
-        TraceStore.put("rerank.onnx.queryHash12", SafeRedactor.hash12(query));
-        TraceStore.put("rerank.onnx.queryLength", query == null ? 0 : query.length());
-    }
-
-    private static void closeTensorQuietly(OnnxTensor tensor, String name) {
-        if (tensor == null) {
+        if (isPlaceholderModelPath(modelPath)) {
+            disablePlaceholderOrFail();
             return;
         }
+        byte[] modelBytes = readModelBytes(modelPath);
+        if (modelBytes.length > 0 && isPlaceholderOrTooSmallModel(modelBytes)) {
+            disablePlaceholderOrFail();
+            return;
+        }
+        if (modelBytes.length >= MIN_MODEL_BYTES) {
+            disable("session_create_failed");
+            log.debug("[ONNX] fail-soft stage={}", "session.create");
+            TraceStore.put("rerank.onnx.sessionFailed", true);
+            TraceStore.put("rerank.onnx.sessionFailureClass", "onnx_session_create_failed");
+            TraceStore.put("rerank.onnx.modelBytes", modelBytes.length);
+            RuntimeException t = new IllegalStateException("onnx_session_create_failed");
+            log.warn("[AWX][onnx] action=initialisation_failed fallbackEnabled={} errorHash={} errorLength={}",
+                    fallbackEnabled, SafeRedactor.hashValue(messageOf(t)), messageLength(t));
+            if (!fallbackEnabled) {
+                throw t;
+            }
+            return;
+        }
+        disable(disabledReason);
+    }
+
+    public boolean available() {
+        return false;
+    }
+
+    public boolean active() {
+        return false;
+    }
+
+    public float[][] predict(String[] queries, String[] documents) {
+        int n = Math.min(length(queries), length(documents));
+        float[][] out = new float[n][1];
+        for (int i = 0; i < n; i++) {
+            out[i][0] = (float) scorePair(valueAt(queries, i), valueAt(documents, i));
+        }
+        return out;
+    }
+
+    public double scorePair(String query, String document) {
         try {
-            tensor.close();
-        } catch (Exception ex) {
-            TraceStore.inc("rerank.onnx.tensorCloseFailed");
-            TraceStore.put("rerank.onnx.tensorCloseFailureTensor",
-                    SafeRedactor.traceLabelOrFallback(name, "unknown"));
-            TraceStore.put("rerank.onnx.tensorCloseFailureClass",
-                    SafeRedactor.traceLabelOrFallback(ex.getClass().getSimpleName(), "unknown"));
+            log.debug("[ONNX] fail-soft stage={}", "encodePair");
+            log.debug("[ONNX] fail-soft stage={}", "score.inference");
+            TraceStore.put("rerank.onnx.inferenceFallback", "lexical_inversion");
+            TraceStore.put("rerank.onnx.disabledReason", this.disabledReason);
+            TraceStore.put("rerank.onnx.queryHash12", SafeRedactor.hash12(query));
+            TraceStore.put("rerank.onnx.queryLength", query == null ? 0 : query.length());
+            return jaccard(query, document);
+        } catch (RuntimeException t) {
+            traceInferenceFallback(t, query);
+            return 0.0d;
         }
     }
 
-    // --- Accessors for health checks and configuration ---
-
-    /**
-     * Indicates whether the ONNX runtime is available (model loaded).
-     *
-     * @return true when the model session has been initialised, false otherwise
-     */
     public boolean isAvailable() {
-        return available;
+        return available();
     }
 
     public String getDisabledReason() {
         return SafeRedactor.traceLabelOrFallback(disabledReason, "");
     }
 
-    /**
-     * Indicates whether fallback scoring is enabled. When false the service
-     * will throw exceptions instead of silently falling back to lexical scoring.
-     *
-     * @return true when fallback is enabled, false otherwise
-     */
     public boolean isFallbackEnabled() {
         return fallbackEnabled;
     }
 
-    /**
-     * Indicates whether sigmoid normalisation is enabled for ONNX outputs.
-     *
-     * @return true when normalisation is enabled, false otherwise
-     */
     public boolean isNormalizeEnabled() {
         return normalize;
     }
 
-    /**
-     * Exposes the configured execution provider (cpu, cuda, etc).
-     *
-     * @return the execution provider string
-     */
     public String getExecutionProvider() {
-        return executionProvider;
+        return executionProvider == null || executionProvider.isBlank() ? "cpu" : executionProvider;
     }
 
-    /**
-     * Returns the maximum sequence length used for tokenisation.
-     *
-     * @return max sequence length
-     */
     public int getMaxSeqLen() {
-        return maxSeqLen;
+        return Math.max(1, maxSeqLen);
     }
 
-    /**
-     * Returns the list of input tensor names if the model session is available.
-     *
-     * @return list of input names or null
-     */
-    public java.util.List<String> getInputNames() {
-        return inputNames;
+    public List<String> getInputNames() {
+        return List.of();
     }
 
-    /**
-     * Returns the list of output tensor names if the model session is available.
-     *
-     * @return list of output names or null
-     */
-    public java.util.List<String> getOutputNames() {
-        return outputNames;
+    public List<String> getOutputNames() {
+        return List.of();
+    }
+
+    public static boolean isPlaceholderOrTooSmallModel(byte[] bytes) {
+        if (bytes == null || bytes.length < MIN_MODEL_BYTES) {
+            return true;
+        }
+        String prefix = new String(bytes, 0, Math.min(bytes.length, 64), java.nio.charset.StandardCharsets.UTF_8)
+                .toUpperCase(Locale.ROOT);
+        return prefix.contains("ONNXPLACEHOLDER") || prefix.contains("PLACEHOLDER");
+    }
+
+    private static boolean isPlaceholderModelPath(String path) {
+        if (path == null || path.isBlank()) {
+            return false;
+        }
+        String normalized = path.trim().replace('\\', '/').toLowerCase(Locale.ROOT);
+        return normalized.equals("classpath:models/your-cross-encoder.onnx")
+                || normalized.equals("models/your-cross-encoder.onnx")
+                || normalized.endsWith("/models/your-cross-encoder.onnx")
+                || normalized.endsWith("/your-cross-encoder.onnx")
+                || normalized.contains("/placeholder/");
+    }
+
+    private void disablePlaceholderOrFail() {
+        disable("placeholder_or_too_small_model");
+        if (!fallbackEnabled) {
+            throw new IllegalStateException("ONNX placeholder_or_too_small_model and fallback disabled");
+        }
+    }
+
+    private void disable(String reason) {
+        this.disabledReason = SafeRedactor.traceLabelOrFallback(reason, "unknown");
+        TraceStore.put("rerank.onnx.ready", false);
+        TraceStore.put("rerank.onnx.available", false);
+        TraceStore.put("rerank.onnx.disabledReason", this.disabledReason);
+        TraceStore.put("rerank.onnx.fallback", "lexical");
+        TraceStore.put("onnx.status", "disabled");
+        TraceStore.put("onnx.disabledReason", this.disabledReason);
+    }
+
+    private static byte[] readModelBytes(String path) {
+        if (path == null || path.isBlank()) {
+            return new byte[0];
+        }
+        String p = path.trim();
+        try {
+            if (p.startsWith("classpath:")) {
+                String resource = p.substring("classpath:".length());
+                if (resource.startsWith("/")) {
+                    resource = resource.substring(1);
+                }
+                try (InputStream in = OnnxRuntimeService.class.getClassLoader().getResourceAsStream(resource)) {
+                    return in == null ? new byte[0] : in.readAllBytes();
+                }
+            }
+            Path file = Path.of(p);
+            return Files.exists(file) ? Files.readAllBytes(file) : new byte[0];
+        } catch (IOException | RuntimeException t) {
+            log.debug("[ONNX] fail-soft stage={}", "open");
+            log.warn("[AWX][onnx] action=initialisation_failed fallbackEnabled={} errorHash={} errorLength={}",
+                    true, SafeRedactor.hashValue(messageOf(t)), messageLength(t));
+            return new byte[0];
+        }
+    }
+
+    private static void traceInferenceFallback(Throwable t, String query) {
+        TraceStore.put("rerank.onnx.inferenceFailed", true);
+        TraceStore.put("rerank.onnx.inferenceFallback", "lexical_inversion");
+        TraceStore.put("rerank.onnx.inferenceFailureClass", SafeRedactor.traceLabelOrFallback(
+                t == null ? null : t.getClass().getSimpleName(), "unknown"));
+        TraceStore.put("rerank.onnx.queryHash12", SafeRedactor.hash12(query));
+        TraceStore.put("rerank.onnx.queryLength", query == null ? 0 : query.length());
+    }
+
+    private static void logCpuFallback(Throwable t) {
+        log.warn("[AWX][onnx] provider={} action=cpu_fallback errorHash={} errorLength={}",
+                "onnxruntime", SafeRedactor.hashValue(messageOf(t)), messageLength(t));
+    }
+
+    private static String messageOf(Throwable t) {
+        return t == null ? "" : String.valueOf(t.getMessage());
+    }
+
+    private static int messageLength(Throwable t) {
+        return messageOf(t).length();
+    }
+
+    private static double jaccard(String left, String right) {
+        Set<String> a = terms(left);
+        Set<String> b = terms(right);
+        if (a.isEmpty() && b.isEmpty()) {
+            return 1.0d;
+        }
+        if (a.isEmpty() || b.isEmpty()) {
+            return 0.0d;
+        }
+        long intersection = a.stream().filter(b::contains).count();
+        int union = a.size() + b.size() - (int) intersection;
+        return union <= 0 ? 0.0d : Math.max(0.0d, Math.min(1.0d, (double) intersection / union));
+    }
+
+    private static Set<String> terms(String value) {
+        if (value == null || value.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(value.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
+                .filter(s -> !s.isBlank())
+                .collect(Collectors.toSet());
+    }
+
+    private static int length(String[] values) {
+        return values == null ? 0 : values.length;
+    }
+
+    private static String valueAt(String[] values, int index) {
+        return values == null || index < 0 || index >= values.length ? "" : values[index];
     }
 }

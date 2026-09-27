@@ -1,11 +1,21 @@
 // src/main/java/com/example/lms/service/guard/GuardContext.java
 package com.example.lms.service.guard;
 
+import com.example.lms.guard.GuardProfile;
+
+import com.example.lms.guard.InteractionEvidencePolicy;
+import com.example.lms.infra.selection.SelectionDecisionLedger;
+import com.example.lms.infra.selection.SelectionEntropy;
+import com.example.lms.infra.selection.SelectionEntropyFactory;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -72,6 +82,8 @@ public class GuardContext {
     private String headerMode;
     // Guard level propagated from headers (low/normal/high, optional)
     private String guardLevel;
+    // Request selection is separate from the configured default and header guard level.
+    private volatile GuardProfile requestGuardProfile;
 
     /**
      * Web search primary override.
@@ -96,10 +108,17 @@ public class GuardContext {
     private volatile boolean strikeMode;
     private volatile boolean bypassMode;
     private volatile boolean webRateLimited;
+    private volatile boolean cheapSearchMode;
     private volatile String bypassReason;
 
     // ── Nova overlay: userQuery + aux LLM health flags ─────────────────────
     private volatile String userQuery;
+    private volatile InteractionEvidencePolicy.Decision interactionPolicyDecision =
+            InteractionEvidencePolicy.offDecision();
+    private volatile List<InteractionEvidencePolicy.ManipulationFact> interactionPolicyFacts = List.of();
+    private volatile Set<String> interactionSuspectEvidenceIds = Set.of();
+    private SelectionEntropy selectionEntropy;
+    private SelectionDecisionLedger selectionDecisionLedger;
 
     /**
      * Soft degradation signal: aux LLM is still reachable but unreliable/slow/blank.
@@ -114,6 +133,39 @@ public class GuardContext {
     private volatile boolean auxHardDown;
 
     public GuardContext() {
+    }
+
+    public synchronized void attachSelectionEntropy(
+            SelectionEntropy entropy,
+            SelectionDecisionLedger ledger) {
+        Objects.requireNonNull(entropy, "entropy");
+        Objects.requireNonNull(ledger, "ledger");
+        if (selectionEntropy == null && selectionDecisionLedger == null) {
+            selectionEntropy = entropy;
+            selectionDecisionLedger = ledger;
+            return;
+        }
+        if (selectionEntropy == entropy && selectionDecisionLedger == ledger) {
+            return;
+        }
+        throw new IllegalStateException("selection_entropy_context_already_attached");
+    }
+
+    public synchronized boolean hasAttachedSelectionEntropy() {
+        return selectionEntropy != null && selectionDecisionLedger != null;
+    }
+
+    public synchronized SelectionEntropy selectionEntropy() {
+        return selectionEntropy == null
+                ? SelectionEntropyFactory.standard()
+                : selectionEntropy;
+    }
+
+    public synchronized SelectionDecisionLedger selectionDecisionLedger() {
+        if (selectionDecisionLedger == null) {
+            selectionDecisionLedger = SelectionDecisionLedger.forStandard();
+        }
+        return selectionDecisionLedger;
     }
 
     // -- getters / setters --
@@ -352,6 +404,14 @@ public Double planDouble(String key) {
         this.headerMode = headerMode;
     }
 
+    public GuardProfile getRequestGuardProfile() {
+        return requestGuardProfile;
+    }
+
+    public void setRequestGuardProfile(GuardProfile profile) {
+        this.requestGuardProfile = profile;
+    }
+
     public String getGuardLevel() {
         return guardLevel;
     }
@@ -411,6 +471,14 @@ public Double planDouble(String key) {
         this.webRateLimited = webRateLimited;
     }
 
+    public boolean isCheapSearchMode() {
+        return cheapSearchMode;
+    }
+
+    public void setCheapSearchMode(boolean cheapSearchMode) {
+        this.cheapSearchMode = cheapSearchMode;
+    }
+
     public String getBypassReason() {
         return bypassReason;
     }
@@ -425,6 +493,60 @@ public Double planDouble(String key) {
 
     public void setUserQuery(String userQuery) {
         this.userQuery = userQuery;
+    }
+
+    public InteractionEvidencePolicy.Decision getInteractionPolicyDecision() {
+        InteractionEvidencePolicy.Decision decision = interactionPolicyDecision;
+        return decision == null ? InteractionEvidencePolicy.offDecision() : decision;
+    }
+
+    public void setInteractionPolicyDecision(InteractionEvidencePolicy.Decision decision) {
+        this.interactionPolicyDecision = decision == null
+                ? InteractionEvidencePolicy.offDecision()
+                : decision;
+    }
+
+    public boolean isInteractionMemoryWriteSuppressed() {
+        return getInteractionPolicyDecision().suppressMemoryWrites();
+    }
+
+    public synchronized void recordInteractionPolicyFact(
+            InteractionEvidencePolicy.ManipulationFact fact,
+            String suspectEvidenceId) {
+        if (fact == null) {
+            return;
+        }
+        ArrayList<InteractionEvidencePolicy.ManipulationFact> merged =
+                new ArrayList<>(interactionPolicyFacts);
+        merged.add(fact);
+        interactionPolicyFacts = new InteractionEvidencePolicy.InteractionObservation(false, merged)
+                .confirmedManipulationFacts();
+
+        String boundedId = boundedEvidenceId(suspectEvidenceId);
+        if (boundedId != null) {
+            LinkedHashSet<String> ids = new LinkedHashSet<>(interactionSuspectEvidenceIds);
+            ids.add(boundedId);
+            interactionSuspectEvidenceIds = Collections.unmodifiableSet(ids);
+        }
+    }
+
+    public List<InteractionEvidencePolicy.ManipulationFact> getInteractionPolicyFacts() {
+        return interactionPolicyFacts;
+    }
+
+    public Set<String> getInteractionSuspectEvidenceIds() {
+        return interactionSuspectEvidenceIds;
+    }
+
+    private static String boundedEvidenceId(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.replace('\u0000', ' ').replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        return normalized.length() <= 1024 ? normalized : normalized.substring(0, 1024);
     }
 
     public boolean isAuxDegraded() {
@@ -551,7 +673,7 @@ public Double planDouble(String key) {
      * mutating the shared context instance that might be observed by other
      * components/threads.
      */
-    public GuardContext copy() {
+    public synchronized GuardContext copy() {
         GuardContext c = new GuardContext();
         c.planId = this.planId;
         c.mode = this.mode;
@@ -573,6 +695,7 @@ public Double planDouble(String key) {
         c.memoryProfile = this.memoryProfile;
         c.headerMode = this.headerMode;
         c.guardLevel = this.guardLevel;
+        c.requestGuardProfile = this.requestGuardProfile;
         c.webPrimary = this.webPrimary;
         c.irregularityScore = this.irregularityScore;
         try {
@@ -584,8 +707,14 @@ public Double planDouble(String key) {
         c.strikeMode = this.strikeMode;
         c.bypassMode = this.bypassMode;
         c.webRateLimited = this.webRateLimited;
+        c.cheapSearchMode = this.cheapSearchMode;
         c.bypassReason = this.bypassReason;
         c.userQuery = this.userQuery;
+        c.interactionPolicyDecision = this.getInteractionPolicyDecision();
+        c.interactionPolicyFacts = this.getInteractionPolicyFacts();
+        c.interactionSuspectEvidenceIds = this.getInteractionSuspectEvidenceIds();
+        c.selectionEntropy = this.selectionEntropy;
+        c.selectionDecisionLedger = this.selectionDecisionLedger;
         c.auxDegraded = this.auxDegraded;
         c.auxHardDown = this.auxHardDown;
         c.domainProfile = this.domainProfile;
@@ -613,7 +742,11 @@ public Double planDouble(String key) {
         ctx.strikeMode = false;
         ctx.bypassMode = false;
         ctx.webRateLimited = false;
+        ctx.cheapSearchMode = false;
         ctx.bypassReason = null;
+        ctx.interactionPolicyDecision = InteractionEvidencePolicy.offDecision();
+        ctx.interactionPolicyFacts = List.of();
+        ctx.interactionSuspectEvidenceIds = Set.of();
         return ctx;
     }
 }

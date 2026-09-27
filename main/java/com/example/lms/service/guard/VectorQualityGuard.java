@@ -210,7 +210,7 @@ public class VectorQualityGuard {
 
         // simple OR regex (escaped)
         String pat = toks.stream().map(VectorQualityGuard::regexEscape).collect(Collectors.joining("|"));
-        p = Pattern.compile("\\b(" + pat + ")\\b");
+        p = Pattern.compile("\\b(" + pat + ")(?=(?:입니다|이다|임)?(?:$|[^\\p{L}\\p{N}\\p{M}_]))");
         unknownTokenPattern = p;
         return p;
     }

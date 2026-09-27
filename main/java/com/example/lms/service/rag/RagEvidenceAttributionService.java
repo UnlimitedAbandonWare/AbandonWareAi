@@ -40,11 +40,165 @@ public class RagEvidenceAttributionService {
     private static final Logger log = LoggerFactory.getLogger(RagEvidenceAttributionService.class);
 
     private static final Pattern MARKER_PATTERN = Pattern.compile("\\[([WVD])(\\d+)]");
+    private static final Pattern URL_IN_TEXT = Pattern.compile("https?://[^\\s\\]\\)\"'<>]+", Pattern.CASE_INSENSITIVE);
     private static final int MAX_APPENDIX_LINES = 12;
+    private static final Set<String> FINAL_EVIDENCE_HEADINGS = Set.of(
+            "### sources",
+            "### evidence",
+            "### references",
+            "### citations");
 
     private final EvidenceGate evidenceGate;
     private final CitationGate citationGate;
     private final ObjectProvider<DebugEventStore> debugEventStoreProvider;
+
+    public enum PromotionStatus {
+        PROMOTED,
+        CONFIRMED_EMPTY,
+        FAILED,
+        UNAVAILABLE
+    }
+
+    public enum PromotionReason {
+        PROMOTED("promoted"),
+        NO_CITABLE_LOCATOR("no_citable_locator"),
+        EVIDENCE_GATE_BLOCKED("evidence_gate_blocked"),
+        CITATION_GATE_BLOCKED("citation_gate_blocked"),
+        GATE_EXCEPTION("gate_exception"),
+        SERVICE_UNAVAILABLE("service_unavailable"),
+        CALLER_FAILURE("caller_failure");
+
+        private final String traceValue;
+
+        PromotionReason(String traceValue) {
+            this.traceValue = traceValue;
+        }
+
+        public String traceValue() {
+            return traceValue;
+        }
+    }
+
+    public record PromotionResult(
+            PromotionStatus status,
+            PromotionReason reason,
+            List<RagEvidenceMetadata> evidence,
+            int webCandidateCount,
+            int webCitableLocatorCount,
+            int vectorCandidateCount,
+            int vectorCitableLocatorCount,
+            int localCandidateCount,
+            int localCitableLocatorCount) {
+
+        public PromotionResult {
+            if (status == null || reason == null) {
+                throw new IllegalArgumentException("promotion status and reason are required");
+            }
+            evidence = evidence == null ? List.of() : List.copyOf(evidence);
+            validateCounts(webCandidateCount, webCitableLocatorCount, "web");
+            validateCounts(vectorCandidateCount, vectorCitableLocatorCount, "vector");
+            validateCounts(localCandidateCount, localCitableLocatorCount, "local");
+            switch (status) {
+                case PROMOTED -> {
+                    int totalCandidates = webCandidateCount + vectorCandidateCount + localCandidateCount;
+                    if (reason != PromotionReason.PROMOTED
+                            || evidence.isEmpty()
+                            || totalCandidates <= 0
+                            || evidence.size() > totalCandidates) {
+                        throw new IllegalArgumentException("promoted result requires promoted evidence");
+                    }
+                    validatePromotedEvidence(
+                            evidence,
+                            webCitableLocatorCount,
+                            vectorCitableLocatorCount,
+                            localCitableLocatorCount);
+                }
+                case CONFIRMED_EMPTY -> {
+                    if (!evidence.isEmpty()
+                            || (reason != PromotionReason.NO_CITABLE_LOCATOR
+                            && reason != PromotionReason.EVIDENCE_GATE_BLOCKED
+                            && reason != PromotionReason.CITATION_GATE_BLOCKED)) {
+                        throw new IllegalArgumentException("confirmed-empty result has contradictory authority");
+                    }
+                }
+                case FAILED -> {
+                    if (!evidence.isEmpty()
+                            || (reason != PromotionReason.GATE_EXCEPTION
+                            && reason != PromotionReason.CALLER_FAILURE)
+                            || (reason == PromotionReason.CALLER_FAILURE
+                            && (webCandidateCount != 0
+                            || vectorCandidateCount != 0
+                            || localCandidateCount != 0))) {
+                        throw new IllegalArgumentException("failed result must carry a bounded failure reason only");
+                    }
+                }
+                case UNAVAILABLE -> {
+                    if (!evidence.isEmpty() || reason != PromotionReason.SERVICE_UNAVAILABLE
+                            || webCandidateCount != 0 || webCitableLocatorCount != 0
+                            || vectorCandidateCount != 0 || vectorCitableLocatorCount != 0
+                            || localCandidateCount != 0 || localCitableLocatorCount != 0) {
+                        throw new IllegalArgumentException("unavailable result cannot carry evidence lineage");
+                    }
+                }
+            }
+        }
+
+        public int retrievalCandidateCount() {
+            return webCandidateCount + vectorCandidateCount;
+        }
+
+        public int retrievalCitableLocatorCount() {
+            return webCitableLocatorCount + vectorCitableLocatorCount;
+        }
+
+        public static PromotionResult unavailable() {
+            return new PromotionResult(
+                    PromotionStatus.UNAVAILABLE,
+                    PromotionReason.SERVICE_UNAVAILABLE,
+                    List.of(),
+                    0, 0, 0, 0, 0, 0);
+        }
+
+        public static PromotionResult callerFailure() {
+            return new PromotionResult(
+                    PromotionStatus.FAILED,
+                    PromotionReason.CALLER_FAILURE,
+                    List.of(),
+                    0, 0, 0, 0, 0, 0);
+        }
+
+        private static void validateCounts(int candidates, int citableLocators, String lane) {
+            if (candidates < 0 || citableLocators < 0 || citableLocators > candidates) {
+                throw new IllegalArgumentException("invalid " + lane + " promotion counts");
+            }
+        }
+
+        private static void validatePromotedEvidence(
+                List<RagEvidenceMetadata> evidence,
+                int webCitableLocators,
+                int vectorCitableLocators,
+                int localCitableLocators) {
+            int webEvidence = 0;
+            int vectorEvidence = 0;
+            int localEvidence = 0;
+            for (RagEvidenceMetadata item : evidence) {
+                if (item == null || (item.source() == null && item.filePath() == null)) {
+                    throw new IllegalArgumentException("promoted evidence requires a citable locator");
+                }
+                switch (String.valueOf(item.kind())) {
+                    case "WEB" -> webEvidence++;
+                    case "VECTOR" -> vectorEvidence++;
+                    case "LOCAL_DOC" -> localEvidence++;
+                    default -> throw new IllegalArgumentException("promoted evidence has an unsupported lane");
+                }
+            }
+            if (webEvidence > webCitableLocators
+                    || vectorEvidence > vectorCitableLocators
+                    || localEvidence > localCitableLocators) {
+                throw new IllegalArgumentException("promoted evidence exceeds typed locator authority");
+            }
+        }
+    }
 
     public RagEvidenceAttributionService(
             EvidenceGate evidenceGate,
@@ -62,11 +216,29 @@ public class RagEvidenceAttributionService {
             List<Document> localDocs,
             QueryDomain domain,
             boolean followUp) {
+        return promoteForPromptDetailed(question, webDocs, vectorDocs, localDocs, domain, followUp).evidence();
+    }
+
+    public PromotionResult promoteForPromptDetailed(
+            String question,
+            List<Content> webDocs,
+            List<Content> vectorDocs,
+            List<Document> localDocs,
+            QueryDomain domain,
+            boolean followUp) {
         long started = System.nanoTime();
         List<Candidate> candidates = new ArrayList<>();
         candidates.addAll(fromContents("WEB", "W", webDocs));
         candidates.addAll(fromContents("VECTOR", "V", vectorDocs));
         candidates.addAll(fromDocuments("LOCAL_DOC", "D", localDocs));
+
+        List<Candidate> rawCitableCandidates = citableCandidates(candidates);
+        int webCandidateCount = candidateCount(candidates, "WEB");
+        int webCitableLocatorCount = candidateCount(rawCitableCandidates, "WEB");
+        int vectorCandidateCount = candidateCount(candidates, "VECTOR");
+        int vectorCitableLocatorCount = candidateCount(rawCitableCandidates, "VECTOR");
+        int localCandidateCount = candidateCount(candidates, "LOCAL_DOC");
+        int localCitableLocatorCount = candidateCount(rawCitableCandidates, "LOCAL_DOC");
 
         List<String> vectorLines = new ArrayList<>();
         List<String> kbLines = new ArrayList<>();
@@ -85,7 +257,8 @@ public class RagEvidenceAttributionService {
         boolean citationSoftPassed = false;
         boolean citationMinPassed = false;
         int citationMin = effectiveMinCitations();
-        String reason = null;
+        PromotionReason reason = null;
+        List<Candidate> filteredCandidates = List.of();
         try {
             evidencePassed = evidenceGate == null || evidenceGate.hasSufficientCoverage(
                     question,
@@ -94,38 +267,69 @@ public class RagEvidenceAttributionService {
                     kbLines,
                     followUp,
                     domain == null ? QueryDomain.GENERAL : domain);
-            List<Candidate> citableCandidates = citableCandidates(candidates);
-            List<String> sources = citableCandidates.stream()
+            filteredCandidates = filteredCitableCandidates(question, candidates);
+            List<String> sources = filteredCandidates.stream()
                     .map(c -> locatorKey(c.metadata))
                     .filter(s -> s != null && !s.isBlank())
                     .distinct()
                     .toList();
             citationSoftPassed = citationGate == null || citationGate.ok(sources, citationMin, 0.0d);
             citationMinPassed = citationGate == null || sources.size() >= citationMin;
-            if (!evidencePassed) {
-                reason = "evidence_gate_blocked";
-            } else if (citableCandidates.isEmpty()) {
-                reason = "no_citable_locator";
+            if (candidates.isEmpty()) {
+                reason = PromotionReason.NO_CITABLE_LOCATOR;
+            } else if (!evidencePassed) {
+                reason = PromotionReason.EVIDENCE_GATE_BLOCKED;
+            } else if (filteredCandidates.isEmpty()) {
+                reason = PromotionReason.NO_CITABLE_LOCATOR;
             } else if (!citationSoftPassed || !citationMinPassed) {
-                reason = "citation_gate_blocked";
+                reason = PromotionReason.CITATION_GATE_BLOCKED;
             }
         } catch (Throwable ex) {
             log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "promotion.gate");
             evidencePassed = false;
             citationSoftPassed = false;
             citationMinPassed = false;
-            reason = "gate_exception_" + ex.getClass().getSimpleName();
+            reason = PromotionReason.GATE_EXCEPTION;
+            long stageMs = Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
+            recordPromotion(question, candidates, List.of(), false, false,
+                    false, citationMin, reason.traceValue(), stageMs);
+            return new PromotionResult(
+                    PromotionStatus.FAILED,
+                    reason,
+                    List.of(),
+                    webCandidateCount,
+                    webCitableLocatorCount,
+                    vectorCandidateCount,
+                    vectorCitableLocatorCount,
+                    localCandidateCount,
+                    localCitableLocatorCount);
         }
 
-        List<Candidate> citableCandidates = citableCandidates(candidates);
         List<RagEvidenceMetadata> promoted = (evidencePassed && citationSoftPassed && citationMinPassed
-                && !citableCandidates.isEmpty())
-                ? citableCandidates.stream().map(Candidate::metadata).toList()
+                && !filteredCandidates.isEmpty())
+                ? filteredCandidates.stream().map(Candidate::metadata).toList()
                 : List.of();
+        PromotionStatus status = promoted.isEmpty()
+                ? PromotionStatus.CONFIRMED_EMPTY
+                : PromotionStatus.PROMOTED;
+        if (status == PromotionStatus.PROMOTED) {
+            reason = PromotionReason.PROMOTED;
+        } else if (reason == null) {
+            reason = PromotionReason.NO_CITABLE_LOCATOR;
+        }
         long stageMs = Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
         recordPromotion(question, candidates, promoted, evidencePassed, citationSoftPassed,
-                citationMinPassed, citationMin, reason, stageMs);
-        return promoted;
+                citationMinPassed, citationMin, reason.traceValue(), stageMs);
+        return new PromotionResult(
+                status,
+                reason,
+                promoted,
+                webCandidateCount,
+                webCitableLocatorCount,
+                vectorCandidateCount,
+                vectorCitableLocatorCount,
+                localCandidateCount,
+                localCitableLocatorCount);
     }
 
     public String appendFinalEvidenceAppendix(String answer, List<RagEvidenceMetadata> evidence) {
@@ -133,9 +337,7 @@ public class RagEvidenceAttributionService {
             return answer;
         }
         String trimmed = answer.trim();
-        String lower = trimmed.toLowerCase(Locale.ROOT);
-        if (lower.contains("### sources") || lower.contains("### evidence")
-                || lower.contains("### references") || lower.contains("### citations")) {
+        if (hasFinalEvidenceAppendixHeading(trimmed)) {
             return answer;
         }
 
@@ -191,6 +393,49 @@ public class RagEvidenceAttributionService {
         return sb.toString();
     }
 
+    public static boolean hasFinalEvidenceAppendixHeading(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return false;
+        }
+        boolean inFence = false;
+        char fenceMarker = 0;
+        int fenceLength = 0;
+        for (String line : answer.split("\\R", -1)) {
+            String trimmed = line.strip();
+            if (inFence) {
+                int closingLength = leadingRun(trimmed, fenceMarker);
+                if (closingLength >= fenceLength && trimmed.substring(closingLength).isBlank()) {
+                    inFence = false;
+                    fenceMarker = 0;
+                    fenceLength = 0;
+                }
+                continue;
+            }
+
+            int backtickLength = leadingRun(trimmed, '`');
+            int tildeLength = leadingRun(trimmed, '~');
+            if (backtickLength >= 3 || tildeLength >= 3) {
+                inFence = true;
+                fenceMarker = backtickLength >= 3 ? '`' : '~';
+                fenceLength = Math.max(backtickLength, tildeLength);
+                continue;
+            }
+
+            if (FINAL_EVIDENCE_HEADINGS.contains(trimmed.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int leadingRun(String value, char marker) {
+        int length = 0;
+        while (length < value.length() && value.charAt(length) == marker) {
+            length++;
+        }
+        return length;
+    }
+
     private List<Candidate> fromContents(String kind, String prefix, List<Content> docs) {
         if (docs == null || docs.isEmpty()) {
             return List.of();
@@ -207,13 +452,17 @@ public class RagEvidenceAttributionService {
                 continue;
             }
             Map<String, Object> metadata = contentMetadata(doc);
+            String sourceUrl = sanitizePublicUrl(firstNonBlank(value(metadata, "url"), value(metadata, "link"),
+                    value(metadata, "source"), value(metadata, "uri"), value(metadata, "document_url")));
+            if (sourceUrl == null) {
+                sourceUrl = sanitizePublicUrl(firstUrlFromText(text));
+            }
             RagEvidenceMetadata item = new RagEvidenceMetadata(
                     prefix + rank,
                     kind,
                     sanitizeTitle(firstNonBlank(value(metadata, "title"), value(metadata, "document_title"),
                             value(metadata, "name"), value(metadata, "fileName"), value(metadata, "filename"))),
-                    sanitizePublicUrl(firstNonBlank(value(metadata, "url"), value(metadata, "link"), value(metadata, "source"),
-                            value(metadata, "uri"), value(metadata, "document_url"))),
+                    sourceUrl,
                     sanitizeFilePath(firstNonBlank(value(metadata, "filePath"), value(metadata, "file_path"),
                             value(metadata, "source_path"), value(metadata, "path"),
                             value(metadata, "documentPath"), value(metadata, "filename"))),
@@ -256,12 +505,17 @@ public class RagEvidenceAttributionService {
                 log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "document.metadata");
                 metadata = Map.of();
             }
+            String sourceUrl = sanitizePublicUrl(firstNonBlank(value(metadata, "source"), value(metadata, "url"),
+                    value(metadata, "link"), value(metadata, "uri"), value(metadata, "document_url")));
+            if (sourceUrl == null) {
+                sourceUrl = sanitizePublicUrl(firstUrlFromText(text));
+            }
             RagEvidenceMetadata item = new RagEvidenceMetadata(
                     prefix + rank,
                     kind,
                     sanitizeTitle(firstNonBlank(value(metadata, "title"), value(metadata, "document_title"),
                             value(metadata, "name"), value(metadata, "fileName"), value(metadata, "filename"))),
-                    sanitizePublicUrl(firstNonBlank(value(metadata, "source"), value(metadata, "url"), value(metadata, "link"))),
+                    sourceUrl,
                     sanitizeFilePath(firstNonBlank(value(metadata, "filePath"), value(metadata, "file_path"),
                             value(metadata, "source_path"), value(metadata, "path"),
                             value(metadata, "documentPath"), value(metadata, "filename"))),
@@ -456,6 +710,9 @@ public class RagEvidenceAttributionService {
     private static int effectiveMinCitations() {
         try {
             GuardContext ctx = GuardContextHolder.getOrDefault();
+            if (ctx != null && ctx.isCheapSearchMode()) {
+                return 1;
+            }
             if (ctx != null && ctx.getMinCitations() != null && ctx.getMinCitations() > 0) {
                 return ctx.getMinCitations();
             }
@@ -525,6 +782,38 @@ public class RagEvidenceAttributionService {
                 .toList();
     }
 
+    private static int candidateCount(List<Candidate> candidates, String kind) {
+        if (candidates == null || candidates.isEmpty()) {
+            return 0;
+        }
+        return (int) candidates.stream()
+                .filter(c -> c != null
+                        && c.metadata != null
+                        && kind.equals(c.metadata.kind()))
+                .count();
+    }
+
+    private static List<Candidate> filteredCitableCandidates(String question, List<Candidate> candidates) {
+        List<Candidate> citable = citableCandidates(candidates);
+        if (citable.isEmpty() || !strictNamedOfficialEvidencePrompt(question)) {
+            return citable;
+        }
+        List<String> domains = namedOfficialEvidenceDomains(question);
+        List<Candidate> official = citable.stream()
+                .filter(candidate -> candidate != null
+                        && candidate.metadata != null
+                        && sourceMatchesAnyDomain(candidate.metadata.source(), domains))
+                .toList();
+        try {
+            TraceStore.put("rag.evidence.promotion.namedOfficialFiltered", true);
+            TraceStore.put("rag.evidence.promotion.namedOfficialFilteredCount", official.size());
+        } catch (Throwable ignore) {
+            log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "namedOfficial.trace");
+            RagEvidenceTraceSuppressions.trace("namedOfficial.trace", ignore);
+        }
+        return official;
+    }
+
     private static boolean hasCitableLocator(RagEvidenceMetadata metadata) {
         return locatorKey(metadata) != null;
     }
@@ -542,6 +831,74 @@ public class RagEvidenceAttributionService {
             return "file:" + path.replace('\\', '/').toLowerCase(Locale.ROOT);
         }
         return null;
+    }
+
+    private static boolean strictNamedOfficialEvidencePrompt(String question) {
+        String q = question == null ? "" : question.toLowerCase(Locale.ROOT);
+        return !q.isBlank()
+                && !hasExplicitEvidenceDomain(q)
+                && !namedOfficialEvidenceDomains(q).isEmpty()
+                && (q.contains("official source")
+                || q.contains("official sources")
+                || q.contains("official/external")
+                || q.contains("official evidence")
+                || looksLikeNamedOfficialSourceDomainPrompt(q));
+    }
+
+    private static boolean looksLikeNamedOfficialSourceDomainPrompt(String q) {
+        String normalized = q == null ? "" : q.toLowerCase(Locale.ROOT);
+        boolean namedOfficialTarget = normalized.contains("openai") || normalized.contains("supabase");
+        boolean sourceDomainPrompt = normalized.contains("source domain")
+                || normalized.contains("source domains")
+                || normalized.contains("\uCD9C\uCC98 \uB3C4\uBA54\uC778")
+                || (normalized.contains("\uB3C4\uBA54\uC778")
+                && (normalized.contains("\uCD9C\uCC98")
+                || normalized.contains("\uADFC\uAC70")
+                || normalized.contains("\uAC80\uC99D")));
+        return namedOfficialTarget && sourceDomainPrompt;
+    }
+
+    private static boolean hasExplicitEvidenceDomain(String question) {
+        String q = question == null ? "" : question;
+        return Pattern.compile("\\b(?:site:)?[a-z0-9][a-z0-9-]*\\.(?:com|org|net|io|ai|dev|co|kr|edu|gov)\\b",
+                Pattern.CASE_INSENSITIVE).matcher(q).find();
+    }
+
+    private static List<String> namedOfficialEvidenceDomains(String question) {
+        String q = question == null ? "" : question.toLowerCase(Locale.ROOT);
+        List<String> domains = new ArrayList<>();
+        if (q.contains("openai")) {
+            domains.add("developers.openai.com");
+        }
+        if (q.contains("supabase")) {
+            domains.add("supabase.com");
+        }
+        return domains;
+    }
+
+    private static boolean sourceMatchesAnyDomain(String source, List<String> domains) {
+        if (source == null || source.isBlank() || domains == null || domains.isEmpty()) {
+            return false;
+        }
+        String host;
+        try {
+            host = URI.create(source).getHost();
+        } catch (Throwable ignore) {
+            log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "namedOfficial.host");
+            RagEvidenceTraceSuppressions.trace("namedOfficial.host", ignore);
+            return false;
+        }
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
+        for (String domain : domains) {
+            String normalizedDomain = domain == null ? "" : domain.toLowerCase(Locale.ROOT);
+            if (normalizedHost.equals(normalizedDomain) || normalizedHost.endsWith("." + normalizedDomain)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static double sourceDiversity(List<RagEvidenceMetadata> evidence) {
@@ -720,6 +1077,26 @@ public class RagEvidenceAttributionService {
         return null;
     }
 
+    private static String firstUrlFromText(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        Matcher matcher = URL_IN_TEXT.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        String url = matcher.group();
+        while (url != null && !url.isBlank()) {
+            char last = url.charAt(url.length() - 1);
+            if (last == '.' || last == ',' || last == ';' || last == ':' || last == '!' || last == '?') {
+                url = url.substring(0, url.length() - 1).trim();
+                continue;
+            }
+            break;
+        }
+        return url;
+    }
+
     private static String limit(String value, int max) {
         if (value == null) {
             return null;
@@ -768,10 +1145,11 @@ public class RagEvidenceAttributionService {
                     null,
                     uri.getHost(),
                     uri.getPort(),
-                    uri.getRawPath(),
+                    null,
                     null,
                     null);
-            return limit(clean.toString(), 1000);
+            String publicUrl = clean.toString() + (uri.getRawPath() == null ? "" : uri.getRawPath());
+            return publicUrl.length() <= 1000 ? publicUrl : null;
         } catch (Throwable ignore) {
             log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "sanitizePublicUrl");
             return null;

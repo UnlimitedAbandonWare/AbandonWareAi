@@ -1,6 +1,7 @@
 
 package com.example.lms.service.llm;
 
+import com.example.lms.infra.resilience.NightmareBreaker;
 
 public interface LlmClient {
     /** 프롬프트를 주면 LLM의 순수 텍스트 응답을 돌려준다. (예: JSON 문자열) */
@@ -12,5 +13,18 @@ public interface LlmClient {
      */
     default String completeWithKey(String breakerKey, String prompt) {
         return complete(prompt);
+    }
+
+    /**
+     * Executes only the physical model call for a caller that already owns the
+     * breaker permit. The caller remains the sole owner of semantic validation
+     * and permit completion.
+     */
+    default String completeWithPermit(
+            NightmareBreaker.CallPermit permit,
+            String stage,
+            String llmCompletionPrompt) {
+        java.util.Objects.requireNonNull(permit, "permit");
+        return complete(llmCompletionPrompt);
     }
 }

@@ -29,9 +29,9 @@ public class VectorDenylistRegistry {
 
     public void ban(String embeddingId, String reason) {
         if (embeddingId == null || embeddingId.isBlank()) return;
-        pruneIfNeeded();
         long expireAtMs = System.currentTimeMillis() + Duration.ofMinutes(Math.max(1, ttlMinutes)).toMillis();
         entries.put(embeddingId, new Entry(expireAtMs, safe(reason)));
+        pruneIfNeeded(embeddingId);
         log.debug("[VectorDenylist] ban id={} ttlMin={} reason={}", embeddingId, ttlMinutes, safe(reason));
     }
 
@@ -66,7 +66,7 @@ public class VectorDenylistRegistry {
         return out;
     }
 
-    private void pruneIfNeeded() {
+    private void pruneIfNeeded(String protectedId) {
         if (entries.size() <= Math.max(100, maxSize)) return;
         long now = System.currentTimeMillis();
         for (Map.Entry<String, Entry> e : entries.entrySet()) {
@@ -77,7 +77,15 @@ public class VectorDenylistRegistry {
         }
         // If still too big, remove arbitrary entries.
         while (entries.size() > Math.max(100, maxSize)) {
-            String k = entries.keys().hasMoreElements() ? entries.keys().nextElement() : null;
+            String k = null;
+            java.util.Enumeration<String> keys = entries.keys();
+            while (keys.hasMoreElements()) {
+                String candidate = keys.nextElement();
+                if (!Objects.equals(candidate, protectedId)) {
+                    k = candidate;
+                    break;
+                }
+            }
             if (k == null) break;
             entries.remove(k);
         }

@@ -10,6 +10,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 
@@ -29,6 +31,7 @@ public class TranslationTrainingServiceImpl implements TranslationTrainingServic
     // [수정] 파라미터 타입을 인터페이스와 동일하게 변경
     public int learnRuleFromChatHistory(List<? extends ChatRequestDto.Message> history) {
         int learned = 0;
+        Set<String> checkedPatterns = new HashSet<>();
 
         for (int i = 0; i < history.size() - 1; i++) {
             ChatRequestDto.Message userMsg   = history.get(i);
@@ -39,6 +42,9 @@ public class TranslationTrainingServiceImpl implements TranslationTrainingServic
                 continue;
             }
 
+            if (!checkedPatterns.add(userMsg.getContent())) {
+                continue;
+            }
             if (ruleRepository.existsByPatternAndLangAndPhase(
                     userMsg.getContent(), "ko", RulePhase.PRE)) {
                 continue;

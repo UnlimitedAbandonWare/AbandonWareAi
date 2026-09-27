@@ -36,6 +36,7 @@ import java.util.regex.Pattern;
 public class VectorPoisonGuard {
 
     private static final Logger log = LoggerFactory.getLogger(VectorPoisonGuard.class);
+    public static final String REASON_GENERATED_ARTIFACT_PATH = "generated_artifact_path";
 
     @Value("${vector.poison-guard.enabled:true}")
     private boolean enabled;
@@ -88,6 +89,24 @@ public class VectorPoisonGuard {
     private static final Pattern GENERATED_REPORT_SCORECARD = Pattern.compile(
             "(?is)측정된\\s*수치\\s*요약|전체\\s*난이도|총\\s*코드\\s*라인|\\bJava\\s*파일\\b|\\bAOP\\s+Aspect\\b|\\bscorecard\\b");
 
+    private static final List<String> GENERATED_ARTIFACT_PATH_SEGMENTS = List.of(
+            "/build/",
+            "/build-logs/",
+            "/.gradle/",
+            "/.next/",
+            "/node_modules/",
+            "/__patch_drop__/",
+            "/__reports__/",
+            "/agent-prompts/out/",
+            "/data/agent-handoff/",
+            "/var/codex-smoke/",
+            "/backupsxs/");
+
+    private static final List<String> GENERATED_ARTIFACT_EXTENSIONS = List.of(
+            ".patch", ".diff", ".log", ".out", ".err",
+            ".class", ".jar", ".war", ".zip", ".tar", ".gz",
+            ".dump", ".raw", ".bin", ".tmp");
+
     public record IngestDecision(boolean allow, String text, Map<String, Object> meta, String reason, double risk) {
     }
 
@@ -97,6 +116,14 @@ public class VectorPoisonGuard {
         }
         if (text == null || text.isBlank()) {
             return new IngestDecision(false, "", meta, "blank", 1.0);
+        }
+
+        if (looksGeneratedArtifactPath(meta)) {
+            Map<String, Object> m = ensureMutable(meta);
+            m.put(VectorMetaKeys.META_DOC_TYPE, "ARTIFACT");
+            m.put(VectorMetaKeys.META_POISON_REASON, REASON_GENERATED_ARTIFACT_PATH);
+            record(stage, REASON_GENERATED_ARTIFACT_PATH, 0, 0, 0, sid);
+            return new IngestDecision(false, "", m, REASON_GENERATED_ARTIFACT_PATH, 0.98);
         }
 
         String payload = text;
@@ -305,7 +332,11 @@ public class VectorPoisonGuard {
         String docType = "";
         try {
             if (seg.metadata() != null) {
-                Object v = seg.metadata().toMap().get(VectorMetaKeys.META_DOC_TYPE);
+                Map<String, Object> metadata = seg.metadata().toMap();
+                if (looksGeneratedArtifactPath(metadata)) {
+                    return true;
+                }
+                Object v = metadata.get(VectorMetaKeys.META_DOC_TYPE);
                 docType = v == null ? "" : String.valueOf(v);
             }
         } catch (Exception ignore) { traceSuppressed("docType.metadata", ignore); }
@@ -313,7 +344,7 @@ public class VectorPoisonGuard {
         String dt = docType == null ? "" : docType.trim().toUpperCase(Locale.ROOT);
         if (!dt.isBlank()) {
             if ("LOG".equals(dt) || "TRACE".equals(dt) || "DIAGNOSTIC".equals(dt) || "STACKTRACE".equals(dt)
-                    || "CHAT_TRANSCRIPT".equals(dt) || "REPORT".equals(dt)) {
+                    || "ARTIFACT".equals(dt) || "CHAT_TRANSCRIPT".equals(dt) || "REPORT".equals(dt)) {
                 return true;
             }
         } else if (!allowLegacyNoDocType) {
@@ -356,7 +387,40 @@ public class VectorPoisonGuard {
                 && GENERATED_REPORT_SCORECARD.matcher(text).find();
     }
 
-    
+    private static boolean looksGeneratedArtifactPath(Map<String, Object> meta) {
+        if (meta == null || meta.isEmpty()) {
+            return false;
+        }
+        Object rawPath = meta.get(VectorMetaKeys.META_SOURCE_PATH);
+        if (rawPath == null) {
+            return false;
+        }
+        String normalized = String.valueOf(rawPath)
+                .trim()
+                .replace('\\', '/')
+                .toLowerCase(Locale.ROOT);
+        if (normalized.isBlank()) {
+            return false;
+        }
+        String bounded = normalized.startsWith("/") ? normalized : "/" + normalized;
+        for (String segment : GENERATED_ARTIFACT_PATH_SEGMENTS) {
+            if (bounded.contains(segment)) {
+                return true;
+            }
+        }
+        for (String extension : GENERATED_ARTIFACT_EXTENSIONS) {
+            if (normalized.endsWith(extension)) {
+                return true;
+            }
+        }
+        String fileName = normalized.substring(normalized.lastIndexOf('/') + 1);
+        return "trace_sample.json".equals(fileName)
+                || "_build_fix_report.json".equals(fileName)
+                || fileName.startsWith("hs_err_pid")
+                || fileName.startsWith("replay_pid");
+    }
+
+
 private static boolean sidAllowed(TextSegment seg, String requestedSid) {
     String segSid = "";
     String segLogicalSid = "";

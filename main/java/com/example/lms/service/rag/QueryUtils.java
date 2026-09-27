@@ -1,6 +1,7 @@
 package com.example.lms.service.rag;
 
 import com.example.lms.service.VectorMetaKeys;
+import com.google.common.collect.MapMaker;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.rag.query.Metadata;
@@ -10,15 +11,15 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.WeakHashMap;
 
 /**
  * Utility methods for constructing {@link Query} instances in a version-safe manner.
  */
 public final class QueryUtils {
 
+    // Sidecars belong to query instances, not vendor value-equal queries.
     private static final Map<Query, Map<String, Object>> QUERY_METADATA =
-            Collections.synchronizedMap(new WeakHashMap<>());
+            new MapMaker().weakKeys().makeMap();
 
     private QueryUtils() {}
 
@@ -134,6 +135,15 @@ public final class QueryUtils {
 
     public static Object sessionId(Query query) {
         return firstPresent(metadata(query), LangChainRAGService.META_SID, "sid", "sessionId", "chatMemoryId");
+    }
+
+    public static java.util.Optional<com.example.lms.service.rag.graph.GeneralGraphScope> generalGraphScope(Query query) {
+        Object scope = metadata(query).get(com.example.lms.service.rag.graph.GeneralGraphScope.METADATA_KEY);
+        if (scope instanceof com.example.lms.service.rag.graph.GeneralGraphScope authorized
+                && authorized.matchesSession(sessionId(query))) {
+            return java.util.Optional.of(authorized);
+        }
+        return java.util.Optional.empty();
     }
 
     private static void remember(Query query, Map<String, Object> metadata) {

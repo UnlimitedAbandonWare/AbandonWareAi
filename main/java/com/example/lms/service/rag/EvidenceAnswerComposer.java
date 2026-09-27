@@ -22,8 +22,31 @@ import java.util.regex.Pattern;
 @Component
 public class EvidenceAnswerComposer {
 
+    private static final String NO_RELEVANT_EVIDENCE_ANSWER =
+            "검색 결과가 질문과 충분히 맞지 않아 답변을 구성하기 어렵습니다.";
+    private static final String OFFICIAL_NO_RELEVANT_EVIDENCE_ANSWER =
+            "evidence_needed: 공식/changelog 근거를 현재 검색 결과에서 확인하지 못했습니다. "
+                    + "공식 출처가 확보되기 전까지 추측 답변은 제한합니다.";
+    private static final String CONDITIONAL_HOLD_CONSTRAINT =
+            "If evidence is insufficient, explicitly answer HOLD.";
+    private static final String HOLD_TOKEN =
+            "(?<![A-Za-z0-9_])HOLD(?![A-Za-z0-9_])";
     private static final Pattern HTML_TAGS = Pattern.compile("<[^>]+>");
     private static final Pattern TOKEN = Pattern.compile("[\\p{L}\\p{Nd}]{2,}");
+    private static final Pattern CONDITIONAL_HOLD = Pattern.compile(
+            "(?:\\bif\\b|\\bwhen\\b|\\bunless\\b|insufficient|not\\s+enough|부족|충분하지)"
+                    + ".{0,120}" + HOLD_TOKEN,
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.DOTALL);
+    private static final Pattern NEGATED_HOLD = Pattern.compile(
+            "(?:do\\s+not|don't|dont|never|without|not\\s+(?:answer|return|output|respond)|"
+                    + "답하지|출력하지|사용하지|제외).{0,80}" + HOLD_TOKEN,
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.DOTALL);
+    private static final Pattern POST_HOLD_NEGATION = Pattern.compile(
+            HOLD_TOKEN + ".{0,48}(?:답(?:변)?하지|출력하지|사용하지|제외)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.DOTALL);
+    private static final Pattern QUOTED_HOLD = Pattern.compile(
+            "[\\\"'`“”‘’]\\s*HOLD\\s*[\\\"'`“”‘’]",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     // A minimal, pragmatic stopword list for KR/EN. Keep it small to avoid over-filtering.
     private static final Set<String> STOP = Set.of(
@@ -45,31 +68,87 @@ public class EvidenceAnswerComposer {
     public String compose(String userQuestion,
                           List<EvidenceAwareGuard.EvidenceDoc> evidence,
                           boolean lowRiskDomain) {
+        return compose(userQuestion, evidence, lowRiskDomain, null);
+    }
+
+    /**
+     * contextSubject(분석된 현재 토픽 또는 세션 carry 토픽)를 받는 확장형.
+     * 질문 키워드/컨텍스트 주제와 전혀 정합하지 않는 근거는 답변으로 채택하지 않고
+     * {@link #noUsableEvidenceAnswer} 를 반환한다 — 모델 장애 시 무관한 검색
+     * 결과가 그럴듯한 답으로 둔갑하는 것을 막는 마지막 게이트다.
+     */
+    public String compose(String userQuestion,
+                          List<EvidenceAwareGuard.EvidenceDoc> evidence,
+                          boolean lowRiskDomain,
+                          String contextSubject) {
 
         int evidenceCount = evidence == null ? 0 : evidence.size();
         traceInput(userQuestion, evidenceCount, lowRiskDomain);
         if (evidence == null || evidence.isEmpty()) {
             traceResult(0, false, evidenceCount, false);
-            return "검색 결과가 충분하지 않아 답변을 구성하기 어렵습니다.";
+            return noUsableEvidenceAnswer(userQuestion);
         }
-
-        StringBuilder sb = new StringBuilder();
 
         boolean futureTech = FutureTechDetector.isFutureTechQuery(userQuestion);
         TraceStore.put("evidenceAnswerComposer.futureTech", futureTech);
 
+        EvidenceIntent evidenceIntent = detectEvidenceIntent(userQuestion);
+        boolean conditionalHoldRequested = requestedConditionalHold(userQuestion);
+        List<EvidenceAwareGuard.EvidenceDoc> usableEvidence = usableEvidenceDocs(evidence);
+        usableEvidence = prioritizeEvidenceDocs(usableEvidence, evidenceIntent);
+        int priorityEvidenceCount = countPriorityEvidence(usableEvidence, evidenceIntent);
+        TraceStore.put("evidenceAnswerComposer.officialOrChangelogIntent", evidenceIntent.officialOrChangelog());
+        TraceStore.put("evidenceAnswerComposer.conditionalHoldRequested", conditionalHoldRequested);
+        TraceStore.put("evidenceAnswerComposer.priorityEvidenceCount", priorityEvidenceCount);
+        TraceStore.put("evidenceAnswerComposer.usableEvidenceCount", usableEvidence.size());
+        TraceStore.put("evidenceAnswerComposer.filteredMetadataEvidenceCount",
+                Math.max(0, evidenceCount - usableEvidence.size()));
+        if (usableEvidence.isEmpty()) {
+            traceResult(0, false, evidenceCount, false);
+            return noUsableEvidenceAnswer(userQuestion);
+        }
+
+        // 정합성 게이트: 분석/carry 로 확보된 컨텍스트 주제가 있을 때만 발동한다.
+        // 주제 신호 없는 질문은 "무관함"을 판정할 앵커 자체가 없으므로 기존
+        // 동작(근거 나열)을 유지한다 — 범용 질문+범용 문서까지 차단해 정상
+        // 근거 답변을 죽이지 않기 위함이다. 전량 탈락이면 noUsableEvidenceAnswer
+        // 를 반환해 상위에서 degraded 응답으로 바꾼다.
+        boolean alignmentJudgeable = contextSubject != null && !contextSubject.isBlank();
+        List<EvidenceAwareGuard.EvidenceDoc> alignedEvidence =
+                filterAlignedEvidence(usableEvidence, userQuestion, contextSubject);
+        TraceStore.put("evidenceAnswerComposer.alignmentJudgeable", alignmentJudgeable);
+        TraceStore.put("evidenceAnswerComposer.alignedEvidenceCount", alignedEvidence.size());
+        if (alignmentJudgeable) {
+            if (alignedEvidence.isEmpty()) {
+                TraceStore.put("evidenceAnswerComposer.alignmentRejected", true);
+                traceResult(0, false, evidenceCount, false);
+                return noUsableEvidenceAnswer(userQuestion);
+            }
+            usableEvidence = alignedEvidence;
+        }
+
+        StringBuilder sb = new StringBuilder();
+
         // 1) Header: explain the situation and risk level.
         if (futureTech) {
             sb.append("※ 아래 내용은 공식 발표 전이며, 검색 결과에서 수집된 루머/유출/예상 정보 기반입니다. 실제 출시 시 변경될 수 있습니다.\n\n");
+        } else if (evidenceIntent.officialOrChangelog() && priorityEvidenceCount > 0) {
+            sb.append("공식/changelog 성격의 근거를 우선해서 검색 결과를 추출형으로 정리했습니다. LLM 경로가 꺼져 있어 원문 근거 중심으로 확인해 주세요.\n\n");
+        } else if (evidenceIntent.officialOrChangelog()) {
+            sb.append("공식/changelog 근거를 요청했지만 현재 검색 결과에서는 뚜렷한 공식/릴리스 노트 근거가 부족합니다. 확인된 검색 결과만 제한적으로 정리합니다.\n\n");
         } else if (lowRiskDomain) {
             sb.append("공식 출처는 아니지만, 검색 결과(커뮤니티/위키 포함)를 바탕으로 핵심을 정리했습니다.\n\n");
         } else {
             sb.append("검색된 자료를 바탕으로 정리했으나, 공식 문서는 아닐 수 있습니다.\n\n");
         }
 
+        if (evidenceIntent.officialOrChangelog() && conditionalHoldRequested) {
+            sb.append("> 요청한 조건부 판정을 보존합니다: 근거가 충분하지 않다면 HOLD.\n\n");
+        }
+
         // 1.5) Provide a short explanation BEFORE listing raw evidence.
         // This remains deterministic (no LLM calls).
-        String explanation = buildExtractiveExplanation(userQuestion, evidence);
+        String explanation = buildExtractiveExplanation(userQuestion, usableEvidence);
         boolean explanationIncluded = !explanation.isBlank();
         if (explanationIncluded) {
             sb.append("### 핵심 설명\n");
@@ -78,14 +157,14 @@ public class EvidenceAnswerComposer {
 
         // 2) Evidence bullets (top N).
         sb.append("### 근거(검색 결과)\n");
-        int limit = Math.min(5, evidence.size());
+        int limit = Math.min(5, usableEvidence.size());
         int usedEvidenceCount = 0;
         for (int i = 0; i < limit; i++) {
-            EvidenceAwareGuard.EvidenceDoc doc = evidence.get(i);
+            EvidenceAwareGuard.EvidenceDoc doc = usableEvidence.get(i);
             if (doc == null) {
                 continue;
             }
-            String title = safe(doc.title(), "제목 없음");
+            String title = displayTitle(doc.title());
             String snippet = sanitizeSnippet(safe(doc.snippet(), ""));
             if (snippet.length() > 180) {
                 snippet = snippet.substring(0, 177) + "...";
@@ -110,6 +189,232 @@ public class EvidenceAnswerComposer {
 
         traceResult(usedEvidenceCount, explanationIncluded, evidenceCount, true);
         return sb.toString();
+    }
+
+    private static List<EvidenceAwareGuard.EvidenceDoc> usableEvidenceDocs(
+            List<EvidenceAwareGuard.EvidenceDoc> evidence) {
+        List<EvidenceAwareGuard.EvidenceDoc> usable = new ArrayList<>();
+        if (evidence == null || evidence.isEmpty()) {
+            return usable;
+        }
+        for (EvidenceAwareGuard.EvidenceDoc doc : evidence) {
+            if (doc == null) {
+                continue;
+            }
+            String snippet = sanitizeSnippet(doc.snippet());
+            if (snippet.isBlank()) {
+                continue;
+            }
+            if (metadataOnlySnippet(doc, snippet)) {
+                continue;
+            }
+            usable.add(doc);
+        }
+        return usable;
+    }
+
+    /**
+     * 근거 문서가 질문/컨텍스트 주제와 정합하는지 결정론적으로 판정한다.
+     * contextSubject 가 없으면 호출되지 않는다(판정 앵커 부재).
+     * 정합 기준: contextSubject 부분일치, 또는 강한 키워드(3자 이상) 1개 이상,
+     * 또는 약한 키워드(2자) min(2, 키워드 수)개 이상. 약한 단독 히트는
+     * 일반명사 우연 일치를 근거로 채택하지 않기 위한 완충이다.
+     */
+    private static List<EvidenceAwareGuard.EvidenceDoc> filterAlignedEvidence(
+            List<EvidenceAwareGuard.EvidenceDoc> usable,
+            String userQuestion,
+            String contextSubject) {
+        if (usable == null || usable.isEmpty()) {
+            return usable == null ? List.of() : usable;
+        }
+        List<String> keywords = extractKeywords(userQuestion);
+        String subject = contextSubject == null ? "" : contextSubject.trim().toLowerCase();
+        int weakNeed = Math.min(2, keywords.size());
+        List<EvidenceAwareGuard.EvidenceDoc> aligned = new ArrayList<>();
+        for (EvidenceAwareGuard.EvidenceDoc doc : usable) {
+            if (doc == null) {
+                continue;
+            }
+            String text = searchableEvidenceText(doc);
+            if (!subject.isBlank() && text.contains(subject)) {
+                aligned.add(doc);
+                continue;
+            }
+            int strong = 0;
+            int weak = 0;
+            for (String kw : keywords) {
+                if (kw == null || kw.isBlank() || !text.contains(kw)) {
+                    continue;
+                }
+                if (kw.length() >= 3) {
+                    strong++;
+                } else {
+                    weak++;
+                }
+            }
+            if (strong >= 1 || (weakNeed > 0 && weak >= weakNeed)) {
+                aligned.add(doc);
+            }
+        }
+        return aligned;
+    }
+
+    /**
+     * compose 결과가 "근거 부적합/부재" 고정 응답인지 판별한다.
+     * 호출 측은 이 결과를 근거 답변으로 채택하지 않고 degraded 응답으로 전환한다.
+     */
+    public static boolean isNoRelevantEvidenceAnswer(String answer) {
+        String a = answer == null ? "" : answer.trim();
+        return a.equals(NO_RELEVANT_EVIDENCE_ANSWER)
+                || a.equals(OFFICIAL_NO_RELEVANT_EVIDENCE_ANSWER);
+    }
+
+    private static List<EvidenceAwareGuard.EvidenceDoc> prioritizeEvidenceDocs(
+            List<EvidenceAwareGuard.EvidenceDoc> evidence,
+            EvidenceIntent intent) {
+        if (evidence == null || evidence.size() < 2 || intent == null || !intent.officialOrChangelog()) {
+            return evidence;
+        }
+        evidence.sort((left, right) -> Integer.compare(
+                evidenceIntentScore(right, intent),
+                evidenceIntentScore(left, intent)));
+        return evidence;
+    }
+
+    private static int countPriorityEvidence(List<EvidenceAwareGuard.EvidenceDoc> evidence,
+                                             EvidenceIntent intent) {
+        if (evidence == null || evidence.isEmpty() || intent == null || !intent.officialOrChangelog()) {
+            return 0;
+        }
+        int count = 0;
+        for (EvidenceAwareGuard.EvidenceDoc doc : evidence) {
+            if (evidenceIntentScore(doc, intent) > 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static EvidenceIntent detectEvidenceIntent(String userQuestion) {
+        String q = searchableText(userQuestion);
+        boolean official = containsAny(q,
+                "official", "official source", "official-source", "primary source",
+                "source of truth", "공식", "1차 출처", "일차 출처");
+        boolean changelog = containsAny(q,
+                "changelog", "change log", "release note", "release notes", "release-notes",
+                "what's new", "whats new", "latest changes", "변경사항", "최신 변경",
+                "릴리스", "릴리즈", "출시 노트");
+        return new EvidenceIntent(official, changelog);
+    }
+
+    private static String noUsableEvidenceAnswer(String userQuestion) {
+        EvidenceIntent intent = detectEvidenceIntent(userQuestion);
+        String q = searchableText(userQuestion);
+        if ((intent != null && intent.officialOrChangelog()) || q.contains("evidence_needed")) {
+            TraceStore.put("evidenceAnswerComposer.noUsableEvidence.evidenceNeeded", true);
+            return OFFICIAL_NO_RELEVANT_EVIDENCE_ANSWER;
+        }
+        return NO_RELEVANT_EVIDENCE_ANSWER;
+    }
+
+    private static int evidenceIntentScore(EvidenceAwareGuard.EvidenceDoc doc, EvidenceIntent intent) {
+        if (doc == null || intent == null || !intent.officialOrChangelog()) {
+            return 0;
+        }
+        String text = searchableEvidenceText(doc);
+        int score = 0;
+        if (intent.changelog()) {
+            if (containsAny(text,
+                    "changelog", "change log", "release note", "release notes", "release-notes",
+                    "/releases", "releases/", "what's new", "whats new", "변경사항",
+                    "릴리스 노트", "릴리즈 노트", "출시 노트")) {
+                score += 8;
+            }
+            if (containsAny(text, "latest", "version", "updates", "update", "최신")) {
+                score += 1;
+            }
+        }
+        if (intent.official()) {
+            if (containsAny(text,
+                    "official", "official docs", "documentation", "api reference",
+                    "developer", "developers", "docs.", "/docs", "platform.openai.com/docs",
+                    "openai.com/changelog", "learn.microsoft.com", "developer.apple.com",
+                    "cloud.google.com", "docs.aws.amazon.com", "docs.github.com")) {
+                score += 6;
+            }
+            if (containsAny(text, "github.com/") && containsAny(text, "/releases", "release")) {
+                score += 4;
+            }
+        }
+        boolean communityOrPersonal = containsAny(text,
+                "reddit", "stackoverflow", "medium.com", "velog", "tistory",
+                "wikipedia", "community", "forum", "personal.", "개인 블로그");
+        if (communityOrPersonal) {
+            score = Math.min(score - 5, 0);
+        }
+        return score;
+    }
+
+    private static String searchableEvidenceText(EvidenceAwareGuard.EvidenceDoc doc) {
+        if (doc == null) {
+            return "";
+        }
+        return searchableText(safe(doc.id(), "") + " "
+                + safe(doc.title(), "") + " "
+                + safe(doc.snippet(), "") + " "
+                + safe(doc.url(), ""));
+    }
+
+    private static String searchableText(String raw) {
+        return raw == null ? "" : raw.toLowerCase().replaceAll("\\s+", " ").trim();
+    }
+
+    private static boolean containsAny(String text, String... needles) {
+        if (text == null || text.isBlank() || needles == null || needles.length == 0) {
+            return false;
+        }
+        for (String needle : needles) {
+            if (needle != null && !needle.isBlank() && text.contains(needle.toLowerCase())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean requestedConditionalHold(String userQuestion) {
+        if (userQuestion == null || userQuestion.isBlank()) {
+            return false;
+        }
+        if (QUOTED_HOLD.matcher(userQuestion).find()
+                || NEGATED_HOLD.matcher(userQuestion).find()
+                || POST_HOLD_NEGATION.matcher(userQuestion).find()) {
+            return false;
+        }
+        return CONDITIONAL_HOLD.matcher(userQuestion).find();
+    }
+
+    /**
+     * Carries only the allowlisted conditional HOLD contract across query rewriting.
+     * The original question is inspected but never copied into the resolved question.
+     */
+    public static String preserveExplicitConditionalHold(
+            String resolvedQuestion,
+            String originalQuestion) {
+        String resolved = resolvedQuestion == null ? "" : resolvedQuestion;
+        if (!requestedConditionalHold(originalQuestion) || requestedConditionalHold(resolved)) {
+            return resolved;
+        }
+        String separator = resolved.isBlank()
+                || Character.isWhitespace(resolved.charAt(resolved.length() - 1))
+                ? ""
+                : "\n";
+        return resolved + separator + CONDITIONAL_HOLD_CONSTRAINT;
+    }
+
+    private record EvidenceIntent(boolean official, boolean changelog) {
+        boolean officialOrChangelog() {
+            return official || changelog;
+        }
     }
 
     private static void traceInput(String userQuestion, int evidenceCount, boolean lowRiskDomain) {
@@ -160,6 +465,7 @@ public class EvidenceAnswerComposer {
             if (snippet.isBlank()) {
                 continue;
             }
+            boolean metadataOnlySnippet = metadataOnlySnippet(doc, snippet);
 
             String best = null;
             int bestScore = -1;
@@ -187,6 +493,9 @@ public class EvidenceAnswerComposer {
             if (best == null) {
                 continue;
             }
+            if (metadataOnlySnippet) {
+                continue;
+            }
 
             String norm = normalizeForDedupe(best);
             if (!seen.add(norm)) {
@@ -205,6 +514,25 @@ public class EvidenceAnswerComposer {
             return "";
         }
         return String.join("\n", bullets);
+    }
+
+    private static boolean metadataOnlySnippet(EvidenceAwareGuard.EvidenceDoc doc, String snippet) {
+        String normalizedSnippet = normalizeForDedupe(snippet);
+        if (normalizedSnippet.isBlank()) {
+            return true;
+        }
+        String normalizedTitle = normalizeForDedupe(doc == null ? "" : safe(doc.title(), ""));
+        if (!normalizedTitle.isBlank() && normalizedSnippet.equals(normalizedTitle)) {
+            return true;
+        }
+        String lower = normalizedSnippet.toLowerCase();
+        return lower.equals("metadata only")
+                || lower.startsWith("metadata only ")
+                || lower.startsWith("url based ")
+                || lower.startsWith("url fallback ")
+                || lower.startsWith("we cannot provide a description for this page")
+                || lower.contains("description for this page right now url:")
+                || lower.matches("https?://\\S+");
     }
 
     private static List<String> extractKeywords(String q) {
@@ -322,5 +650,14 @@ public class EvidenceAnswerComposer {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? fallback : trimmed;
+    }
+
+    // 진행 중 상태를 나타내는 과도기 제목(Loading... 등)은 근거 제목으로 렌더링하지 않는다.
+    private static final Pattern TRANSIENT_TITLE = Pattern.compile(
+            "(?i)^\\s*(?:loading|로딩\\s*중|로딩중|fetching|검색\\s*중)[.…\\s]*$");
+
+    private static String displayTitle(String title) {
+        String t = safe(title, "");
+        return TRANSIENT_TITLE.matcher(t).matches() ? "제목 없음" : t;
     }
 }

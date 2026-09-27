@@ -25,6 +25,8 @@ import java.util.*;
 import dev.langchain4j.exception.InternalServerException;
 import dev.langchain4j.exception.HttpException;
 import com.example.lms.search.QueryHygieneFilter;
+import com.example.lms.search.TraceStore;
+import com.example.lms.trace.SafeChatMessageLog;
 import org.springframework.beans.factory.annotation.Qualifier;
 import com.example.lms.domain.enums.RulePhase;
 import com.example.lms.dto.ChatRequestDto;
@@ -330,7 +332,7 @@ public class ChatServiceLegacyPatch {
     private String defaultModel;
     @Value("${openai.fine-tuning.custom-model-id:}")
     private String tunedModelId;
-    @Value("${openai.api.temperature.default:0.7}") private double defaultTemp;
+    @Value("${openai.api.temperature.default:${llm.chat.temperature:0.3}}") private double defaultTemp;
     @Value("${openai.api.top-p.default:1.0}")       private double defaultTopP;
     @Value("${openai.api.history.max-messages:6}")
     private int maxHistory;
@@ -431,7 +433,7 @@ public class ChatServiceLegacyPatch {
 
     // ── intent/risk/로깅 유틸 ─────────────────────────────────────
     private String inferIntent(String q) {
-        try { return qcPreprocessor.inferIntent(q); } catch (Exception e) { return "GENERAL"; }
+        try { return qcPreprocessor.inferIntent(q); } catch (Exception e) { traceLegacyPatchSuppressed("intent.infer", e); return "GENERAL"; }
     }
 
     private String detectRisk(String q) {
@@ -445,7 +447,7 @@ public class ChatServiceLegacyPatch {
     }
 
     private void reinforce(String sessionKey, String query, String answer) {
-        try { reinforceAssistantAnswer(sessionKey, query, answer); } catch (Throwable ignore) {}
+        try { reinforceAssistantAnswer(sessionKey, query, answer); } catch (Throwable t) { traceLegacyPatchSuppressed("memory.reinforce", t); }
     }
 
     /**
@@ -734,7 +736,8 @@ public class ChatServiceLegacyPatch {
                     out = "충분한 증거를 찾지 못했습니다. 더 구체적인 키워드나 맥락을 알려주시면 정확도가 올라갑니다.";
                 }
             }
-        } catch (Throwable ignore) {
+        } catch (Throwable t) {
+            traceLegacyPatchSuppressed("evidence.degrade", t);
             // never block the chat flow
         }
 
@@ -778,12 +781,15 @@ public class ChatServiceLegacyPatch {
         try {
             // 먼저 학습용 인터셉터에 전달하여 구조화된 지식 학습을 수행합니다.
             learningWriteInterceptor.ingest(sessionKey, userQuery, out, /*score*/ 0.5);
-        } catch (Throwable ignore) {
+        } catch (Throwable t) {
+            traceLegacyPatchSuppressed("learning.write", t);
             // swallow errors to avoid breaking the chat flow
         }
         try {
             memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5);
-        } catch (Throwable ignore) {}
+        } catch (Throwable t) {
+            traceLegacyPatchSuppressed("memory.write", t);
+        }
         // 이해 요약 및 기억 인터셉터: 검증/확장된 최종 답변을 구조화 요약하여 저장하고 SSE로 전송
         try {
             understandAndMemorizeInterceptor.afterVerified(
@@ -791,7 +797,8 @@ public class ChatServiceLegacyPatch {
                     userQuery,
                     out,
                     req.isUnderstandingEnabled());
-        } catch (Throwable ignore) {
+        } catch (Throwable t) {
+            traceLegacyPatchSuppressed("understanding.memorize", t);
             // swallow errors to avoid breaking the chat flow
         }
         reinforce(sessionKey, userQuery, out);
@@ -800,6 +807,7 @@ public class ChatServiceLegacyPatch {
         try {
             modelUsed = modelRouter.resolveModelName(model);
         } catch (Exception e) {
+            traceLegacyPatchSuppressed("model.resolveName", e);
             modelUsed = "lc:" + getModelName(model);
         }
         // 증거 집합 정리
@@ -889,7 +897,7 @@ public class ChatServiceLegacyPatch {
     //  검증 여부 결정 헬퍼
     private boolean shouldVerify(String joinedContext, com.example.lms.dto.ChatRequestDto req) {
         boolean hasContext = org.springframework.util.StringUtils.hasText(joinedContext);
-        Boolean flag = req.isUseVerification(); // null 가능
+        Boolean flag = req.getUseVerification(); // null 가능
         boolean enabled = (flag == null) ? verificationEnabled : Boolean.TRUE.equals(flag);
         return hasContext && enabled;
     }
@@ -915,9 +923,7 @@ public class ChatServiceLegacyPatch {
 
         try {
             /* ① 초안 생성 */
-            if (log.isTraceEnabled()) {
-                log.trace("[LC] final messages for draft → {}", msgs);
-            }
+            SafeChatMessageLog.traceDraft(log, msgs);
             // ✔ LC4j 1.0.1 API: generate(/* ... */) → chat(/* ... */).aiMessage().text()
             String draft = dynamicChatModel.chat(msgs).aiMessage().text();
 
@@ -1300,6 +1306,7 @@ public class ChatServiceLegacyPatch {
                     Thread.sleep(llmBackoffMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    traceLegacyPatchSuppressed("llm.retry.sleep", ie);
                     break;
                 }
             } catch (RuntimeException e) {
@@ -1314,6 +1321,7 @@ public class ChatServiceLegacyPatch {
                     Thread.sleep(llmBackoffMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    traceLegacyPatchSuppressed("llm.connect.retry.sleep", ie);
                     break;
                 }
             }
@@ -1405,11 +1413,15 @@ public class ChatServiceLegacyPatch {
                 String t = seg.text().strip();
                 if (!t.isEmpty()) return truncate(t, 80);
             }
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            traceLegacyPatchSuppressed("evidence.safeTitle.segment", e);
+        }
         try {
             String s = String.valueOf(c);
             if (s != null && !s.isBlank()) return truncate(s, 80);
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            traceLegacyPatchSuppressed("evidence.safeTitle.toString", e);
+        }
         return "(제목 없음)";
     }
     private static String safeSnippet(dev.langchain4j.rag.content.Content c) {
@@ -1420,8 +1432,19 @@ public class ChatServiceLegacyPatch {
                 String t = seg.text().strip();
                 if (!t.isEmpty()) return truncate(t, 160);
             }
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            traceLegacyPatchSuppressed("evidence.safeSnippet.segment", e);
+        }
         return "";
+    }
+
+    private static void traceLegacyPatchSuppressed(String stage, Throwable error) {
+        String safeStage = stage == null || stage.isBlank() ? "unknown" : stage;
+        String errorType = error == null ? "unknown" : error.getClass().getSimpleName();
+        TraceStore.put("chat.legacyPatch.suppressed.stage", safeStage);
+        TraceStore.put("chat.legacyPatch.suppressed.errorType", errorType);
+        TraceStore.put("chat.legacyPatch.suppressed." + safeStage, true);
+        TraceStore.put("chat.legacyPatch.suppressed." + safeStage + ".errorType", errorType);
     }
 
 }

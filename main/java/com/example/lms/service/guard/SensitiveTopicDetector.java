@@ -38,9 +38,22 @@ public class SensitiveTopicDetector {
     @Value("${privacy.boundary.block-web-search-on-sensitive:false}")
     private boolean blockWebOnSensitive;
 
-    private static final Pattern SELF_HARM = Pattern.compile("(자해|자살|극단\\s*선택|죽고\\s*싶|살기\\s*싫)");
-    private static final Pattern ABUSE = Pattern.compile("(학대|폭력|성폭력|가정폭력|가스라이팅|스토킹)");
-    private static final Pattern TRAUMA = Pattern.compile("(트라우마|PTSD|공황|우울|불안)");
+    private static final Pattern SELF_HARM = Pattern.compile(
+            "(자해|자살|극단\\s*선택|죽고\\s*싶|살기\\s*싫|\\bself[-\\s]?harm\\b|\\bsuicid(?:e|al)\\b|\\bkill\\s+myself\\b)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern ABUSE = Pattern.compile(
+            "(학대|폭력|성\\s*폭력|가정\\s*폭력|가스라이팅|스토킹|\\babuse\\b|\\bdomestic\\s+violence\\b|\\bsexual\\s+assault\\b|\\bstalking\\b)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern TRAUMA = Pattern.compile(
+            "(트라우마|공황|우울|불안|\\bptsd\\b|\\btrauma\\b|\\bpanic\\s+attack\\b|\\bdepress(?:ion|ed)\\b|\\banxiety\\b)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    public static boolean isSensitiveText(String text) {
+        return StringUtils.hasText(text)
+                && (SELF_HARM.matcher(text).find()
+                        || ABUSE.matcher(text).find()
+                        || TRAUMA.matcher(text).find());
+    }
 
     public void applyTo(GuardContext gctx, ChatRequestDto req) {
         if (!enabled || gctx == null) {
@@ -66,7 +79,9 @@ public class SensitiveTopicDetector {
 
         // Sampling hints (upper layers may choose to apply)
         gctx.putPlanOverride("llm.answer.temperature", answerTemp);
-        gctx.putPlanOverride("llm.explore.temperature.max", exploreTempCap);
+        putLowerCap(gctx, "llm.answer.temperature.max", answerTemp);
+        putLowerCap(gctx, "llm.selfAsk.temperature.max", exploreTempCap);
+        putLowerCap(gctx, "llm.explore.temperature.max", exploreTempCap);
 
         // Web boundary: mask query and (optionally) block web search for sensitive topics
         gctx.putPlanOverride("privacy.boundary.mask-web-query", true);
@@ -82,5 +97,13 @@ public class SensitiveTopicDetector {
             LOG.log(System.Logger.Level.DEBUG,
                     "Sensitive topic trace tags skipped stage=trace_store_unavailable");
         }
+    }
+
+    private static void putLowerCap(GuardContext context, String key, double candidate) {
+        if (!Double.isFinite(candidate)) {
+            return;
+        }
+        Double current = context.planDouble(key);
+        context.putPlanOverride(key, current == null ? candidate : Math.min(current, candidate));
     }
 }

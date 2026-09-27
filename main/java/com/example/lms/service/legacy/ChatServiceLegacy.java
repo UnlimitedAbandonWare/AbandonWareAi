@@ -24,6 +24,8 @@ import java.util.*;
 import dev.langchain4j.exception.InternalServerException;
 import dev.langchain4j.exception.HttpException;
 import com.example.lms.search.QueryHygieneFilter;
+import com.example.lms.search.TraceStore;
+import com.example.lms.trace.SafeChatMessageLog;
 import org.springframework.beans.factory.annotation.Qualifier;
 import com.example.lms.domain.enums.RulePhase;
 import com.example.lms.dto.ChatRequestDto;
@@ -325,7 +327,7 @@ public class ChatServiceLegacy {
     private String defaultModel;
     @Value("${openai.fine-tuning.custom-model-id:}")
     private String tunedModelId;
-    @Value("${openai.api.temperature.default:0.7}") private double defaultTemp;
+    @Value("${openai.api.temperature.default:${llm.chat.temperature:0.3}}") private double defaultTemp;
     @Value("${openai.api.top-p.default:1.0}")       private double defaultTopP;
     @Value("${openai.api.history.max-messages:6}")
     private int maxHistory;
@@ -435,7 +437,7 @@ public class ChatServiceLegacy {
 
     // ── intent/risk/로깅 유틸 ─────────────────────────────────────
     private String inferIntent(String q) {
-        try { return qcPreprocessor.inferIntent(q); } catch (Exception e) { return "GENERAL"; }
+        try { return qcPreprocessor.inferIntent(q); } catch (Exception e) { traceLegacySuppressed("intent.infer", e); return "GENERAL"; }
     }
 
     private String detectRisk(String q) {
@@ -469,7 +471,7 @@ public class ChatServiceLegacy {
     }
 
     private void reinforce(String sessionKey, String query, String answer) {
-        try { reinforceAssistantAnswer(sessionKey, query, answer); } catch (Throwable ignore) {}
+        try { reinforceAssistantAnswer(sessionKey, query, answer); } catch (Throwable t) { traceLegacySuppressed("memory.reinforce", t); }
     }
 
     /**
@@ -575,17 +577,10 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
         List<dev.langchain4j.rag.content.Content> vectorDocs =
                 useRag
                         ? ragSvc.asContentRetriever(pineconeIndexName)
-                        .retrieve(
-                            dev.langchain4j.rag.query.Query.builder()
-                                    .text(finalQuery)
-                                    .metadata(Metadata.from(
-                                            Map.of(
-                                                    com.example.lms.service.rag.LangChainRAGService.META_SID,
-                                                    (req.getSessionId() == null)
-                                                            ? "__TRANSIENT__"
-                                                            : req.getSessionId()
-                                            )))
-                                    .build())
+                        .retrieve(com.example.lms.service.rag.QueryUtils.buildQuery(
+                                finalQuery,
+                                (req.getSessionId() == null) ? "__TRANSIENT__" : req.getSessionId(),
+                                null))
                         : List.of();
 
         // 1-c) 메모리 컨텍스트(항상 시도) - 전담 핸들러 사용
@@ -623,7 +618,8 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                 if (localDocs != null && !localDocs.isEmpty()) {
                     ctxBuilder.localDocs(localDocs);
                 }
-            } catch (Exception ignore) {
+            } catch (Exception e) {
+                traceLegacySuppressed("attachments.localDocs", e);
                 // Ignore any failures during attachment extraction to avoid disrupting chat
             }
         }
@@ -779,7 +775,8 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                     out = "충분한 증거를 찾지 못했습니다. 더 구체적인 키워드나 맥락을 알려주시면 정확도가 올라갑니다.";
                 }
             }
-        } catch (Throwable ignore) {
+        } catch (Throwable t) {
+            traceLegacySuppressed("evidence.degrade", t);
             // never block the chat flow
         }
 
@@ -823,12 +820,15 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
         try {
             // 먼저 학습용 인터셉터에 전달하여 구조화된 지식 학습을 수행합니다.
             learningWriteInterceptor.ingest(sessionKey, userQuery, out, /*score*/ 0.5);
-        } catch (Throwable ignore) {
+        } catch (Throwable t) {
+            traceLegacySuppressed("learning.write", t);
             // swallow errors to avoid breaking the chat flow
         }
         try {
             memoryWriteInterceptor.save(sessionKey, userQuery, out, /*score*/ 0.5);
-        } catch (Throwable ignore) {}
+        } catch (Throwable t) {
+            traceLegacySuppressed("memory.write", t);
+        }
         // 이해 요약 및 기억 인터셉터: 검증/확장된 최종 답변을 구조화 요약하여 저장하고 SSE로 전송
         try {
             understandAndMemorizeInterceptor.afterVerified(
@@ -836,7 +836,8 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                     userQuery,
                     out,
                     req.isUnderstandingEnabled());
-        } catch (Throwable ignore) {
+        } catch (Throwable t) {
+            traceLegacySuppressed("understanding.memorize", t);
             // swallow errors to avoid breaking the chat flow
         }
         reinforce(sessionKey, userQuery, out);
@@ -845,6 +846,7 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
         try {
             modelUsed = modelRouter.resolveModelName(model);
         } catch (Exception e) {
+            traceLegacySuppressed("model.resolveName", e);
             modelUsed = String.format("lc:%s", getModelName(model));
         }
         // 증거 집합 정리
@@ -934,7 +936,7 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
     //  검증 여부 결정 헬퍼
     private boolean shouldVerify(String joinedContext, com.example.lms.dto.ChatRequestDto req) {
         boolean hasContext = org.springframework.util.StringUtils.hasText(joinedContext);
-        Boolean flag = req.isUseVerification(); // null 가능
+        Boolean flag = req.getUseVerification(); // null 가능
         boolean enabled = (flag == null) ? verificationEnabled : Boolean.TRUE.equals(flag);
         return hasContext && enabled;
     }
@@ -959,7 +961,8 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                     Optional.ofNullable(req.getTopP()).orElse(defaultTopP),
                     req.getMaxTokens()
             );
-        } catch (Exception ignore) {
+        } catch (Exception e) {
+            traceLegacySuppressed("llm.createDynamicModel", e);
             // 안전 무시: 아래 다운시프트
         }
         final boolean llmAvailable = (dynamicChatModel != null);
@@ -968,9 +971,7 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
             /* ① 초안 생성 */
             String draft;
             if (llmAvailable) {
-                if (log.isTraceEnabled()) {
-                    log.trace("[LC] final messages for draft → {}", msgs);
-                }
+                SafeChatMessageLog.traceDraft(log, msgs);
                 // ✔ LC4j 1.0.1 API: generate(/* ... */) → chat(/* ... */).aiMessage().text()
                 draft = dynamicChatModel.chat(msgs).aiMessage().text();
             } else {
@@ -1367,6 +1368,7 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                     Thread.sleep(llmBackoffMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    traceLegacySuppressed("llm.retry.sleep", ie);
                     break;
                 }
             } catch (RuntimeException e) {
@@ -1381,6 +1383,7 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                     Thread.sleep(llmBackoffMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    traceLegacySuppressed("llm.connect.retry.sleep", ie);
                     break;
                 }
             }
@@ -1472,11 +1475,15 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                 String t = seg.text().strip();
                 if (!t.isEmpty()) return truncate(t, 80);
             }
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            traceLegacySuppressed("evidence.safeTitle.segment", e);
+        }
         try {
             String s = String.valueOf(c);
             if (s != null && !s.isBlank()) return truncate(s, 80);
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            traceLegacySuppressed("evidence.safeTitle.toString", e);
+        }
         return "(제목 없음)";
     }
     private static String safeSnippet(dev.langchain4j.rag.content.Content c) {
@@ -1487,7 +1494,9 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
                 String t = seg.text().strip();
                 if (!t.isEmpty()) return truncate(t, 160);
             }
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            traceLegacySuppressed("evidence.safeSnippet.segment", e);
+        }
         return "";
     }
 
@@ -1523,10 +1532,20 @@ int plateLimit = Math.max(hybridTopK, Math.max(plate.webTopK(), plate.vecTopK())
             try {
                 // Perform a dummy hybrid retrieval.  The result is ignored.
                 this.hybridRetriever.retrieveAll(java.util.List.of("compliance-check"), 1);
-            } catch (Exception ignore) {
+            } catch (Exception e) {
+                traceLegacySuppressed("compliance.ragGate.retrieve", e);
                 // Ignore any errors; this method is never invoked at runtime
             }
         }
+    }
+
+    private static void traceLegacySuppressed(String stage, Throwable error) {
+        String safeStage = stage == null || stage.isBlank() ? "unknown" : stage;
+        String errorType = error == null ? "unknown" : error.getClass().getSimpleName();
+        TraceStore.put("chat.legacy.suppressed.stage", safeStage);
+        TraceStore.put("chat.legacy.suppressed.errorType", errorType);
+        TraceStore.put("chat.legacy.suppressed." + safeStage, true);
+        TraceStore.put("chat.legacy.suppressed." + safeStage + ".errorType", errorType);
     }
 
 }

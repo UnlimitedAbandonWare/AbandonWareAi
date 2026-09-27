@@ -10,6 +10,7 @@ import com.example.lms.search.TraceStore;
 import com.example.lms.service.rag.overdrive.OverdriveGuard;
 import com.example.lms.service.verbosity.VerbosityProfile;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.trace.TraceMemoryFingerprintProbe;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import lombok.RequiredArgsConstructor;
@@ -59,6 +60,9 @@ public class ContextOrchestrator {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private AnchorNarrower overdriveAnchorNarrower;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TraceMemoryFingerprintProbe traceMemoryFingerprintProbe;
+
     /**
      * 여러 정보 소스를 바탕으로 최종 컨텍스트를 조율하고, 동적 규칙을 포함하여 프롬프트를 생성합니다.
      * (기존 호환 버전: Verbosity 미사용)
@@ -92,6 +96,7 @@ public class ContextOrchestrator {
                               String memoryCtx) {
 
         String promptMemoryCtx = memoryCtx;
+        traceMemoryFingerprint("raw_snapshot", "before_memory_compression", query, promptMemoryCtx, null);
         if (shouldActivateMemoryCompression(query, promptMemoryCtx)) {
             try {
                 promptMemoryCtx = promptContextCompressor.compressMemoryForPrompt(query, promptMemoryCtx);
@@ -104,6 +109,8 @@ public class ContextOrchestrator {
                 // fail-soft: keep original memory context
             }
         }
+        traceMemoryFingerprint("first_refinement", "after_memory_compression", query, promptMemoryCtx,
+                checkpointDetails("memory_compression", 0, 0, 0));
         boolean hasMemory = promptMemoryCtx != null && !promptMemoryCtx.isBlank();
 
         // [FIX-B1] Null-safe 래핑 + 디버그 로그 강화
@@ -126,6 +133,8 @@ public class ContextOrchestrator {
         // 2) 메모리 단독 모드: 검색 결과가 없어도 메모리만으로 프롬프트 생성
         if (merged.isEmpty() && hasMemory) {
             traceContextResult(0, "memory_only_no_candidates");
+            traceMemoryFingerprint("load", "memory_only_no_candidates", query, promptMemoryCtx,
+                    checkpointDetails("memory_only_no_candidates", 0, 0, 0));
             PromptContext ctx = PromptContext.builder()
                     .rag(List.of())
                     .web(List.of())
@@ -148,6 +157,8 @@ public class ContextOrchestrator {
         // Build an empty-context prompt so the assistant can respond based on system policies.
         if (merged.isEmpty()) {
             traceContextResult(0, "empty_candidates");
+            traceMemoryFingerprint("load", "empty_candidates", query, promptMemoryCtx,
+                    checkpointDetails("empty_candidates", 0, 0, 0));
             PromptContext ctx = PromptContext.builder()
                     .rag(List.of())
                     .web(List.of())
@@ -197,6 +208,8 @@ public class ContextOrchestrator {
         List<Content> finalWeb = new ArrayList<>();
         List<Content> finalRag = new ArrayList<>();
         splitPromptDocs(finalDocs, finalWeb, finalRag);
+        String contextRefinementSummary = "";
+        Map<String, Double> contextRefinementSignals = Map.of();
         if (promptContextCompressor != null && allPromptDocsAlreadyCompressed(finalWeb, finalRag)) {
             tracePromptComposerSkipped("already_compressed");
         } else if (promptContextCompressor != null) {
@@ -211,6 +224,8 @@ public class ContextOrchestrator {
                     if (composition != null) {
                         finalWeb = composition.web() == null ? new ArrayList<>() : new ArrayList<>(composition.web());
                         finalRag = composition.rag() == null ? new ArrayList<>() : new ArrayList<>(composition.rag());
+                        contextRefinementSummary = composition.contextRefinementSummary();
+                        contextRefinementSignals = composition.contextRefinementSignals();
                     }
                 } catch (Exception ex) {
                     TraceStore.put("orchestrator.compress.skipReason", "exception_fail_soft");
@@ -225,6 +240,8 @@ public class ContextOrchestrator {
                 finalWeb.size(), finalRag.size(), cap);
         int finalContextCount = finalWeb.size() + finalRag.size();
         traceContextResult(finalContextCount, finalContextCount == 0 ? "empty_after_filter" : "");
+        traceMemoryFingerprint("second_refinement", "after_context_filter", query, promptMemoryCtx,
+                checkpointDetails("after_context_filter", finalContextCount, finalWeb.size(), finalRag.size()));
 
         PromptContext ctx = PromptContext.builder()
                 .rag(finalRag)
@@ -240,9 +257,53 @@ public class ContextOrchestrator {
                 .sectionSpec(profile == null ? null : profile.sections())
                 .audience(profile == null ? null : profile.audience())
                 .citationStyle(profile == null ? null : profile.citationStyle())
+                .contextRefinementSummary(contextRefinementSummary)
+                .contextRefinementSignals(contextRefinementSignals)
                 .build();
 
+        traceMemoryFingerprint("load", "prompt_builder", query, promptMemoryCtx,
+                checkpointDetails("prompt_builder", finalContextCount, finalWeb.size(), finalRag.size()));
         return promptBuilder.build(ctx);
+    }
+
+    private void traceMemoryFingerprint(String stage,
+                                        String phase,
+                                        String query,
+                                        String memoryCtx,
+                                        Map<String, Object> extra) {
+        TraceMemoryFingerprintProbe probe = traceMemoryFingerprintProbe;
+        if (probe == null) {
+            return;
+        }
+        try {
+            Map<String, Object> raw = new LinkedHashMap<>();
+            raw.put("memoryCtx", memoryCtx == null ? "" : memoryCtx);
+            raw.put("memoryLength", memoryCtx == null ? 0 : memoryCtx.length());
+            raw.put("queryHash", SafeRedactor.hashValue(query));
+            raw.put("queryLength", query == null ? 0 : query.length());
+            raw.put("phase", SafeRedactor.traceLabelOrFallback(phase, "unknown"));
+            if (extra != null && !extra.isEmpty()) {
+                raw.putAll(extra);
+            }
+            probe.checkpoint(stage, "ContextOrchestrator", raw);
+        } catch (RuntimeException ex) {
+            TraceStore.put("traceMemory.probe.skippedReason", "exception_fail_soft");
+            TraceStore.put("traceMemory.probe.errorHash", SafeRedactor.hashValue(messageOf(ex)));
+            log.debug("[ContextOrchestrator] trace-memory fingerprint fail-soft. errorHash={} errorLength={}",
+                    SafeRedactor.hashValue(messageOf(ex)), messageLength(ex));
+        }
+    }
+
+    private static Map<String, Object> checkpointDetails(String route,
+                                                        int contextCount,
+                                                        int webCount,
+                                                        int ragCount) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("route", SafeRedactor.traceLabelOrFallback(route, "unknown"));
+        details.put("contextCount", Math.max(0, contextCount));
+        details.put("webCount", Math.max(0, webCount));
+        details.put("ragCount", Math.max(0, ragCount));
+        return details;
     }
 
     private static boolean allPromptDocsAlreadyCompressed(List<Content> webDocs, List<Content> ragDocs) {

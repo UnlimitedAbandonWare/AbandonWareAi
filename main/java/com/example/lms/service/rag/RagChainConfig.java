@@ -82,7 +82,6 @@ public class RagChainConfig {
         return new ImagePromptGroundingHandler(groundedImagePromptBuilder);
     }
 
-
     @Bean
     public ExtremeZSystemHandler extremeZSystemHandler(
             ContradictionScorer contradictionScorer,

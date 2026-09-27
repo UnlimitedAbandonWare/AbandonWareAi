@@ -36,9 +36,24 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
+import com.example.lms.infra.exec.ContextPropagation;
+import jakarta.annotation.PreDestroy;
+import java.math.BigDecimal;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class LangChainRAGService {
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.graph.GeneralGraphVectorGate generalGraphVectorGate;
 
     private static final Logger log = LoggerFactory.getLogger(LangChainRAGService.class);
 
@@ -50,6 +65,20 @@ public class LangChainRAGService {
 
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
+
+    // Separate from whole-request pools: waiting RAG workers must not occupy vector slots.
+    // No queue or caller-runs policy; a stuck provider can occupy at most four slots.
+    private final ThreadPoolExecutor vectorBudgetExecutor = new ThreadPoolExecutor(
+            0, 4, 30L, TimeUnit.SECONDS, new SynchronousQueue<>(), task -> {
+                Thread worker = new Thread(task, "rag-vector-budget");
+                worker.setDaemon(true);
+                return worker;
+            }, new ThreadPoolExecutor.AbortPolicy());
+
+    @PreDestroy
+    void shutdownVectorBudgetExecutor() {
+        vectorBudgetExecutor.shutdownNow();
+    }
 
     // lazy bootstrap: 검색 결과가 비었을 때만 1회 세션 메모리 적재
     @Autowired(required = false)
@@ -174,6 +203,101 @@ public class LangChainRAGService {
      * 1.0.1 버전의 표준 구현체인 EmbeddingStoreContentRetriever를 사용합니다.
      */
     public ContentRetriever asContentRetriever(String indexName) {
+        return this::retrieveWithinVectorBudget;
+    }
+
+    private List<Content> retrieveWithinVectorBudget(Query query) {
+        if (query == null || query.text() == null || query.text().isBlank() || embeddingModel instanceof NoopEmbeddingModel) {
+            return vectorRetriever(null).retrieve(query);
+        }
+        Long requestedMs = vectorBudgetMillis(QueryUtils.metadata(query).get("vecBudgetMs"));
+        TimeBudget requestBudget = TimeBudgetContext.get();
+        if (requestedMs == null && requestBudget == null) return vectorRetriever(null).retrieve(query);
+        if (requestedMs != null && requestedMs < 0) {
+            traceVectorBudget("invalid_budget", null, false);
+            return List.of();
+        }
+        long allowedMs = requestedMs == null ? Long.MAX_VALUE : requestedMs;
+        if (requestBudget != null) allowedMs = requestBudget.capWaitMillis(allowedMs);
+        if (allowedMs <= 0) {
+            traceVectorBudget("deadline_exhausted", null, false);
+            return List.of();
+        }
+        VectorCall call = new VectorCall(new TimeBudget(allowedMs));
+        Future<List<Content>> future;
+        try {
+            future = vectorBudgetExecutor.submit(ContextPropagation.wrapCallable(() -> {
+                call.started.set(true);
+                TimeBudget previous = TimeBudgetContext.get();
+                TimeBudgetContext.set(call.budget);
+                try { return vectorRetriever(call).retrieve(query); }
+                finally {
+                    if (previous == null) TimeBudgetContext.clear(); else TimeBudgetContext.set(previous);
+                    call.finished.set(true);
+                }
+            }));
+        } catch (RejectedExecutionException rejected) {
+            traceVectorBudget(vectorBudgetExecutor.isShutdown() ? "executor_shutdown" : "executor_saturated", call, false);
+            return List.of();
+        }
+        try {
+            List<Content> result = future.get(call.budget.remainingMillis(), TimeUnit.MILLISECONDS);
+            if (call.budget.expired()) {
+                call.abandoned.set(true);
+                traceVectorBudget("deadline_exhausted", call, future.cancel(false));
+                return List.of();
+            }
+            traceVectorBudget("completed", call, false);
+            return result;
+        } catch (TimeoutException timeout) {
+            call.abandoned.set(true);
+            traceVectorBudget("deadline_exhausted", call, future.cancel(false));
+            return List.of();
+        } catch (InterruptedException interrupted) {
+            call.abandoned.set(true);
+            traceVectorBudget("caller_interrupted", call, future.cancel(false));
+            Thread.currentThread().interrupt();
+            return List.of();
+        } catch (ExecutionException failure) {
+            if (failure.getCause() instanceof Error error) throw error;
+            traceVectorBudget("execution_failed", call, false);
+            return List.of();
+        }
+    }
+
+    private static Long vectorBudgetMillis(Object value) {
+        if (value == null) return null;
+        if (!(value instanceof Number) && !(value instanceof String)) return -1L;
+        try {
+            BigDecimal number = new BigDecimal(String.valueOf(value).trim());
+            if (number.signum() < 0) return -1L;
+            return number.min(BigDecimal.valueOf(120_000L)).longValueExact();
+        } catch (NumberFormatException | ArithmeticException invalid) {
+            return -1L;
+        }
+    }
+
+    private static void traceVectorBudget(String reason, VectorCall call, boolean cancelAccepted) {
+        boolean finished = call != null && call.finished.get();
+        TraceStore.put("vector.budget.reason", reason);
+        TraceStore.put("vector.budget.cancelAccepted", cancelAccepted);
+        TraceStore.put("vector.budget.workerStartedAtReturn", finished || call != null && call.started.get());
+        TraceStore.put("vector.budget.workerFinishedAtReturn", finished);
+        if (!"completed".equals(reason)) traceVectorRetrievalResult(0, 0, reason, "budget");
+    }
+
+    private static final class VectorCall {
+        final TimeBudget budget;
+        final AtomicBoolean abandoned = new AtomicBoolean();
+        final AtomicBoolean started = new AtomicBoolean();
+        final AtomicBoolean finished = new AtomicBoolean();
+        VectorCall(TimeBudget budget) { this.budget = budget; }
+        void check() throws TimeoutException {
+            if (abandoned.get() || budget.expired()) throw new TimeoutException("vector_budget_exhausted");
+        }
+    }
+
+    private ContentRetriever vectorRetriever(VectorCall call) {
         // indexName은 사용하는 VectorStore 구현체에 따라 다를 수 있으나,
         // 여기서는 기본 Store를 래핑하여 반환합니다.
         //
@@ -203,6 +327,7 @@ public class LangChainRAGService {
                 int poolK = (vectorPoisonGuard != null) ? Math.min(30, Math.max(k, k * 4)) : k;
                 traceVectorRetrievalStart(k, poolK, minScore);
 
+                long retrievalBegan = System.nanoTime();
                 try {
                     if (nightmareBreaker != null && nightmareBreaker.isOpen(NightmareKeys.RETRIEVAL_VECTOR_POISON)) {
                         TraceStore.put("vector.poisoning.bypass", true);
@@ -215,7 +340,16 @@ public class LangChainRAGService {
                         qText = vectorPoisonGuard.sanitizeQueryForVectorSearch(qText);
                     }
 
+                    if (call != null) call.check();
+                    long embeddingBegan = System.nanoTime();
                     Embedding emb = embeddingModel.embed(qText).content();
+                    TraceStore.put("rag.pipeline.embedding.latencyMs", (System.nanoTime() - embeddingBegan) / 1_000_000);
+                    TraceStore.put("rag.pipeline.embedding.dimensions", emb == null ? 0 : emb.vector().length);
+                    org.slf4j.LoggerFactory.getLogger("rag.pipeline").debug(
+                            "[rag-pipeline] stage=embedding elapsedMs={} dimensions={} cacheHits={} cacheMisses={}",
+                            TraceStore.get("rag.pipeline.embedding.latencyMs"), TraceStore.get("rag.pipeline.embedding.dimensions"),
+                            TraceStore.get("embeddingCache.hit.count"), TraceStore.get("embeddingCache.miss.count"));
+                    if (call != null) call.check();
                     if (emb == null || emb.vector() == null || emb.vector().length == 0) {
                         traceVectorRetrievalResult(0, 0, "empty_embedding", "embedding_empty");
                         return List.of();
@@ -243,7 +377,11 @@ public class LangChainRAGService {
                             .filter(filter)
                             .build();
 
+                    if (call != null) call.check();
+                    long vectorBegan = System.nanoTime();
                     EmbeddingSearchResult<TextSegment> result = embeddingStore.search(request);
+                    TraceStore.put("rag.pipeline.vector.latencyMs", (System.nanoTime() - vectorBegan) / 1_000_000);
+                    if (call != null) call.check();
                     List<EmbeddingMatch<TextSegment>> matches = (result == null || result.matches() == null)
                             ? Collections.emptyList()
                             : result.matches();
@@ -265,7 +403,9 @@ public class LangChainRAGService {
                                 .filter(relaxedScope)
                                 .build();
 
+                        if (call != null) call.check();
                         EmbeddingSearchResult<TextSegment> relaxedScopeRes = embeddingStore.search(relaxedScopeReq);
+                        if (call != null) call.check();
                         if (relaxedScopeRes != null && relaxedScopeRes.matches() != null) {
                             matches = relaxedScopeRes.matches();
                         }
@@ -283,48 +423,28 @@ public class LangChainRAGService {
                                 .filter(relaxed)
                                 .build();
 
+                        if (call != null) call.check();
                         EmbeddingSearchResult<TextSegment> relaxedResult = embeddingStore.search(relaxedRequest);
+                        if (call != null) call.check();
                         if (relaxedResult != null && relaxedResult.matches() != null) {
                             matches = relaxedResult.matches();
                         }
                     }
 
                     int rawMatchCount = matches == null ? 0 : matches.size();
-                    if (matches == null || matches.isEmpty()) {
-                        traceVectorRetrievalResult(rawMatchCount, 0, "no_matches", "none");
-                        return List.of();
-                    }
-                    if (vectorPoisonGuard != null) {
-                        int raw = matches.size();
-                        matches = vectorPoisonGuard.filterMatches(matches, sid);
-                        int kept = (matches == null ? 0 : matches.size());
-                        int dropped = Math.max(0, raw - kept);
-                        if (nightmareBreaker != null && raw >= 3) {
-                            double ratio = raw == 0 ? 0.0 : ((double) dropped / (double) raw);
-                            if (dropped >= 2 && ratio >= 0.60) {
-                                nightmareBreaker.recordRejected(NightmareKeys.RETRIEVAL_VECTOR_POISON, qText,
-                                        "vector.poison.filtered");
-                                // [AUTO-RECOMMEND] repeated poison drops -> recommend sid rotation (fail-soft)
-                                try {
-                                    if (sidRotationAdvisor != null) {
-                                        sidRotationAdvisor.recordPoison(sid,
-                                                "retrieval_vector_poison ratio="
-                                                        + String.format(java.util.Locale.ROOT, "%.2f", ratio));
-                                    }
-                                } catch (Exception ignore) {
-                                    log.debug("[LangChainRAGService] fail-soft stage={}", "sidRotationAdvisor.recordPoison");
-                                    // fail-soft
-                                }
-                            }
-                        }
-                    }
+                    matches = evaluateVectorPoison(matches, sid, "rag.vector.content-retriever");
 
                     if (vectorQualityGuard != null && matches != null) {
                         matches = vectorQualityGuard.filterMatches(matches, qText, "rag.vector");
                     }
 
+                    if (call != null) call.check();
                     if (matches == null || matches.isEmpty()) {
-                        traceVectorRetrievalResult(rawMatchCount, 0, "filtered_empty", "none");
+                        traceVectorRetrievalResult(
+                                rawMatchCount,
+                                0,
+                                rawMatchCount == 0 ? "no_matches" : "filtered_empty",
+                                "none");
                         return List.of();
                     }
                     List<Content> out = new ArrayList<>();
@@ -332,19 +452,30 @@ public class LangChainRAGService {
                         if (match == null || match.embedded() == null)
                             continue;
                         // Preserve TextSegment metadata (url/source/title 등) for downstream citations.
-                        out.add(Content.from(match.embedded()));
+                        com.example.lms.service.rag.graph.GeneralGraphVectorGate.content(
+                                generalGraphVectorGate, QueryUtils.generalGraphScope(q).orElse(null),
+                                match.embedded()).ifPresent(out::add);
                         if (out.size() >= k) {
                             break;
                         }
                     }
+                    if (call != null) call.check();
                     traceVectorRetrievalResult(rawMatchCount, out.size(), out.isEmpty() ? "content_empty" : "none", "none");
                     return out;
+                } catch (TimeoutException expired) {
+                    return List.of();
                 } catch (Exception e) {
                     String failureClass = e.getClass().getSimpleName();
                     traceVectorRetrievalResult(0, 0, "exception", failureClass);
                     log.debug("[LangChainRAGService] fail-soft stage={}", "contentRetriever.retrieve");
                     log.debug("[RAG] retrieve failed (fail-soft) failureClass={}", failureClass);
                     return List.of();
+                } finally {
+                    long elapsed = (System.nanoTime() - retrievalBegan) / 1_000_000;
+                    TraceStore.put("rag.pipeline.retrieval.latencyMs", elapsed);
+                    org.slf4j.LoggerFactory.getLogger("rag.pipeline").debug(
+                            "[rag-pipeline] stage=retrieval elapsedMs={} returnedCount={}", elapsed,
+                            TraceStore.get("vector.retrieval.keptCount"));
                 }
             }
         };
@@ -433,10 +564,7 @@ public class LangChainRAGService {
     // ---- Query metadata helpers (version-safe) ----
     @SuppressWarnings("unchecked")
     private static Map<String, Object> toMetaMap(Query q) {
-        if (q == null || q.metadata() == null) {
-            return java.util.Collections.emptyMap();
-        }
-        return com.example.lms.util.MetadataUtils.toMap(q.metadata());
+        return QueryUtils.metadata(q);
     }
 
     private static int resolveTopK(Map<String, Object> meta, int def) {
@@ -757,37 +885,9 @@ public class LangChainRAGService {
                 }
             }
 
-            if (matches == null || matches.isEmpty()) {
-                log.debug("[RAG] Vector 0 matches sidHash={}", SafeRedactor.hashValue(sid));
-                return java.util.Collections.emptyList();
-            }
-            int raw = (matches == null ? 0 : matches.size());
-            if (vectorPoisonGuard != null && matches != null) {
-                matches = vectorPoisonGuard.filterMatches(matches, sid);
-            }
+            matches = evaluateVectorPoison(matches, sid, "rag.vector.context-retriever");
             if (vectorQualityGuard != null && matches != null) {
                 matches = vectorQualityGuard.filterMatches(matches, qText, "rag.vector");
-            }
-            int kept = (matches == null ? 0 : matches.size());
-
-            if (nightmareBreaker != null && raw >= 3) {
-                int dropped = raw - kept;
-                double ratio = raw <= 0 ? 0.0 : ((double) dropped / (double) raw);
-                if (dropped >= 2 && ratio >= 0.6) {
-                    nightmareBreaker.recordRejected(NightmareKeys.RETRIEVAL_VECTOR_POISON, qText,
-                            "vector.poison.filtered");
-                    // [AUTO-RECOMMEND] repeated poison drops -> recommend sid rotation (fail-soft)
-                    try {
-                        if (sidRotationAdvisor != null) {
-                            sidRotationAdvisor.recordPoison(sid,
-                                    "retrieval_vector_poison ratio="
-                                            + String.format(java.util.Locale.ROOT, "%.2f", ratio));
-                        }
-                    } catch (Exception ignore) {
-                        log.debug("[LangChainRAGService] fail-soft stage={}", "retrieveRagContext.sidRotationAdvisor");
-                        // fail-soft
-                    }
-                }
             }
 
             if (matches == null || matches.isEmpty()) {
@@ -809,6 +909,86 @@ public class LangChainRAGService {
         } catch (Exception e) {
             log.debug("[LangChainRAGService] fail-soft stage={}", "retrieveRagContext");
             log.warn("[AWX][rag][vector] retrieve failed failureReason={} errorType={}", "retrieve-error", SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
+            return Collections.emptyList();
+        }
+    }
+
+    private List<EmbeddingMatch<TextSegment>> evaluateVectorPoison(
+            List<EmbeddingMatch<TextSegment>> matches,
+            String sid,
+            String stage) {
+        if (vectorPoisonGuard == null) {
+            return matches == null ? Collections.emptyList() : matches;
+        }
+
+        NightmareBreaker.CallPermit permit = null;
+        long startedNs = System.nanoTime();
+        try {
+            if (nightmareBreaker != null) {
+                permit = nightmareBreaker.acquire(NightmareKeys.RETRIEVAL_VECTOR_POISON, stage);
+            }
+        } catch (NightmareBreaker.OpenCircuitException open) {
+            TraceStore.put("vector.poisoning.bypass", true);
+            TraceStore.put("vector.poisoning.bypassReason", "breaker_open");
+            return Collections.emptyList();
+        } catch (Throwable admissionFailure) {
+            TraceStore.put("vector.poisoning.evaluationFailure", true);
+            TraceStore.put("vector.poisoning.failureClass",
+                    SafeRedactor.traceLabelOrFallback(
+                            admissionFailure.getClass().getSimpleName(), "unknown"));
+            return Collections.emptyList();
+        }
+
+        int raw = matches == null ? 0 : matches.size();
+        try {
+            List<EmbeddingMatch<TextSegment>> filtered = raw == 0
+                    ? Collections.emptyList()
+                    : vectorPoisonGuard.filterMatches(matches, sid);
+            if (filtered == null) {
+                filtered = Collections.emptyList();
+            }
+            int dropped = Math.max(0, raw - filtered.size());
+            double ratio = raw == 0 ? 0.0d : (double) dropped / (double) raw;
+            boolean poison = raw >= 3 && dropped >= 2 && ratio >= 0.60d;
+
+            if (permit != null) {
+                if (raw < 3) {
+                    permit.completeAbandoned(stage, "sample_insufficient");
+                } else if (poison) {
+                    permit.completeRejected(stage, "poison_ratio_exceeded");
+                } else {
+                    permit.completeSuccess(Math.max(0L,
+                            (System.nanoTime() - startedNs) / 1_000_000L));
+                }
+            }
+
+            if (poison && sidRotationAdvisor != null) {
+                try {
+                    sidRotationAdvisor.recordPoison(
+                            sid,
+                            "retrieval_vector_poison ratio="
+                                    + String.format(java.util.Locale.ROOT, "%.2f", ratio));
+                } catch (Exception advisorFailure) {
+                    String advisorStage = "rag.vector.context-retriever".equals(stage)
+                            ? "retrieveRagContext.sidRotationAdvisor"
+                            : "sidRotationAdvisor.recordPoison";
+                    log.debug("[LangChainRAGService] fail-soft stage={} errorType={}",
+                            advisorStage,
+                            advisorFailure.getClass().getSimpleName());
+                }
+            }
+            return filtered;
+        } catch (Throwable evaluationFailure) {
+            if (permit != null) {
+                permit.completeFailure(
+                        NightmareBreaker.classify(evaluationFailure),
+                        evaluationFailure,
+                        stage);
+            }
+            TraceStore.put("vector.poisoning.evaluationFailure", true);
+            TraceStore.put("vector.poisoning.failureClass",
+                    SafeRedactor.traceLabelOrFallback(
+                            evaluationFailure.getClass().getSimpleName(), "unknown"));
             return Collections.emptyList();
         }
     }

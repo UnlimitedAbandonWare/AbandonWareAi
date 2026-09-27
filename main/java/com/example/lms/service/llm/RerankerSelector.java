@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import java.util.Locale;
 import java.util.Map;
 
 
@@ -57,7 +58,9 @@ public class RerankerSelector {
         this.rerankers = rerankers;
         this.onnxEnabled = onnxEnabled;
         this.onnxRuntimeEnabled = onnxRuntimeEnabled;
-        String b = (backend == null || backend.isBlank()) ? null : backend.trim().toLowerCase();
+        String b = (backend == null || backend.isBlank())
+                ? null
+                : backend.trim().toLowerCase(Locale.ROOT);
         this.backend = (b == null) ? "embedding-model" : b;
         log.info("[AWX2AF2][gpu][reranker] backendHash={} backendLength={} onnxEnabled={} onnxRuntimeEnabled={}",
                 SafeRedactor.hashValue(this.backend), lengthOf(this.backend), this.onnxEnabled, this.onnxRuntimeEnabled);

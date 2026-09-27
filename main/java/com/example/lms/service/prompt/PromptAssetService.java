@@ -95,6 +95,7 @@ public class PromptAssetService {
     public String resolveTraitText(String traitId) {
         if (!StringUtils.hasText(traitId)) return null;
         String trimmed = traitId.trim();
+        if (!isSafePromptId(trimmed)) return null;
 
         String key = "trait:" + trimmed;
         return cache.computeIfAbsent(key, k -> {

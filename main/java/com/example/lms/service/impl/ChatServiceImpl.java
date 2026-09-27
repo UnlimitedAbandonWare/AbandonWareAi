@@ -3,8 +3,7 @@ package com.example.lms.service.impl;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.beans.factory.annotation.Autowired;
-import com.example.lms.service.ChatService;
-import com.example.lms.service.ChatService.ChatResult;
+import com.example.lms.service.ChatResult;
 import com.example.lms.dto.ChatRequestDto;
 import java.util.List;
 import java.util.function.Function;
@@ -47,17 +46,4 @@ public class ChatServiceImpl {
         // 오케스트레이터가 있다면: orchestrator.cancelSession(sessionId);
     }
 
-    @SuppressWarnings("all")
-    private ChatResult toServiceResult(Object r) {
-        if (r == null) return ChatResult.of("", "default", false);
-        try {
-            String content = String.valueOf(r.getClass().getMethod("content").invoke(r));
-            String model   = String.valueOf(r.getClass().getMethod("modelUsed").invoke(r));
-            Object ragObj  = r.getClass().getMethod("ragUsed").invoke(r);
-            boolean rag    = (ragObj instanceof Boolean) ? (Boolean) ragObj : false;
-            return ChatResult.of(content, model, rag);
-        } catch (Exception ignored) {
-            return ChatResult.of(String.valueOf(r), "default", false);
-        }
-    }
 }

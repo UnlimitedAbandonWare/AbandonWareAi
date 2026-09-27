@@ -43,12 +43,22 @@ public class AnswerQualityEvaluator {
     ) {
     }
 
+    private enum Sufficiency {
+        SUFFICIENT,
+        INSUFFICIENT,
+        UNAVAILABLE
+    }
+
     /**
      * 로컬 문서 집합이 충분한지 점검합니다.
      * 기준: 최소 문서 수(minDocs) + 평균 코사인 유사도(minAvgScore)
      */
     public boolean isSufficient(String query, List<Content> docs, int minDocs, double minAvgScore) {
-        if (docs == null || docs.size() < Math.max(1, minDocs)) return false;
+        return evaluateSufficiency(query, docs, minDocs, minAvgScore) == Sufficiency.SUFFICIENT;
+    }
+
+    private Sufficiency evaluateSufficiency(String query, List<Content> docs, int minDocs, double minAvgScore) {
+        if (docs == null || docs.size() < Math.max(1, minDocs)) return Sufficiency.INSUFFICIENT;
 
         try {
             float[] queryVector = embeddingModel.embed(query).content().vector();
@@ -59,18 +69,18 @@ public class AnswerQualityEvaluator {
             Response<List<Embedding>> resp = embeddingModel.embedAll(segments);
             List<Embedding> docVectors = resp.content();
 
-            if (docVectors == null || docVectors.size() != segments.size()) return false;
+            if (docVectors == null || docVectors.size() != segments.size()) return Sufficiency.UNAVAILABLE;
 
             double sum = 0.0;
             for (Embedding e : docVectors) {
                 sum += cosineSimilarity(queryVector, e.vector());
             }
             double avg = sum / docVectors.size();
-            return avg >= minAvgScore;
+            return avg >= minAvgScore ? Sufficiency.SUFFICIENT : Sufficiency.INSUFFICIENT;
 
         } catch (Exception ex) {
             traceSuppressed("isSufficient", ex);
-            return false;
+            return Sufficiency.UNAVAILABLE;
         }
     }
 
@@ -90,15 +100,17 @@ public class AnswerQualityEvaluator {
         } else {
             boolean enoughDocs = docCount >= Math.max(1, minDocs);
             boolean enoughSources = distinctSources >= Math.max(1, minDistinctSources);
-            boolean similar = isSufficient(query, docs, minDocs, minAvgScore);
-            if (enoughDocs && enoughSources && similar) {
+            Sufficiency sufficiency = evaluateSufficiency(query, docs, minDocs, minAvgScore);
+            if (enoughDocs && enoughSources && sufficiency == Sufficiency.SUFFICIENT) {
                 ev = new RetrievalEvaluation(Decision.ACCEPT, 0.85, docCount, distinctSources, "sufficient");
             } else if (!enoughSources) {
                 ev = new RetrievalEvaluation(Decision.REPAIR_WITH_WEB, 0.45, docCount, distinctSources, "low_source_diversity");
-            } else if (!enoughDocs || !similar) {
+            } else if (!enoughDocs) {
                 ev = new RetrievalEvaluation(Decision.REPAIR_WITH_WEB, 0.4, docCount, distinctSources, "weak_relevance");
+            } else if (sufficiency == Sufficiency.UNAVAILABLE) {
+                ev = new RetrievalEvaluation(Decision.ABSTAIN, 0.25, docCount, distinctSources, "evaluation_unavailable");
             } else {
-                ev = new RetrievalEvaluation(Decision.ABSTAIN, 0.25, docCount, distinctSources, "insufficient_after_eval");
+                ev = new RetrievalEvaluation(Decision.REPAIR_WITH_WEB, 0.4, docCount, distinctSources, "weak_relevance");
             }
         }
         log.debug("[CRAG][eval] decision={}, confidence={}, docs={}, sources={}, reason={}",

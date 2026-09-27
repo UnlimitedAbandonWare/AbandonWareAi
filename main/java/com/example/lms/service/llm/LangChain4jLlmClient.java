@@ -12,8 +12,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.List;
+import java.util.Locale;
 
 @Component
 public class LangChain4jLlmClient implements LlmClient {
@@ -63,6 +65,15 @@ public class LangChain4jLlmClient implements LlmClient {
         }
     }
 
+    @Override
+    public String completeWithPermit(
+            NightmareBreaker.CallPermit permit,
+            String stage,
+            String llmCompletionPrompt) {
+        java.util.Objects.requireNonNull(permit, "permit");
+        return callModel(stage, llmCompletionPrompt);
+    }
+
     private String callModel(String stage, String llmCompletionPrompt) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
         String modelClass = modelClassLabel();
@@ -108,9 +119,60 @@ public class LangChain4jLlmClient implements LlmClient {
         TraceStore.put("llm.client.errorType", errorType);
         TraceStore.put("llm.client.errorHash", SafeRedactor.hashValue(errorMessage));
         TraceStore.put("llm.client.errorLength", errorLength);
+        if (e instanceof WebClientResponseException responseException) {
+            traceHttpFailure(modelClass, responseException);
+        }
         log.warn("[AWX][llm-client] failed stage={} modelClass={} errorType={} errorHash={} errorLength={} promptHash={} promptLength={}",
                 safeStage, modelClass, errorType, SafeRedactor.hashValue(errorMessage), errorLength,
                 SafeRedactor.hashValue(prompt), prompt == null ? 0 : prompt.length());
+    }
+
+    private void traceHttpFailure(String modelClass, WebClientResponseException e) {
+        int status = e.getStatusCode().value();
+        String body = e.getResponseBodyAsString();
+        int bodyLength = body == null ? 0 : body.length();
+        String failureClass = upstreamFailureClass(status, modelClass);
+        String nextAction = upstreamNextAction(status, modelClass);
+        TraceStore.put("llm.client.httpStatus", status);
+        TraceStore.put("llm.client.responseBodyLength", bodyLength);
+        TraceStore.put("llm.client.responseBodyHash", SafeRedactor.hashValue(body));
+        TraceStore.put("llm.client.upstreamFailureClass", failureClass);
+        TraceStore.put("llm.client.upstreamNextAction", nextAction);
+        TraceStore.put("llm.localSmoke.operatorAction.upstreamStatus", status);
+        TraceStore.put("llm.localSmoke.operatorAction.upstreamFailureClass", failureClass);
+        TraceStore.put("llm.localSmoke.operatorAction.upstreamNextAction", nextAction);
+    }
+
+    private static String upstreamFailureClass(int status, String modelClass) {
+        String prefix = isOllamaModelClass(modelClass) ? "ollama" : "llm";
+        if (status >= 500) {
+            return prefix + "_upstream_5xx";
+        }
+        if (status == 429) {
+            return prefix + "_rate_limit";
+        }
+        if (status >= 400) {
+            return prefix + "_upstream_4xx";
+        }
+        return prefix + "_upstream_http_error";
+    }
+
+    private static String upstreamNextAction(int status, String modelClass) {
+        String prefix = isOllamaModelClass(modelClass) ? "ollama" : "llm";
+        if (status >= 500) {
+            return "inspect_" + prefix + "_runtime_capacity";
+        }
+        if (status == 429) {
+            return "respect_" + prefix + "_retry_after";
+        }
+        if (status >= 400) {
+            return "inspect_" + prefix + "_request_contract";
+        }
+        return "inspect_" + prefix + "_http_failure";
+    }
+
+    private static boolean isOllamaModelClass(String modelClass) {
+        return modelClass != null && modelClass.toLowerCase(Locale.ROOT).contains("ollama");
     }
 
     private String modelClassLabel() {
