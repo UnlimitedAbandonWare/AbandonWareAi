@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
@@ -196,7 +197,7 @@ public class GraphDbClient {
         if (raw.isBlank()) {
             return "";
         }
-        String lower = raw.toLowerCase();
+        String lower = raw.toLowerCase(Locale.ROOT);
         if (lower.contains("secret")
                 || lower.contains("token")
                 || lower.contains("authorization")
@@ -215,7 +216,7 @@ public class GraphDbClient {
         if (raw.isBlank()) {
             return "";
         }
-        String lower = raw.toLowerCase();
+        String lower = raw.toLowerCase(Locale.ROOT);
         if (lower.contains("cancel") || lower.contains("interrupt")) {
             return "cancelled";
         }
