@@ -34,6 +34,18 @@ class SafeRedactorTest {
     }
 
     @Test
+    void alreadyHashedOpaquePacketReferencesRemainUsableAcrossToolCalls() {
+        String packetRef = "hash:0123456789ab";
+
+        assertEquals(packetRef, SafeRedactor.diagnosticValue("packetRef", packetRef));
+        assertEquals(
+                Map.of("packetRef", packetRef, "queryTraceRefs", java.util.List.of(packetRef)),
+                SafeRedactor.diagnosticValue("toolResponse", Map.of(
+                        "packetRef", packetRef,
+                        "queryTraceRefs", java.util.List.of(packetRef))));
+    }
+
+    @Test
     void pathLikeKeysBecomeHashLenSummary() {
         String raw = "/api/private/" + com.example.lms.test.SecretFixtures.openAiKey() + "?ownerToken=secret";
 
@@ -66,6 +78,45 @@ class SafeRedactorTest {
         assertEquals(3, SafeRedactor.diagnosticValue("returnedCount", 3));
         assertTrue(String.valueOf(SafeRedactor.diagnosticValue("url", "https://example.com/a?q=secret"))
                 .contains("example.com"));
+    }
+
+    @Test
+    void canonicalHarmonyAuthorityLabelsRemainReadableAndSecretMasked() {
+        assertEquals("MoE", SafeRedactor.diagnosticValue("retrievalOrder.lastSetBy", "MoE"));
+        assertEquals("OVERDRIVE",
+                SafeRedactor.diagnosticValue("routing.executionPlan.primaryMode", "OVERDRIVE"));
+        assertEquals("CfvmKallocLearningProperties",
+                SafeRedactor.diagnosticValue("cfvm.tempSource", "CfvmKallocLearningProperties"));
+        assertEquals("ollama",
+                SafeRedactor.diagnosticValue("hypernova.whitening.provider", "ollama"));
+
+        String secret = com.example.lms.test.SecretFixtures.openAiKey();
+        Object sanitized = SafeRedactor.diagnosticValue(
+                "cfvm.tempSource",
+                "CfvmKallocLearningProperties " + secret);
+        assertFalse(String.valueOf(sanitized).contains(secret));
+
+        String providerSecret = "sk-" + "123456789012345678901234";
+        Object providerSanitized = SafeRedactor.diagnosticValue(
+                "hypernova.whitening.provider",
+                providerSecret);
+        assertFalse(String.valueOf(providerSanitized).contains(providerSecret));
+    }
+
+    @Test
+    void canonicalHarmonyAuthorityLabelsHashUnexpectedFreeFormValues() {
+        String raw = "private student question with arbitrary owner text";
+        for (String key : java.util.List.of(
+                "retrievalOrder.lastSetBy",
+                "routing.executionPlan.primaryMode",
+                "cfvm.tempSource",
+                "hypernova.whitening.provider")) {
+            Object value = SafeRedactor.diagnosticValue(key, raw);
+            Map<?, ?> summary = assertInstanceOf(Map.class, value, key);
+            assertEquals(Boolean.TRUE, summary.get("present"), key);
+            assertEquals(SafeRedactor.hash12(raw), summary.get("hash12"), key);
+            assertFalse(String.valueOf(summary).contains(raw), key);
+        }
     }
 
     @Test
