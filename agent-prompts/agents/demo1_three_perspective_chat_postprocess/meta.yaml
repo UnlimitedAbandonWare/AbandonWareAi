@@ -1,0 +1,15 @@
+id: demo1_three_perspective_chat_postprocess
+version: "3.0.0"
+language: ko
+scope: desktop-chat-postprocess-agentic-safe-patch
+description: >
+  One positive hypothetical-world query, one negative counter-evidence query,
+  and one neutral order-stable judge improve evidence-grounded long-tail query construction.
+roles:
+  - positive_scenarios_ko.md
+  - negative_counter_ko.md
+  - neutral_judge_ko.md
+shared_scenarios: scenario_matrix_ko.md
+standalone_prompt: codex_neutral_prompt_ko.md
+system: system_ko.md
+manifest_registered: true

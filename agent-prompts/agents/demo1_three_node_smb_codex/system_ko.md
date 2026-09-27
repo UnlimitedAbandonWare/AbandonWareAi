@@ -1,7 +1,7 @@
 # Three-Node SMB Codex Orchestration
 # Desktop + Mac mini + Notebook 3-노드 Safe Patch 지침서
 
-이 프롬프트는 **Windows Desktop**, **Mac mini**, **Notebook(노트북/NAS 연결 전후)** 세 노드가 SMB로 공유 소스를 다룰 때 안전하게 Codex/Agent 작업을 나누기 위한 `demo-1` 전용 지침서다.
+이 프롬프트는 **Windows Desktop**, **Mac mini**, **Notebook** 세 노드가 SMB로 공유 소스를 다룰 때 안전하게 Codex/Agent 작업을 나누기 위한 `demo-1` 전용 지침서다.
 
 ---
 
@@ -11,19 +11,54 @@
 |------|------|--------------|-----------|------------|----------|
 | **Desktop** | Canonical Source Owner / Final Applier | **읽기+쓰기** | 최종 검토자 | `./gradlew.bat` 최종 | 8080 / 8081 |
 | **Mac mini** | Read-Only Investigator / Patch Producer | **읽기 전용** | 제출자 | worktree 전용 로컬 | 18160–18199 |
-| **Notebook** | Secondary Investigator / Patch Producer | **읽기 전용** (NAS 마운트) | 제출자 | worktree 전용 로컬 | 18200–18249 |
+| **Notebook** | Secondary Investigator / Conditional Direct Worker | `SMB_ACCESS` read/tools on `Y:\` | Explicit producer handoff only | `LOCAL_PRODUCER` only when isolation selected | 18200–18249 |
+
+---
+
+## 0.1 Notebook SMB mode contract
+
+```text
+canonicalWorkspace=Y:\
+publicIdentityFields=[canonicalWorkspace,backingShareIdentityVerified,backingShareIdentityReason]
+backingShareIdentityVerified=true|false
+backingShareIdentityReason=match|mismatch|evidence-needed
+readMode=SMB_ACCESS
+defaultNotebookMode=SMB_ACCESS
+defaultDirectSmbEdit=false
+directMode=YDRIVE_SMB_GUARDED_DIRECT
+guardedDirectMode=YDRIVE_SMB_GUARDED_DIRECT
+directGateExplicitNotebookImplementation=required
+requiredGuardSkill=demo1-macsrc-smb-direct-patch
+producerMode=LOCAL_PRODUCER
+sharedLeaseRequired=true
+preimageCompareAndSwapRequired=true
+desktopFinalProof=evidence_needed
+canonicalQueryCount=3
+```
+
+| Mode | Select when | Result |
+|------|-------------|--------|
+| `SMB_ACCESS` | Read, search, audit, build, tool, or evidence work | `sourceWriteRoot=null`; `authorizedMutation=false`; source remains unchanged. |
+| `YDRIVE_SMB_GUARDED_DIRECT` | A Notebook user explicitly requests implementation and every direct-edit gate passes | `sourceWriteRoot=Y:\`; only after backing identity match, declared targets, active boundary, repository guard, absent index-lock, shared lease, immediate preimage verification, focused verification, postimage hashes, rollback, and redaction. |
+| `LOCAL_PRODUCER` | The user explicitly selects isolation or direct mode is inapplicable | Work in a Notebook-local clone/worktree and submit the PatchDrop producer bundle; never use this as an automatic fallback from identity failure. |
+| `HOLD` | Root identity, explicit authorization, targets, guard evidence, or verification evidence is missing | No write root and no fallback; request the one smallest decision-changing proof. |
+
+Matching backing identity is necessary but not sufficient for mutation. `backingShareIdentityVerified=false or backingShareIdentityReason=mismatch|evidence-needed -> HOLD`; public identity output contains exactly the fields named by `publicIdentityFields`. Desktop remains the canonical owner and final verifier. Mac mini remains a producer. The guarded direct mode does not create a second SMB protocol or replace Desktop final proof.
+
+Desktop exclusively owns its local final-verification checkout.
+YDRIVE_SMB_GUARDED_DIRECT is the sole Notebook canonical Y-drive write exception after every gate passes.
+PatchDrop-only producer handoff applies to LOCAL_PRODUCER and Mac mini, not YDRIVE_SMB_GUARDED_DIRECT.
 
 ---
 
 ## 1. 절대 원칙
 
-- Desktop만 canonical root(`C:\AbandonWare\demo-1\demo-1\src`)를 직접 편집한다.
-- Mac mini와 Notebook은 원본 SMB 경로를 직접 수정하지 않는다.
-- Mac mini / Notebook의 소스 편집은 **별도 worktree** + `agent/macmini/<topic>` / `agent/notebook/<topic>` 브랜치에서만 한다.
-- Mac mini / Notebook 결과물은 `.patch`, unified diff, 로그, 보고서 형태로 **PatchDrop**에 제출한다.
+- Desktop exclusively owns its local final-verification checkout at `C:\AbandonWare\demo-1\demo-1\src`; this does not revoke the gated Notebook exception on canonical `Y:\`.
+- Mac mini는 원본 SMB 경로를 직접 수정하지 않고 producer 경로를 유지한다. Notebook은 `SMB_ACCESS`에서 읽기/도구만 수행하며, 명시적 구현 요청과 검증된 backing identity, declared targets, active boundary, repository guard evidence가 모두 있을 때만 `YDRIVE_SMB_GUARDED_DIRECT`를 선택한다.
+- Mac mini의 소스 편집은 **별도 worktree** + `agent/macmini/<topic>` 브랜치에서만 한다. Notebook의 `LOCAL_PRODUCER` 소스 편집도 **별도 worktree** + `agent/notebook/<topic>` 브랜치에서만 한다; guarded direct는 위의 완전한 gate를 충족할 때만 `Y:\`에서 허용된다.
+- Mac mini and Notebook `LOCAL_PRODUCER` results are submitted as `.patch`, unified diff, logs, and reports through **PatchDrop**. Guarded direct work stays on the repository-owned lease/CAS path and is not converted into PatchDrop.
 - Desktop은 PatchDrop 내용을 검토한 뒤에만 canonical root에 최종 적용한다.
-- SMB 공유는 원본 직접 편집 채널이 아니라 **evidence / patch 교환 채널**이다.
-- Notebook이 NAS를 통해 SMB에 접속하는 경우, NAS 경로를 canonical root와 혼동하지 않는다.
+- SMB 공유는 기본적으로 **evidence / patch 교환 채널**이다. 위의 guarded Notebook exception은 repository-owned guard로만 처리한다.
 - 세 노드가 동시에 같은 파일을 편집할 수 없다. 동시 편집 의심 시 `smb-conflict-risk`로 분류하고 중단한다.
 - 최종 proof는 Desktop의 실제 명령 출력만 인정한다.
 - LangChain4j 버전은 반드시 `1.0.1`을 유지한다.
@@ -31,7 +66,7 @@
 
 ---
 
-## 2. SMB 경로 구성표
+## 2. SMB 경로와 소유 경계
 
 ```text
 [Desktop] canonical root (읽기+쓰기):
@@ -40,24 +75,19 @@
 [Desktop] PatchDrop:
   C:\AbandonWare\demo-1\demo-1\src\__patch_drop__\
 
-[Mac mini] SMB 마운트 (읽기 전용):
-  /Volumes/WinSrc  →  \\DESKTOP-HOST\AbandonWare\demo-1\demo-1\src
-  또는 구성에 따라 NAS 경유:
-  /Volumes/NAS-WinSrc  →  \\NAS-HOST\awx-share\demo-1\demo-1\src
+[Mac mini] producer source:
+  producer-local clone/worktree only
 
-[Notebook] SMB 마운트 (읽기 전용):
-  Windows: \\DESKTOP-HOST\awx-share\demo-1\demo-1\src
-  또는 NAS 경유: \\NAS-HOST\awx-share\demo-1\demo-1\src
-  NAS 연결 전(로컬 전용): 별도 Git clone 또는 shallow mirror
+[Notebook] canonical SMB workspace:
+  Y:\
+  SMB_ACCESS: sourceWriteRoot=null, authorizedMutation=false
+  YDRIVE_SMB_GUARDED_DIRECT: sourceWriteRoot=Y:\ only after the complete direct-edit gate
 
-[PatchDrop 교환 공유]:
-  \\NAS-HOST\awx-patchdrop\  (3노드 공통)
-  또는 각 노드가 Desktop canonical PatchDrop을 SMB로 접근
+[PatchDrop exchange]:
+  use the declared PatchDrop root only in explicitly selected producer mode
 ```
 
-> **NAS 연결 전**: Notebook은 별도 Git clone + 로컬 worktree에서 작업한다.
-> 완성된 `.patch`를 이메일/USB/sftp로 Desktop PatchDrop에 이동한다.
-> NAS가 붙은 후에는 NAS 경유 PatchDrop을 사용한다.
+> Notebook source writes never infer an alternate mapped drive or raw network root. `Y:\` is the only canonical Notebook workspace in this policy.
 
 ---
 
@@ -82,14 +112,12 @@
 
 ### Notebook
 
-- NAS 연결 전/후 모두 동일 원칙 적용.
-  - **NAS 연결 전**: Git clone 로컬 worktree. `.patch` → USB/sftp → PatchDrop.
-  - **NAS 연결 후**: NAS SMB 마운트 읽기 전용. `.patch` → NAS PatchDrop → Desktop 검토.
+- `SMB_ACCESS`에서는 `Y:\`를 읽기/도구/evidence 용도로만 사용하며 `sourceWriteRoot=null`, `authorizedMutation=false`다.
+- `LOCAL_PRODUCER`는 사용자가 isolation을 선택하거나 direct mode가 inapplicable일 때에만 별도 Git clone/local worktree에서 사용한다.
 - 별도 worktree: `agent/notebook/<topic>` (로컬 clone 기준)
 - `.patch`, `.report.md`, `.verify.log`, `.sha256.txt` 세트를 PatchDrop에 제출한다.
-- Desktop canonical root를 SMB로 직접 수정하지 않는다.
+- Direct source edit는 기본 workflow가 아니다. 사용자가 Notebook 구현을 명시하고 backing identity, declared targets, active boundary, repository guard, absent index-lock, shared lease, immediate preimage verification, focused verification, postimage hashes, rollback, redaction을 확인할 때만 `YDRIVE_SMB_GUARDED_DIRECT`를 선택한다.
 - **포트**: `18200`–`18249`
-- NAS 마운트 경로를 canonical root로 착각하지 않는다.
 
 ---
 
@@ -114,7 +142,7 @@ $PatchDrop = Join-Path $Root "__patch_drop__"
 if (Test-Path $PatchDrop) {
     $pending = Get-ChildItem $PatchDrop -Filter "*.patch" -File -ErrorAction SilentlyContinue
     if ($pending.Count -gt 0) {
-        $pending | Sort-Object LastWriteTime | Select-Object Name,Length,LastWriteTime
+        $pending | Select-Object Name,Length
         Write-Error "[AWX][desktop] patch-drop-pending"
         exit 1
     }
@@ -225,23 +253,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "C:\worktrees\agent-notebook
 ```
 
 ```powershell
-# Mac mini에서 pwsh 사용 시에도 동일 계약 적용
-pwsh -NoProfile -File "$HOME/worktrees/agent-macmini-<topic>/__patch_drop__/producer_bundle.ps1" `
+# Mac mini producer-local worktree에서 pwsh 사용 시에도 동일 계약 적용
+pwsh -NoProfile -File "<producer-local-worktree>/__patch_drop__/producer_bundle.ps1" `
   -Topic "<topic>" `
   -Node macmini `
-  -SourceRoot "/Users/<user>/worktrees/agent-macmini-<topic>" `
-  -PatchDropRoot "/Volumes/NAS-WinSrc/__patch_drop__" `
+  -SourceRoot "<producer-local-worktree>" `
+  -PatchDropRoot "<declared-patchdrop-root>" `
   -PathSpec "main/java/path/Changed.java","src/test/java/path/ChangedTest.java"
 ```
 
 If Mac mini does not have `pwsh`, use the Python helper with the same nested v3 bundle contract:
 
 ```bash
-python3 "$HOME/worktrees/agent-macmini-<topic>/__patch_drop__/producer_bundle.py" \
+python3 "<producer-local-worktree>/__patch_drop__/producer_bundle.py" \
   --topic "<topic>" \
   --node macmini \
-  --source-root "$HOME/worktrees/agent-macmini-<topic>" \
-  --patchdrop-root "/Volumes/NAS-WinSrc/__patch_drop__" \
+  --source-root "<producer-local-worktree>" \
+  --patchdrop-root "<declared-patchdrop-root>" \
   --pathspec main/java/path/Changed.java src/test/java/path/ChangedTest.java
 ```
 
@@ -257,27 +285,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\__patch_drop__\janitor_pr
 
 `janitor_promote_producer_pending.ps1` accepts `-Node macmini`, `-Node notebook`, or `-Node desktop`. It promotes exactly one nested producer bundle to top-level `<topic>-v3.*` only after SHA and secret-scan gates pass. The promoted manifest still keeps `desktopFinalProof=evidence_needed`; Desktop apply and Gradle verification remain separate.
 
-Producer helpers must reject Mac mini/Notebook source roots that point at shared source paths, including Desktop canonical source, Windows mapped/UNC roots, macOS `/Volumes/...`, and Linux `/mnt/...` or `/media/...` NAS roots. These mount roots are allowed for `PatchDropRoot`, not for `SourceRoot`.
-
-Helper를 쓸 수 없는 경우에만 아래 수동 경로를 사용한다. 수동 경로도 반드시 동일한 sidecar 세트를 제출해야 한다.
-
-```bash
-# Mac mini (macOS): worktree에서 실행
-cd ~/worktrees/agent-macmini-<topic>
-git diff --binary > /Volumes/WinSrc/__patch_drop__/<topic>-macmini-v3.patch
-# 또는 NAS PatchDrop:
-git diff --binary > /Volumes/NAS-WinSrc/__patch_drop__/<topic>-macmini-v3.patch
-```
+Producer helpers must reject Mac mini/Notebook source roots that point at shared source paths, including Desktop canonical source and mapped or mounted network roots. The coordinator-proven PatchDrop root is an exchange destination only, never a producer `SourceRoot`. Do not print or persist the backing network root.
 
 ```powershell
-# Notebook (Windows): NAS 연결 후
+# Notebook (Windows): explicitly selected producer handoff
 cd C:\worktrees\agent-notebook-<topic>
-git diff --binary | Set-Content "\\NAS-HOST\awx-patchdrop\<topic>-notebook-v3.patch" -Encoding UTF8
-```
-
-```bash
-# Notebook (NAS 연결 전): sftp/scp로 Desktop에 전송
-scp <topic>-notebook-v3.patch user@DESKTOP-HOST:"C:/AbandonWare/demo-1/demo-1/src/__patch_drop__/"
+git diff --binary | Set-Content "Y:\__patch_drop__\notebook\<topic>-notebook-v3.patch" -Encoding UTF8
 ```
 
 제출 세트 (완전한 번들 기준):
@@ -326,55 +339,9 @@ Use `desktop-consumer` for applying an active top-level PatchDrop bundle. Plain 
 
 ### 6.2 Desktop 검토 및 적용
 
-```powershell
-$Root = "C:\AbandonWare\demo-1\demo-1\src"
-$PatchDrop = Join-Path $Root "__patch_drop__"
-Push-Location $Root
+수동 Desktop apply 경로는 없다. §6.1의 `janitor_apply_one.ps1` guarded consumer path만 사용한다. 이 helper는 manifest-pinned cumulative v3 bundle의 manifest `activePatch`, SHA sidecars, 단일 active top-level patch, producer isolation, count-only secret scan(`sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}`, `sbp_[A-Za-z0-9_-]{10,}`), source lease, rollback snapshot, and dry-run gate를 확인한다.
 
-# 가장 오래된 pending patch부터 처리 (FIFO)
-$pending = Get-ChildItem $PatchDrop -Filter "*.patch" -File |
-    Sort-Object LastWriteTime |
-    Select-Object -First 1
-
-if (-not $pending) {
-    Write-Error "[AWX][desktop] evidence_needed: no patch found"
-    exit 1
-}
-
-# Secret scan (count만 출력, 값 출력 금지)
-$hits = Select-String -Path $pending.FullName `
-    -Pattern "sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|gsk_[A-Za-z0-9]{20,}|pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}|password\s*=\s*\S+|secret\s*=\s*\S+" `
-    -CaseSensitive -ErrorAction SilentlyContinue
-Write-Host "[AWX][desktop][security] secretPatternHits=$($hits.Count)"
-if ($hits.Count -gt 0) {
-    Write-Error "[AWX][desktop] secret-leak-risk: 적용 중단"
-    exit 1
-}
-
-# Dry-run 확인
-git apply --check $pending.FullName
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "[AWX][desktop] git-apply-check-failed"
-    exit 1
-}
-
-# 실제 적용
-git apply $pending.FullName
-
-# 이동
-$Applied = Join-Path $PatchDrop "applied"
-New-Item -ItemType Directory -Force -Path $Applied | Out-Null
-Move-Item -Path $pending.FullName -Destination $Applied
-
-Pop-Location
-```
-
-규칙:
-
-- secret scan hit 시 `secret-leak-risk`로 분류하고 적용 중단.
-- `git apply --check` 실패 시 적용 중단, 원인 파일/라인 보고.
-- Desktop Gradle 검증 통과 후에만 `applied`로 이동.
-- 복수의 pending patch가 있을 때는 제출 노드(`macmini` / `notebook`)와 topic을 명시한 뒤 순서를 결정하고, 한 번에 하나씩 적용한다.
+`janitor_apply_one.ps1` 성공 후 §7의 Desktop Gradle verification을 완료하기 전에는 bundle을 `applied`로 승격하지 않는다. verification 실패는 rollback/rejected로 분류하며, manifest/hash 불일치 또는 복수 active 후보는 `patch-drop-pending`으로 HOLD한다.
 
 ---
 
@@ -418,50 +385,14 @@ New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $ProjectCache |
 
 ---
 
-## 8. NAS 연결 전/후 Notebook 전환 절차
+## 8. Notebook mode transition
 
-### NAS 연결 전 (로컬 전용)
+1. Read, search, audit, build, and evidence work stay in `SMB_ACCESS` with `canonicalWorkspace=Y:\`, `sourceWriteRoot=null`, and `authorizedMutation=false`.
+2. A user who selects isolation uses a producer-local clone/worktree on `agent/notebook/<topic>` and submits a complete nested v3 PatchDrop bundle to the declared PatchDrop root.
+3. An explicit Notebook implementation may use `YDRIVE_SMB_GUARDED_DIRECT` only after the repository guard confirms identity, targets, active source boundary, index-lock absence, shared lease, immediate preimage verification, focused verification, postimage hashes, rollback, and redaction.
+4. Identity mismatch, missing guard evidence, or an inapplicable direct mode yields `HOLD`: no write root, no automatic local-producer fallback, and one smallest decision-changing proof.
 
-1. Desktop에서 최신 소스를 `git bundle` 또는 bare clone으로 Notebook에 복사한다.
-2. Notebook에서 로컬 worktree를 `agent/notebook/<topic>` 브랜치로 생성한다.
-3. 작업 완료 후 `.patch` 세트를 sftp/scp/USB로 Desktop PatchDrop에 전달한다.
-4. Desktop이 검토·적용·검증 후 결과를 Notebook에 공유한다.
-
-```bash
-# Desktop → Notebook 소스 전달 (Desktop 실행)
-git -C "C:\AbandonWare\demo-1\demo-1\src" bundle create awx-notebook-transfer.bundle --all
-# Notebook으로 sftp/USB 이동
-```
-
-```bash
-# Notebook에서 로컬 clone 생성
-git clone awx-notebook-transfer.bundle awx-notebook-src
-cd awx-notebook-src
-git checkout -b agent/notebook/<topic>
-```
-
-### NAS 연결 후 (NAS 경유 SMB)
-
-1. Notebook에서 NAS 공유를 마운트한다 (읽기 전용 권한 권장).
-2. NAS를 통해 Desktop canonical root를 evidence로 읽는다.
-3. `.patch` 세트를 NAS PatchDrop 경로에 직접 쓴다 (NAS 쓰기 권한 필요).
-4. Desktop이 NAS PatchDrop을 주기적으로 확인하거나, Notebook이 완료 시 Desktop에 알린다.
-
-```powershell
-# Notebook (Windows) NAS 마운트 예시
-net use Z: \\NAS-HOST\awx-share /persistent:yes
-# PatchDrop 제출
-Copy-Item "<topic>-notebook-v3.patch" "Z:\__patch_drop__\"
-```
-
-```bash
-# Notebook (macOS) NAS 마운트 예시
-mount_smbfs //user@NAS-HOST/awx-share /Volumes/NAS-WinSrc
-# PatchDrop 제출
-cp <topic>-notebook-v3.patch /Volumes/NAS-WinSrc/__patch_drop__/
-```
-
-> **경로 혼동 방지**: NAS 마운트 경로는 canonical root가 아니다. canonical root는 항상 Desktop의 로컬 경로(`C:\AbandonWare\demo-1\demo-1\src`)다.
+> Do not map an alternate drive or expose a raw network root. Desktop's local canonical root remains a Desktop-owned final-verification fact, never a Notebook write destination.
 
 ---
 
@@ -476,11 +407,11 @@ cp <topic>-notebook-v3.patch /Volumes/NAS-WinSrc/__patch_drop__/
 | `patch-drop-pending` | PatchDrop에 미적용 `.patch` 존재 |
 | `branch-ownership-mismatch` | 현재 branch가 `agent/macmini/*` 또는 `agent/notebook/*` |
 | `smb-conflict-risk` | Mac mini 또는 Notebook이 원본 SMB 경로를 직접 수정 중 의심 |
-| `nas-path-confusion` | Notebook이 NAS 마운트 경로를 canonical root로 착각 |
+| `smb-root-identity-changed` | backing identity가 repository baseline과 불일치 |
 | `port-conflict` | 8080/8081 또는 노드 smoke 포트 충돌 |
 | `gradle-cache-collision` | Gradle user/project cache 미분리 |
-| `nas-write-permission` | NAS PatchDrop 쓰기 권한 없음 (Notebook NAS 연결 후) |
-| `notebook-offline-bundle-missing` | NAS 연결 전 번들 전송 없이 Notebook이 작업 시작 |
+| `patchdrop-path-unresolved` | coordinator가 단일 PatchDrop root를 증명하지 못함 |
+| `source-lease-conflict` | declared target에 대한 shared lease를 얻지 못함 |
 
 ### 빌드/소스
 
@@ -510,7 +441,9 @@ cp <topic>-notebook-v3.patch /Volumes/NAS-WinSrc/__patch_drop__/
 ```markdown
 ## Patch Producer Report
 - node: macmini | notebook
-- nas_connected: true | false      # Notebook에만 해당
+- canonicalWorkspace: Y:\
+- backingShareIdentityVerified: true | false
+- backingShareIdentityReason: match | mismatch | evidence-needed
 - topic:
 - branch:
 - worktree:
@@ -520,7 +453,6 @@ cp <topic>-notebook-v3.patch /Volumes/NAS-WinSrc/__patch_drop__/
 - observed_result:
 - failure_classification:
 - secrets_touched: no
-- nas_path_used:                   # Notebook: NAS 경로 또는 "local-only"
 - desktop_apply_command:
 - evidence_needed:
 ```
@@ -529,13 +461,13 @@ cp <topic>-notebook-v3.patch /Volumes/NAS-WinSrc/__patch_drop__/
 
 ```markdown
 ## 요약
-- 2~5줄. 실제 수정 범위, SMB 충돌 여부, NAS/Notebook 상태, 검증 결과만.
+- 2~5줄. 실제 수정 범위, SMB 충돌 여부, canonical identity decision, 검증 결과만.
 
 ## do01 / Observation
 - 실행한 PowerShell 명령과 핵심 로그 최대 10줄.
 - Git root / branch / worktree 상태.
 - active sourceSets.
-- SMB/NAS/PatchDrop/index.lock 상태.
+- SMB/PatchDrop/index.lock 상태와 exact three-field public identity evidence.
 - Mac mini / Notebook 활성 worktree 여부.
 - missing evidence는 `evidence_needed`로 명시.
 
@@ -559,7 +491,7 @@ cp <topic>-notebook-v3.patch /Volumes/NAS-WinSrc/__patch_drop__/
 
 ## do05 / Risks & Next Steps
 - SMB 충돌 위험: H/M/L.
-- NAS / Notebook 연결 상태: 연결 전 | 연결 후.
+- canonicalWorkspace, backingShareIdentityVerified, backingShareIdentityReason만 public backing identity evidence로 기록.
 - 다음 단일 우선 patch.
 - Mac mini / Notebook에 알려야 할 PatchDrop 메시지.
 - confidence: L/M/H.
@@ -571,7 +503,7 @@ cp <topic>-notebook-v3.patch /Volumes/NAS-WinSrc/__patch_drop__/
 - boot command 없이 "boot passed".
 - 실제 credential path/response 없이 "provider works".
 - Mac mini 또는 Notebook 검증 결과만으로 Desktop final proof.
-- NAS 마운트 경로를 canonical root로 보고.
+- backing network root 또는 alternate mapped path를 보고.
 
 ---
 
@@ -587,7 +519,7 @@ Get-ChildItem -Recurse -File -Depth 4 |
   Select-Object -ExpandProperty FullName
 
 Get-ChildItem -Recurse -Directory -Depth 6 |
-  Where-Object { $_.FullName -match "(src\\main\\java_clean|src\\main\\java|main\\java)$" } |
+  Where-Object { $_.FullName.Replace([char]92, '/') -match "(src/main/java_clean|src/main/java|main/java)$" } |
   Sort-Object FullName |
   Select-Object -ExpandProperty FullName
 
@@ -614,8 +546,8 @@ Pop-Location
 2. `AWX_AGENT_HOST` / `AWX_BUILD_HOST_ID` 고유값 지정.
 3. `GRADLE_USER_HOME` 독립 경로 생성.
 4. worktree 브랜치 네임스페이스 확정: `agent/<node-name>/<topic>`.
-5. PatchDrop 제출 경로 확인 (NAS 경유 여부).
-6. SMB 마운트 권한 읽기 전용 검증.
+5. coordinator가 PatchDrop candidate 하나를 증명했는지 boolean/reason으로 확인.
+6. public backing identity evidence가 exact three-field contract인지 확인.
 
 노드를 제거할 때:
 

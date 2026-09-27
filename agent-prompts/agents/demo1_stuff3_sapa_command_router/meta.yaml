@@ -1,0 +1,11 @@
+id: demo1_stuff3_sapa_command_router
+version: "1.0.0"
+language: ko
+scope: codex-evidence-first-command-routing
+description: >
+  Compact Korean Codex command router that translates the user's practical
+  Stuff3 knowledge profile into bounded memory, ensemble, debugging, and
+  quantitative-metric lanes.
+system: system_ko.md
+manifest_registered: true
+

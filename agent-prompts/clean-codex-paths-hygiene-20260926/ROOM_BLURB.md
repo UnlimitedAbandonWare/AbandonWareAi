@@ -1,0 +1,1 @@
+Clean: Codex P0~P13 경로/홈 정리. SSOT CLEAN_KICKOFF.md + PASTE_TO_CLEAN.md
