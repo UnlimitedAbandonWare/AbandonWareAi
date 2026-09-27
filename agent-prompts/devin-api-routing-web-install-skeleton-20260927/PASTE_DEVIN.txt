@@ -1,0 +1,173 @@
+# Devin 붙여넣기 — API 라우팅 적극 활용 + 웹 설치 골격 (설계+뼈대)
+
+작성: 2026-09-27 Asia/Seoul · Grok Bot (probe SSOT 기반)
+세션 폴더: agent-prompts/devin-api-routing-web-install-skeleton-20260927/
+
+## 1. 미션 (한 줄)
+
+**기존 API 라우팅 시임을 연장**해, 강력한(유료/프리미엄) 모델이 카탈로그에서 선택 불능인 원인을 맞추고, **웹 설치 → 적절한 placement/route 등록**의 설계+얇은 스켈레톤만 깐다. 병렬 스택 금지.
+
+## 2. Project Root (고정)
+
+`C:\AbandonWare\demo-1\demo-1\src`
+
+- Remote: `https://github.com/UnlimitedAbandonWare/AbandonWareAi` only (AbandonWare3 폐기)
+- Git: push / `add -A` / history rewrite 금지 until user. 이번 세션은 **지시서·설계·얇은 stub** 위주; 무단 commit 금지.
+- 허용 쓰기: 이 폴더 `agent-prompts/...` · `docs/` 설계 확장 · 최소 stub이 기존 시임에 붙는 경우만. 제품 전면 재작성 ❌
+
+## 3. Self-Ask (5문 — 시작 전 답하고 진행)
+
+1. **선택 실패의 SSOT는 어디인가?** → 카탈로그(`ChatModelCatalogService` + `app.ai.allow-remote-model-selection` + `remote-model-selection-routes`) vs Admin(`OpenAiModelSelectionPolicy.effectiveAllowRemoteSelection`). 둘이 다르면 UI/설정 불일치.
+2. **웹 설치가 지금 없는가?** → 예. in-app web install→route 등록 없음. 카탈로그 recheck는 pull 안 함. 로컬 pull만 `LocalLlmProcessManager` / desktop scripts.
+3. **무엇을 새로 만들지 않는가?** → 두 번째 catalog/factory/aspect/OpenRouter runtime. 새 provider client ❌.
+4. **allowlist 전략은?** → 전역 `allow-remote=true` 맹목 플립 ❌. 승인된 단일 라우트(예: `api3`) 중심으로 좁게. economy 등 원치 않는 라우트가 같이 열리지 않게 증명 후.
+5. **검증 예산은?** → free/local → low_cost → paid. `AWX_AGENT_ALLOW_PAID_MODELS=1` 없으면 유료 soak ❌. RTX 3090 Ollama 로컬 우선.
+
+## 4. Context — 왜 Powerful 모델 선택이 안 되는가 (probe A/B/C/D)
+
+| ID | 원인 | 증거 방향 |
+|---|---|---|
+| **A** | 카탈로그는 raw `app.ai.allow-remote-model-selection=false` + allowlist `app.ai.remote-model-selection-routes` 기본 **`api3`만** → 대부분 클라우드 행이 `remote_selection_disabled` | GET `/api/chat/models` 응답의 disabled reason |
+| **B** | Admin 설정은 `OpenAiModelSelectionPolicy.effectiveAllowRemoteSelection` — `OPENAI_API_KEY` 있으면 true → **UI/설정 vs 카탈로그 불일치** | ModelSettings / Admin effective vs catalog row |
+| **C** | Powerful paid 라우트(gpt-5.5/premium, gemini-2.5-pro, Claude 등)가 `manifest` / `llm.yaml`에서 `enabled:false` 이거나 allowlist 밖 | `main/resources/configs/cloud-models.manifest.yaml` (classpath SSOT; **root `configs/cloud-models.manifest.yaml` 은 MISSING일 수 있음**) + `application-llm.yaml` `llmrouter.models.*` |
+| **D** | `openai-economy`는 meta-display에는 enabled이나 allowlist 밖. 전역 allow-remote만 켜면 economy도 열림 → **맹목 플립 금지** | meta-display cue ≠ main chat allowlist |
+| **E (설치 공백)** | in-app **웹 설치→route 등록 없음**. catalog recheck는 원격 pull 안 함. 로컬만 `LocalLlmProcessManager` / `scripts/ollama-light-preload.ps1` / `data/agent-handoff/model-autopilot/desktop-pull-now-v1/` | 코드 경로 대조 |
+
+추가: Groq 가드는 `GroqFreeTierGuard` — bypass 금지. `data/usage/groq-free-plan.json` 존재 관찰 가능하나 **증거를 날조하지 말 것**.
+
+## 5. 기존 시임 Inventory — EXTEND (교체·병렬 ❌)
+
+문서/설정:
+- `docs/API_ROUTING_SPEC.md`
+- `configs/api-routing.yaml`
+- `main/resources/configs/cloud-models.manifest.yaml` ← classpath SSOT
+- `application-llm.yaml` → `llmrouter.models.*` (api3 등)
+
+런타임/API:
+- `ChatModelCatalogService` / `ChatModelCatalogController` → `GET /api/chat/models`
+- `CloudModelRouteClassifier`, `HybridLlmGatewayProbeService`, `GroqFreeTierGuard`
+- `ChatWorkflow` (`strictModelSelection`), `DynamicChatModelFactory`, `LlmRouterAspect`
+- `chat-model-picker.js`, `model-settings.html` / `ModelSettingsService`
+- `OpenAiModelSelectionPolicy.effectiveAllowRemoteSelection`
+
+로컬 설치(이미 있음 → 웹 stub이 호출):
+- `LocalLlmProcessManager` warmup pull
+- `scripts/ollama-light-preload.ps1`
+- `data/agent-handoff/model-autopilot/desktop-pull-now-v1/`
+
+스킬(읽기/준수):
+- `.agents/skills/demo1-api-routing-inventory`
+- `.agents/skills/demo1-local-llm-gpu-gateway`
+- `.agents/skills/demo1-agent-api-spend-guard`
+
+진단 교차(있으면 읽고 reconcile, 없으면 invent ❌):
+- `docs/diagnostics/API01-main-selection-20260927.md` (또는 동등 경로)
+
+## 6. Deliverable (사용자 의도: 설계+뼈대)
+
+**목표 산출물 = 설계 문서 + 얇은 skeleton/stub.** 풀 프로덕션 soak · 새 provider SDK · 전면 리라이트 ❌.
+
+권장 산출:
+1. **설계 문서** (이 폴더 또는 `docs/` 확장): purpose→tier→route 표, allowlist 전략, catalog↔settings 정합, web-install 흐름도
+2. **얇은 stub**: Admin/API 엔드포인트 골격 — local은 기존 `LocalLlmProcessManager` 호출; cloud는 `llmrouter.models` + manifest `enabled` + `remote-model-selection-routes` 등록만. **새 provider client 금지**
+3. **카탈로그 캐시 expire** 훅(설치 후) + picker는 probe eligible일 때만 selectable
+4. 포커스된 gradle 테스트 + `/api/chat/models` delta 검증 메모
+
+## 7. WP0–WP4 체크리스트 + Acceptance
+
+### WP0 — Inventory (읽기 위주)
+- [ ] catalog raw flags vs settings `effectiveAllowRemoteSelection` diff 표
+- [ ] 현재 selectable set 목록 (local + allowlisted cloud)
+- [ ] manifest ↔ diagnostics(`API01-main-selection-20260927.md` 등) reconcile
+- [ ] Groq guard 관찰 (`data/usage/groq-free-plan.json`) — 존재/스키마만, 수치 날조 ❌
+- **AC:** `docs/` 또는 이 폴더에 inventory md 1개. 소스 대규모 변경 없음.
+
+### WP1 — Placement 설계
+- [ ] purpose → tier → route 표를 **yaml/doc으로 `api-routing.yaml` / `API_ROUTING_SPEC.md` 연장**
+- [ ] 좁은 allowlist 전략 명문화 (선호: 승인 단일 라우트 예 `api3`)
+- [ ] Meta Display cue lane ≠ main chat 선택 경로 분리 명시
+- **AC:** 설계만으로도 “어디에 무엇을 꽂는지” 한 장으로 설명 가능. 전역 allow-remote 맹목 ON 제안 ❌.
+
+### WP2 — Web-install stub
+- [ ] Admin/API stub: **local** → 기존 `LocalLlmProcessManager` pull
+- [ ] **cloud** → `llmrouter.models` 등록 + manifest `enabled` + `remote-model-selection-routes`에만 추가
+- [ ] 새 provider HTTP client / OpenRouter 런타임 / 두 번째 catalog ❌
+- **AC:** 컴파일·빈 스텁이라도 기존 시임에 연결되는 진입점 1개. secrets 로그/응답 출력 ❌.
+
+### WP3 — Catalog wire
+- [ ] install 후 catalog cache expire
+- [ ] picker: probe eligible + allowlist 통과한 행만 selectable
+- [ ] settings effectiveAllow와 catalog 표시 정합 방향 문서화(또는 최소 코드 정렬)
+- **AC:** `/api/chat/models`에서 설치·등록한 승인 라우트만 selectable 변화 관찰 가능(또는 단위 테스트로 증명).
+
+### WP4 — Verify
+- [ ] 포커스 gradle 테스트 (관련 `*Catalog*` / `*Routing*` / policy)
+- [ ] `GET /api/chat/models` before/after delta
+- [ ] strict chat path 1회 (local 또는 승인 low_cost). **유료 soak 금지** unless `AWX_AGENT_ALLOW_PAID_MODELS=1`
+- **AC:** 아래 Verification 명령을 돌리고 DONE/SKIP/HOLD + 증거 경로 보고.
+
+## 8. Verification commands (예시 — 환경에 맞게 조정)
+
+```bat
+cd /d C:\AbandonWare\demo-1\demo-1\src
+gradlew.bat test --tests "*ChatModelCatalog*" --tests "*ModelSelection*" -q
+curl -s http://127.0.0.1:<PORT>/api/chat/models | findstr /i "remote_selection selectable route"
+```
+
+로컬 GPU(있을 때):
+```bat
+Watch-Rtx3090.bat
+scripts\ollama-light-preload.ps1
+```
+
+Spend guard:
+- `AWX_AGENT_SPEND_GUARD` / host mode 준수
+- 유료 fanout·soak ❌ without `AWX_AGENT_ALLOW_PAID_MODELS=1`
+- GroqFreeTierGuard bypass ❌
+
+## 9. Hard stops
+
+- ❌ 병렬 라우팅 스택 (두 번째 catalog / factory / aspect / OpenRouter runtime)
+- ❌ secrets·API 키 값 출력 (파일·로그·채팅·커밋)
+- ❌ AbandonWare3 / wipe / `add -A` / 무단 commit·push
+- ❌ `GroqFreeTierGuard` bypass
+- ❌ 전역 `allow-remote-model-selection=true` without “승인 라우트만 selectable” 증명
+- ❌ Meta Display cue lane을 main chat 선택과 merge
+- ❌ PROTO_OPEN / low guardrails 환경에서 admin login harden를 완료 기준으로 삼기
+- ❌ 유료 모델 대량 호출 / soak (prefer free/local → low_cost → paid; RTX 3090 Ollama 우선)
+
+## 10. Devin 시작 문장 (그대로 복붙해 시작)
+
+> Project Root는 `C:\AbandonWare\demo-1\demo-1\src`다. 목표는 **기존 API 라우팅을 적극 활용**하고, powerful 모델 선택 불능(A–D)을 카탈로그/allowlist/manifest/설정 정합으로 고치며, **웹 설치→route 등록**의 설계+얇은 스켈레톤을 깐다. WP0 Inventory → WP1 Placement 설계(`api-routing.yaml`/`API_ROUTING_SPEC` 연장) → WP2 Web-install stub(local=`LocalLlmProcessManager`, cloud=llmrouter+manifest+remote-model-selection-routes만) → WP3 catalog cache expire/picker eligible → WP4 포커스 검증. 병렬 스택·전역 allow-remote 맹목·secrets 출력·유료 soak·Groq bypass·무단 push 금지. 산출은 설계+뼈대; 끝나면 WP별 DONE/SKIP/HOLD로 보고한다.
+
+## 11. Report-back 형식
+
+```text
+DEVIN_API_ROUTING_WEB_INSTALL_SKELETON: DONE|PARTIAL|HOLD
+
+WP0: DONE|SKIP|HOLD — <한 줄>
+WP1: DONE|SKIP|HOLD — <한 줄>
+WP2: DONE|SKIP|HOLD — <한 줄>
+WP3: DONE|SKIP|HOLD — <한 줄>
+WP4: DONE|SKIP|HOLD — <한 줄>
+
+FILES_TOUCHED:
+- <path>
+
+EVIDENCE_COMMANDS:
+- <실행한 명령>
+
+NOT_RUN:
+- <의도적으로 안 돌린 것 + 이유>
+
+HARD_STOP_CHECK:
+- parallel_stack: no
+- secrets_printed: no
+- global_allow_remote_blind: no
+- groq_bypass: no
+- paid_soak: no
+- unauthorized_push: no
+```
+
+---
+끝. 이 파일만으로 Devin 세션을 시작할 수 있다. 추가 맥락이 필요하면 같은 폴더 `README.md`와 probe 요약·기존 스킬을 읽는다.
