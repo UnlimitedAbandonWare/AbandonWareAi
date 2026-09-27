@@ -209,6 +209,12 @@ public class NovaWebFailSoftProperties {
     private boolean allowExtraSearchCalls = true;
     private int maxExtraSearchCalls = 2;
 
+    /**
+     * Max request-local wait before a quality-gate rescue retry when Brave is in a
+     * very short cooldown. Set to {@code 0} to keep rescue retries fully non-blocking.
+     */
+    private long qualityGateRescueCooldownWaitMaxMs = 1_000L;
+
 
     /**
      * When minCitations rescue wants to "defer" NOFILTER_SAFE top-up in order to attempt extra
@@ -502,6 +508,14 @@ public class NovaWebFailSoftProperties {
 
     public int getMaxExtraSearchCalls() {
         return maxExtraSearchCalls;
+    }
+
+    public long getQualityGateRescueCooldownWaitMaxMs() {
+        return qualityGateRescueCooldownWaitMaxMs;
+    }
+
+    public void setQualityGateRescueCooldownWaitMaxMs(long qualityGateRescueCooldownWaitMaxMs) {
+        this.qualityGateRescueCooldownWaitMaxMs = Math.max(0L, qualityGateRescueCooldownWaitMaxMs);
     }
 
     public List<String> getOfficialDocsRescueQueries() {

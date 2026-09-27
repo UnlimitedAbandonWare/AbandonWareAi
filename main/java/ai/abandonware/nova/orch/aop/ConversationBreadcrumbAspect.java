@@ -21,8 +21,8 @@ import org.springframework.core.annotation.Order;
  * <p>Goal: keep a stable conversation-level sid ({@code chat-<sessionId>}) across
  * chunked requests, while preserving the raw/browser sid in {@code MDC[requestSid]}.
  *
- * <p>NOTE: TraceStore is cleared early inside {@code ChatWorkflow.continueChat(..)};
- * this aspect focuses on MDC breadcrumbs only.
+ * <p>NOTE: TraceStore is cleared early inside {@code ChatWorkflow.continueChat(..)}.
+ * Apply MDC before the call, then publish the redacted trace breadcrumb after it returns.
  */
 @Aspect
 @Order(Ordered.HIGHEST_PRECEDENCE + 8)
@@ -88,10 +88,9 @@ public class ConversationBreadcrumbAspect {
             // Force conversation sid.
             MDC.put("sid", convSid);
             MDC.put("sessionId", convSid);
-            recordConversationBreadcrumb(convSid, prevSid, req.getSessionId());
-
             return (args == null) ? pjp.proceed() : pjp.proceed(args);
         } finally {
+            recordConversationBreadcrumb(convSid, prevSid, req.getSessionId());
             // If the caller already had these keys set, restore them; otherwise leave them for TraceFilter to clean up.
             if (prevRequestSid != null) {
                 restore(requestSidKey, prevRequestSid);
@@ -139,10 +138,10 @@ public class ConversationBreadcrumbAspect {
             row.put("sessionId", SafeRedactor.hashValue(convSid));
             row.put("data", data);
             TraceStore.append("ml.breadcrumbs.v1", row);
-            TraceStore.put("cihRag.breadcrumb.queryRedacted", true);
-            TraceStore.put("cihRag.breadcrumb.stage", "conversation_sid");
-            TraceStore.put("cihRag.breadcrumb.relevance", 0.0d);
-            TraceStore.put("cihRag.breadcrumb.routeDecision", "conversation_sid_applied");
+            TraceStore.putIfAbsent("cihRag.breadcrumb.queryRedacted", true);
+            TraceStore.putIfAbsent("cihRag.breadcrumb.stage", "conversation_sid");
+            TraceStore.putIfAbsent("cihRag.breadcrumb.relevance", 0.0d);
+            TraceStore.putIfAbsent("cihRag.breadcrumb.routeDecision", "conversation_sid_applied");
         } catch (Throwable ignore) {
             log.debug("[ConversationBreadcrumbAspect] breadcrumb trace skipped stage={} errorHash={} errorLength={}",
                     SafeRedactor.traceLabelOrFallback("conversation.record", "unknown"),

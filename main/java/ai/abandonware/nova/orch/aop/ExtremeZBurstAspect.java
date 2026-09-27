@@ -1241,8 +1241,10 @@ public class ExtremeZBurstAspect {
             return;
         }
         trace("cfvm.recorder.available", true);
+        Map<String, Object> cfvmTrace = new LinkedHashMap<>(TraceStore.getAll());
+        cfvmTrace.put(CfvmFailureRecorder.RAG_ORIGIN_MARKER, true);
         recorder.record("extremez", risk.primaryCause(), "ExtremeZBurstAspect",
-                sessionId(originalQuery), TraceStore.getAll());
+                sessionId(originalQuery), cfvmTrace);
     }
 
     private void traceSkip(String reason, int baseCount, int extraCount) {

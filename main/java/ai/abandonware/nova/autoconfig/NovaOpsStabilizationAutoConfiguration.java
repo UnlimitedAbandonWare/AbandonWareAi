@@ -151,7 +151,7 @@ public class NovaOpsStabilizationAutoConfiguration {
     @ConditionalOnProperty(name = "nova.orch.web.failsoft.ratelimit-backoff.enabled", havingValue = "true", matchIfMissing = true)
     public ProviderRateLimitBackoffAspect providerRateLimitBackoffAspect(
             RateLimitBackoffCoordinator backoffCoordinator,
-            BraveRateLimitState braveRateLimitState) {
-        return new ProviderRateLimitBackoffAspect(backoffCoordinator, braveRateLimitState);
+            ObjectProvider<BraveRateLimitState> braveRateLimitStateProvider) {
+        return new ProviderRateLimitBackoffAspect(backoffCoordinator, braveRateLimitStateProvider.getIfAvailable());
     }
 }

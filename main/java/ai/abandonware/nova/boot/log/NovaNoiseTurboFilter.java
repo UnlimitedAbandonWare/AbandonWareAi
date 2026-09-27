@@ -7,6 +7,7 @@ import ch.qos.logback.core.spi.FilterReply;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import org.slf4j.Marker;
+import java.io.IOException;
 
 /**
  * Drops known noisy logs that are expected during fail-soft degradation.
@@ -52,6 +53,9 @@ public class NovaNoiseTurboFilter extends TurboFilter {
 
         // 2) Fail-soft LLM timeout fast-bail: avoid huge ERROR stacks when we intentionally degrade.
         if (level.isGreaterOrEqual(Level.ERROR)) {
+            if (isTomcatSseClientDisconnect(name, format, t)) {
+                return FilterReply.DENY;
+            }
             if (isFastBailThrowable(t)) {
                 return FilterReply.DENY;
             }
@@ -107,6 +111,42 @@ public class NovaNoiseTurboFilter extends TurboFilter {
                 return true;
             }
             cur = cur.getCause();
+        }
+        return false;
+    }
+
+    private boolean isTomcatSseClientDisconnect(String loggerName, String format, Throwable t) {
+        if (loggerName == null || format == null || t == null) {
+            return false;
+        }
+        if (!loggerName.contains("dispatcherServlet")) {
+            return false;
+        }
+        if (!format.contains("Servlet.service()")) {
+            return false;
+        }
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof IOException
+                    && hasStackFrame(
+                    cur,
+                    "org.springframework.web.servlet.mvc.method.annotation.ReactiveTypeHandler$SseEmitterSubscriber",
+                    "send")) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    private boolean hasStackFrame(Throwable t, String className, String methodName) {
+        if (t == null) {
+            return false;
+        }
+        for (StackTraceElement frame : t.getStackTrace()) {
+            if (className.equals(frame.getClassName()) && methodName.equals(frame.getMethodName())) {
+                return true;
+            }
         }
         return false;
     }

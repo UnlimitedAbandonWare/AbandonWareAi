@@ -325,12 +325,4 @@ public class LlmCallTraceAspect {
         return null;
     }
 
-    private static String safe(String s) {
-        if (s == null) return "null";
-        String t = s.replaceAll("[\r\n\t]+", " ").trim();
-        if (t.length() > 240) {
-            return t.substring(0, 240) + "...";
-        }
-        return t;
-    }
 }

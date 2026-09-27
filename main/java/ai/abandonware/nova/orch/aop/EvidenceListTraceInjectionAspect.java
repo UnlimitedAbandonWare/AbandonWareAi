@@ -454,6 +454,12 @@ public class EvidenceListTraceInjectionAspect {
         String naverProviderDisabled = safeInline(firstNonNull(ctx.get("web.naver.providerDisabled")), 24);
         String naverDisabledReason = safeTraceLabelInline(firstNonNull(ctx.get("web.naver.disabledReason")), 180);
         String naverFailureReason = safeTraceLabelInline(firstNonNull(ctx.get("web.naver.failureReason")), 180);
+        String naverFailureClass = safeTraceLabelInline(firstNonNull(ctx.get("web.naver.failureClass")), 180);
+        String naverProviderAttemptObserved = safeNaverObserved(ctx.get("web.naver.providerAttemptObserved"));
+        String naverProviderResultCount = safeNaverStageCount(ctx.get("web.naver.providerResultCount"));
+        String naverPreFilterCount = safeNaverStageCount(ctx.get("web.naver.preFilterCount"));
+        String naverPostFilterCount = safeNaverStageCount(ctx.get("web.naver.postFilterCount"));
+        String naverMergeCount = safeNaverStageCount(ctx.get("web.naver.mergeCount"));
         String naverReturnedCount = safeInline(firstNonNull(ctx.get("web.naver.returnedCount")), 24);
         String naverAfterFilterCount = safeInline(firstNonNull(ctx.get("web.naver.afterFilterCount")), 24);
         String naverHttpStatus = safeInline(firstNonNull(ctx.get("web.naver.httpStatus")), 24);
@@ -751,6 +757,12 @@ public class EvidenceListTraceInjectionAspect {
         if ((!naverProviderDisabled.isBlank() && !"null".equalsIgnoreCase(naverProviderDisabled))
                 || (!naverDisabledReason.isBlank() && !"null".equalsIgnoreCase(naverDisabledReason))
                 || (!naverFailureReason.isBlank() && !"null".equalsIgnoreCase(naverFailureReason))
+                || !naverFailureClass.isBlank()
+                || !naverProviderAttemptObserved.isBlank()
+                || !naverProviderResultCount.isBlank()
+                || !naverPreFilterCount.isBlank()
+                || !naverPostFilterCount.isBlank()
+                || !naverMergeCount.isBlank()
                 || (!naverReturnedCount.isBlank() && !"null".equalsIgnoreCase(naverReturnedCount))
                 || (!naverAfterFilterCount.isBlank() && !"null".equalsIgnoreCase(naverAfterFilterCount))
                 || (!naverHttpStatus.isBlank() && !"null".equalsIgnoreCase(naverHttpStatus))
@@ -766,6 +778,24 @@ public class EvidenceListTraceInjectionAspect {
                     .append("`, failureReason=`").append(escapeMd(zeroIfBlank(naverFailureReason)))
                     .append("`, returnedCount=").append(escapeMd(zeroIfBlank(naverReturnedCount)))
                     .append(", afterFilterCount=").append(escapeMd(zeroIfBlank(naverAfterFilterCount)));
+            if (!naverFailureClass.isBlank()) {
+                sb.append(", failureClass=`").append(escapeMd(naverFailureClass)).append("`");
+            }
+            if (!naverProviderAttemptObserved.isBlank()) {
+                sb.append(", providerAttemptObserved=").append(naverProviderAttemptObserved);
+            }
+            if (!naverProviderResultCount.isBlank()) {
+                sb.append(", providerResultCount=").append(naverProviderResultCount);
+            }
+            if (!naverPreFilterCount.isBlank()) {
+                sb.append(", preFilterCount=").append(naverPreFilterCount);
+            }
+            if (!naverPostFilterCount.isBlank()) {
+                sb.append(", postFilterCount=").append(naverPostFilterCount);
+            }
+            if (!naverMergeCount.isBlank()) {
+                sb.append(", mergeCount=").append(naverMergeCount);
+            }
             if (!naverHttpStatus.isBlank() && !"null".equalsIgnoreCase(naverHttpStatus)) {
                 sb.append(", httpStatus=").append(escapeMd(naverHttpStatus));
             }
@@ -1155,6 +1185,44 @@ public class EvidenceListTraceInjectionAspect {
         return safeTraceLabelInline(value, 120);
     }
 
+    private static String safeNaverObserved(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof Boolean observed) {
+            return Boolean.toString(observed);
+        }
+        String candidate = String.valueOf(value).trim();
+        if ("true".equalsIgnoreCase(candidate) || "false".equalsIgnoreCase(candidate)) {
+            return candidate.toLowerCase(Locale.ROOT);
+        }
+        return "unknown";
+    }
+
+    private static String safeNaverStageCount(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof Number) {
+            try {
+                long count = new java.math.BigDecimal(value.toString()).longValueExact();
+                return count >= 0L ? Long.toString(count) : "unknown";
+            } catch (ArithmeticException | NumberFormatException ignored) {
+                return "unknown";
+            }
+        }
+        String candidate = String.valueOf(value).trim();
+        if ("unknown".equalsIgnoreCase(candidate)) {
+            return "unknown";
+        }
+        try {
+            long count = Long.parseLong(candidate);
+            return count >= 0L ? Long.toString(count) : "unknown";
+        } catch (NumberFormatException ignored) {
+            return "unknown";
+        }
+    }
+
     private static List<String> selectedKeys() {
         return List.of(
                 "sid",
@@ -1294,6 +1362,12 @@ public class EvidenceListTraceInjectionAspect {
                 "web.naver.providerDisabled",
                 "web.naver.disabledReason",
                 "web.naver.failureReason",
+                "web.naver.failureClass",
+                "web.naver.providerAttemptObserved",
+                "web.naver.providerResultCount",
+                "web.naver.preFilterCount",
+                "web.naver.postFilterCount",
+                "web.naver.mergeCount",
                 "web.naver.returnedCount",
                 "web.naver.afterFilterCount",
                 "web.naver.httpStatus",

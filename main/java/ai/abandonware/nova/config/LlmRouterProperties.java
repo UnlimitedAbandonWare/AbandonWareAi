@@ -2,7 +2,9 @@ package ai.abandonware.nova.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -109,11 +111,20 @@ public class LlmRouterProperties {
         /** Explicit fallback route key. Used only when llm.gateway cloud fallback is enabled. */
         private String fallbackKey;
 
+        /** Explicit local route used only for endpoint/device quarantine failover. */
+        private String deviceFallbackKey;
+
+        /** Explicit hardware role label; never inferred from an endpoint URL. */
+        private String deviceRole;
+
         /** Keep this route out of auto-pick; direct requests can still target it. */
         private boolean fallbackOnly = false;
 
         /** Enable metadata/health probe participation for this route. */
         private boolean probeEnabled = true;
+
+        /** Provider-specific credential environment variable name for diagnostics and fail-soft gating. */
+        private String credentialEnv;
 
         /** Route-specific minimum score override. */
         private Integer minRouteScore;
@@ -129,6 +140,12 @@ public class LlmRouterProperties {
 
         /** Route budget hint in milliseconds. */
         private Long budgetMs;
+
+        /** Require the provider response metadata to attest the configured model identity. */
+        private boolean responseModelVerificationRequired = false;
+
+        /** Route-scoped, explicit response model identities accepted in addition to {@link #name}. */
+        private List<String> responseModelAliases = new ArrayList<>();
 
         public boolean isEnabled() {
             return enabled;
@@ -178,12 +195,46 @@ public class LlmRouterProperties {
             this.stage = stage;
         }
 
+        public boolean isResponseModelVerificationRequired() {
+            return responseModelVerificationRequired;
+        }
+
+        public void setResponseModelVerificationRequired(boolean responseModelVerificationRequired) {
+            this.responseModelVerificationRequired = responseModelVerificationRequired;
+        }
+
+        public List<String> getResponseModelAliases() {
+            return responseModelAliases;
+        }
+
+        public void setResponseModelAliases(List<String> responseModelAliases) {
+            this.responseModelAliases = responseModelAliases == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(responseModelAliases);
+        }
+
         public String getFallbackKey() {
             return fallbackKey;
         }
 
         public void setFallbackKey(String fallbackKey) {
             this.fallbackKey = fallbackKey;
+        }
+
+        public String getDeviceFallbackKey() {
+            return deviceFallbackKey;
+        }
+
+        public void setDeviceFallbackKey(String deviceFallbackKey) {
+            this.deviceFallbackKey = deviceFallbackKey;
+        }
+
+        public String getDeviceRole() {
+            return deviceRole;
+        }
+
+        public void setDeviceRole(String deviceRole) {
+            this.deviceRole = deviceRole;
         }
 
         public boolean isFallbackOnly() {
@@ -200,6 +251,14 @@ public class LlmRouterProperties {
 
         public void setProbeEnabled(boolean probeEnabled) {
             this.probeEnabled = probeEnabled;
+        }
+
+        public String getCredentialEnv() {
+            return credentialEnv;
+        }
+
+        public void setCredentialEnv(String credentialEnv) {
+            this.credentialEnv = credentialEnv;
         }
 
         public Integer getMinRouteScore() {

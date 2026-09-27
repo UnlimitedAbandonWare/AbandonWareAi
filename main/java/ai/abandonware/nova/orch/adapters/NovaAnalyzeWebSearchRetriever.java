@@ -1,5 +1,7 @@
 package ai.abandonware.nova.orch.adapters;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.infra.exec.ContextPropagation;
 import com.example.lms.search.policy.SearchPolicyDecision;
 import com.example.lms.search.policy.SearchPolicyEngine;
@@ -31,9 +33,18 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -50,6 +61,7 @@ import java.util.stream.Collectors;
 public class NovaAnalyzeWebSearchRetriever extends AnalyzeWebSearchRetriever implements ContentRetriever {
 
     private static final Logger log = LoggerFactory.getLogger(NovaAnalyzeWebSearchRetriever.class);
+    private static final int DEFAULT_SEARCH_ADMISSION_LIMIT = 64;
 
     private static final Pattern HREF_DQ = Pattern.compile("href=\\\"(https?://[^\\\"\\s>]+)\\\"", Pattern.CASE_INSENSITIVE);
     private static final Pattern HREF_SQ = Pattern.compile("href='(https?://[^'\\s>]+)'", Pattern.CASE_INSENSITIVE);
@@ -62,6 +74,11 @@ public class NovaAnalyzeWebSearchRetriever extends AnalyzeWebSearchRetriever imp
     private final SearchPolicyEngine searchPolicyEngine;
     private final ExecutorService searchIoExecutor;
     private final ObjectMapper objectMapper;
+    private final Object searchAdmissionConfigLock = new Object();
+    private final AtomicInteger activeSearchLeases = new AtomicInteger();
+    private final AtomicInteger waitingSearchAdmissions = new AtomicInteger();
+    private volatile Semaphore searchAdmissionPermits =
+            new Semaphore(DEFAULT_SEARCH_ADMISSION_LIMIT, true);
 
     private volatile int timeoutMs = 1800;
     private volatile int webTopK = 10;
@@ -96,6 +113,15 @@ public class NovaAnalyzeWebSearchRetriever extends AnalyzeWebSearchRetriever imp
         this.webTopK = k;
     }
 
+    @org.springframework.beans.factory.annotation.Value("${search.executor.io.max-size:64}")
+    void configureSearchAdmissionLimit(int requestedLimit) {
+        resetSearchAdmissionLimit(requestedLimit);
+    }
+
+    void setSearchAdmissionLimitForTest(int requestedLimit) {
+        resetSearchAdmissionLimit(requestedLimit);
+    }
+
     @Override
     public List<Content> retrieve(Query query) {
         String originalQuery = (query != null && query.text() != null) ? query.text().trim() : "";
@@ -107,6 +133,13 @@ public class NovaAnalyzeWebSearchRetriever extends AnalyzeWebSearchRetriever imp
         if (originalQuery == null || originalQuery.isBlank()) {
             return Collections.emptyList();
         }
+
+        final long operationTimeoutMs = effectiveOperationTimeoutMs();
+        if (operationTimeoutMs <= 0L) {
+            traceDeadlineExceeded(originalQuery, "before_policy", operationTimeoutMs);
+            return Collections.emptyList();
+        }
+        final long deadlineNs = deadlineAfterMillis(operationTimeoutMs);
 
         Map<String, Object> qMeta = com.example.lms.service.rag.QueryUtils.metadata(query);
 
@@ -134,108 +167,139 @@ public class NovaAnalyzeWebSearchRetriever extends AnalyzeWebSearchRetriever imp
             plannerMax = safeTunePlannerMax(plannerMax, spDecision, originalQuery);
         }
 
-        List<String> basePlan = routingPlanService.plan(originalQuery, null, plannerMax);
-        List<String> queries = (spDecision != null)
-                ? safeApplyPolicy(basePlan, originalQuery, spDecision)
-                : basePlan;
+        List<String> basePlan = Collections.emptyList();
+        boolean routingPlanFailed = false;
+        CompletionService<List<String>> planCompletions =
+                new ExecutorCompletionService<>(searchIoExecutor);
+        final int boundedPlannerMax = plannerMax;
+        final String plannedOriginalQuery = originalQuery;
+        SubmittedWork<List<String>> planWork = submitLeased(
+                planCompletions,
+                ContextPropagation.wrapCallable(
+                        () -> routingPlanService.plan(plannedOriginalQuery, null, boundedPlannerMax)),
+                "routing_plan",
+                deadlineNs,
+                operationTimeoutMs,
+                originalQuery);
+        if (planWork == null) {
+            return Collections.emptyList();
+        }
+        try {
+            Future<List<String>> completedPlan = pollUntilDeadline(planCompletions, deadlineNs);
+            if (completedPlan == null) {
+                CancelStats stats = cancelOutstanding(List.of(planWork));
+                recordWorkerOutcome(stats);
+                AnalyzeSearchTimeoutTrace.recordCancelSuppressed(
+                        "NovaAnalyze",
+                        operationTimeoutMs,
+                        stats.attempted(),
+                        stats.succeeded(),
+                        originalQuery);
+                traceDeadlineExceeded(originalQuery, "routing_plan", operationTimeoutMs);
+                return Collections.emptyList();
+            }
+            try {
+                List<String> planned = completedPlan.get();
+                basePlan = planned == null ? Collections.emptyList() : planned;
+            } catch (ExecutionException | CancellationException planFailure) {
+                routingPlanFailed = true;
+                traceRoutingPlanFailure(originalQuery, planFailure);
+            }
+        } catch (InterruptedException interrupted) {
+            CancelStats stats = cancelOutstanding(List.of(planWork));
+            recordWorkerOutcome(stats);
+            traceInterruptedPoll(originalQuery, interrupted);
+            Thread.currentThread().interrupt();
+            return Collections.emptyList();
+        }
 
-        if (queries == null || queries.isEmpty()) {
+        List<String> queries = routingPlanFailed
+                ? Collections.emptyList()
+                : (spDecision != null)
+                        ? safeApplyPolicy(basePlan, originalQuery, spDecision)
+                        : basePlan;
+
+        if (!routingPlanFailed && (queries == null || queries.isEmpty())) {
             queries = List.of(originalQuery);
         }
 
-        List<Callable<List<String>>> tasks = new ArrayList<>();
-        for (String q : queries) {
-            if (q == null || q.isBlank()) {
-                continue;
-            }
-            tasks.add(ContextPropagation.wrapCallable(() -> {
-                try {
-                    return webSearchProvider.search(q, reqTopK);
-                } catch (Exception e) {
-                    log.debug("[Analyze][nova] web search failed failureReason={} errorType={} queryHash={} queryLength={}",
-                            analyzeFailureReason(e),
-                            analyzeErrorType(e),
-                            SafeRedactor.hashValue(q),
-                            q.length());
-                    tracePlannedSearchFailure(q, e);
-                    return Collections.emptyList();
-                }
-            }));
-        }
-
         List<String> merged = new ArrayList<>();
-
-        // IMPORTANT: avoid ExecutorService.invokeAll(..., timeout) here.
-        // The JDK's invokeAll timeout path cancels unfinished tasks (often via cancel(true)),
-        // which can "poison" pooled workers. Use CompletionService + poll and best-effort
-        // cancel(false).
-        final long hardTimeoutMs = Math.max(250L, timeoutMs);
-        final long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(hardTimeoutMs);
-        java.util.concurrent.CompletionService<List<String>> cs =
-                new java.util.concurrent.ExecutorCompletionService<>(searchIoExecutor);
-        List<Future<List<String>>> futures = new ArrayList<>();
-        for (Callable<List<String>> task : tasks) {
-            futures.add(cs.submit(task));
-        }
-
-        int remaining = tasks.size();
-        while (remaining > 0) {
-            long remNs = deadlineNs - System.nanoTime();
-            if (remNs <= 0L) {
-                break;
-            }
-            long remMs = TimeUnit.NANOSECONDS.toMillis(remNs);
-            // Precision guard: toMillis(...) truncates; if time remains but converts to 0ms,
-            // keep a 1ms floor so late completions can be harvested before we cancel.
-            if (remMs <= 0L) {
-                remMs = 1L;
-            }
-            try {
-                Future<List<String>> f = cs.poll(remMs, TimeUnit.MILLISECONDS);
-                if (f == null) {
-                    break;
-                }
-                remaining--;
-                if (f.isCancelled()) {
+        if (!routingPlanFailed) {
+            CompletionService<List<String>> completions =
+                    new ExecutorCompletionService<>(searchIoExecutor);
+            List<SubmittedWork<List<String>>> submitted = new ArrayList<>();
+            for (String q : queries) {
+                if (q == null || q.isBlank()) {
                     continue;
                 }
-                try {
-                    List<String> part = f.get();
-                    if (part != null && !part.isEmpty()) {
-                        merged.addAll(part);
-                    }
-                } catch (Exception e) {
-                    log.debug("[Analyze][nova] partial search failure failureReason={} errorType={} queryHash={} queryLength={}",
-                            analyzeFailureReason(e),
-                            analyzeErrorType(e),
-                            SafeRedactor.hashValue(originalQuery),
-                            originalQuery.length());
-                    tracePartialSearchFailure(originalQuery, e);
+                SubmittedWork<List<String>> work = submitLeased(
+                        completions,
+                        ContextPropagation.wrapCallable(() -> {
+                            try {
+                                return webSearchProvider.search(q, reqTopK);
+                            } catch (Exception e) {
+                                log.debug("[Analyze][nova] web search failed failureReason={} errorType={} queryHash={} queryLength={}",
+                                        analyzeFailureReason(e),
+                                        analyzeErrorType(e),
+                                        SafeRedactor.hashValue(q),
+                                        q.length());
+                                tracePlannedSearchFailure(q, e);
+                                return Collections.emptyList();
+                            }
+                        }),
+                        "planned_search",
+                        deadlineNs,
+                        operationTimeoutMs,
+                        originalQuery);
+                if (work != null) {
+                    submitted.add(work);
                 }
-            } catch (InterruptedException ie) {
-                // Avoid poisoning pooled request threads.
-                traceInterruptedPoll(originalQuery, ie);
-                Thread.interrupted();
-                break;
             }
-        }
 
-        // Best-effort cancel of unfinished tasks without interrupt.
-        int cancelAttempted = 0;
-        int cancelSucceeded = 0;
-        for (Future<List<String>> f : futures) {
-            if (f != null && !f.isDone()) {
+            if (submitted.isEmpty() && queries != null && !queries.isEmpty()) {
+                return Collections.emptyList();
+            }
+
+            int remaining = submitted.size();
+            while (remaining > 0 && remainingMillis(deadlineNs) > 0L) {
                 try {
-                    cancelAttempted++;
-                    if (f.cancel(false)) {
-                        cancelSucceeded++;
+                    Future<List<String>> completed = pollUntilDeadline(completions, deadlineNs);
+                    if (completed == null) {
+                        break;
                     }
-                } catch (Exception e) {
-                    traceCancelFailure(originalQuery, e);
+                    remaining--;
+                    if (completed.isCancelled()) {
+                        continue;
+                    }
+                    try {
+                        List<String> part = completed.get();
+                        if (part != null && !part.isEmpty()) {
+                            merged.addAll(part);
+                        }
+                    } catch (Exception e) {
+                        log.debug("[Analyze][nova] partial search failure failureReason={} errorType={} queryHash={} queryLength={}",
+                                analyzeFailureReason(e),
+                                analyzeErrorType(e),
+                                SafeRedactor.hashValue(originalQuery),
+                                originalQuery.length());
+                        tracePartialSearchFailure(originalQuery, e);
+                    }
+                } catch (InterruptedException interrupted) {
+                    traceInterruptedPoll(originalQuery, interrupted);
+                    Thread.currentThread().interrupt();
+                    break;
                 }
             }
+
+            CancelStats cancelStats = cancelOutstanding(submitted);
+            recordWorkerOutcome(cancelStats);
+            AnalyzeSearchTimeoutTrace.recordCancelSuppressed(
+                    "NovaAnalyze",
+                    operationTimeoutMs,
+                    cancelStats.attempted(),
+                    cancelStats.succeeded(),
+                    originalQuery);
         }
-        AnalyzeSearchTimeoutTrace.recordCancelSuppressed("NovaAnalyze", hardTimeoutMs, cancelAttempted, cancelSucceeded, originalQuery);
 
         List<String> flattened = new ArrayList<>();
         for (String raw : merged) {
@@ -258,28 +322,22 @@ public class NovaAnalyzeWebSearchRetriever extends AnalyzeWebSearchRetriever imp
         }
 
         if (dedup.isEmpty()) {
-            // Fallback: direct original query.
-            try {
-                List<String> fallback = webSearchProvider.search(originalQuery, reqTopK);
-                if (fallback != null) {
-                    for (String raw : fallback) {
-                        Optional<List<String>> maybeJson = tryFlattenBraveJson(raw, reqTopK);
-                        List<String> items = maybeJson.orElse(List.of(raw));
-                        for (String s : items) {
-                            if (s == null || s.isBlank()) continue;
-                            String url = extractUrl(s);
-                            String key = (url != null && !url.isBlank()) ? url : s;
-                            dedup.putIfAbsent(key, s);
-                        }
+            List<String> fallback = searchOriginalWithinDeadline(
+                    originalQuery,
+                    reqTopK,
+                    deadlineNs,
+                    operationTimeoutMs);
+            for (String raw : fallback) {
+                Optional<List<String>> maybeJson = tryFlattenBraveJson(raw, reqTopK);
+                List<String> items = maybeJson.orElse(List.of(raw));
+                for (String s : items) {
+                    if (s == null || s.isBlank()) {
+                        continue;
                     }
+                    String url = extractUrl(s);
+                    String key = (url != null && !url.isBlank()) ? url : s;
+                    dedup.putIfAbsent(key, s);
                 }
-            } catch (Exception e) {
-                log.debug("[Analyze][nova] fallback search failed failureReason={} errorType={} queryHash={} queryLength={}",
-                        analyzeFailureReason(e),
-                        analyzeErrorType(e),
-                        SafeRedactor.hashValue(originalQuery),
-                        originalQuery.length());
-                traceFallbackSearchFailure(originalQuery, e);
             }
         }
 
@@ -287,6 +345,319 @@ public class NovaAnalyzeWebSearchRetriever extends AnalyzeWebSearchRetriever imp
                 .limit(reqTopK)
                 .map(Content::from)
                 .collect(Collectors.toList());
+    }
+
+    private long effectiveOperationTimeoutMs() {
+        long configuredMs = Math.max(250L, timeoutMs);
+        TimeBudget requestBudget = TimeBudgetContext.get();
+        if (requestBudget == null) {
+            return configuredMs;
+        }
+        return Math.max(0L, Math.min(configuredMs, requestBudget.remainingMillis()));
+    }
+
+    private static long deadlineAfterMillis(long timeoutMillis) {
+        long now = System.nanoTime();
+        long timeoutNs = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMillis));
+        return timeoutNs >= Long.MAX_VALUE - now ? Long.MAX_VALUE : now + timeoutNs;
+    }
+
+    private static long remainingMillis(long deadlineNs) {
+        long remainingNs = deadlineNs - System.nanoTime();
+        if (remainingNs <= 0L) {
+            return 0L;
+        }
+        return Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNs));
+    }
+
+    private static <T> Future<T> pollUntilDeadline(
+            CompletionService<T> completions,
+            long deadlineNs) throws InterruptedException {
+        long remainingMs = remainingMillis(deadlineNs);
+        return remainingMs <= 0L ? null : completions.poll(remainingMs, TimeUnit.MILLISECONDS);
+    }
+
+    private <T> SubmittedWork<T> submitLeased(
+            CompletionService<T> completions,
+            Callable<T> task,
+            String stage,
+            long deadlineNs,
+            long operationTimeoutMs,
+            String query) {
+        if (remainingMillis(deadlineNs) <= 0L) {
+            traceDeadlineExceeded(query, stage, operationTimeoutMs);
+            return null;
+        }
+        SearchLease lease;
+        try {
+            lease = tryAcquireSearchLease(deadlineNs);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            traceInterruptedPoll(query, interrupted);
+            return null;
+        }
+        if (lease == null) {
+            if (remainingMillis(deadlineNs) <= 0L) {
+                traceDeadlineExceeded(query, stage, operationTimeoutMs);
+            } else {
+                traceAdmissionFailure(query, stage, null);
+            }
+            return null;
+        }
+        LeasedTask<T> leasedTask = new LeasedTask<>(task, lease, Thread.currentThread());
+        try {
+            Future<T> future = completions.submit(leasedTask);
+            if (leasedTask.inlineExecutionRejected()) {
+                traceAdmissionFailure(query, stage, null);
+                return null;
+            }
+            return new SubmittedWork<>(future, leasedTask);
+        } catch (RejectedExecutionException rejected) {
+            leasedTask.cancelBeforeStart();
+            traceAdmissionFailure(query, stage, rejected);
+            return null;
+        }
+    }
+
+    private List<String> searchOriginalWithinDeadline(
+            String originalQuery,
+            int reqTopK,
+            long deadlineNs,
+            long operationTimeoutMs) {
+        if (remainingMillis(deadlineNs) <= 0L) {
+            traceDeadlineExceeded(originalQuery, "original_fallback", operationTimeoutMs);
+            return Collections.emptyList();
+        }
+        CompletionService<List<String>> completions =
+                new ExecutorCompletionService<>(searchIoExecutor);
+        SubmittedWork<List<String>> work = submitLeased(
+                completions,
+                ContextPropagation.wrapCallable(() -> webSearchProvider.search(originalQuery, reqTopK)),
+                "original_fallback",
+                deadlineNs,
+                operationTimeoutMs,
+                originalQuery);
+        if (work == null) {
+            return Collections.emptyList();
+        }
+        try {
+            Future<List<String>> completed = pollUntilDeadline(completions, deadlineNs);
+            if (completed == null) {
+                CancelStats stats = cancelOutstanding(List.of(work));
+                recordWorkerOutcome(stats);
+                AnalyzeSearchTimeoutTrace.recordCancelSuppressed(
+                        "NovaAnalyze",
+                        operationTimeoutMs,
+                        stats.attempted(),
+                        stats.succeeded(),
+                        originalQuery);
+                traceDeadlineExceeded(originalQuery, "original_fallback", operationTimeoutMs);
+                return Collections.emptyList();
+            }
+            List<String> result = completed.get();
+            return result == null ? Collections.emptyList() : result;
+        } catch (InterruptedException interrupted) {
+            CancelStats stats = cancelOutstanding(List.of(work));
+            recordWorkerOutcome(stats);
+            traceInterruptedPoll(originalQuery, interrupted);
+            Thread.currentThread().interrupt();
+            return Collections.emptyList();
+        } catch (ExecutionException | CancellationException failure) {
+            log.debug("[Analyze][nova] fallback search failed failureReason={} errorType={} queryHash={} queryLength={}",
+                    analyzeFailureReason(failure),
+                    analyzeErrorType(failure),
+                    SafeRedactor.hashValue(originalQuery),
+                    originalQuery.length());
+            traceFallbackSearchFailure(originalQuery, failure);
+            return Collections.emptyList();
+        }
+    }
+
+    private SearchLease tryAcquireSearchLease(long deadlineNs) throws InterruptedException {
+        Semaphore permits;
+        synchronized (searchAdmissionConfigLock) {
+            permits = searchAdmissionPermits;
+            waitingSearchAdmissions.incrementAndGet();
+        }
+        try {
+            long remainingNs = deadlineNs - System.nanoTime();
+            if (remainingNs <= 0L
+                    || !permits.tryAcquire(remainingNs, TimeUnit.NANOSECONDS)) {
+                return null;
+            }
+            activeSearchLeases.incrementAndGet();
+            return new SearchLease(permits, activeSearchLeases);
+        } finally {
+            waitingSearchAdmissions.decrementAndGet();
+        }
+    }
+
+    private void resetSearchAdmissionLimit(int requestedLimit) {
+        if (requestedLimit < 1 || requestedLimit > 10_000) {
+            throw new IllegalArgumentException("invalid_nova_search_admission_limit");
+        }
+        synchronized (searchAdmissionConfigLock) {
+            if (activeSearchLeases.get() != 0 || waitingSearchAdmissions.get() != 0) {
+                throw new IllegalStateException("nova_search_admission_in_use");
+            }
+            searchAdmissionPermits = new Semaphore(requestedLimit, true);
+        }
+    }
+
+    private static CancelStats cancelOutstanding(List<? extends SubmittedWork<?>> submitted) {
+        int attempted = 0;
+        int succeeded = 0;
+        for (SubmittedWork<?> work : submitted) {
+            if (work == null || !work.isOutstanding()) {
+                continue;
+            }
+            attempted++;
+            try {
+                if (work.cancelWithoutInterrupt()) {
+                    succeeded++;
+                }
+            } catch (RuntimeException cancelFailure) {
+                traceCancelFailure("", cancelFailure);
+            }
+        }
+        boolean workerUnfinished = submitted.stream()
+                .filter(Objects::nonNull)
+                .anyMatch(SubmittedWork::workerUnfinished);
+        return new CancelStats(attempted, succeeded, workerUnfinished);
+    }
+
+    private static void recordWorkerOutcome(CancelStats stats) {
+        if (stats == null || stats.attempted() <= 0) {
+            return;
+        }
+        TraceStore.put("nova.search.callerOutcome", "caller_returned");
+        TraceStore.put("nova.search.taskCancelRequested", true);
+        TraceStore.put("nova.search.workerTermination",
+                stats.workerUnfinished() ? "worker_unfinished" : "worker_terminated");
+    }
+
+    private static void traceAdmissionFailure(String query, String stage, Throwable error) {
+        TraceStore.put("nova.search.admission.reason", "executor_saturated");
+        TraceStore.put("nova.search.admission.stage",
+                SafeRedactor.traceLabelOrFallback(stage, "unknown"));
+        TraceStore.put("nova.search.admission.queryHash12", hash12(query));
+        TraceStore.put("nova.search.admission.queryLength", query == null ? 0 : query.length());
+        if (error != null) {
+            TraceStore.put("nova.search.admission.errorType", analyzeErrorType(error));
+        }
+    }
+
+    private static void traceRoutingPlanFailure(String query, Throwable error) {
+        TraceStore.put("nova.search.plan.failureReason", "routing_plan_failed");
+        TraceStore.put("nova.search.plan.errorType", analyzeErrorType(error));
+        TraceStore.put("nova.search.plan.queryHash12", hash12(query));
+        TraceStore.put("nova.search.plan.queryLength", query == null ? 0 : query.length());
+    }
+
+    private static void traceDeadlineExceeded(String query, String stage, long timeoutMs) {
+        TraceStore.put("nova.search.deadline.reason", "request_deadline_exhausted");
+        TraceStore.put("nova.search.deadline.stage",
+                SafeRedactor.traceLabelOrFallback(stage, "unknown"));
+        TraceStore.put("nova.search.deadline.timeoutMs", Math.max(0L, timeoutMs));
+        TraceStore.put("nova.search.deadline.queryHash12", hash12(query));
+        TraceStore.put("nova.search.deadline.queryLength", query == null ? 0 : query.length());
+    }
+
+    private enum WorkerState {
+        QUEUED,
+        RUNNING,
+        FINISHED,
+        CANCELLED_BEFORE_START
+    }
+
+    private static final class SearchLease implements AutoCloseable {
+        private final Semaphore permits;
+        private final AtomicInteger activeLeases;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private SearchLease(Semaphore permits, AtomicInteger activeLeases) {
+            this.permits = permits;
+            this.activeLeases = activeLeases;
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                activeLeases.decrementAndGet();
+                permits.release();
+            }
+        }
+    }
+
+    private static final class LeasedTask<T> implements Callable<T> {
+        private final Callable<T> delegate;
+        private final SearchLease lease;
+        private final Thread submittingThread;
+        private final AtomicBoolean inlineExecutionRejected = new AtomicBoolean();
+        private final AtomicReference<WorkerState> state =
+                new AtomicReference<>(WorkerState.QUEUED);
+
+        private LeasedTask(Callable<T> delegate, SearchLease lease, Thread submittingThread) {
+            this.delegate = Objects.requireNonNull(delegate);
+            this.lease = Objects.requireNonNull(lease);
+            this.submittingThread = Objects.requireNonNull(submittingThread);
+        }
+
+        @Override
+        public T call() throws Exception {
+            if (!state.compareAndSet(WorkerState.QUEUED, WorkerState.RUNNING)) {
+                throw new CancellationException("nova_search_cancelled_before_start");
+            }
+            try {
+                if (Thread.currentThread() == submittingThread) {
+                    inlineExecutionRejected.set(true);
+                    throw new RejectedExecutionException("nova_search_inline_execution_rejected");
+                }
+                return delegate.call();
+            } finally {
+                state.set(WorkerState.FINISHED);
+                lease.close();
+            }
+        }
+
+        private boolean cancelBeforeStart() {
+            if (state.compareAndSet(WorkerState.QUEUED, WorkerState.CANCELLED_BEFORE_START)) {
+                lease.close();
+                return true;
+            }
+            return false;
+        }
+
+        private boolean isOutstanding() {
+            WorkerState current = state.get();
+            return current == WorkerState.QUEUED || current == WorkerState.RUNNING;
+        }
+
+        private boolean workerUnfinished() {
+            return state.get() == WorkerState.RUNNING;
+        }
+
+        private boolean inlineExecutionRejected() {
+            return inlineExecutionRejected.get();
+        }
+    }
+
+    private record SubmittedWork<T>(Future<T> future, LeasedTask<T> leasedTask) {
+        private boolean cancelWithoutInterrupt() {
+            boolean cancelledBeforeStart = leasedTask.cancelBeforeStart();
+            return future.cancel(false) || cancelledBeforeStart;
+        }
+
+        private boolean isOutstanding() {
+            return leasedTask.isOutstanding();
+        }
+
+        private boolean workerUnfinished() {
+            return leasedTask.workerUnfinished();
+        }
+    }
+
+    private record CancelStats(int attempted, int succeeded, boolean workerUnfinished) {
     }
 
     private static int metaInt(Map<String, Object> meta, String key, int defaultValue) {

@@ -23,6 +23,7 @@ final class HybridWebSearchEmptyFallbackSupport {
     private static final Logger log = LoggerFactory.getLogger(HybridWebSearchEmptyFallbackSupport.class);
 
     private static final Pattern URL_PATTERN = Pattern.compile("https?://[^\\s)]+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SITE_TOKEN_PATTERN = Pattern.compile("(?i)\\bsite:([^\\s]+)");
     private static final List<String> NOFILTER_SAFE_LOW_TRUST_HOST_MARKERS = List.of(
             "blog.naver.com",
             "cafe.naver.com",
@@ -196,7 +197,54 @@ final class HybridWebSearchEmptyFallbackSupport {
         if (out.isEmpty()) {
             return Collections.emptyList();
         }
-        return new ArrayList<>(out);
+        return filterScopedCacheOnlySnippets(query, new ArrayList<>(out), limit, "tracePool");
+    }
+
+    static List<String> filterScopedCacheOnlySnippets(String query, List<String> snippets, int topK, String source) {
+        List<SiteRequirement> requirements = siteRequirements(query);
+        if (requirements.isEmpty()) {
+            return snippets == null ? Collections.emptyList() : snippets;
+        }
+
+        int inputCount = snippets == null ? 0 : snippets.size();
+        int limit = Math.max(1, topK);
+        List<String> kept = new ArrayList<>();
+        int removed = 0;
+        if (snippets != null) {
+            for (String snippet : snippets) {
+                if (snippet == null || snippet.isBlank()) {
+                    continue;
+                }
+                if (matchesAnySiteRequirement(snippet, requirements)) {
+                    kept.add(snippet);
+                    if (kept.size() >= limit) {
+                        break;
+                    }
+                } else {
+                    removed++;
+                }
+            }
+        }
+
+        try {
+            TraceStore.put("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.enabled", true);
+            TraceStore.put("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.lastSource",
+                    com.example.lms.trace.SafeRedactor.traceLabelOrFallback(source, "unknown"));
+            TraceStore.put("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.required.count",
+                    requirements.size());
+            TraceStore.inc("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.input.count", inputCount);
+            TraceStore.inc("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.kept.count", kept.size());
+            TraceStore.inc("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.removed.count", removed);
+            TraceStore.put("web.failsoft.hybridEmptyFallback.cacheOnly.scopedFilter.required.hashes",
+                    requirementHashes(requirements));
+        } catch (Throwable ignore) {
+            WebFailSoftTraceSuppressions.trace("hybridEmptyFallbackSupport.scopedFilterTrace", ignore);
+        }
+
+        if (kept.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return kept;
     }
 
     static List<String> mergeAndLimit(List<String> a, List<String> b, int limit) {
@@ -262,19 +310,16 @@ final class HybridWebSearchEmptyFallbackSupport {
             return null;
         }
 
-        Matcher m = URL_PATTERN.matcher(snippet);
-        if (!m.find()) {
+        URI uri = extractUri(snippet);
+        if (uri == null) {
             return null;
         }
-
-        String url = m.group();
         try {
-            URI uri = URI.create(url);
             String host = uri.getHost();
             if (host == null) {
                 return null;
             }
-            host = host.toLowerCase();
+            host = host.toLowerCase(java.util.Locale.ROOT);
             if (host.startsWith("www.")) {
                 host = host.substring(4);
             }
@@ -285,11 +330,196 @@ final class HybridWebSearchEmptyFallbackSupport {
         }
     }
 
+    private static URI extractUri(String snippet) {
+        if (snippet == null || snippet.isBlank()) {
+            return null;
+        }
+        Matcher m = URL_PATTERN.matcher(snippet);
+        if (!m.find()) {
+            return null;
+        }
+        String url = trimTrailingUrlPunctuation(m.group());
+        if (url.isBlank()) {
+            return null;
+        }
+        try {
+            return URI.create(url);
+        } catch (Exception ignore) {
+            WebFailSoftTraceSuppressions.trace("hybridEmptyFallbackSupport.extractUri", ignore);
+            return null;
+        }
+    }
+
+    private static String trimTrailingUrlPunctuation(String url) {
+        if (url == null) {
+            return "";
+        }
+        String out = url.trim();
+        while (!out.isEmpty()) {
+            char last = out.charAt(out.length() - 1);
+            if (last == '.' || last == ',' || last == ';' || last == ':' || last == ']' || last == '}') {
+                out = out.substring(0, out.length() - 1).trim();
+                continue;
+            }
+            break;
+        }
+        return out;
+    }
+
+    private static boolean matchesAnySiteRequirement(String snippet, List<SiteRequirement> requirements) {
+        if (requirements == null || requirements.isEmpty()) {
+            return true;
+        }
+        URI uri = extractUri(snippet);
+        if (uri == null) {
+            return false;
+        }
+        String host = normalizeHost(uri.getHost());
+        if (host.isBlank()) {
+            return false;
+        }
+        String path = normalizePath(uri.getPath());
+        for (SiteRequirement requirement : requirements) {
+            if (requirement.matches(host, path)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<SiteRequirement> siteRequirements(String query) {
+        if (query == null || query.isBlank()) {
+            return Collections.emptyList();
+        }
+        Matcher matcher = SITE_TOKEN_PATTERN.matcher(query);
+        List<SiteRequirement> out = new ArrayList<>();
+        while (matcher.find()) {
+            SiteRequirement requirement = parseSiteRequirement(matcher.group(1));
+            if (requirement != null) {
+                out.add(requirement);
+            }
+        }
+        return out;
+    }
+
+    private static SiteRequirement parseSiteRequirement(String rawToken) {
+        if (rawToken == null || rawToken.isBlank()) {
+            return null;
+        }
+        String token = rawToken.trim();
+        while (!token.isEmpty()) {
+            char last = token.charAt(token.length() - 1);
+            if (last == '"' || last == '\'' || last == '`' || last == ',' || last == ';'
+                    || last == ')' || last == ']' || last == '}') {
+                token = token.substring(0, token.length() - 1).trim();
+                continue;
+            }
+            break;
+        }
+        while (!token.isEmpty()) {
+            char first = token.charAt(0);
+            if (first == '"' || first == '\'' || first == '`' || first == '(' || first == '[' || first == '{') {
+                token = token.substring(1).trim();
+                continue;
+            }
+            break;
+        }
+        if (token.isBlank()) {
+            return null;
+        }
+
+        String hostPart = token;
+        String pathPart = "";
+        try {
+            if (token.startsWith("http://") || token.startsWith("https://")) {
+                URI uri = URI.create(token);
+                hostPart = uri.getHost();
+                pathPart = uri.getPath();
+            } else {
+                int slash = token.indexOf('/');
+                if (slash >= 0) {
+                    hostPart = token.substring(0, slash);
+                    pathPart = token.substring(slash);
+                }
+            }
+        } catch (Exception ignore) {
+            WebFailSoftTraceSuppressions.trace("hybridEmptyFallbackSupport.parseSiteRequirement", ignore);
+        }
+
+        String host = normalizeHost(hostPart);
+        if (host.isBlank()) {
+            return null;
+        }
+        return new SiteRequirement(host, normalizePath(pathPart));
+    }
+
+    private static String normalizeHost(String host) {
+        if (host == null || host.isBlank()) {
+            return "";
+        }
+        String out = host.trim().toLowerCase(java.util.Locale.ROOT);
+        while (out.startsWith("*.")) {
+            out = out.substring(2);
+        }
+        if (out.startsWith("www.")) {
+            out = out.substring(4);
+        }
+        return out;
+    }
+
+    private static String normalizePath(String path) {
+        if (path == null || path.isBlank() || "/".equals(path.trim())) {
+            return "";
+        }
+        String out = path.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!out.startsWith("/")) {
+            out = "/" + out;
+        }
+        while (out.endsWith("/") && out.length() > 1) {
+            out = out.substring(0, out.length() - 1);
+        }
+        return out;
+    }
+
+    private static List<String> requirementHashes(List<SiteRequirement> requirements) {
+        if (requirements == null || requirements.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<String> out = new ArrayList<>();
+        for (SiteRequirement requirement : requirements) {
+            if (requirement == null) {
+                continue;
+            }
+            out.add(crc32Hex(requirement.host() + requirement.path()));
+            if (out.size() >= 8) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private record SiteRequirement(String host, String path) {
+        boolean matches(String candidateHost, String candidatePath) {
+            if (candidateHost == null || candidateHost.isBlank()) {
+                return false;
+            }
+            String normalizedPath = candidatePath == null ? "" : candidatePath;
+            boolean hostMatches = candidateHost.equals(host) || candidateHost.endsWith("." + host);
+            if (!hostMatches) {
+                return false;
+            }
+            if (path == null || path.isBlank()) {
+                return true;
+            }
+            return normalizedPath.equals(path) || normalizedPath.startsWith(path + "/");
+        }
+    }
+
     static boolean isLowTrustHost(String host) {
         if (host == null || host.isBlank()) {
             return false;
         }
-        String h = host.toLowerCase();
+        String h = host.toLowerCase(java.util.Locale.ROOT);
         for (String marker : NOFILTER_SAFE_LOW_TRUST_HOST_MARKERS) {
             if (marker == null || marker.isBlank()) {
                 continue;

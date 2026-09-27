@@ -3,7 +3,6 @@ package ai.abandonware.nova.orch.aop;
 import com.example.lms.infra.resilience.NightmareBreaker;
 import com.example.lms.infra.resilience.NightmareKeys;
 import com.example.lms.dto.ChatRequestDto;
-import com.example.lms.orchestration.OrchestrationSignals;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.guard.GuardContext;
 import com.example.lms.service.guard.GuardContextHolder;
@@ -295,20 +294,9 @@ public class GuardDebugTraceAspect {
             boolean bypass = ctx != null && ctx.isBypassMode();
             double irr = ctx != null ? ctx.getIrregularityScore() : 0.0;
 
-            OrchestrationSignals sig;
-            try {
-                sig = OrchestrationSignals.compute(query, nb, ctx);
-            } catch (Exception e) {
-                traceSuppressed("orchestration.compute", e);
-                sig = null;
-            }
-
-            String orchReason = (sig != null)
-                    ? safe(sig.reason())
-                    : safe(ctx != null ? ctx.getBypassReason() : null);
-            String modeLabel = (sig != null)
-                    ? safe(sig.modeLabel())
-                    : (bypass ? "BYPASS" : (strike ? "STRIKE" : (compression ? "COMPRESSION" : "NORMAL")));
+            // Observe the current request; diagnostics must not reapply plans or sample routing.
+            String orchReason = safe(ctx != null ? ctx.getBypassReason() : null);
+            String modeLabel = bypass ? "BYPASS" : (strike ? "STRIKE" : (compression ? "COMPRESSION" : "NORMAL"));
 
             boolean bypassByChatDown = chatOpen; // OrchestrationSignals uses CHAT_DRAFT open
             boolean bypassByWebBothDown = webBraveOpen && webNaverOpen;

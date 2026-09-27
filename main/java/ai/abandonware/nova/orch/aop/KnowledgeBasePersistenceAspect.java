@@ -29,15 +29,10 @@ import java.util.Set;
  * Nova Overlay: "persist=SKIPPED" 상태로 남아있는 KB 통합(integrateVerifiedKnowledge)을
  * 실제 저장소(JPA Repository)로 연결합니다.
  *
- * - 기존 DefaultKnowledgeBaseService.integrateVerifiedKnowledge(...)는 SKIPPED를
- * 반환하며
- * DB에 아무것도 저장하지 않습니다.
- * - 이 AOP는 해당 호출을 가로채 DomainKnowledge / EntityAttribute로 upsert 합니다.
- *
- * 주의:
- * - DomainKnowledge는 현재 entityName이 전역 유니크로 선언되어 있어
- * (domain+entityName 유니크가 아닌) 충돌이 발생할 수 있습니다.
- * 충돌 시 entityName 기반 폴백 조회를 시도하고, 그래도 실패하면 원래 메서드(SKIPPED)로 폴백합니다.
+ * - 기본 서비스가 저장한 결과는 그대로 유지합니다.
+ * - SKIPPED인 경우에만 선택적으로 DomainKnowledge / EntityAttribute를 upsert 합니다.
+ * - 저장 및 충돌 재조회는 항상 domain+entityName 범위에 한정합니다.
+ * 다른 도메인의 동명 행을 이동하지 않으며, 저장 실패 시 원래 결과로 폴백합니다.
  */
 @Slf4j
 @Aspect
@@ -121,8 +116,9 @@ public class KnowledgeBasePersistenceAspect {
             }
 
             List<Kv> attrs = parsed.attributes == null ? List.of() : parsed.attributes;
-            if (attrs.size() > maxAttributes) {
-                attrs = attrs.subList(0, maxAttributes);
+            int attributeLimit = Math.max(0, maxAttributes);
+            if (attrs.size() > attributeLimit) {
+                attrs = attrs.subList(0, attributeLimit);
             }
 
             KnowledgeBaseService.IntegrationStatus status = upsert(d.trim(), e.trim(), attrs, confidence,
@@ -142,11 +138,6 @@ public class KnowledgeBasePersistenceAspect {
             Double confidence,
             List<String> sources) {
         Optional<DomainKnowledge> found = repo.findByDomainAndEntityNameIgnoreCase(domain, entityName);
-        if (found.isEmpty()) {
-            // DomainKnowledge.entityName is currently global-unique; use a fallback lookup
-            // when needed.
-            found = repo.findByEntityNameIgnoreCase(entityName);
-        }
 
         DomainKnowledge dk = found.orElseGet(DomainKnowledge::new);
         boolean created = (dk.getId() == null);
@@ -164,9 +155,9 @@ public class KnowledgeBasePersistenceAspect {
             repo.save(dk);
         } catch (DataIntegrityViolationException dive) {
             WebFailSoftTraceSuppressions.trace("knowledgeBasePersistence.uniqueConstraintRetry", dive);
-            // One more attempt: if unique constraint on entityName is hit, try updating the
-            // existing row.
-            Optional<DomainKnowledge> fallback = repo.findByEntityNameIgnoreCase(entityName);
+            // A concurrent insert may have created this domain's row. Never move a
+            // same-name row from another domain, including with an older global constraint.
+            Optional<DomainKnowledge> fallback = repo.findByDomainAndEntityNameIgnoreCase(domain, entityName);
             if (fallback.isPresent()) {
                 DomainKnowledge existing = fallback.get();
                 existing.setDomain(domain);

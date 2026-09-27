@@ -231,11 +231,12 @@ public class NovaDebugPortAutoConfiguration {
         final String HDR_SESSION_ID = "X-Session-Id";
         final String onceKey = "ablation.ctx.correlation.missing";
 
-        return (request, next) -> {
+        return (request, next) -> Mono.fromDirect(subscriber -> {
             String rid = request.headers().getFirst(HDR_REQUEST_ID);
             String sid = request.headers().getFirst(HDR_SESSION_ID);
             if (!hasText(rid) && !hasText(sid)) {
-                return next.exchange(request);
+                Mono.defer(() -> next.exchange(request)).subscribe(subscriber);
+                return;
             }
 
             // Detect "MDC missing but headers exist" -> context propagation leak signal.
@@ -338,12 +339,14 @@ public class NovaDebugPortAutoConfiguration {
                 }
             }
 
-            Mono<ClientResponse> mono = next.exchange(request);
-            if (!changed) {
-                return mono;
+            try {
+                Mono.defer(() -> next.exchange(request)).subscribe(subscriber);
+            } finally {
+                if (changed) {
+                    restoreMdc(prev);
+                }
             }
-            return mono.doFinally(sig -> restoreMdc(prev));
-        };
+        });
     }
 
     private static String resolveRequestIdFromContext() {

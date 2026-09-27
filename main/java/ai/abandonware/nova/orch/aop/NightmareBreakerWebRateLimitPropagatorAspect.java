@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.context.event.EventListener;
 
 import java.util.Locale;
 
@@ -44,9 +45,36 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
 
     /**
      * Reentry guard to avoid recursion when we probe other breaker keys from inside this aspect.
-     * (NightmareBreaker.isOpenOrHalfOpen is itself woven by this aspect.)
+     * (NightmareBreaker.isOpen is itself woven by this aspect.)
      */
     private static final ThreadLocal<Boolean> TL_REENTRY = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+    private enum ObservationReason {
+        BREAKER_OPEN,
+        STATE_OPENED,
+        STATE_OPEN_EXTENDED,
+        ADMISSION_BLOCKED,
+        ADMISSION_BYPASSED
+    }
+
+    private enum ObservationSource {
+        IS_OPEN,
+        STATE_SIGNAL
+    }
+
+    private enum ProviderKey {
+        BRAVE,
+        NAVER,
+        HYBRID,
+        UNKNOWN;
+
+        private static ProviderKey from(String key) {
+            if (keyEquals(key, NightmareKeys.WEBSEARCH_BRAVE)) return BRAVE;
+            if (keyEquals(key, NightmareKeys.WEBSEARCH_NAVER)) return NAVER;
+            if (keyEquals(key, NightmareKeys.WEBSEARCH_HYBRID)) return HYBRID;
+            return UNKNOWN;
+        }
+    }
 
     private static void traceSuppressed(String stage, Exception ex) {
         try {
@@ -59,52 +87,24 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
         }
     }
 
-    @Around("execution(* com.example.lms.infra.resilience.NightmareBreaker.recordRateLimit(..))")
-    public Object aroundRecordRateLimit(ProceedingJoinPoint pjp) throws Throwable {
-        Object ret = pjp.proceed();
-
-        // Avoid propagating when we are inside our own breaker-state probe.
-        if (Boolean.TRUE.equals(TL_REENTRY.get())) {
-            return ret;
+    @EventListener
+    public void onStateSignal(NightmareBreaker.StateSignal signal) {
+        if (signal == null || !signal.webSearchKey() || Boolean.TRUE.equals(TL_REENTRY.get())) {
+            return;
         }
-
+        ObservationReason reason = observationReason(signal.signalType());
+        if (reason == null) {
+            return;
+        }
         try {
-            Object[] args = pjp.getArgs();
-            if (args == null || args.length < 1) {
-                return ret;
-            }
-
-            String key = (args[0] == null) ? null : String.valueOf(args[0]);
-            if (!isWebSearchKey(key)) {
-                return ret;
-            }
-
-            NightmareBreaker nb = (pjp.getTarget() instanceof NightmareBreaker n) ? n : null;
-
-            // If breaker is now open/half-open, set a request-local signal immediately.
-            boolean openNow = true;
-            try {
-                if (nb != null && key != null) {
-                    openNow = nb.isOpenOrHalfOpen(key);
-                }
-            } catch (Exception ignore) {
-                traceSuppressed("openNowProbe", ignore);
-                openNow = true; // best-effort
-            }
-
-            String reason = null;
-            if (args.length >= 3 && args[2] != null) {
-                reason = safeTrim(String.valueOf(args[2]), 160);
-            }
-
-            propagate(nb, key, reason, "nightmareBreaker.recordRateLimit", openNow);
+            propagate(signal.sourceBreaker(), signal.diagnosticKey(), ProviderKey.UNKNOWN,
+                    reason, ObservationSource.STATE_SIGNAL,
+                    signal.mode() == NightmareBreaker.BreakerMode.OPEN);
         } catch (Exception e) {
-            // Never break request path.
-            log.debug("[nova][webRateLimited] propagate failed (ignored): errorHash={} errorLength={}",
+            // Never break request path or the publisher's successful breaker transition.
+            log.debug("[nova][webRateLimited] propagate(stateSignal) failed (ignored): errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
-
-        return ret;
     }
 
     @Around("execution(boolean com.example.lms.infra.resilience.NightmareBreaker.isOpen(..))")
@@ -131,7 +131,8 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
             }
 
             NightmareBreaker nb = (pjp.getTarget() instanceof NightmareBreaker n) ? n : null;
-            propagate(nb, key, "breaker_open", "nightmareBreaker.isOpen", true);
+            propagate(nb, SafeRedactor.hashValue(key), ProviderKey.from(key),
+                    ObservationReason.BREAKER_OPEN, ObservationSource.IS_OPEN, true);
         } catch (Exception e) {
             log.debug("[nova][webRateLimited] propagate(isOpen) failed (ignored): errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -140,40 +141,12 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
         return ret;
     }
 
-    @Around("execution(boolean com.example.lms.infra.resilience.NightmareBreaker.isOpenOrHalfOpen(..))")
-    public Object aroundIsOpenOrHalfOpen(ProceedingJoinPoint pjp) throws Throwable {
-        Object ret = pjp.proceed();
-
-        if (Boolean.TRUE.equals(TL_REENTRY.get())) {
-            return ret;
-        }
-
-        try {
-            if (!(ret instanceof Boolean b) || !b) {
-                return ret;
-            }
-
-            Object[] args = pjp.getArgs();
-            if (args == null || args.length < 1) {
-                return ret;
-            }
-
-            String key = (args[0] == null) ? null : String.valueOf(args[0]);
-            if (!isWebSearchKey(key)) {
-                return ret;
-            }
-
-            NightmareBreaker nb = (pjp.getTarget() instanceof NightmareBreaker n) ? n : null;
-            propagate(nb, key, "breaker_open_or_half_open", "nightmareBreaker.isOpenOrHalfOpen", true);
-        } catch (Exception e) {
-            log.debug("[nova][webRateLimited] propagate(isOpenOrHalfOpen) failed (ignored): errorHash={} errorLength={}",
-                    SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-        }
-
-        return ret;
-    }
-
-    private static void propagate(NightmareBreaker nb, String key, String reason, String setBy, boolean openNow) {
+    private static void propagate(NightmareBreaker nb,
+            String diagnosticKey,
+            ProviderKey currentProvider,
+            ObservationReason reason,
+            ObservationSource source,
+            boolean openNow) {
         GuardContext ctx = null;
         try {
             ctx = GuardContextHolder.getOrDefault();
@@ -191,14 +164,12 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
 
             // Best-effort: compute provider down-ness without poisoning the request path.
             if (nb != null) {
-                braveDown = isDown(nb, NightmareKeys.WEBSEARCH_BRAVE, key, openNow);
-                naverDown = isDown(nb, NightmareKeys.WEBSEARCH_NAVER, key, openNow);
-                hybridDown = isDown(nb, NightmareKeys.WEBSEARCH_HYBRID, key, openNow);
-            } else {
-                // If we cannot probe other keys, infer only from the current key.
-                braveDown = keyEquals(key, NightmareKeys.WEBSEARCH_BRAVE) && openNow;
-                naverDown = keyEquals(key, NightmareKeys.WEBSEARCH_NAVER) && openNow;
-                hybridDown = keyEquals(key, NightmareKeys.WEBSEARCH_HYBRID) && openNow;
+                braveDown = isDown(nb, NightmareKeys.WEBSEARCH_BRAVE,
+                        currentProvider == ProviderKey.BRAVE, openNow);
+                naverDown = isDown(nb, NightmareKeys.WEBSEARCH_NAVER,
+                        currentProvider == ProviderKey.NAVER, openNow);
+                hybridDown = isDown(nb, NightmareKeys.WEBSEARCH_HYBRID,
+                        currentProvider == ProviderKey.HYBRID, openNow);
             }
         } catch (Exception ignore) {
             traceSuppressed("providerDownProbe", ignore);
@@ -209,7 +180,7 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
 
         boolean anyDown = braveDown || naverDown || hybridDown;
         boolean effectiveDown = hybridDown || (braveDown && naverDown);
-        String diagnosticKey = safeKey(key);
+        String safeDiagnosticKey = safeDiagnosticKey(diagnosticKey);
 
         // ── 1) Always record provider-scoped partial-down flags (never block the whole web on single-provider down)
         try {
@@ -225,10 +196,9 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
                 if (naverDown) TraceStore.put("orch.webPartialDown.naverDown", true);
                 if (hybridDown) TraceStore.put("orch.webPartialDown.hybridDown", true);
 
-                if (diagnosticKey != null) TraceStore.putIfAbsent("orch.webPartialDown.key", diagnosticKey);
-                if (reason != null && !reason.isBlank())
-                    TraceStore.putIfAbsent("orch.webPartialDown.reason", safeTrim(reason, 160));
-                if (setBy != null) TraceStore.put("orch.webPartialDown.setBy", setBy);
+                if (safeDiagnosticKey != null) TraceStore.putIfAbsent("orch.webPartialDown.key", safeDiagnosticKey);
+                if (reason != null) TraceStore.putIfAbsent("orch.webPartialDown.reason", reason.name());
+                if (source != null) TraceStore.put("orch.webPartialDown.setBy", source.name());
                 TraceStore.put("orch.webPartialDown.openNow", openNow);
             }
         } catch (Exception ex) {
@@ -272,34 +242,45 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
         try {
             TraceStore.put("orch.webRateLimited", true);
 
-            if (diagnosticKey != null) {
-                TraceStore.putIfAbsent("orch.webRateLimited.key", diagnosticKey);
+            if (safeDiagnosticKey != null) {
+                TraceStore.putIfAbsent("orch.webRateLimited.key", safeDiagnosticKey);
             }
-            if (reason != null && !reason.isBlank()) {
-                TraceStore.putIfAbsent("orch.webRateLimited.reason", safeTrim(reason, 160));
+            if (reason != null) {
+                TraceStore.putIfAbsent("orch.webRateLimited.reason", reason.name());
             }
             TraceStore.put("orch.webRateLimited.openNow", openNow);
-            if (setBy != null) {
-                TraceStore.put("orch.webRateLimited.setBy", setBy);
+            if (source != null) {
+                TraceStore.put("orch.webRateLimited.setBy", source.name());
             }
         } catch (Exception ex) {
             traceSuppressed("effectiveDownTrace", ex);
         }
     }
 
-    private static boolean isDown(NightmareBreaker nb, String checkKey, String currentKey, boolean openNow) {
+    private static boolean isDown(NightmareBreaker nb, String checkKey, boolean currentProvider, boolean openNow) {
         if (nb == null || checkKey == null || checkKey.isBlank()) {
             return false;
         }
-        if (keyEquals(currentKey, checkKey)) {
+        if (currentProvider) {
             return openNow;
         }
         try {
-            return nb.isOpenOrHalfOpen(checkKey);
+            return nb.isOpen(checkKey);
         } catch (Exception ignore) {
             traceSuppressed("isDownProbe", ignore);
             return false;
         }
+    }
+
+    private static ObservationReason observationReason(NightmareBreaker.SignalType type) {
+        if (type == null) return null;
+        return switch (type) {
+            case OPENED -> ObservationReason.STATE_OPENED;
+            case OPEN_EXTENDED -> ObservationReason.STATE_OPEN_EXTENDED;
+            case ADMISSION_BLOCKED -> ObservationReason.ADMISSION_BLOCKED;
+            case ADMISSION_BYPASSED -> ObservationReason.ADMISSION_BYPASSED;
+            default -> null;
+        };
     }
 
     private static boolean keyEquals(String a, String b) {
@@ -328,16 +309,9 @@ public class NightmareBreakerWebRateLimitPropagatorAspect {
         return k.startsWith("websearch:") || k.contains("websearch");
     }
 
-    private static String safeTrim(String s, int max) {
-        String t = com.example.lms.trace.SafeRedactor.traceLabel(s);
-        if (t == null) return "";
-        if (t.length() <= max) {
-            return t;
-        }
-        return t.substring(0, Math.max(0, max - 3)) + "...";
-    }
-
-    private static String safeKey(String key) {
-        return com.example.lms.trace.SafeRedactor.traceLabelOrFallback(key, "websearch");
+    private static String safeDiagnosticKey(String diagnosticKey) {
+        if (diagnosticKey == null) return null;
+        String value = diagnosticKey.trim().toLowerCase(Locale.ROOT);
+        return value.matches("hash:[0-9a-f]{12}") ? value : null;
     }
 }

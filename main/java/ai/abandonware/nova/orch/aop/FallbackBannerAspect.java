@@ -92,6 +92,7 @@ public class FallbackBannerAspect {
             String modelUsed = r.modelUsed();
             boolean degraded = modelUsed != null
                     && modelUsed.toLowerCase(Locale.ROOT).contains("fallback:evidence");
+            boolean agentDebugEvidence = isAgentDebugEvidence(r);
             boolean internalUaw = isInternalUawThread();
 
             // (TRACE) Surface degraded-mode routing to the UI without polluting the answer body.
@@ -104,37 +105,34 @@ public class FallbackBannerAspect {
                 traceSuppressed("answer.mode.trace", ignoreMode);
             }
 
+            // 제작: 로컬 모델 슬롯 경합 우회(reason=local_contended)도 배너/트레이스에서 구분한다.
+            try {
+                boolean localContended = "local_contended".equals(
+                        TraceStore.get("llm.gateway.preselectionReason"))
+                        || Boolean.TRUE.equals(TraceStore.get("llm.localAdmission.contended"));
+                if (localContended) {
+                    TraceStore.putIfAbsent("answer.routeFallback", "local_contended");
+                }
+            } catch (Exception ignoreReason) {
+                traceSuppressed("answer.routeFallback.trace", ignoreReason);
+            }
+
             // Router feedback: if the primary route degraded, mark it as failure (even if we later rescue).
             recordRouterOutcome(!degraded, startedAt);
 
-            // If we hit evidence-only fallback, attempt a second-chance generation using an auxiliary model.
-            // Fail-soft: if aux is unavailable, keep the original evidence-only response.
-            if (degraded && !internalUaw && isEvidenceAuxEnabled() && chatModelFactory != null) {
-                ChatResult recovered = tryAuxRecovery(req, r);
-                if (recovered != null) {
-                    return recovered;
-                }
-            }
-
             // Avoid contaminating internal UAW samples with the degraded-mode banner.
-            if (!degraded || internalUaw) {
+            if (!degraded || agentDebugEvidence || internalUaw) {
+                if (agentDebugEvidence) {
+                    try {
+                        TraceStore.putIfAbsent("chat.agentDebugEvidence.bannerSkipped", true);
+                    } catch (Exception ignore) {
+                        traceSuppressed("agentDebugEvidence.bannerSkipped", ignore);
+                    }
+                }
                 return out;
             }
 
-            String content = (r.content() == null) ? "" : r.content();
-            // 중복 삽입 방지
-            if (content.startsWith("※ [DEGRADED MODE]")) {
-                return out;
-            }
-
-            String hint = buildHint(modelUsed);
-            String patched =
-                    "※ [DEGRADED MODE] LLM 호출이 실패/차단되어 'Evidence-only(LLM-OFF)' 경로로 답변했습니다.\n"
-                            + hint
-                            + "\n\n"
-                            + content;
-            recordBannerPrepended(r);
-            return ChatResult.of(patched, r.modelUsed(), r.ragUsed(), r.evidence(), r.evidenceMetadata());
+            return out;
         } catch (Throwable t) {
             recordRouterOutcome(false, startedAt);
             throw t;
@@ -147,6 +145,17 @@ public class FallbackBannerAspect {
     private boolean isEvidenceAuxEnabled() {
         String v = get("nova.orch.evidence-aux.enabled", "true");
         return v != null && "true".equalsIgnoreCase(v.trim());
+    }
+
+    private static boolean isAgentDebugEvidence(ChatResult r) {
+        if (r == null) {
+            return false;
+        }
+        String model = r.modelUsed() == null ? "" : r.modelUsed().toLowerCase(Locale.ROOT);
+        String content = r.content() == null ? "" : r.content();
+        return model.contains("agent-debug:fallback:evidence")
+                || content.contains("AGENT_VISIBLE_DEBUG_HEARTBEAT")
+                || content.contains("현재 디버그 heartbeat 기준 상태입니다");
     }
 
     private ChatResult tryAuxRecovery(ChatRequestDto req, ChatResult evidenceOnly) {
@@ -196,6 +205,10 @@ public class FallbackBannerAspect {
 
                 String recovered = runRecoveryPrompt(model, query, clip(evidence, maxChars));
                 if (recovered != null && !recovered.isBlank()) {
+                    if (isInvalidAuxRecoveryText(recovered)) {
+                        recordAuxRecoveryRejected("invalid_text", recovered);
+                        continue;
+                    }
                     stickyAuxModel.compareAndSet(null, auxModel);
                     return ChatResult.of(recovered,
                             auxModel + ":fallback:aux",
@@ -235,6 +248,31 @@ public class FallbackBannerAspect {
                 .build();
         List<ChatMessage> msgs = List.of(UserMessage.from(promptBuilder.build(ctx)));
         return model.chat(msgs).aiMessage().text();
+    }
+
+    private static boolean isInvalidAuxRecoveryText(String recovered) {
+        if (recovered == null || recovered.isBlank()) {
+            return true;
+        }
+        return recovered.contains("??")
+                || recovered.indexOf('\uFFFD') >= 0
+                || recovered.contains("\u6FE1")
+                || recovered.contains("\uF9DE")
+                || recovered.contains("\u6E72");
+    }
+
+    private static void recordAuxRecoveryRejected(String reason, String recovered) {
+        try {
+            TraceStore.put("fallbackBanner.auxRecovery.rejected", true);
+            TraceStore.put("fallbackBanner.auxRecovery.rejected.reason",
+                    SafeRedactor.traceLabelOrFallback(reason, "unknown"));
+            TraceStore.put("fallbackBanner.auxRecovery.rejected.contentLength",
+                    recovered == null ? 0 : recovered.length());
+            TraceStore.put("fallbackBanner.auxRecovery.rejected.contentHash",
+                    SafeRedactor.hashValue(recovered));
+        } catch (Exception ignore) {
+            traceSuppressed("aux.recovery.rejected.trace", ignore);
+        }
     }
 
     private List<String> getAuxCandidates() {

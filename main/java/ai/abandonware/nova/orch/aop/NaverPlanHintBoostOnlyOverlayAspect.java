@@ -13,6 +13,7 @@ import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -233,7 +234,7 @@ public class NaverPlanHintBoostOnlyOverlayAspect {
         if (!hasText(query)) {
             return false;
         }
-        String qLower = query.toLowerCase();
+        String qLower = query.toLowerCase(Locale.ROOT);
 
         NaverPlanHintBoostOnlyOverlayProperties.Location loc = props.getLocation();
 
@@ -282,7 +283,7 @@ public class NaverPlanHintBoostOnlyOverlayAspect {
             if (!hasText(kw)) {
                 continue;
             }
-            if (!qLower.contains(kw.toLowerCase())) {
+            if (!qLower.contains(kw.toLowerCase(Locale.ROOT))) {
                 continue;
             }
             if (isWeakKeyword(kw, loc.getWeakKeywords())) {
@@ -382,7 +383,7 @@ public class NaverPlanHintBoostOnlyOverlayAspect {
         // Deny keywords: reduce obvious translation/meaning false positives when suffix
         // rules get looser
         // (ex: "번역 어디" should not be treated as a location query).
-        String qLower = query.toLowerCase();
+        String qLower = query.toLowerCase(Locale.ROOT);
         String denyHit = firstMatchLower(qLower, loc.getWeakOnlyPromoteDenyKeywords());
         if (hasText(denyHit)) {
             try {
@@ -503,12 +504,12 @@ public class NaverPlanHintBoostOnlyOverlayAspect {
         if (!hasText(kw)) {
             return false;
         }
-        String k = kw.toLowerCase();
+        String k = kw.toLowerCase(Locale.ROOT);
         for (String w : safeList(weakKeywords)) {
             if (!hasText(w)) {
                 continue;
             }
-            if (k.equals(w.toLowerCase())) {
+            if (k.equals(w.toLowerCase(Locale.ROOT))) {
                 return true;
             }
         }
@@ -544,7 +545,7 @@ public class NaverPlanHintBoostOnlyOverlayAspect {
         if (!hasText(query)) {
             return false;
         }
-        return looksLikeAnyLower(query.toLowerCase(), keywords);
+        return looksLikeAnyLower(query.toLowerCase(Locale.ROOT), keywords);
     }
 
     private static boolean looksLikeAnyLower(String qLower, java.util.List<String> keywords) {
@@ -558,7 +559,7 @@ public class NaverPlanHintBoostOnlyOverlayAspect {
             if (kw == null || kw.isBlank()) {
                 continue;
             }
-            if (qLower.contains(kw.toLowerCase())) {
+            if (qLower.contains(kw.toLowerCase(Locale.ROOT))) {
                 return true;
             }
         }
@@ -576,7 +577,7 @@ public class NaverPlanHintBoostOnlyOverlayAspect {
             if (kw == null || kw.isBlank()) {
                 continue;
             }
-            if (qLower.contains(kw.toLowerCase())) {
+            if (qLower.contains(kw.toLowerCase(Locale.ROOT))) {
                 return kw;
             }
         }

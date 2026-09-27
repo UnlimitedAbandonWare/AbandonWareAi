@@ -160,6 +160,7 @@ public class NovaOrchestrationProperties {
         private int memoryMaxLines = 12;
         private int memoryMaxChars = 1400;
         private double memoryContaminationThreshold = 0.35d;
+        private boolean contextRefinerEnabled = false;
 
         public boolean isEnabled() {
             return enabled;
@@ -363,6 +364,14 @@ public class NovaOrchestrationProperties {
 
         public void setMemoryContaminationThreshold(double memoryContaminationThreshold) {
             this.memoryContaminationThreshold = memoryContaminationThreshold;
+        }
+
+        public boolean isContextRefinerEnabled() {
+            return contextRefinerEnabled;
+        }
+
+        public void setContextRefinerEnabled(boolean contextRefinerEnabled) {
+            this.contextRefinerEnabled = contextRefinerEnabled;
         }
     }
 

@@ -43,10 +43,11 @@ public class NovaModelGuardProperties {
     private String substituteChatModel = "";
 
     /**
-     * Prefixes for models that are known (or strongly suspected) to be "Responses-only" and fail on
+     * Exact model IDs verified to be "Responses-only" and fail on
      * /v1/chat/completions with errors like "This is not a chat model".
      *
-     * <p>Matching rule: exact match or prefix + '-' snapshot suffix.</p>
+     * <p>The legacy property name is retained. Verified snapshot IDs need their own entry;
+     * endpoint preference and account availability do not imply API exclusivity.</p>
      */
     private List<String> responsesOnlyPrefixes = new ArrayList<>(List.of(
             "gpt-5-pro",

@@ -20,6 +20,7 @@ import ai.abandonware.nova.orch.aop.KnowledgeBasePersistenceAspect;
 import ai.abandonware.nova.orch.aop.UawAutolearnStrictRequestAspect;
 import ai.abandonware.nova.orch.aop.UawIdleAutoTrainingPipelineAspect;
 import ai.abandonware.nova.orch.aop.UawPipelineAblationBridge;
+import com.example.lms.learning.gemini.GeminiGateway;
 import ai.abandonware.nova.orch.aop.UawAblationFinalizeAspect;
 import ai.abandonware.nova.orch.aop.FaultMaskAblationPenaltyAspect;
 import ai.abandonware.nova.orch.aop.FaultMaskIrregularityCapAspect;
@@ -73,6 +74,7 @@ import ai.abandonware.nova.orch.probe.WebSoakKpiLastStore;
 import ai.abandonware.nova.orch.probe.WebSoakKpiProbeController;
 
 import com.example.lms.guard.KeyResolver;
+import com.example.lms.llm.ModelRuntimeHealthTracker;
 
 import com.example.lms.cfvm.CfvmFailureRecorder;
 import com.example.lms.config.PromptPoseProperties;
@@ -182,7 +184,15 @@ public class NovaOrchestrationAutoConfiguration {
     }
 
     @Bean
-    public DynamicContextCompressor compressor(NovaOrchestrationProperties props, AnchorProbeHandler anchorProbeHandler) {
+    public DynamicContextCompressor compressor(
+            NovaOrchestrationProperties props,
+            AnchorProbeHandler anchorProbeHandler,
+            Environment env) {
+        if (props != null && props.getRagCompressor() != null && env != null
+                && env.containsProperty("prompt.context.refiner.enabled")) {
+            props.getRagCompressor().setContextRefinerEnabled(
+                    env.getProperty("prompt.context.refiner.enabled", Boolean.class, false));
+        }
         return new DynamicContextCompressor(props, anchorProbeHandler);
     }
 
@@ -361,6 +371,7 @@ public class NovaOrchestrationAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(DegradedStorage.class)
     @ConditionalOnProperty(name = "nova.orch.memory-degraded.enabled", havingValue = "true", matchIfMissing = true)
     public MemoryDegradedAspect memoryDegradedAspect(DegradedStorage storage) {
         return new MemoryDegradedAspect(storage);
@@ -381,11 +392,15 @@ public class NovaOrchestrationAutoConfiguration {
                                           ObjectProvider<KeyResolver> keyResolverProvider,
                                           ObjectProvider<HybridLlmGatewayProbeService> gatewayProbeProvider,
                                           ObjectProvider<LlmGatewayBreadcrumbPublisher> gatewayBreadcrumbProvider,
-                                          ObjectProvider<LlmGatewayFailureClassifier> gatewayFailureClassifierProvider) {
+                                          ObjectProvider<LlmGatewayFailureClassifier> gatewayFailureClassifierProvider,
+                                          ObjectProvider<ModelRuntimeHealthTracker> modelRuntimeHealthTrackerProvider,
+                                          ObjectProvider<GeminiGateway> geminiGatewayProvider) {
         return new LlmRouterAspect(env, props, bandit, modelGuardProps, keyResolverProvider,
                 gatewayProbeProvider.getIfAvailable(),
                 gatewayBreadcrumbProvider.getIfAvailable(),
-                gatewayFailureClassifierProvider.getIfAvailable());
+                gatewayFailureClassifierProvider.getIfAvailable(),
+                modelRuntimeHealthTrackerProvider.getIfAvailable(),
+                geminiGatewayProvider.getIfAvailable());
     }
 
 
@@ -614,7 +629,7 @@ public class NovaOrchestrationAutoConfiguration {
 
 
     @Bean
-    @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("'${uaw.autolearn.strict.enabled:false}' == 'true' && '${uaw.autolearn.pipeline.enabled:false}' == 'false'")
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("'${uaw.autolearn.strict.enabled:false}' == 'true' && '${uaw.autolearn.pipeline.enabled:true}' == 'false'")
     public UawAutolearnStrictRequestAspect uawAutolearnStrictRequestAspect(
             Environment env,
             ObjectProvider<NightmareBreaker> nightmareBreakerProvider) {

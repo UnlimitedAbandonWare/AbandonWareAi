@@ -46,6 +46,7 @@ public class NovaPropertyAliasEnvironmentPostProcessor implements EnvironmentPos
         if (env == null) {
             return;
         }
+        long startedNs = System.nanoTime();
 
         Map<String, Object> alias = new LinkedHashMap<>();
 
@@ -241,171 +242,31 @@ public class NovaPropertyAliasEnvironmentPostProcessor implements EnvironmentPos
         putIfBlank(env, alias, "gpt-search.hybrid.await.min-live-budget-ms", minLiveBudgetMs);
 
         // ---------------------------------------------------------------------
-        // Brave API key/subscription-token resolver (multi-token, fail-soft):
-        // - Prevent blank property masking ENV (Spring placeholder default won't apply to empty string)
-        // - Avoid false multi-source detections caused by Spring relaxed binding
-        // - Allow BOTH BRAVE_API_KEY and BRAVE_SUBSCRIPTION_TOKEN to be present without disabling
-        // - Pick a deterministic winner by priority and backfill canonical property keys
-        //
-        // Brave Search API uses "X-Subscription-Token" header, so we support both:
-        // - ...api-key (legacy)
-        // - ...subscription-token (preferred)
-        // ---------------------------------------------------------------------
-        String rawBraveApiPrimary = rawTrimToNull(getNonEnvProperty(env, "gpt-search.brave.api-key"));
-        String rawBraveApiLegacy = rawTrimToNull(getNonEnvProperty(env, "search.brave.api-key"));
-        String rawBraveSubPrimary = rawTrimToNull(getNonEnvProperty(env, "gpt-search.brave.subscription-token"));
-        String rawBraveSubLegacy = rawTrimToNull(getNonEnvProperty(env, "search.brave.subscription-token"));
-
-        String rawBraveEnvApiA = rawTrimToNull(System.getenv("GPT_SEARCH_BRAVE_API_KEY"));
-        String rawBraveEnvApiB = rawTrimToNull(System.getenv("BRAVE_API_KEY"));
-        String rawBraveEnvSubC = rawTrimToNull(System.getenv("GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN"));
-        String rawBraveEnvSubD = rawTrimToNull(System.getenv("BRAVE_SUBSCRIPTION_TOKEN"));
-
-        String braveApiPrimary = normalizeNonPlaceholder(rawBraveApiPrimary);
-        String braveApiLegacy = normalizeNonPlaceholder(rawBraveApiLegacy);
-        String braveSubPrimary = normalizeNonPlaceholder(rawBraveSubPrimary);
-        String braveSubLegacy = normalizeNonPlaceholder(rawBraveSubLegacy);
-
-        String braveEnvApiA = normalizeNonPlaceholder(rawBraveEnvApiA);
-        String braveEnvApiB = normalizeNonPlaceholder(rawBraveEnvApiB);
-        String braveEnvSubC = normalizeNonPlaceholder(rawBraveEnvSubC);
-        String braveEnvSubD = normalizeNonPlaceholder(rawBraveEnvSubD);
-
-        java.util.LinkedHashMap<String, String> braveApiSources = new java.util.LinkedHashMap<>();
-        if (!isBlank(braveApiPrimary))
-            braveApiSources.put("gpt-search.brave.api-key", braveApiPrimary);
-        if (!isBlank(braveApiLegacy))
-            braveApiSources.put("search.brave.api-key", braveApiLegacy);
-        if (!isBlank(braveEnvApiA))
-            braveApiSources.put("GPT_SEARCH_BRAVE_API_KEY", braveEnvApiA);
-        if (!isBlank(braveEnvApiB))
-            braveApiSources.put("BRAVE_API_KEY", braveEnvApiB);
-
-        java.util.LinkedHashMap<String, String> braveSubSources = new java.util.LinkedHashMap<>();
-        if (!isBlank(braveSubPrimary))
-            braveSubSources.put("gpt-search.brave.subscription-token", braveSubPrimary);
-        if (!isBlank(braveSubLegacy))
-            braveSubSources.put("search.brave.subscription-token", braveSubLegacy);
-        if (!isBlank(braveEnvSubC))
-            braveSubSources.put("GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN", braveEnvSubC);
-        if (!isBlank(braveEnvSubD))
-            braveSubSources.put("BRAVE_SUBSCRIPTION_TOKEN", braveEnvSubD);
-
-        // Diagnostics: source names only (never log secret values)
-        java.util.LinkedHashMap<String, String> braveKeyPresent = new java.util.LinkedHashMap<>();
-        braveKeyPresent.putAll(braveSubSources);
-        braveKeyPresent.putAll(braveApiSources);
-
-        try {
-            if (!braveKeyPresent.isEmpty()) {
-                alias.put("nova.provider.brave.key.sources", String.join(",", braveKeyPresent.keySet()));
-                alias.put("nova.provider.brave.key.present.count", String.valueOf(braveKeyPresent.size()));
-                alias.put("nova.provider.brave.key.duplicate",
-                        String.valueOf(braveKeyPresent.size() > new java.util.HashSet<>(braveKeyPresent.keySet()).size()));
-            }
-        } catch (Exception ignore) {
-            traceSuppressed("brave.keyDiagnostics", ignore);
+        // Base key projects only onto BRAVE_API_KEY / gpt-search.brave.api-key names.
+        // Retired BRAVE_SUBSCRIPTION_TOKEN is not an input, alias, or failover source.
+        var brave = new com.example.lms.guard.ProviderCredentialResolver(env)
+                .resolve(com.example.lms.guard.ProviderCredentialResolver.Provider.BRAVE);
+        String braveValue = brave.enabled() ? brave.valueOrNull() : "";
+        for (String name : List.of("gpt-search.brave.api-key", "search.brave.api-key",
+                "GPT_SEARCH_BRAVE_API_KEY", "BRAVE_API_KEY", "brave.api.key")) {
+            alias.put(name, braveValue);
         }
-
-        // Distinct values per logical type (values redacted; used only for conflict heuristics)
-        int braveSubDistinct = 0;
-        {
-            java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
-            for (String v : braveSubSources.values()) {
-                if (!isBlank(v))
-                    set.add(v.trim());
-            }
-            braveSubDistinct = set.size();
+        var braveFree = new com.example.lms.guard.ProviderCredentialResolver(env).resolveBraveFree();
+        String braveFreeValue = braveFree.enabled() ? braveFree.valueOrNull() : "";
+        for (String name : List.of("gpt-search.brave.api-key-free",
+                "GPT_SEARCH_BRAVE_API_KEY_FREE", "BRAVE_API_KEY_FREE")) {
+            alias.put(name, braveFreeValue);
         }
-        int braveApiDistinct = 0;
-        {
-            java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
-            for (String v : braveApiSources.values()) {
-                if (!isBlank(v))
-                    set.add(v.trim());
-            }
-            braveApiDistinct = set.size();
-        }
-
-        // Winner selection (subscription-token preferred; then api-key)
-        String winner = null;
-        String winnerSource = "";
-
-        if (!isBlank(braveSubPrimary)) {
-            winner = braveSubPrimary;
-            winnerSource = "gpt-search.brave.subscription-token";
-        } else if (!isBlank(braveApiPrimary)) {
-            winner = braveApiPrimary;
-            winnerSource = "gpt-search.brave.api-key";
-        } else if (!isBlank(braveSubLegacy)) {
-            winner = braveSubLegacy;
-            winnerSource = "search.brave.subscription-token";
-        } else if (!isBlank(braveApiLegacy)) {
-            winner = braveApiLegacy;
-            winnerSource = "search.brave.api-key";
-        } else if (!isBlank(braveEnvSubC)) {
-            winner = braveEnvSubC;
-            winnerSource = "GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN";
-        } else if (!isBlank(braveEnvApiA)) {
-            winner = braveEnvApiA;
-            winnerSource = "GPT_SEARCH_BRAVE_API_KEY";
-        } else if (!isBlank(braveEnvSubD)) {
-            winner = braveEnvSubD;
-            winnerSource = "BRAVE_SUBSCRIPTION_TOKEN";
-        } else if (!isBlank(braveEnvApiB)) {
-            winner = braveEnvApiB;
-            winnerSource = "BRAVE_API_KEY";
-        }
-
-        // Multi-token across groups is OK (do NOT disable).
-        int braveUnionDistinct = 0;
-        {
-            java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
-            for (String v : braveKeyPresent.values()) {
-                if (!isBlank(v))
-                    set.add(v.trim());
-            }
-            braveUnionDistinct = set.size();
-        }
-        boolean braveMultiToken = braveUnionDistinct > 1;
-
-        // Hard conflict heuristics: multiple distinct values within the same logical type.
-        boolean braveHardConflictInType = (braveSubDistinct > 1) || (braveApiDistinct > 1);
-
-        // We no longer disable Brave on multi-token. Keep conflict=false to avoid "key_source_conflict" noise.
         alias.put("nova.provider.brave.key.conflict", "false");
-        alias.put("nova.provider.brave.key.conflictResolved", String.valueOf(braveHardConflictInType));
-        alias.put("nova.provider.brave.key.multi", String.valueOf(braveMultiToken));
-        if (!isBlank(winnerSource)) {
-            alias.put("nova.provider.brave.key.winnerSource", winnerSource);
-        }
-
-        if (braveHardConflictInType) {
-            log.error(
-                    "[NovaAlias] Multiple Brave keys detected within the SAME key-type group (subscriptionDistinct={}, apiDistinct={}). "
-                            + "Will proceed with winnerSource={} by priority. (values redacted)",
-                    braveSubDistinct, braveApiDistinct, winnerSource);
-        } else if (braveMultiToken) {
-            log.warn(
-                    "[NovaAlias] Brave multi-token detected across groups: {} -> winnerSource={}. (values redacted)",
-                    braveKeyPresent.keySet(), winnerSource);
-        }
-
-        if (!isBlank(winner)) {
-            // Backfill canonical keys (only when blank) so downstream @Value resolution works reliably.
-            putIfBlank(env, alias, "gpt-search.brave.subscription-token", winner);
-            putIfBlank(env, alias, "gpt-search.brave.api-key", winner);
-            putIfBlank(env, alias, "search.brave.subscription-token", winner);
-            putIfBlank(env, alias, "search.brave.api-key", winner);
-
-            // Also backfill ENV aliases when they are blank (best-effort).
-            putIfBlank(env, alias, "GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN", winner);
-            putIfBlank(env, alias, "GPT_SEARCH_BRAVE_API_KEY", winner);
-            putIfBlank(env, alias, "BRAVE_SUBSCRIPTION_TOKEN", winner);
-            putIfBlank(env, alias, "BRAVE_API_KEY", winner);
-        }
+        alias.put("nova.provider.brave.key.conflictResolved", "false");
+        alias.put("nova.provider.brave.key.multi", "false");
+        alias.put("nova.provider.brave.key.duplicate", "false");
+        alias.put("nova.provider.brave.key.sources", brave.sourceName());
+        alias.put("nova.provider.brave.key.winnerSource", brave.sourceName());
+        alias.put("nova.provider.brave.key.present.count", brave.enabled() ? "1" : "0");
 
         if (alias.isEmpty()) {
+            log.debug("[NovaAlias] No property aliases applied elapsedMs={}", elapsedMs(startedNs));
             return;
         }
 
@@ -421,8 +282,13 @@ public class NovaPropertyAliasEnvironmentPostProcessor implements EnvironmentPos
         sources.addFirst(new MapPropertySource(ALIAS_SOURCE_NAME, alias));
 
         // Do NOT log values (may contain secrets).
-        log.info("[NovaAlias] Applied {} property alias(es) to reduce silent misconfiguration.", alias.size());
+        log.info("[NovaAlias] Applied {} property alias(es) to reduce silent misconfiguration. elapsedMs={}",
+                alias.size(), elapsedMs(startedNs));
         log.debug("[NovaAlias] Aliased keys: {}", alias.keySet());
+    }
+
+    private static long elapsedMs(long startedNs) {
+        return Math.max(0L, (System.nanoTime() - startedNs) / 1_000_000L);
     }
 
     @Override
@@ -554,15 +420,15 @@ public class NovaPropertyAliasEnvironmentPostProcessor implements EnvironmentPos
         }
         String fastModel = firstNonBlankFromEnv(env, "llm.fast.model", "LLM_FAST_MODEL");
         if (isBlank(fastModel)) {
-            fastModel = "qwen3:8b";
+            fastModel = "qwen3.5:9b";
         }
         String judgeModel = firstNonBlankFromEnv(env, "llm.judge.model", "LLM_JUDGE_MODEL");
         if (isBlank(judgeModel)) {
-            judgeModel = "qwen3:30b";
+            judgeModel = "smtek/Qwen3.8-27B:Q3_K_XL";
         }
         String coderModel = firstNonBlankFromEnv(env, "llm.coder.model", "LLM_CODER_MODEL");
         if (isBlank(coderModel)) {
-            coderModel = "qwen3-coder:30b";
+            coderModel = "smtek/Qwen3.8-27B:Q3_K_XL";
         }
         String visionModel = firstNonBlankFromEnv(env, "llm.vision.model", "LLM_VISION_MODEL");
         if (isBlank(visionModel)) {

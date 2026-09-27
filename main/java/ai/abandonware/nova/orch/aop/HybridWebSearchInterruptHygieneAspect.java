@@ -22,19 +22,16 @@ import java.util.Map;
  * {@code com.example.lms.search.provider.HybridWebSearchProvider}.
  *
  * <p>
- * Why: pooled threads can carry stale interrupt flags from cancelled tasks.
- * HybridWebSearchProvider awaits provider futures and an interrupted thread can
- * cause
- * immediate InterruptedException (often with waitedMs=0), cascading into empty
- * results and noisy traces.
+ * Why: an interrupt is the caller's cancellation signal. Clearing it at this
+ * boundary can let cancelled requests continue into provider and cache work.
  *
  * <p>
  * This aspect:
  * <ul>
- * <li>Clears a stale interrupt flag at entry/exit of the provider
+ * <li>Observes and preserves an interrupt flag at entry/exit of the provider
  * boundary.</li>
- * <li>Emits TraceStore keys for observability, including a compact stack digest
- * when a stale interrupt is cleared.</li>
+ * <li>Skips provider execution when cancellation is already present.</li>
+ * <li>Emits fixed TraceStore keys for preservation observability.</li>
  * <li>Detects waitedMs=0 interrupt patterns in {@code web.await.events} and
  * records an "interruptResidual" hint.</li>
  * <li>For interrupt-like exceptions that bubble up, fails-soft to an empty
@@ -53,36 +50,34 @@ public class HybridWebSearchInterruptHygieneAspect {
 
     @Around("execution(java.util.List com.example.lms.search.provider.HybridWebSearchProvider.search(..))")
     public Object aroundSearch(ProceedingJoinPoint pjp) throws Throwable {
-        boolean clearedAtEntry = false;
-
-        // Clear a stale interrupt flag before search execution.
         if (Thread.currentThread().isInterrupted()) {
-            Thread.interrupted(); // clears
-            clearedAtEntry = true;
             try {
-                TraceStore.inc("web.interruptHygiene.cleared.entry.count");
-                TraceStore.put("interrupt.cleaned", true);
-                TraceStore.put("web.interruptHygiene.cleared.entry.where", "HybridWebSearchProvider.search");
-                TraceStore.put("web.interruptHygiene.cleared.entry.stack", stackDigest(12));
-            } catch (Exception ignore) { traceSuppressed("entry.clearTrace", ignore); }
+                TraceStore.inc("web.interruptHygiene.preserved.entry.count");
+                TraceStore.put("interrupt.preserved", true);
+                TraceStore.put("web.interruptHygiene.preserved.entry.where", "HybridWebSearchProvider.search");
+            } catch (Exception ignore) { traceSuppressed("entry.preserveTrace", ignore); }
+            return Collections.emptyList();
         }
 
-        boolean swallowed = false;
+        boolean preservedThrow = false;
 
         try {
             return pjp.proceed();
         } catch (Throwable t) {
             if (looksInterrupted(t)) {
-                swallowed = true;
-                Thread.interrupted(); // clear to avoid poisoning downstream stages
+                preservedThrow = true;
+                Thread.currentThread().interrupt();
                 try {
                     TraceStore.inc("web.interruptHygiene.swallowed.count");
-                    TraceStore.put("interrupt.cleaned", true);
                     TraceStore.put("web.interruptHygiene.swallowed.where", "HybridWebSearchProvider.search");
                     TraceStore.put("web.interruptHygiene.swallowed.error", "interrupted");
-                } catch (Exception ignore) { traceSuppressed("swallowed.trace", ignore); }
+                    TraceStore.inc("web.interruptHygiene.preserved.throw.count");
+                    TraceStore.put("interrupt.preserved", true);
+                    TraceStore.put("web.interruptHygiene.preserved.throw.where", "HybridWebSearchProvider.search");
+                    TraceStore.put("web.interruptHygiene.preserved.throw.error", "interrupted");
+                } catch (Exception ignore) { traceSuppressed("throw.preserveTrace", ignore); }
                 log.debug(
-                        "[nova][interrupt-hygiene] swallowed interrupt-like error from HybridWebSearchProvider.search(): errorHash={} errorLength={}",
+                        "[nova][interrupt-hygiene] preserved interrupt-like cancellation from HybridWebSearchProvider.search(): errorHash={} errorLength={}",
                         SafeRedactor.hashValue(t.getMessage()), t.getMessage() == null ? 0 : t.getMessage().length());
                 return Collections.emptyList();
             }
@@ -95,22 +90,15 @@ public class HybridWebSearchInterruptHygieneAspect {
                 observeWebAwaitRootCause();
             } catch (Exception ignore) { traceSuppressed("finally.observe", ignore); }
 
-            // If the provider left the thread in interrupted state, clear it to prevent
-            // poisoning downstream stages.
             if (Thread.currentThread().isInterrupted()) {
-                Thread.interrupted();
                 try {
-                    TraceStore.inc("web.interruptHygiene.cleared.exit.count");
-                    TraceStore.put("interrupt.cleaned", true);
-                    TraceStore.put("web.interruptHygiene.cleared.exit.where", "HybridWebSearchProvider.search");
-                    TraceStore.put("web.interruptHygiene.cleared.exit.stack", stackDigest(12));
-                    if (clearedAtEntry) {
-                        TraceStore.put("web.interruptHygiene.cleared.entryAndExit", true);
+                    TraceStore.inc("web.interruptHygiene.preserved.exit.count");
+                    TraceStore.put("interrupt.preserved", true);
+                    TraceStore.put("web.interruptHygiene.preserved.exit.where", "HybridWebSearchProvider.search");
+                    if (preservedThrow) {
+                        TraceStore.put("web.interruptHygiene.preserved.throwAndExit", true);
                     }
-                    if (swallowed) {
-                        TraceStore.put("web.interruptHygiene.swallowed.andExitInterrupted", true);
-                    }
-                } catch (Exception ignore) { traceSuppressed("exit.clearTrace", ignore); }
+                } catch (Exception ignore) { traceSuppressed("exit.preserveTrace", ignore); }
             }
         }
     }
@@ -231,7 +219,12 @@ public class HybridWebSearchInterruptHygieneAspect {
             String detail = str(best.get("detail"));
             if (detail != null) {
                 if (detail.length() > 200) {
-                    detail = detail.substring(0, 200);
+                    int end = 200;
+                    if (Character.isHighSurrogate(detail.charAt(end - 1))
+                            && Character.isLowSurrogate(detail.charAt(end))) {
+                        end--;
+                    }
+                    detail = detail.substring(0, end);
                 }
                 TraceStore.put("web.await.root.detail",
                         SafeRedactor.diagnosticValue("web.await.root.detail", detail, 200));

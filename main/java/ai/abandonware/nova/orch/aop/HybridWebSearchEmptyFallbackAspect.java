@@ -155,6 +155,14 @@ public class HybridWebSearchEmptyFallbackAspect {
         if (!out.isEmpty()) {
             return outObj;
         }
+        if (isTrueish(TraceStore.get("web.boundedRoute"))) {
+            try {
+                TraceStore.put("web.failsoft.hybridEmptyFallback.skipped.reason", "boundedRoute");
+            } catch (Exception ignore) {
+                WebFailSoftTraceSuppressions.trace("hybridEmptyFallback.boundedRouteTrace", ignore);
+            }
+            return outObj;
+        }
 
         // Feature flag (same as search(..) path)
         boolean enabled = getBoolean(true, "nova.orch.failsoft.hybrid-empty-fallback.enabled",
@@ -283,6 +291,14 @@ public class HybridWebSearchEmptyFallbackAspect {
             return out;
         }
         if (!list.isEmpty()) {
+            return out;
+        }
+        if (isTrueish(TraceStore.get("web.boundedRoute"))) {
+            try {
+                TraceStore.put("web.failsoft.hybridEmptyFallback.skipped.reason", "boundedRoute");
+            } catch (Exception ignore) {
+                WebFailSoftTraceSuppressions.trace("hybridEmptyFallback.boundedRouteTrace", ignore);
+            }
             return out;
         }
 
@@ -1539,6 +1555,7 @@ public class HybridWebSearchEmptyFallbackAspect {
             if (naver != null) {
                 try {
                     naverCached = safeList(naver.searchSnippetsCacheOnly(q, topK));
+                    naverCached = filterScopedCacheOnlySnippets(query, naverCached, topK, "naver");
                 } catch (Throwable ignore) {
                     WebFailSoftTraceSuppressions.trace("hybridEmptyFallback.cacheOnlyNaver", ignore);
                     naverCached = Collections.emptyList();
@@ -1547,6 +1564,7 @@ public class HybridWebSearchEmptyFallbackAspect {
             if (brave != null) {
                 try {
                     braveCached = safeList(brave.searchCacheOnly(q, topK));
+                    braveCached = filterScopedCacheOnlySnippets(query, braveCached, topK, "brave");
                 } catch (Throwable ignore) {
                     WebFailSoftTraceSuppressions.trace("hybridEmptyFallback.cacheOnlyBrave", ignore);
                     braveCached = Collections.emptyList();
