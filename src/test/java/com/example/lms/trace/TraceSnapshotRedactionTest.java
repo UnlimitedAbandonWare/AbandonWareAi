@@ -1,5 +1,6 @@
 package com.example.lms.trace;
 
+import com.example.lms.harmony.HarmonyTraceReader;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.trace.TraceHtmlBuilder;
 import dev.langchain4j.data.document.Metadata;
@@ -46,6 +47,222 @@ class TraceSnapshotRedactionTest {
 
         assertNotNull(id);
         TraceStore.clear();
+    }
+
+    @Test
+    void timeoutCancellationOutcomeSurvivesActiveSnapshotSanitizationWithoutRawPayload() {
+        String rawPrompt = "private timeout prompt ownerToken=secret";
+        String rawModel = "private-model:timeout-probe";
+        TraceSnapshotStore store = enabledStore();
+        TraceStore.put("trace.id", "timeout-probe-trace");
+        TraceStore.put("llm.call.timeout", true);
+        TraceStore.put("llm.call.timeout.stage", "chat_draft");
+        TraceStore.put("llm.call.timeout.ms", 500L);
+        TraceStore.put("llm.call.timeout.modelHash", SafeRedactor.hashValue(rawModel));
+        TraceStore.put("llm.call.timeout.cancelInterrupt", true);
+        TraceStore.put("llm.call.timeout.cancelMayInterruptIfRunning", true);
+        TraceStore.put("llm.call.timeout.cancelAccepted", false);
+        TraceStore.put("llm.call.timeout.futureCancelledState", false);
+        TraceStore.put("llm.call.timeout.rawPrompt", rawPrompt);
+
+        String id = store.captureCurrent("llm_timeout_probe", "POST", "/api/chat", 504, null);
+
+        assertNotNull(id);
+        TraceSnapshotStore.TraceSnapshot snapshot = store.get(id).orElseThrow();
+        assertEquals(Boolean.TRUE, snapshot.trace().get("llm.call.timeout"));
+        assertEquals("chat_draft", snapshot.trace().get("llm.call.timeout.stage"));
+        assertEquals(500L, ((Number) snapshot.trace().get("llm.call.timeout.ms")).longValue());
+        assertEquals(Boolean.TRUE, snapshot.trace().get("llm.call.timeout.cancelInterrupt"));
+        assertEquals(Boolean.TRUE, snapshot.trace().get("llm.call.timeout.cancelMayInterruptIfRunning"));
+        assertEquals(Boolean.FALSE, snapshot.trace().get("llm.call.timeout.cancelAccepted"));
+        assertEquals(Boolean.FALSE, snapshot.trace().get("llm.call.timeout.futureCancelledState"));
+        String dump = snapshot.toString();
+        assertFalse(dump.contains(rawPrompt), dump);
+        assertFalse(dump.contains(rawModel), dump);
+    }
+
+    @Test
+    void probeRoundSafeScalarsSurviveCaptureWithoutRetainingRawProbeValues() {
+        String rawClaim = "private probe claim ownerToken=secret";
+        TraceSnapshotStore store = enabledStore();
+        String id = store.captureCustom(
+                "probe_round",
+                "POST",
+                "/internal/agent/probe-round:start",
+                200,
+                null,
+                Map.ofEntries(
+                        Map.entry("orch.probeRound.observed", true),
+                        Map.entry("orch.probeRound.roundRef", "hash:123456789abc"),
+                        Map.entry("orch.probeRound.phase", "NORMALIZATION_REQUIRED"),
+                        Map.entry("orch.probeRound.reason", "verifier_deferred"),
+                        Map.entry("orch.probeRound.hypothesis", "after_filter_starvation"),
+                        Map.entry("orch.probeRound.patchCandidate", "source_patch_candidate"),
+                        Map.entry("orch.probeRound.causalConfidence", 0.74d),
+                        Map.entry("orch.probeRound.counterEvidenceCount", 3),
+                        Map.entry("orch.probeRound.retrievalConfidence", 0.82d),
+                        Map.entry("orch.probeRound.coherenceStatus", "consistent"),
+                        Map.entry("orch.probeRound.releaseStatus", "approve"),
+                        Map.entry("orch.probeRound.confidenceRange", "medium_to_high"),
+                        Map.entry("orch.probeRound.verifiedEvidenceCount", 2),
+                        Map.entry("orch.probeRound.verificationGatePassed", true),
+                        Map.entry("orch.probeRound.rawClaim", rawClaim)),
+                null);
+
+        assertNotNull(id);
+        Map<String, Object> captured = store.get(id).orElseThrow().trace();
+        assertEquals(Boolean.TRUE, captured.get("orch.probeRound.observed"));
+        assertEquals("hash:123456789abc", captured.get("orch.probeRound.roundRef"));
+        assertEquals("NORMALIZATION_REQUIRED", captured.get("orch.probeRound.phase"));
+        assertEquals("verifier_deferred", captured.get("orch.probeRound.reason"));
+        assertEquals("after_filter_starvation", captured.get("orch.probeRound.hypothesis"));
+        assertEquals("source_patch_candidate", captured.get("orch.probeRound.patchCandidate"));
+        assertEquals(0.74d, captured.get("orch.probeRound.causalConfidence"));
+        assertEquals(3, captured.get("orch.probeRound.counterEvidenceCount"));
+        assertEquals(0.82d, captured.get("orch.probeRound.retrievalConfidence"));
+        assertEquals("consistent", captured.get("orch.probeRound.coherenceStatus"));
+        assertEquals("approve", captured.get("orch.probeRound.releaseStatus"));
+        assertEquals("medium_to_high", captured.get("orch.probeRound.confidenceRange"));
+        assertEquals(2, captured.get("orch.probeRound.verifiedEvidenceCount"));
+        assertEquals(Boolean.TRUE, captured.get("orch.probeRound.verificationGatePassed"));
+        assertFalse((captured + "\n" + store.get(id).orElseThrow().html()).contains(rawClaim));
+    }
+
+    @Test
+    void canonicalHarmonyAuthorityLabelsSurviveCaptureAndFrameSelection() {
+        TraceSnapshotStore store = enabledStore();
+        String id = store.captureCustom(
+                "unit_test",
+                "POST",
+                "/api/chat",
+                200,
+                null,
+                Map.of(
+                        "retrievalOrder.lastSetBy", "MoE",
+                        "routing.executionPlan.primaryMode", "OVERDRIVE",
+                        "cfvm.tempSource", "CfvmKallocLearningProperties"),
+                null);
+
+        assertNotNull(id);
+        Map<String, Object> captured = store.get(id).orElseThrow().trace();
+        assertEquals("MoE", captured.get("retrievalOrder.lastSetBy"));
+        assertEquals("OVERDRIVE", captured.get("routing.executionPlan.primaryMode"));
+        assertEquals("CfvmKallocLearningProperties", captured.get("cfvm.tempSource"));
+
+        DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+        factory.registerSingleton("traceSnapshotStore", store);
+        HarmonyTraceReader reader = new HarmonyTraceReader(factory.getBeanProvider(TraceSnapshotStore.class));
+        HarmonyTraceReader.TraceFrame frame = reader.readFrame();
+        assertEquals("recentSnapshot", frame.evidenceSource());
+        assertEquals("OVERDRIVE", frame.read("routing.executionPlan.primaryMode").value());
+
+        TraceSnapshotStore whiteningOnlyStore = enabledStore();
+        String whiteningId = whiteningOnlyStore.captureCustom(
+                "unit_test",
+                "POST",
+                "/api/chat",
+                200,
+                null,
+                Map.of("hypernova.whitening.provider", "ollama"),
+                null);
+        assertNotNull(whiteningId);
+        DefaultListableBeanFactory whiteningFactory = new DefaultListableBeanFactory();
+        whiteningFactory.registerSingleton("traceSnapshotStore", whiteningOnlyStore);
+        HarmonyTraceReader whiteningReader = new HarmonyTraceReader(
+                whiteningFactory.getBeanProvider(TraceSnapshotStore.class));
+        HarmonyTraceReader.TraceFrame whiteningFrame = whiteningReader.readFrame();
+        assertEquals("recentSnapshot", whiteningFrame.evidenceSource());
+        assertEquals("ollama", whiteningFrame.read("hypernova.whitening.provider").value());
+    }
+
+    @Test
+    void canonicalHarmonyEvidenceSurvivesTraceEntryBudget() {
+        TraceSnapshotStore store = enabledStore();
+        Map<String, Object> trace = new LinkedHashMap<>();
+        for (int i = 0; i < 130; i++) {
+            trace.put("debug.filler." + i, i);
+        }
+        trace.put("ablation.penalties", List.of());
+        trace.put("retrievalOrder.lastSetBy", "MoE");
+        trace.put("routing.executionPlan.primaryMode", "OVERDRIVE");
+        trace.put("hypernova.dppApplied", true);
+        trace.put("hypernova.twpmP", 1.25d);
+        trace.put("hypernova.sourceScoreScaleMismatchCount", 0);
+        trace.put("extremeZ.cancelShieldWrapped", true);
+        trace.put("cfvm.boltzmannTemp", 0.72d);
+        trace.put("cfvm.tempSource", "CfvmKallocLearningProperties");
+        trace.put("cfvm.rawTile.enabled", true);
+        trace.put("moe.evolverPlateRegistered", true);
+        trace.put("extremeZ.timeBudgetConsumedMs", 37L);
+        trace.put("hypernova.whitening.provider", "ollama");
+        trace.put("cihRag.breadcrumb.queryRedacted", true);
+        trace.put("cihRag.mlaBreadcrumbCount", 3);
+
+        String id = store.captureCustom("unit_test", "POST", "/api/chat", 200, null, trace, null);
+
+        assertNotNull(id);
+        Map<String, Object> captured = store.get(id).orElseThrow().trace();
+        for (String key : List.of(
+                "ablation.penalties",
+                "retrievalOrder.lastSetBy",
+                "routing.executionPlan.primaryMode",
+                "hypernova.dppApplied",
+                "hypernova.twpmP",
+                "hypernova.sourceScoreScaleMismatchCount",
+                "extremeZ.cancelShieldWrapped",
+                "cfvm.boltzmannTemp",
+                "cfvm.tempSource",
+                "cfvm.rawTile.enabled",
+                "moe.evolverPlateRegistered",
+                "extremeZ.timeBudgetConsumedMs",
+                "hypernova.whitening.provider",
+                "cihRag.breadcrumb.queryRedacted",
+                "cihRag.mlaBreadcrumbCount")) {
+            assertTrue(captured.containsKey(key), "priority snapshot evidence missing key=" + key);
+        }
+        assertEquals(Boolean.TRUE, captured.get("cihRag.breadcrumb.queryRedacted"));
+        assertEquals(3, captured.get("cihRag.mlaBreadcrumbCount"));
+
+        DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+        factory.registerSingleton("traceSnapshotStore", store);
+        HarmonyTraceReader.TraceFrame frame = new HarmonyTraceReader(
+                factory.getBeanProvider(TraceSnapshotStore.class)).readFrame();
+        assertEquals("recentSnapshot", frame.evidenceSource());
+        assertEquals("OVERDRIVE", frame.read("routing.executionPlan.primaryMode").value());
+        assertEquals("ollama", frame.read("hypernova.whitening.provider").value());
+    }
+
+    @Test
+    void timeoutCancellationOutcomeSurvivesTraceEntryBudget() {
+        TraceSnapshotStore store = enabledStore();
+        Map<String, Object> trace = new LinkedHashMap<>();
+        for (int i = 0; i < 130; i++) {
+            trace.put("debug.filler." + i, i);
+        }
+        trace.put("trace.id", "same-timeout-trace");
+        trace.put("llm.call.timeout", true);
+        trace.put("llm.call.timeout.cancelMayInterruptIfRunning", true);
+        trace.put("llm.call.timeout.cancelAccepted", false);
+        trace.put("llm.call.timeout.futureCancelledState", false);
+        trace.put("llm.call.timeout.workerTerminationEvidence", "not_observed");
+
+        String id = store.captureCustom(
+                "unit_test",
+                "POST",
+                "/api/chat",
+                200,
+                null,
+                trace,
+                null);
+
+        assertNotNull(id);
+        Map<String, Object> captured = store.get(id).orElseThrow().trace();
+        assertTrue(String.valueOf(captured.get("trace.id")).startsWith("hash:"));
+        assertEquals(Boolean.TRUE, captured.get("llm.call.timeout"));
+        assertEquals(Boolean.TRUE, captured.get("llm.call.timeout.cancelMayInterruptIfRunning"));
+        assertEquals(Boolean.FALSE, captured.get("llm.call.timeout.cancelAccepted"));
+        assertEquals(Boolean.FALSE, captured.get("llm.call.timeout.futureCancelledState"));
+        assertEquals("not_observed", captured.get("llm.call.timeout.workerTerminationEvidence"));
     }
 
     @Test
@@ -173,6 +390,85 @@ class TraceSnapshotRedactionTest {
     }
 
     @Test
+    void traceMemoryRecoveryRouteLabelsSurviveSnapshotSanitizing() {
+        TraceSnapshotStore store = enabledStore();
+
+        String id = store.captureCustom(
+                "trace_memory_self_probe",
+                "GET",
+                "/api/diagnostics/trace/memory/self-probe",
+                200,
+                null,
+                Map.of(
+                        "traceMemory.checkpoint.stage", "load",
+                        "traceMemory.trigger.reason", "silent_failure",
+                        "traceMemory.recovery.action", "DEGRADE",
+                        "traceMemory.recovery.route", "retry_failsoft",
+                        "traceMemory.recovery.routeDecision", "retry_failsoft.DEGRADE.WARN",
+                        "traceMemory.suspectPayload.isolated", true,
+                        "traceMemory.suspectPayload.stage", "load",
+                        "traceMemory.suspectPayload.route", "retry_failsoft"),
+                null);
+
+        assertNotNull(id);
+        TraceSnapshotStore.TraceSnapshot snapshot = store.get(id).orElseThrow();
+
+        assertEquals("retry_failsoft", snapshot.trace().get("traceMemory.recovery.route"));
+        assertEquals("retry_failsoft", snapshot.trace().get("traceMemory.suspectPayload.route"));
+        assertEquals(Boolean.TRUE, snapshot.trace().get("traceMemory.suspectPayload.isolated"));
+        assertFalse(String.valueOf(snapshot.trace().get("traceMemory.recovery.route")).startsWith("hash:"));
+        assertFalse(String.valueOf(snapshot.trace().get("traceMemory.suspectPayload.route")).startsWith("hash:"));
+    }
+
+    @Test
+    void traceMemoryProviderSuppressionSurvivesSnapshotAndMetadataHtml() {
+        TraceSnapshotStore store = enabledStore();
+        String rawPayload = "private provider failure ownerToken=secret";
+        String generatedPanel = "<section data-trace=\"trace-memory\" data-kind=\"metadata-only\">"
+                + "<h3>Trace Memory Checkpoint</h3><dl><dt>Raw</dt><dd>"
+                + rawPayload
+                + "</dd></dl></section>";
+
+        String id = store.captureCustom(
+                "trace_memory_self_probe",
+                "GET",
+                "/api/diagnostics/trace/memory/self-probe",
+                200,
+                null,
+                Map.ofEntries(
+                        Map.entry("ui.traceHtml.kind", "traceMemoryMetadataOnly"),
+                        Map.entry("ui.traceHtml.synthetic", true),
+                        Map.entry("ui.traceHtml.length", generatedPanel.length()),
+                        Map.entry("traceMemory.checkpoint.stage", "raw_snapshot"),
+                        Map.entry("traceMemory.checkpoint.phase", "memory.loader.raw"),
+                        Map.entry("traceMemory.provider.suppressed", true),
+                        Map.entry("traceMemory.provider.suppressed.stage", "debugEventStore"),
+                        Map.entry("traceMemory.provider.suppressed.debugEventStore", true),
+                        Map.entry("traceMemory.provider.suppressed.debugEventStore.errorType",
+                                "IllegalStateException"),
+                        Map.entry("traceMemory.provider.suppressed.debugEventStore.errorHash",
+                                "hash:provider-failure")),
+                generatedPanel);
+
+        assertNotNull(id);
+        TraceSnapshotStore.TraceSnapshot snapshot = store.get(id).orElseThrow();
+        String html = snapshot.html();
+
+        assertEquals(Boolean.TRUE, snapshot.trace().get("traceMemory.provider.suppressed"));
+        assertEquals("debugEventStore", snapshot.trace().get("traceMemory.provider.suppressed.stage"));
+        assertEquals(Boolean.TRUE, snapshot.trace().get("traceMemory.provider.suppressed.debugEventStore"));
+        assertEquals("IllegalStateException",
+                snapshot.trace().get("traceMemory.provider.suppressed.debugEventStore.errorType"));
+        assertEquals("hash:provider-failure",
+                snapshot.trace().get("traceMemory.provider.suppressed.debugEventStore.errorHash"));
+        assertTrue(html.contains("Provider suppressed"));
+        assertTrue(html.contains("debugEventStore"));
+        assertTrue(html.contains("IllegalStateException"));
+        assertFalse(html.contains(rawPayload));
+        assertFalse(html.contains("ownerToken"));
+    }
+
+    @Test
     void topKFallbackObjectsAreDiagnosticSummaries() {
         TraceSnapshotStore store = enabledStore();
         String rawPayload = "private topk object payload must not remain in snapshot";
@@ -198,6 +494,184 @@ class TraceSnapshotRedactionTest {
 
         assertFalse(dump.contains(rawPayload));
         assertTrue(dump.contains("hash12"));
+    }
+
+    @Test
+    void queryRewriteDiagnosticLabelsSurviveSnapshotWithoutRawQueryText() {
+        TraceSnapshotStore store = enabledStore();
+        String rawQuery = "private rewrite raw query ownerToken=secret";
+        List<String> labels = List.of("verification:official_source", "exploration:latest_update");
+        List<String> temperatureHints = List.of(
+                "0:verification:official_source@0.15#a1b2c3d4e5f6",
+                "1:exploration:latest_update@0.7#f6e5d4c3b2a1");
+        String laneSummary = "verification:official_source|exploration:latest_update";
+
+        String id = store.captureCustom(
+                "chat.trace_html.final",
+                "POST",
+                "/api/chat/stream",
+                200,
+                null,
+                Map.of(
+                        "web.query.rewrite.querySeedHash12", "123456789abc",
+                        "web.query.rewrite.variantSetHash12", "fedcba987654",
+                        "web.query.rewrite.verificationLaneCount", 2,
+                        "web.query.rewrite.explorationLaneCount", 3,
+                        "web.query.rewrite.laneLabels", labels,
+                        "web.query.rewrite.laneSummary", laneSummary,
+                        "web.query.rewrite.variantLaneTemperatureHints", temperatureHints,
+                        "web.query.rewrite.rawQuery", rawQuery),
+                null);
+
+        assertNotNull(id);
+        TraceSnapshotStore.TraceSnapshot snapshot = store.get(id).orElseThrow();
+        String dump = snapshot.toString() + "\n" + snapshot.html();
+
+        assertEquals("123456789abc", snapshot.trace().get("web.query.rewrite.querySeedHash12"));
+        assertEquals("fedcba987654", snapshot.trace().get("web.query.rewrite.variantSetHash12"));
+        assertEquals(2, snapshot.trace().get("web.query.rewrite.verificationLaneCount"));
+        assertEquals(3, snapshot.trace().get("web.query.rewrite.explorationLaneCount"));
+        assertEquals(labels, snapshot.trace().get("web.query.rewrite.laneLabels"));
+        assertEquals(laneSummary, snapshot.trace().get("web.query.rewrite.laneSummary"));
+        assertEquals(temperatureHints, snapshot.trace().get("web.query.rewrite.variantLaneTemperatureHints"));
+        assertTrue(String.valueOf(snapshot.trace().get("web.query.rewrite.rawQuery")).contains("hash12"));
+        assertFalse(dump.contains(rawQuery));
+        assertFalse(dump.contains("ownerToken"));
+    }
+
+    @Test
+    void queryRewriteDiagnosticsSurviveTraceEntryBudgetWithoutRawQueryText() {
+        TraceSnapshotStore store = enabledStore();
+        String rawQuery = "private rewrite raw query after budget ownerToken=secret";
+        List<String> labels = List.of("verification:official_source", "exploration:latest_update");
+        List<String> temperatureHints = List.of(
+                "0:verification:official_source@0.15#a1b2c3d4e5f6",
+                "1:exploration:latest_update@0.7#f6e5d4c3b2a1");
+        String laneSummary = "verification:official_source|exploration:latest_update";
+        Map<String, Object> trace = new LinkedHashMap<>();
+        for (int i = 0; i < 130; i++) {
+            trace.put("debug.filler." + i, i);
+        }
+        trace.put("web.query.rewrite.querySeedHash12", "123456789abc");
+        trace.put("web.query.rewrite.variantSetHash12", "fedcba987654");
+        trace.put("web.query.rewrite.verificationLaneCount", 2);
+        trace.put("web.query.rewrite.explorationLaneCount", 3);
+        trace.put("web.query.rewrite.laneLabels", labels);
+        trace.put("web.query.rewrite.laneSummary", laneSummary);
+        trace.put("web.query.rewrite.variantLaneTemperatureHints", temperatureHints);
+        trace.put("web.query.rewrite.rawQuery", rawQuery);
+
+        String id = store.captureCustom(
+                "chat.trace_html.final",
+                "POST",
+                "/api/chat/stream",
+                200,
+                null,
+                trace,
+                null);
+
+        assertNotNull(id);
+        TraceSnapshotStore.TraceSnapshot snapshot = store.get(id).orElseThrow();
+        String dump = snapshot.toString() + "\n" + snapshot.html();
+
+        assertEquals("123456789abc", snapshot.trace().get("web.query.rewrite.querySeedHash12"));
+        assertEquals("fedcba987654", snapshot.trace().get("web.query.rewrite.variantSetHash12"));
+        assertEquals(2, snapshot.trace().get("web.query.rewrite.verificationLaneCount"));
+        assertEquals(3, snapshot.trace().get("web.query.rewrite.explorationLaneCount"));
+        assertEquals(labels, snapshot.trace().get("web.query.rewrite.laneLabels"));
+        assertEquals(laneSummary, snapshot.trace().get("web.query.rewrite.laneSummary"));
+        assertEquals(temperatureHints, snapshot.trace().get("web.query.rewrite.variantLaneTemperatureHints"));
+        assertFalse(dump.contains(rawQuery));
+        assertFalse(dump.contains("ownerToken"));
+    }
+
+    @Test
+    void rewritePlanTemperatureHintsSurviveSnapshotWithoutRawQueryText() {
+        TraceSnapshotStore store = enabledStore();
+        List<String> temperatureHints = List.of(
+                "0:verification:official_source@0.15#a1b2c3d4e5f6",
+                "1:exploration:latest_update@0.7#f6e5d4c3b2a1");
+
+        String id = store.captureCustom(
+                "chat.trace_html.final",
+                "POST",
+                "/api/chat/stream",
+                200,
+                null,
+                Map.of(
+                        "web.rewritePlan.variantLaneTemperatureHints", temperatureHints,
+                        "web.rewritePlan.rawQuery", "private rewritePlan raw query ownerToken=secret"),
+                null);
+
+        TraceSnapshotStore.TraceSnapshot snapshot = store.get(id).orElseThrow();
+
+        assertEquals(temperatureHints, snapshot.trace().get("web.rewritePlan.variantLaneTemperatureHints"));
+        assertTrue(String.valueOf(snapshot.trace().get("web.rewritePlan.rawQuery")).contains("hash12"));
+        assertFalse((snapshot.toString() + "\n" + snapshot.html()).contains("ownerToken"));
+    }
+
+    @Test
+    void queryTransformerSuperTokenDiagnosticsSurviveSnapshotWithoutRawBranchText() {
+        TraceSnapshotStore store = enabledStore();
+        String rawBranchText = "private branch query ownerToken=secret should not survive";
+        List<String> axes = List.of("definition", "alias", "relation");
+        List<String> queryHashes = List.of("aaa111bbb222", "ccc333ddd444", "eee555fff666");
+        List<String> titleHashes = List.of("111aaa222bbb", "333ccc444ddd", "555eee666fff");
+        Map<String, Object> trace = new LinkedHashMap<>();
+        for (int i = 0; i < 130; i++) {
+            trace.put("debug.filler." + i, i);
+        }
+        trace.put("queryTransformer.subQueries.superTokens.enabled", true);
+        trace.put("queryTransformer.subQueries.superTokens.branchCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.tokenCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.subModelCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.subModelAssignmentCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.branchTitleHashCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.branchTitleHashes", titleHashes);
+        trace.put("queryTransformer.subQueries.superTokens.branchTitleMetadataCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.branchQueryMetadataCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.branchQueryHashes", queryHashes);
+        trace.put("queryTransformer.subQueries.superTokens.branchQueryCoverageComplete", true);
+        trace.put("queryTransformer.subQueries.superTokens.titlePresent", true);
+        trace.put("queryTransformer.subQueries.superTokens.titleHash12", "123456789abc");
+        trace.put("queryTransformer.subQueries.superTokens.titleTokenCount", 5);
+        trace.put("queryTransformer.subQueries.superTokens.axisCount", 3);
+        trace.put("queryTransformer.subQueries.superTokens.axes", axes);
+        trace.put("queryTransformer.subQueries.superTokens.coverageComplete", true);
+        trace.put("queryTransformer.subQueries.superTokens.branchQueryText", rawBranchText);
+
+        String id = store.captureCustom(
+                "chat.trace_html.final",
+                "POST",
+                "/api/chat/stream",
+                200,
+                null,
+                trace,
+                null);
+
+        assertNotNull(id);
+        TraceSnapshotStore.TraceSnapshot snapshot = store.get(id).orElseThrow();
+        String dump = snapshot.toString() + "\n" + snapshot.html();
+
+        assertEquals(Boolean.TRUE, snapshot.trace().get("queryTransformer.subQueries.superTokens.enabled"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.branchCount"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.tokenCount"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.subModelCount"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.subModelAssignmentCount"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.branchTitleHashCount"));
+        assertEquals(titleHashes, snapshot.trace().get("queryTransformer.subQueries.superTokens.branchTitleHashes"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.branchTitleMetadataCount"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.branchQueryMetadataCount"));
+        assertEquals(queryHashes, snapshot.trace().get("queryTransformer.subQueries.superTokens.branchQueryHashes"));
+        assertEquals(Boolean.TRUE, snapshot.trace().get("queryTransformer.subQueries.superTokens.branchQueryCoverageComplete"));
+        assertEquals(Boolean.TRUE, snapshot.trace().get("queryTransformer.subQueries.superTokens.titlePresent"));
+        assertEquals("123456789abc", snapshot.trace().get("queryTransformer.subQueries.superTokens.titleHash12"));
+        assertEquals(5, snapshot.trace().get("queryTransformer.subQueries.superTokens.titleTokenCount"));
+        assertEquals(3, snapshot.trace().get("queryTransformer.subQueries.superTokens.axisCount"));
+        assertEquals(axes, snapshot.trace().get("queryTransformer.subQueries.superTokens.axes"));
+        assertEquals(Boolean.TRUE, snapshot.trace().get("queryTransformer.subQueries.superTokens.coverageComplete"));
+        assertFalse(dump.contains(rawBranchText));
+        assertFalse(dump.contains("ownerToken"));
     }
 
     @Test
@@ -286,6 +760,93 @@ class TraceSnapshotRedactionTest {
         String html = store.get(id).orElseThrow().html();
 
         assertTrue(html.contains("safe generated panel"));
+        assertFalse(html.contains("hash12"));
+    }
+
+    @Test
+    void matchingHarmonyTraceHtmlMetaRendersAllowlistedMetadataOverride() {
+        TraceSnapshotStore store = enabledStore();
+        String rawPayload = "private harmony override ownerToken=secret";
+        String generatedPanel = "<section data-trace=\"chat-harmony\" data-kind=\"metadata-only\">"
+                + "<h3>Chat Harmony Trace</h3><dl><dt>Raw</dt><dd>"
+                + rawPayload
+                + "</dd></dl></section>";
+
+        String id = store.captureCustom(
+                "unit_test",
+                "GET",
+                "/api/chat/stream",
+                200,
+                null,
+                Map.of(
+                        "ui.traceHtml.kind", "chatHarmonyMetadataOnly",
+                        "ui.traceHtml.synthetic", true,
+                        "ui.traceHtml.length", generatedPanel.length(),
+                        "chat.harmony.postprocess.agentVisible", true,
+                        "chat.harmony.postprocess.decision", "smooth_chat",
+                        "chat.harmony.postprocess.reason", "answer_flow_balanced",
+                        "chat.harmony.postprocess.weightedScore", 0.628d,
+                        "chat.harmony.postprocess.evidenceCount", 2,
+                        "debug.ai.metrics.nextAction", "continue_observing_chat_harmony",
+                        "debug.ai.metrics.nextReason", "smooth_chat"),
+                generatedPanel);
+
+        assertNotNull(id);
+        String html = store.get(id).orElseThrow().html();
+
+        assertTrue(html.contains("chat-harmony"));
+        assertTrue(html.contains("Chat Harmony Trace"));
+        assertTrue(html.contains("smooth_chat"));
+        assertTrue(html.contains("answer_flow_balanced"));
+        assertTrue(html.contains("0.628"));
+        assertTrue(html.contains("2"));
+        assertTrue(html.contains("continue_observing_chat_harmony"));
+        assertTrue(html.contains("smooth_chat"));
+        assertFalse(html.contains(rawPayload));
+        assertFalse(html.contains("ownerToken"));
+        assertFalse(html.contains("hash12"));
+    }
+
+    @Test
+    void matchingTraceMemoryTraceHtmlMetaRendersVirtualCheckpointMetadataOverride() {
+        TraceSnapshotStore store = enabledStore();
+        String rawPayload = "private trace-memory override ownerToken=secret";
+        String generatedPanel = "<section data-trace=\"trace-memory\" data-kind=\"metadata-only\">"
+                + "<h3>Trace Memory Checkpoint</h3><dl><dt>Raw</dt><dd>"
+                + rawPayload
+                + "</dd></dl></section>";
+
+        String id = store.captureCustom(
+                "trace_memory_self_probe",
+                "GET",
+                "/api/diagnostics/trace/memory/self-probe",
+                200,
+                null,
+                Map.ofEntries(
+                        Map.entry("ui.traceHtml.kind", "traceMemoryMetadataOnly"),
+                        Map.entry("ui.traceHtml.synthetic", true),
+                        Map.entry("ui.traceHtml.length", generatedPanel.length()),
+                        Map.entry("traceMemory.checkpoint.stage", "load"),
+                        Map.entry("traceMemory.checkpoint.phase", "memory.loader.assembled"),
+                        Map.entry("traceMemory.checkpoint.historySize", 2),
+                        Map.entry("traceMemory.virtualCheckpoint.latestKey",
+                                "traceMemory.virtualCheckpoint.first_refinement"),
+                        Map.entry("traceMemory.virtualCheckpoint.latestStage", "first_refinement"),
+                        Map.entry("traceMemory.virtualCheckpoint.latestPhase", "memory.refine.primary"),
+                        Map.entry("traceMemory.delta.changed", true)),
+                generatedPanel);
+
+        assertNotNull(id);
+        String html = store.get(id).orElseThrow().html();
+
+        assertTrue(html.contains("trace-memory"));
+        assertTrue(html.contains("Trace Memory Checkpoint"));
+        assertTrue(html.contains("Virtual checkpoint"));
+        assertTrue(html.contains("traceMemory.virtualCheckpoint.first_refinement"));
+        assertTrue(html.contains("first_refinement"));
+        assertTrue(html.contains("memory.refine.primary"));
+        assertFalse(html.contains(rawPayload));
+        assertFalse(html.contains("ownerToken"));
         assertFalse(html.contains("hash12"));
     }
 
