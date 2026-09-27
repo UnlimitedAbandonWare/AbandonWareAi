@@ -3,10 +3,14 @@ package com.abandonware.ai.agent.integrations.service.rag.fusion;
 
 import java.net.*;
 import java.util.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 /**
  * Canonical URL normalizer: strips UTM/session params and sorts query keys.
  */
 public class CanonicalUrlNormalizer {
+    private static final Logger log = Logger.getLogger(CanonicalUrlNormalizer.class.getName());
+
     private static final Set<String> DROP = new HashSet<>(Arrays.asList(
         "utm_source","utm_medium","utm_campaign","utm_term","utm_content","gclid","fbclid","session","sid","phpsessid"
     ));
@@ -29,7 +33,15 @@ public class CanonicalUrlNormalizer {
             URI out = new URI(u.getScheme(), u.getAuthority(), u.getPath(), q, u.getFragment());
             return out.toString();
         } catch (Exception e){
+            logFailSoft("normalize", e);
             return url;
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isLoggable(Level.FINE)) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.fine("[AWX][rag][canonical-url] failSoft stage=" + stage + " errorType=" + errorType);
         }
     }
 }

@@ -49,13 +49,17 @@ public class RemoteEmbedder implements Embedder {
             } else { // tei default
                 payload = om.writeValueAsString(Map.of("input", List.of(text)));
             }
-            HttpResponse<String> resp = HttpClient.newHttpClient().send(
+            HttpResponse<String> resp = client.send(
                     req.POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build(),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (resp.statusCode() / 100 != 2) return new HeuristicEmbedder().embed(text);
             JsonNode root = om.readTree(resp.body());
             float[] vec = tryParseEmbedding(root);
             if (vec != null) return vec;
+            return new HeuristicEmbedder().embed(text);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            traceSuppressed("embed", text, e);
             return new HeuristicEmbedder().embed(text);
         } catch (Exception e) {
             traceSuppressed("embed", text, e);
@@ -93,6 +97,9 @@ public class RemoteEmbedder implements Embedder {
                 return null;
             }
             v[i] = (float) value;
+            if (!Float.isFinite(v[i])) {
+                return null;
+            }
         }
         return normalize(v);
     }
@@ -102,12 +109,12 @@ public class RemoteEmbedder implements Embedder {
             return null;
         }
         double norm = 0;
-        for (float x : v) norm += x*x;
+        for (float x : v) norm += (double) x * x;
         if (norm <= 1e-12d) {
             return null;
         }
         norm = Math.sqrt(Math.max(1e-9, norm));
-        for (int i=0;i<v.length;i++) v[i] /= (float) norm;
+        for (int i=0;i<v.length;i++) v[i] = (float) (v[i] / norm);
         return v;
     }
 

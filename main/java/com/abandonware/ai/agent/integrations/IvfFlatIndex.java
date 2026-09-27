@@ -30,9 +30,27 @@ public class IvfFlatIndex implements AnnIndex {
             return;
         }
         byte[] bytes = Files.readAllBytes(vec);
+        int headerBytes = Integer.BYTES * 2;
+        if (bytes.length < headerBytes) {
+            throw new IOException("Invalid vector index header");
+        }
         ByteBuffer bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         int dim = bb.getInt(); // dim
         int rows = bb.getInt(); // rows
+        if (dim < 0 || rows < 0) {
+            throw new IOException("Invalid vector index shape");
+        }
+        long expectedByteCount;
+        try {
+            long cellCount = Math.multiplyExact((long) rows, (long) dim);
+            expectedByteCount = Math.addExact(headerBytes,
+                    Math.multiplyExact(cellCount, (long) Float.BYTES));
+        } catch (ArithmeticException ex) {
+            throw new IOException("Invalid vector index shape", ex);
+        }
+        if (expectedByteCount != bytes.length) {
+            throw new IOException("Invalid vector index payload length");
+        }
         this.vectors = new float[rows][dim];
         for (int r = 0; r < rows; r++) {
             for (int d=0; d<dim; d++) {

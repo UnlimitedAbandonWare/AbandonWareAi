@@ -14,6 +14,7 @@ import java.util.*;
  *  {"query":"/* ... *&#47;", "relevant_ids":["/* ... *&#47;"], "local":[{"id":/* ... *&#47;}], "web":[{"id":/* ... *&#47;}]}
  */
 public class RrfWeightTuner {
+    private static final System.Logger LOG = System.getLogger(RrfWeightTuner.class.getName());
 
     public static void main(String[] args) throws Exception {
         Path train = Paths.get(System.getenv().getOrDefault("RRF_TRAIN_FILE", args.length>0?args[0]:"./data/rrf_train.jsonl"));
@@ -33,7 +34,9 @@ public class RrfWeightTuner {
 
         String out = "{\"K\":"+bestK+",\"w_local\":"+bestWl+",\"w_web\":"+bestWw+"}";
         Files.writeString(Paths.get("./rrf_weights.json"), out, StandardCharsets.UTF_8);
-        System.out.println("[RrfWeightTuner] best F1@"+at+"="+bestF1+" with K="+bestK+" w_local="+bestWl+" w_web="+bestWw);
+        LOG.log(System.Logger.Level.INFO,
+                "[RrfWeightTuner] bestF1At={0} bestF1={1} k={2} wLocal={3} wWeb={4}",
+                at, bestF1, bestK, bestWl, bestWw);
     }
 
     record Example(String query, Set<String> relevant, List<Map<String,Object>> local, List<Map<String,Object>> web) {}

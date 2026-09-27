@@ -22,7 +22,7 @@ import java.util.Map;
  * production version would use WebClient or RestTemplate to perform an
  * outbound HTTP POST to the specified URL.
  */
-@Service
+@Service("agentN8nNotifier")
 public class N8nNotifier {
     private static final Logger log = LoggerFactory.getLogger(N8nNotifier.class);
 

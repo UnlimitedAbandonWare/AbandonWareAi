@@ -15,7 +15,7 @@ import java.util.HashMap;
  * address based on the provided coordinates.  A real implementation
  * would call Kakao's address lookup endpoint.
  */
-@Service
+@Service("agentKakaoReverseGeocodingClient")
 public class KakaoReverseGeocodingClient {
     private static final Logger log = LoggerFactory.getLogger(KakaoReverseGeocodingClient.class);
 

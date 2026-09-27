@@ -14,6 +14,10 @@ import java.util.*;
  */
 public final class RrfFusion {
 
+    private static final double DEFAULT_K = 60.0d;
+    private static final double DEFAULT_LOCAL_WEIGHT = 1.0d;
+    private static final double DEFAULT_WEB_WEIGHT = 1.0d;
+
     private RrfFusion() {}
 
     /**
@@ -23,14 +27,26 @@ public final class RrfFusion {
      */
     @SuppressWarnings("unchecked")
     public static List<Map<String,Object>> fuse(List<Map<String,Object>> local, List<Map<String,Object>> web) {
+        return fuse(
+                local,
+                web,
+                System.getenv("RRF_K"),
+                System.getenv("RRF_W_LOCAL"),
+                System.getenv("RRF_W_WEB"));
+    }
+
+    static List<Map<String,Object>> fuse(
+            List<Map<String,Object>> local,
+            List<Map<String,Object>> web,
+            String rawK,
+            String rawLocalWeight,
+            String rawWebWeight) {
         if (local == null) local = List.of();
         if (web == null) web = List.of();
 
-        double K = getEnvDouble("RRF_K", 60.0);
-        double wLocal = getEnvDouble("RRF_W_LOCAL", 1.0);
-        double wWeb   = getEnvDouble("RRF_W_WEB",   1.0);
+        RrfConfig config = resolveConfig(rawK, rawLocalWeight, rawWebWeight);
 
-        Map<String, Double> score = new HashMap<>();
+        Map<String, Double> score = new LinkedHashMap<>();
         Map<String, Map<String,Object>> pick = new LinkedHashMap<>();
 
         // local
@@ -39,7 +55,12 @@ public final class RrfFusion {
             String key = keyOf(m);
             if (key == null) continue;
             pick.putIfAbsent(key, m);
-            score.put(key, score.getOrDefault(key, 0.0) + (wLocal / (K + r)));
+            score.put(key, finiteScore(
+                    score.getOrDefault(key, 0.0),
+                    config.localWeight(),
+                    config.k(),
+                    r,
+                    DEFAULT_LOCAL_WEIGHT));
             r++;
         }
         // web
@@ -48,7 +69,12 @@ public final class RrfFusion {
             String key = keyOf(m);
             if (key == null) continue;
             pick.putIfAbsent(key, m);
-            score.put(key, score.getOrDefault(key, 0.0) + (wWeb / (K + r)));
+            score.put(key, finiteScore(
+                    score.getOrDefault(key, 0.0),
+                    config.webWeight(),
+                    config.k(),
+                    r,
+                    DEFAULT_WEB_WEIGHT));
             r++;
         }
 
@@ -67,17 +93,103 @@ public final class RrfFusion {
         return out;
     }
 
-    private static double getEnvDouble(String name, double def) {
-        return parseEnvDouble(name, def, System.getenv(name));
-    }
-
     static double parseEnvDouble(String name, double def, String rawValue) {
-        try {
-            return (rawValue == null || rawValue.isBlank()) ? def : Double.parseDouble(rawValue);
-        } catch (NumberFormatException e) {
-            traceSuppressed("env.double", name, rawValue, e);
+        ParsedDouble parsed = parseRawDouble(name, def, rawValue);
+        if (!parsed.valid()) {
             return def;
         }
+        String reason = invalidScalarReason(name, parsed.value());
+        if (reason != null) {
+            traceConfigFallback(reason);
+            return def;
+        }
+        return parsed.value();
+    }
+
+    private static RrfConfig resolveConfig(
+            String rawK,
+            String rawLocalWeight,
+            String rawWebWeight) {
+        ParsedDouble k = parseRawDouble("RRF_K", DEFAULT_K, rawK);
+        ParsedDouble localWeight = parseRawDouble(
+                "RRF_W_LOCAL", DEFAULT_LOCAL_WEIGHT, rawLocalWeight);
+        ParsedDouble webWeight = parseRawDouble(
+                "RRF_W_WEB", DEFAULT_WEB_WEIGHT, rawWebWeight);
+
+        if (!k.valid() || !Double.isFinite(k.value()) || k.value() <= 0.0d) {
+            return fallbackConfig("invalid_k");
+        }
+        if (!localWeight.valid() || !webWeight.valid()
+                || !Double.isFinite(localWeight.value())
+                || !Double.isFinite(webWeight.value())) {
+            return fallbackConfig("non_finite_weight");
+        }
+        if (localWeight.value() < 0.0d || webWeight.value() < 0.0d) {
+            return fallbackConfig("negative_weight");
+        }
+        double weightSum = localWeight.value() + webWeight.value();
+        if (!Double.isFinite(weightSum)) {
+            return fallbackConfig("non_finite_weight");
+        }
+        if (weightSum <= 0.0d) {
+            return fallbackConfig("zero_weight_sum");
+        }
+        return new RrfConfig(k.value(), localWeight.value(), webWeight.value());
+    }
+
+    private static ParsedDouble parseRawDouble(String name, double def, String rawValue) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return new ParsedDouble(def, true);
+        }
+        try {
+            return new ParsedDouble(Double.parseDouble(rawValue), true);
+        } catch (NumberFormatException e) {
+            traceSuppressed("env.double", name, rawValue, e);
+            return new ParsedDouble(def, false);
+        }
+    }
+
+    private static String invalidScalarReason(String name, double value) {
+        if ("RRF_K".equals(name)) {
+            return !Double.isFinite(value) || value <= 0.0d ? "invalid_k" : null;
+        }
+        if ("RRF_W_LOCAL".equals(name) || "RRF_W_WEB".equals(name)) {
+            if (!Double.isFinite(value)) return "non_finite_weight";
+            if (value < 0.0d) return "negative_weight";
+        }
+        return null;
+    }
+
+    private static RrfConfig fallbackConfig(String reason) {
+        traceConfigFallback(reason);
+        return new RrfConfig(DEFAULT_K, DEFAULT_LOCAL_WEIGHT, DEFAULT_WEB_WEIGHT);
+    }
+
+    private static void traceConfigFallback(String reason) {
+        Object current = TraceStore.get("agent.rrf.config.fallback.count");
+        int count = current instanceof Number number ? number.intValue() : 0;
+        TraceStore.put("agent.rrf.config.fallback", true);
+        TraceStore.put("agent.rrf.config.fallback.reason",
+                SafeRedactor.traceLabelOrFallback(reason, "invalid_config"));
+        TraceStore.put("agent.rrf.config.fallback.count", count + 1);
+    }
+
+    private static double finiteScore(
+            double current,
+            double weight,
+            double k,
+            int rank,
+            double defaultWeight) {
+        double updated = current + (weight / (k + rank));
+        if (Double.isFinite(updated)) {
+            return updated;
+        }
+        TraceStore.put("agent.rrf.score.fallback", true);
+        TraceStore.put("agent.rrf.score.fallback.reason", "non_finite_score");
+        Object countValue = TraceStore.get("agent.rrf.score.fallback.count");
+        int count = countValue instanceof Number number ? number.intValue() : 0;
+        TraceStore.put("agent.rrf.score.fallback.count", count + 1);
+        return defaultWeight / (DEFAULT_K + rank);
     }
 
     private static String keyOf(Map<String,Object> m) {
@@ -142,5 +254,11 @@ public final class RrfFusion {
             return "invalid_url";
         }
         return SafeRedactor.traceLabelOrFallback(error.getClass().getSimpleName(), "unknown");
+    }
+
+    private record ParsedDouble(double value, boolean valid) {
+    }
+
+    private record RrfConfig(double k, double localWeight, double webWeight) {
     }
 }

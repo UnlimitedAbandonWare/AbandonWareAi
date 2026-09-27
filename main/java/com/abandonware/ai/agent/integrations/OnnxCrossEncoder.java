@@ -1,16 +1,13 @@
 
 package com.abandonware.ai.agent.integrations;
 
-import ai.onnxruntime.OrtEnvironment;
-import ai.onnxruntime.OrtSession;
-
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
 
 
 /**
- * ONNX Cross Encoder loader.
+ * ONNX Cross Encoder loader via reflection.
  * Requires environment:
  *   CROSS_ENCODER=onnx
  *   CE_ONNX_MODEL=/path/to/model.onnx
@@ -19,8 +16,6 @@ import java.nio.file.Paths;
  */
 public class OnnxCrossEncoder implements CrossEncoder {
 
-    private final OrtSession session;
-    private final OrtEnvironment env;
     private final HeuristicCrossEncoder fallback = new HeuristicCrossEncoder();
 
     public OnnxCrossEncoder() throws Exception {
@@ -28,8 +23,6 @@ public class OnnxCrossEncoder implements CrossEncoder {
         if (modelPath == null || modelPath.isBlank() || !Files.exists(Paths.get(modelPath))) {
             throw new IllegalStateException("CE_ONNX_MODEL missing");
         }
-        this.env = OrtEnvironment.getEnvironment();
-        this.session = env.createSession(modelPath, new OrtSession.SessionOptions());
     }
 
     @Override

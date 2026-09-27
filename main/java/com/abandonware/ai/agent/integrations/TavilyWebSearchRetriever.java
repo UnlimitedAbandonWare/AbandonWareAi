@@ -2,6 +2,7 @@
 package com.abandonware.ai.agent.integrations;
 
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.guard.ProviderCredentialResolver;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,38 +27,57 @@ public class TavilyWebSearchRetriever {
     private final ObjectMapper om = new ObjectMapper();
     private final String apiUrl;
     private final Supplier<String> apiKeySupplier;
+    private final ProviderCredentialResolver credentialResolver;
 
     public TavilyWebSearchRetriever() {
         this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build(),
                 "https://api.tavily.com/search",
-                () -> System.getenv("TAVILY_API_KEY"));
+                () -> null);
+    }
+
+    public TavilyWebSearchRetriever(ProviderCredentialResolver credentialResolver) {
+        this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build(),
+                "https://api.tavily.com/search",
+                credentialResolver);
     }
 
     TavilyWebSearchRetriever(HttpClient client, String apiUrl, Supplier<String> apiKeySupplier) {
         this.client = Objects.requireNonNull(client, "client");
         this.apiUrl = Objects.requireNonNull(apiUrl, "apiUrl");
         this.apiKeySupplier = Objects.requireNonNull(apiKeySupplier, "apiKeySupplier");
+        this.credentialResolver = null;
+    }
+
+    TavilyWebSearchRetriever(
+            HttpClient client,
+            String apiUrl,
+            ProviderCredentialResolver credentialResolver) {
+        this.client = Objects.requireNonNull(client, "client");
+        this.apiUrl = Objects.requireNonNull(apiUrl, "apiUrl");
+        this.apiKeySupplier = () -> null;
+        this.credentialResolver = Objects.requireNonNull(credentialResolver, "credentialResolver");
     }
 
     public boolean isEnabled(String domain) {
-        String key = apiKeySupplier.get();
-        if (ConfigValueGuards.isMissing(key)) return false;
+        ResolvedCredential credential = resolveCredential();
+        if (!credential.enabled()) return false;
         if (domain == null) return false;
         String d = domain.toLowerCase(Locale.ROOT);
         return d.equals("web") || d.equals("web+local") || d.equals("rrf");
     }
 
     public List<Map<String,Object>> search(String query, int topK, String domain) {
-        String key = apiKeySupplier.get();
-        if (ConfigValueGuards.isMissing(key)) {
-            traceProviderDisabled(query, topK, domain, "missing_tavily_api_key");
+        ResolvedCredential credential = resolveCredential();
+        if (!credential.enabled()) {
+            traceProviderDisabled(query, topK, domain, credential.disabledReason());
             return List.of();
         }
-        if (!isEnabled(domain)) {
+        if (!isDomainEnabled(domain)) {
             traceDomainSkipped(query, topK, domain, "domain_not_enabled");
             return List.of();
         }
         try {
+            String key = credential.value();
             String lang = containsHangul(query) ? "ko" : "en";
             Map<String,Object> payload = new HashMap<>();
             payload.put("api_key", key);
@@ -115,6 +135,37 @@ public class TavilyWebSearchRetriever {
             traceSuppressed("search", query, topK, domain, e);
             return List.of();
         }
+    }
+
+    private ResolvedCredential resolveCredential() {
+        ProviderCredentialResolver resolver = credentialResolver;
+        if (resolver != null) {
+            ProviderCredentialResolver.Resolution resolution = resolver.resolve(
+                    ProviderCredentialResolver.Provider.TAVILY);
+            if (!resolution.enabled()) {
+                String reason = "missing-credential".equals(resolution.disabledReason())
+                        ? "missing_tavily_api_key"
+                        : resolution.disabledReason();
+                return new ResolvedCredential(null, false, reason);
+            }
+            return new ResolvedCredential(resolution.valueOrNull(), true, "");
+        }
+        String value = apiKeySupplier.get();
+        if (ConfigValueGuards.isMissing(value)) {
+            return new ResolvedCredential(null, false, "missing_tavily_api_key");
+        }
+        return new ResolvedCredential(value, true, "");
+    }
+
+    private static boolean isDomainEnabled(String domain) {
+        if (domain == null) {
+            return false;
+        }
+        String normalized = domain.toLowerCase(Locale.ROOT);
+        return normalized.equals("web") || normalized.equals("web+local") || normalized.equals("rrf");
+    }
+
+    private record ResolvedCredential(String value, boolean enabled, String disabledReason) {
     }
 
     private static boolean containsHangul(String s) {

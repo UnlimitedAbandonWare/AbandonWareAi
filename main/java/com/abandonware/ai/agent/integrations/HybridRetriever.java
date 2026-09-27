@@ -3,6 +3,8 @@ package com.abandonware.ai.agent.integrations;
 
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.guard.ProviderCredentialResolver;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -27,12 +29,22 @@ public class HybridRetriever {
 
 
     private final Bm25Index index;
-    private final TavilyWebSearchRetriever tavily = new TavilyWebSearchRetriever();
+    private final TavilyWebSearchRetriever tavily;
     private final LruCache<String, List<Map<String,Object>>> cache = new LruCache<>(128);
 
     public HybridRetriever() {
+        this(new TavilyWebSearchRetriever());
+    }
+
+    @Autowired
+    public HybridRetriever(ProviderCredentialResolver credentialResolver) {
+        this(new TavilyWebSearchRetriever(credentialResolver));
+    }
+
+    HybridRetriever(TavilyWebSearchRetriever tavily) {
         Path repo = Paths.get(".").toAbsolutePath().normalize();
         this.index = new Bm25Index(repo);
+        this.tavily = Objects.requireNonNull(tavily, "tavily");
     }
 
     public List<Map<String,Object>> retrieve(String query, Integer topK, String domain) {
@@ -86,12 +98,37 @@ public class HybridRetriever {
         return finalList;
     }
 
+    /**
+     * Strict local retrieval for policy-controlled internal tools. This path
+     * intentionally bypasses RRF, Tavily, environment-selected second-pass
+     * rerankers, and every remote embedding adapter.
+     */
+    public List<Map<String, Object>> retrieveStrictLocal(String query, Integer topK) {
+        try {
+            index.ensureBuilt();
+        } catch (IOException error) {
+            traceSuppressed("strictLocal.index.ensureBuilt", error, query, "local");
+            return List.of();
+        }
+        int k = topK == null ? 6 : Math.max(1, topK);
+        List<Bm25Index.SearchResult> candidates = index.search(query, null, Math.max(32, k * 5));
+        List<Map<String, Object>> local = toResultMaps(query, candidates);
+        List<Map<String, Object>> reranked = mmr(query, local, k);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (int i = 0; i < Math.min(k, reranked.size()); i++) {
+            Map<String, Object> row = new LinkedHashMap<>(reranked.get(i));
+            row.put("rank", i + 1);
+            out.add(row);
+        }
+        return out;
+    }
+
     private List<Map<String,Object>> toResultMaps(String query, List<Bm25Index.SearchResult> localCandidates) {
         List<Map<String,Object>> out = new ArrayList<>();
         List<String> qToks = TextUtils.tokenize(query);
         int r = 1;
         for (Bm25Index.SearchResult sr : localCandidates) {
-            Bm25Index.Chunk c = index.getChunk(sr.docId);
+            Bm25Index.Chunk c = sr.chunk;
             String snippet = TextUtils.makeSnippet(c.body, qToks);
             String id = c.source + "::" + Integer.toHexString(Math.abs(c.id.hashCode()));
             Map<String,Object> m = new LinkedHashMap<>();
