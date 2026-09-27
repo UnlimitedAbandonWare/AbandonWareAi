@@ -1,6 +1,5 @@
 package com.example.lms.service.agent;
 
-import com.example.lms.artplate.ArtPlateSpec;
 import com.example.lms.artplate.NineArtPlateGate;
 import com.example.lms.cfvm.RawMatrixBuffer;
 import com.example.lms.cfvm.RawSlotExtractor;
@@ -120,6 +119,8 @@ public class ReportSnapshotService {
 
     private static final List<String> HYPERNOVA_TRACE_KEYS = List.of(
             "hypernova.twpmP",
+            "hypernova.twpmP.max",
+            "hypernova.twpmP.maxBounded",
             "hypernova.cvarFusedScore",
             "hypernova.cvarAlpha",
             "hypernova.cvarPhi",
@@ -184,7 +185,6 @@ public class ReportSnapshotService {
     private final DebugEventStore debugEventStore;
     private final RawMatrixBuffer rawMatrixBuffer;
     private final RgbStrategySelector rgbStrategySelector;
-    private final NineArtPlateGate artPlateGate;
     private final OverdriveGuard overdriveGuard;
     private final WeightedPowerMeanFuser weightedPowerMeanFuser;
     private final FinalSigmoidGate finalSigmoidGate;
@@ -284,7 +284,6 @@ public class ReportSnapshotService {
         this.debugEventStore = debugEventStore == null ? new DebugEventStore() : debugEventStore;
         this.rawMatrixBuffer = rawMatrixBuffer;
         this.rgbStrategySelector = rgbStrategySelector;
-        this.artPlateGate = artPlateGate;
         this.overdriveGuard = overdriveGuard;
         this.weightedPowerMeanFuser = weightedPowerMeanFuser;
         this.finalSigmoidGate = finalSigmoidGate;
@@ -517,12 +516,7 @@ public class ReportSnapshotService {
     }
 
     private String selectedPlate() {
-        Object traced = TraceStore.get("artplate.selector.selected");
-        if (traced != null) {
-            return safeLabel(traced, "");
-        }
-        ArtPlateSpec last = artPlateGate == null ? null : artPlateGate.getLastSelected();
-        return last == null ? "" : safeLabel(last.id(), "");
+        return safeLabel(TraceStore.get("artplate.selector.selected"), "not_observed");
     }
 
     private static ReasonDto reasonDto(RgbStrategySelector.Reason reason) {

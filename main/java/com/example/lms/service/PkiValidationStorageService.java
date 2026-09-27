@@ -7,10 +7,12 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.Objects;
+import java.util.Optional;
 
 
 
@@ -59,5 +61,37 @@ public class PkiValidationStorageService {
             throw new RuntimeException("파일 저장 실패", e);
         }
         return "/.well-known/pki-validation/" + name;
+    }
+
+    public Optional<byte[]> read(String fileName) {
+        if (fileName == null) {
+            throw new IllegalArgumentException("검증 파일명이 비어 있습니다.");
+        }
+
+        String name = StringUtils.cleanPath(fileName);
+        if (!name.matches("^[A-Fa-f0-9]{32,64}\\.txt$")) {
+            throw new IllegalArgumentException("허용되지 않는 검증 파일명입니다.");
+        }
+
+        Path source = rootLocation.resolve(name).normalize();
+        if (!source.getParent().equals(rootLocation)) {
+            throw new IllegalArgumentException("보안 위협: 경로 탈출 감지");
+        }
+
+        try {
+            if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
+                return Optional.empty();
+            }
+            if (Files.isSymbolicLink(source)
+                    || !Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IllegalArgumentException("일반 검증 파일만 읽을 수 있습니다.");
+            }
+            if (Files.size(source) > 1_000_000L) {
+                throw new IllegalArgumentException("파일 크기가 1MB를 초과합니다.");
+            }
+            return Optional.of(Files.readAllBytes(source));
+        } catch (IOException e) {
+            throw new RuntimeException("검증 파일 읽기 실패", e);
+        }
     }
 }

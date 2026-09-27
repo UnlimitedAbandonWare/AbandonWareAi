@@ -46,7 +46,7 @@ public class VectorAliasCorrector {
     public Optional<String> correct(String input) {
         if (input == null) return Optional.empty();
         String s = normalize(input);
-        String byFull = aliasMap.get(s.trim().toLowerCase());
+        String byFull = aliasMap.get(s.trim().toLowerCase(Locale.ROOT));
         String out = byFull != null ? byFull : s;
         return out.equals(input) ? Optional.empty() : Optional.of(out);
     }

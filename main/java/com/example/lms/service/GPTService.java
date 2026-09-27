@@ -52,6 +52,9 @@ public class GPTService {
     @Value("${openai.chat.force-high-tier:false}")
     private boolean forceHighTier;
 
+    @Value("${openai.api.temperature.default:${llm.chat.temperature:0.3}}")
+    private double defaultTemperature;
+
     public GPTService(@Qualifier("openaiWebClient") WebClient openaiWebClient,
                       CurrentModelRepository currentRepo) {
         this.openaiWebClient = openaiWebClient;
@@ -73,7 +76,7 @@ public class GPTService {
         Map<String, Object> body = new HashMap<>();
         body.put("model", modelToUse);
         body.put("messages", List.of(message));
-        body.put("temperature", 0.7);
+        body.put("temperature", defaultTemperature);
         String tokenKey = OpenAiTokenParamCompat.tokenParamKey(modelToUse, apiUrl);
         if (tokenKey != null && !tokenKey.isBlank() && !"none".equalsIgnoreCase(tokenKey)) {
             body.put(tokenKey, 1024);

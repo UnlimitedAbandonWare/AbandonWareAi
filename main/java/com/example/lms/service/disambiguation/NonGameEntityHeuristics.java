@@ -1,5 +1,6 @@
 package com.example.lms.service.disambiguation;
 
+import java.util.Locale;
 import java.util.Set;
 
 public final class NonGameEntityHeuristics {
@@ -28,7 +29,7 @@ public final class NonGameEntityHeuristics {
      */
     public static boolean containsSuspiciousPair(String query) {
         if (query == null || query.isBlank()) return false;
-        String q = query.toLowerCase();
+        String q = query.toLowerCase(Locale.ROOT);
         boolean mentionsGenshin = q.contains("원신") || q.contains("genshin");
         if (!mentionsGenshin) return false;
         for (String n : NON_GAME_PROPER_NOUNS) {

@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.example.lms.guard.GuardProfile;
+import com.example.lms.guard.InteractionEvidencePolicy;
 import com.example.lms.util.FutureTechDetector;
 import com.example.lms.util.QueryTypeHeuristics;
 import com.example.lms.domain.enums.VisionMode;
@@ -584,6 +585,144 @@ public class EvidenceAwareGuard {
     }
 
     public String degradeToEvidenceList(List<EvidenceDoc> topDocs) {
+        return degradeToEvidenceList(topDocs, true);
+    }
+
+    public enum ContainmentStatus {
+        NOT_REQUIRED,
+        CLEAN,
+        QUARANTINED,
+        INSUFFICIENT_CLEAN_EVIDENCE,
+        ENFORCEMENT_FAILED
+    }
+
+    public record InteractionEvidencePreparation(
+            java.util.List<EvidenceDoc> cleanEvidence,
+            int quarantinedCount,
+            ContainmentStatus status,
+            boolean strictEvaluation,
+            boolean memoryWriteAllowed,
+            boolean blockRequired) {
+
+        public InteractionEvidencePreparation {
+            cleanEvidence = cleanEvidence == null ? java.util.List.of() : java.util.List.copyOf(cleanEvidence);
+            quarantinedCount = Math.max(0, quarantinedCount);
+            status = status == null ? ContainmentStatus.ENFORCEMENT_FAILED : status;
+        }
+    }
+
+    /**
+     * Quarantine explicitly suspect evidence before strict defensive evaluation.
+     * The trace contract contains counts and bounded status only.
+     */
+    public boolean requiresRetrievedEvidenceQuarantine(InteractionEvidencePolicy.Decision decision) {
+        return decision != null
+                && decision.defensive()
+                && decision.sourceSurfaces().contains(
+                        InteractionEvidencePolicy.SourceSurface.RETRIEVED_EVIDENCE);
+    }
+
+    public InteractionEvidencePreparation prepareInteractionEvidence(
+            InteractionEvidencePolicy.Decision decision,
+            java.util.List<EvidenceDoc> evidence,
+            java.util.Set<String> suspectEvidenceIds) {
+        java.util.List<EvidenceDoc> source = evidence == null ? java.util.List.of() : evidence;
+        if (decision == null || !decision.defensive()) {
+            if (decision != null && decision.shouldTrace()) {
+                traceInteractionContainment(
+                        ContainmentStatus.NOT_REQUIRED,
+                        source.size(),
+                        source.size(),
+                        0,
+                        false);
+            }
+            return new InteractionEvidencePreparation(
+                    source,
+                    0,
+                    ContainmentStatus.NOT_REQUIRED,
+                    false,
+                    true,
+                    false);
+        }
+
+        if (requiresRetrievedEvidenceQuarantine(decision)
+                && (suspectEvidenceIds == null || suspectEvidenceIds.isEmpty())) {
+            traceInteractionContainment(
+                    ContainmentStatus.ENFORCEMENT_FAILED,
+                    source.size(),
+                    0,
+                    0,
+                    true);
+            return new InteractionEvidencePreparation(
+                    java.util.List.of(),
+                    0,
+                    ContainmentStatus.ENFORCEMENT_FAILED,
+                    true,
+                    false,
+                    true);
+        }
+
+        try {
+            java.util.ArrayList<EvidenceDoc> clean = new java.util.ArrayList<>();
+            int quarantined = 0;
+            for (EvidenceDoc doc : source) {
+                if (doc == null) {
+                    continue;
+                }
+                boolean suspect = suspectEvidenceIds != null && suspectEvidenceIds.contains(doc.id());
+                if (suspect) {
+                    quarantined++;
+                } else {
+                    clean.add(doc);
+                }
+            }
+            ContainmentStatus status = clean.isEmpty()
+                    ? ContainmentStatus.INSUFFICIENT_CLEAN_EVIDENCE
+                    : (quarantined > 0 ? ContainmentStatus.QUARANTINED : ContainmentStatus.CLEAN);
+            boolean block = clean.isEmpty();
+            traceInteractionContainment(status, source.size(), clean.size(), quarantined, block);
+            return new InteractionEvidencePreparation(
+                    clean,
+                    quarantined,
+                    status,
+                    true,
+                    false,
+                    block);
+        } catch (RuntimeException enforcementFailure) {
+            traceInteractionContainment(
+                    ContainmentStatus.ENFORCEMENT_FAILED,
+                    0,
+                    0,
+                    0,
+                    true);
+            return new InteractionEvidencePreparation(
+                    java.util.List.of(),
+                    0,
+                    ContainmentStatus.ENFORCEMENT_FAILED,
+                    true,
+                    false,
+                    true);
+        }
+    }
+
+    private static void traceInteractionContainment(
+            ContainmentStatus status,
+            int inputCount,
+            int cleanCount,
+            int quarantinedCount,
+            boolean blockRequired) {
+        try {
+            TraceStore.put("interaction.policy.containment.status", status.name());
+            TraceStore.put("interaction.policy.containment.inputCount", Math.max(0, inputCount));
+            TraceStore.put("interaction.policy.containment.cleanCount", Math.max(0, cleanCount));
+            TraceStore.put("interaction.policy.containment.quarantinedCount", Math.max(0, quarantinedCount));
+            TraceStore.put("interaction.policy.containment.blockRequired", blockRequired);
+        } catch (Throwable traceFailure) {
+            log.debug("[guard] fail-soft stage={}", "interactionPolicy.containmentTrace");
+        }
+    }
+
+    public String degradeToEvidenceList(List<EvidenceDoc> topDocs, boolean includeDiagnostics) {
         if (topDocs == null || topDocs.isEmpty()) {
             try {
                 TraceStore.put("guard.final.action", "DEGRADE_EVIDENCE_LIST");
@@ -592,7 +731,7 @@ public class EvidenceAwareGuard {
                 TraceStore.put("guard.degradedToEvidence.evidenceCount", 0);
                 TraceStore.put("guard.degradedToEvidence.snippetNonBlank", 0);
                 TraceStore.put("guard.degradedToEvidence.hasSnippet", false);
-                TraceStore.put("guard.degradedToEvidence.diagnosticsRendered", true);
+                TraceStore.put("guard.degradedToEvidence.diagnosticsRendered", includeDiagnostics);
             } catch (RuntimeException ex) {
                 log.debug("[guard] fail-soft stage={}", "guard.degradedToEvidence.emptyTrace");
                 traceBestEffortFailure("guard.degradedToEvidence.emptyTrace", ex);
@@ -628,6 +767,9 @@ public class EvidenceAwareGuard {
         // Fill missing title/snippet so DEGRADE_EVIDENCE_LIST does not degrade into
         // URL-only output.
         docs = EvidenceDocListEnricher.enrich(docs);
+        DegradedEvidenceIntent evidenceIntent = detectDegradedEvidenceIntent(currentGuardUserQuery());
+        docs = prioritizeDegradedEvidenceDocs(docs, evidenceIntent);
+        int priorityEvidenceCount = countPriorityEvidence(docs, evidenceIntent);
 
         int snippetNonBlank = 0;
         for (EvidenceDoc d : docs) {
@@ -641,18 +783,46 @@ public class EvidenceAwareGuard {
             TraceStore.put("guard.degradedToEvidence.evidenceCount", docs.size());
             TraceStore.put("guard.degradedToEvidence.snippetNonBlank", snippetNonBlank);
             TraceStore.put("guard.degradedToEvidence.hasSnippet", snippetNonBlank > 0);
-            TraceStore.put("guard.degradedToEvidence.diagnosticsRendered", true);
+            TraceStore.put("guard.degradedToEvidence.diagnosticsRendered", includeDiagnostics);
+            TraceStore.put("guard.degradedToEvidence.officialOrChangelogIntent",
+                    evidenceIntent.officialOrChangelog());
+            TraceStore.put("guard.degradedToEvidence.priorityEvidenceCount", priorityEvidenceCount);
         } catch (RuntimeException ex) {
             log.debug("[guard] fail-soft stage={}", "guard.degradedToEvidence.metricsTrace");
             traceBestEffortFailure("guard.degradedToEvidence.metricsTrace", ex);
         }
 
+        if (evidenceIntent.officialOrChangelog() && priorityEvidenceCount <= 0) {
+            try {
+                TraceStore.put("guard.degradedToEvidence.evidenceNeeded", true);
+                TraceStore.put("guard.degradedToEvidence.evidenceNeededReason", "official_evidence_missing");
+            } catch (RuntimeException ex) {
+                log.debug("[guard] fail-soft stage={}", "guard.degradedToEvidence.evidenceNeededTrace");
+                traceBestEffortFailure("guard.degradedToEvidence.evidenceNeededTrace", ex);
+            }
+            return "evidence_needed: official/changelog evidence is missing from the current search results. "
+                    + "Do not list community, mirror, tutorial, or local sources as proof for this request.";
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("## 검색 결과 요약\n");
-        sb.append("상세한 답변을 만들 만큼 **공식 문서가 많지는 않지만**, 관련 자료를 확보했습니다.\n");
-        sb.append("아래 자료의 **스니펫/근거**와 함께, 하단의 **진단(Plan/Mode/Aux/Guard/WebFailSoft)** 을 확인해 주세요.\n\n");
+        if (evidenceIntent.officialOrChangelog() && priorityEvidenceCount > 0) {
+            sb.append("공식/changelog 성격의 근거를 우선해서 검색 결과를 정리했습니다.\n");
+        } else if (evidenceIntent.officialOrChangelog()) {
+            sb.append("공식/changelog 근거를 요청했지만 현재 검색 결과에서는 뚜렷한 공식/릴리스 노트 근거가 부족합니다.\n");
+        } else {
+            sb.append("상세한 답변을 만들 만큼 **공식 문서가 많지는 않지만**, 관련 자료를 확보했습니다.\n");
+        }
+        if (includeDiagnostics) {
+            sb.append("아래 자료의 **스니펫/근거**와 함께, 하단의 **진단(Plan/Mode/Aux/Guard/WebFailSoft)** 을 확인해 주세요.\n\n");
+        } else {
+            sb.append("아래 자료의 **스니펫/근거**를 확인해 주세요.\n\n");
+        }
 
         // 핵심 포인트(스니펫/제목의 첫 문장) 1~3개
+        java.util.Set<String> queryKeywords = queryRelevanceKeywords(currentGuardUserQuery());
+        int keyPointCandidates = 0;
+        int keyPointSkippedAsIrrelevant = 0;
         java.util.List<String> keyPoints = new java.util.ArrayList<>();
         for (EvidenceDoc d : docs) {
             if (keyPoints.size() >= 3) {
@@ -667,10 +837,28 @@ public class EvidenceAwareGuard {
             if (p.isBlank()) {
                 p = keySentence(title);
             }
-            p = clip(redact(p), 160);
-            if (!p.isBlank() && !keyPoints.contains(p)) {
-                keyPoints.add(p);
+            if (p.isBlank()) {
+                continue;
             }
+            keyPointCandidates++;
+            if (!queryKeywords.isEmpty() && !queryRelevantText(p, queryKeywords)) {
+                keyPointSkippedAsIrrelevant++;
+                continue;
+            }
+            String safePoint = clip(redact(p), 160);
+            if (!safePoint.isBlank() && !keyPoints.contains(safePoint)) {
+                keyPoints.add(safePoint);
+            }
+        }
+        try {
+            TraceStore.put("guard.degradedToEvidence.keyPoints.queryFiltered",
+                    !queryKeywords.isEmpty() && keyPointSkippedAsIrrelevant > 0);
+            TraceStore.put("guard.degradedToEvidence.keyPoints.candidateCount", keyPointCandidates);
+            TraceStore.put("guard.degradedToEvidence.keyPoints.skippedIrrelevant", keyPointSkippedAsIrrelevant);
+            TraceStore.put("guard.degradedToEvidence.keyPoints.renderedCount", keyPoints.size());
+        } catch (RuntimeException ex) {
+            log.debug("[guard] fail-soft stage={}", "guard.degradedToEvidence.keyPointFilterTrace");
+            traceBestEffortFailure("guard.degradedToEvidence.keyPointFilterTrace", ex);
         }
         if (!keyPoints.isEmpty()) {
             sb.append("### 핵심 포인트\n");
@@ -715,13 +903,21 @@ public class EvidenceAwareGuard {
         }
         sb.append("\n");
 
-        // 진단/라우팅(TraceStore 기반)
-        sb.append(buildDiagnosticsBlock());
+        if (includeDiagnostics) {
+            // 진단/라우팅(TraceStore 기반)
+            sb.append(buildDiagnosticsBlock());
 
-        // 빠른 개선 힌트(운영/디버깅)
-        sb.append(buildFixHintsBlock());
+            // 빠른 개선 힌트(운영/디버깅)
+            sb.append(buildFixHintsBlock());
+        }
 
-        sb.append("\n(위 내용은 검색 엔진 및 커뮤니티 데이터를 바탕으로 한 것으로, 최신 업데이트와 다를 수 있습니다.)");
+        if (evidenceIntent.officialOrChangelog() && priorityEvidenceCount > 0) {
+            sb.append("\n(위 내용은 공식/changelog 성격의 검색 근거를 우선 정리한 것으로, 최신 상태는 원문 링크에서 재확인해 주세요.)");
+        } else if (evidenceIntent.officialOrChangelog()) {
+            sb.append("\n(위 내용은 제한된 검색 근거 기반이며, 공식/changelog 원문 근거가 부족하므로 추가 확인이 필요합니다.)");
+        } else {
+            sb.append("\n(위 내용은 검색 엔진 및 커뮤니티 데이터를 바탕으로 한 것으로, 최신 업데이트와 다를 수 있습니다.)");
+        }
         return sb.toString();
     }
 
@@ -1024,6 +1220,175 @@ public class EvidenceAwareGuard {
             "좀", "해주세요", "해줘",
             "the", "a", "an", "and", "or", "to", "of", "in", "for", "on", "with", "is", "are");
 
+    private static final java.util.Set<String> QUERY_RELEVANCE_STOP = java.util.Set.of(
+            "현재", "이번", "오늘", "질문", "답변", "답해줘", "알려줘", "한국어", "영어",
+            "문장", "문장만", "방법", "설명", "디버그", "없이", "세", "두", "한",
+            "the", "a", "an", "and", "or", "to", "of", "in", "for", "on", "with", "is", "are",
+            "please", "answer", "explain", "debug");
+
+    private static String currentGuardUserQuery() {
+        try {
+            GuardContext ctx = GuardContextHolder.get();
+            return ctx == null ? "" : ctx.getUserQuery();
+        } catch (RuntimeException ex) {
+            log.debug("[guard] fail-soft stage={}", "guard.degradedToEvidence.userQueryContext");
+            traceBestEffortFailure("guard.degradedToEvidence.userQueryContext", ex);
+            return "";
+        }
+    }
+
+    private static DegradedEvidenceIntent detectDegradedEvidenceIntent(String userQuery) {
+        String q = searchableEvidenceText(userQuery);
+        boolean official = degradedContainsAny(q,
+                "official", "official source", "official-source", "official evidence",
+                "official documentation", "primary source", "source of truth",
+                "공식", "1차 출처", "일차 출처");
+        boolean changelog = degradedContainsAny(q,
+                "changelog", "change log", "release note", "release notes", "release-notes",
+                "what's new", "whats new", "latest changes", "변경사항", "최신 변경",
+                "릴리스", "릴리즈", "출시 노트");
+        return new DegradedEvidenceIntent(official, changelog);
+    }
+
+    private static java.util.List<EvidenceDoc> prioritizeDegradedEvidenceDocs(
+            java.util.List<EvidenceDoc> docs,
+            DegradedEvidenceIntent intent) {
+        if (docs == null || docs.size() < 2 || intent == null || !intent.officialOrChangelog()) {
+            return docs;
+        }
+        docs.sort((left, right) -> Integer.compare(
+                degradedEvidenceIntentScore(right, intent),
+                degradedEvidenceIntentScore(left, intent)));
+        return docs;
+    }
+
+    private static int countPriorityEvidence(java.util.List<EvidenceDoc> docs, DegradedEvidenceIntent intent) {
+        if (docs == null || docs.isEmpty() || intent == null || !intent.officialOrChangelog()) {
+            return 0;
+        }
+        int count = 0;
+        for (EvidenceDoc doc : docs) {
+            if (degradedEvidenceIntentScore(doc, intent) > 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static int degradedEvidenceIntentScore(EvidenceDoc doc, DegradedEvidenceIntent intent) {
+        if (doc == null || intent == null || !intent.officialOrChangelog()) {
+            return 0;
+        }
+        String text = searchableEvidenceText(
+                safeString(doc.id()) + " "
+                        + safeString(doc.title()) + " "
+                        + safeString(doc.snippet()));
+        int score = 0;
+        if (intent.changelog()) {
+            if (degradedContainsAny(text,
+                    "changelog", "change log", "release note", "release notes", "release-notes",
+                    "/releases", "releases/", "what's new", "whats new", "변경사항",
+                    "릴리스 노트", "릴리즈 노트", "출시 노트")) {
+                score += 8;
+            }
+            if (degradedContainsAny(text, "latest", "version", "updates", "update", "최신")) {
+                score += 1;
+            }
+        }
+        if (intent.official()) {
+            if (degradedContainsAny(text,
+                    "official", "official docs", "official documentation", "documentation",
+                    "api reference", "developer", "developers", "docs.", "/docs",
+                    "platform.openai.com/docs", "developers.openai.com",
+                    "openai.com/changelog", "learn.microsoft.com", "developer.apple.com",
+                    "cloud.google.com", "docs.aws.amazon.com", "docs.github.com")) {
+                score += 6;
+            }
+            if (degradedContainsAny(text, "github.com/") && degradedContainsAny(text, "/releases", "release")) {
+                score += 4;
+            }
+        }
+        boolean communityOrPersonal = degradedContainsAny(text,
+                "reddit", "stackoverflow", "medium.com", "velog", "tistory",
+                "wikipedia", "community", "forum", "personal.", "개인 블로그");
+        if (communityOrPersonal) {
+            score = Math.min(score - 5, 0);
+        }
+        return score;
+    }
+
+    private static String searchableEvidenceText(String raw) {
+        return raw == null ? "" : raw.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+    }
+
+    private static String safeString(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static boolean degradedContainsAny(String text, String... needles) {
+        if (text == null || text.isBlank() || needles == null || needles.length == 0) {
+            return false;
+        }
+        for (String needle : needles) {
+            if (needle != null && !needle.isBlank() && text.contains(needle.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private record DegradedEvidenceIntent(boolean official, boolean changelog) {
+        boolean officialOrChangelog() {
+            return official || changelog;
+        }
+    }
+
+    private static java.util.Set<String> queryRelevanceKeywords(String text) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        addRelevanceTokens(out, text);
+        for (String normalized : KoreanQueryNormalizer.normalize(text)) {
+            addRelevanceTokens(out, normalized);
+        }
+        return out;
+    }
+
+    private static void addRelevanceTokens(java.util.Set<String> out, String text) {
+        if (out == null || text == null || text.isBlank()) {
+            return;
+        }
+        java.util.regex.Matcher m = KEY_SENT_TOKEN.matcher(text.toLowerCase(Locale.ROOT));
+        while (m.find()) {
+            String token = m.group();
+            if (token == null) {
+                continue;
+            }
+            String t = token.trim();
+            if (t.length() < 2) {
+                continue;
+            }
+            if (KEY_SENT_STOP.contains(t) || QUERY_RELEVANCE_STOP.contains(t)) {
+                continue;
+            }
+            out.add(t);
+        }
+    }
+
+    private static boolean queryRelevantText(String text, java.util.Set<String> queryKeywords) {
+        if (queryKeywords == null || queryKeywords.isEmpty()) {
+            return true;
+        }
+        java.util.Set<String> candidate = queryRelevanceKeywords(text);
+        if (candidate.isEmpty()) {
+            return false;
+        }
+        for (String keyword : queryKeywords) {
+            if (candidate.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static String keySentence(String s) {
         if (s == null) {
             return "";
@@ -1120,13 +1485,14 @@ public class EvidenceAwareGuard {
             int requiredMinCitations,
             int actualCitations,
             List<EvidenceDoc> evidenceDocs) {
+        boolean includeDiagnostics = !prefersConciseEvidenceDetour(userQuery);
         StringBuilder sb = new StringBuilder();
         sb.append("⚠️ 근거 출처가 부족하여, 확정 답변 대신 ‘근거 목록 + 확인 경로’만 제공합니다.\n");
         sb.append("- 인용 최소치: ").append(requiredMinCitations)
                 .append(", 현재: ").append(actualCitations).append("\n");
 
         List<String> suggestions = buildSearchSuggestions(userQuery);
-        if (!suggestions.isEmpty()) {
+        if (includeDiagnostics && !suggestions.isEmpty()) {
             sb.append("\n추가 근거 확보용 추천 검색어:\n");
             for (String q : suggestions) {
                 sb.append("- ").append(q).append("\n");
@@ -1134,9 +1500,27 @@ public class EvidenceAwareGuard {
         }
 
         sb.append("\n---\n");
-        sb.append(degradeToEvidenceList(evidenceDocs));
+        sb.append(degradeToEvidenceList(evidenceDocs, includeDiagnostics));
 
         return sb.toString();
+    }
+
+    private static boolean prefersConciseEvidenceDetour(String userQuery) {
+        if (userQuery == null || userQuery.isBlank()) {
+            return false;
+        }
+        String q = userQuery.toLowerCase(Locale.ROOT);
+        return q.contains("한 문장")
+                || q.contains("한문장")
+                || q.contains("짧게")
+                || q.contains("간단")
+                || q.contains("답변만")
+                || q.contains("진단 없이")
+                || q.contains("one sentence")
+                || q.contains("single sentence")
+                || q.contains("answer only")
+                || q.contains("without diagnostics")
+                || q.contains("no diagnostics");
     }
 
     private static List<String> buildSearchSuggestions(String userQuery) {
@@ -1145,6 +1529,11 @@ public class EvidenceAwareGuard {
         String q = userQuery.trim();
         if (q.isEmpty())
             return Collections.emptyList();
+
+        List<String> officialScoped = buildOfficialScopedSearchSuggestions(q);
+        if (!officialScoped.isEmpty()) {
+            return officialScoped;
+        }
 
         boolean ko = containsHangul(q);
         List<String> candidates = ko
@@ -1159,6 +1548,35 @@ public class EvidenceAwareGuard {
                         q + " site:wikipedia.org",
                         "\"" + q + "\" documentation");
 
+        return candidates.size() > 4 ? candidates.subList(0, 4) : candidates;
+    }
+
+    private static List<String> buildOfficialScopedSearchSuggestions(String query) {
+        String lower = query.toLowerCase(Locale.ROOT);
+        boolean officialScoped = lower.contains("official/external")
+                || lower.contains("external/official")
+                || lower.contains("official source")
+                || lower.contains("official sources")
+                || lower.contains("official url")
+                || lower.contains("official urls")
+                || lower.contains("official evidence")
+                || lower.contains("official documentation");
+        if (!officialScoped) {
+            return Collections.emptyList();
+        }
+
+        java.util.ArrayList<String> candidates = new java.util.ArrayList<>();
+        if (lower.contains("openai")) {
+            candidates.add("site:developers.openai.com OpenAI Responses API web_search official documentation");
+            candidates.add("site:platform.openai.com OpenAI Responses API web_search official documentation");
+        }
+        if (lower.contains("supabase")) {
+            candidates.add("site:supabase.com Supabase MCP read_only project_ref official documentation");
+            candidates.add("site:supabase.com Supabase CLI project ref official documentation");
+        }
+        if (candidates.isEmpty()) {
+            candidates.add("official documentation");
+        }
         return candidates.size() > 4 ? candidates.subList(0, 4) : candidates;
     }
 
@@ -1481,7 +1899,7 @@ public class EvidenceAwareGuard {
         if (url == null) {
             return false;
         }
-        String lower = url.toLowerCase();
+        String lower = url.toLowerCase(Locale.ROOT);
         // namu.wiki는 테크/루머 출처로 별도 취급 (isRumorFriendlyDomain)
         return /* lower.contains("namu.wiki") || */
         lower.contains("tistory.com")
@@ -1571,6 +1989,9 @@ public class EvidenceAwareGuard {
             java.util.List<EvidenceDoc> evidence,
             int maxRegens,
             VisionMode visionMode) {
+        if (visionMode == VisionMode.FREE && scorecardBlockRecommended()) {
+            return guardWithEvidence(draft, evidence, maxRegens);
+        }
         if (visionMode == VisionMode.FREE) {
             // FREE 모드에서는 가드를 완화
             if (evidence != null && !evidence.isEmpty()) {
@@ -1585,19 +2006,32 @@ public class EvidenceAwareGuard {
                     0.0, EvidenceStrength.NONE, DraftQuality.OK,
                     GuardAction.ALLOW_NO_MEMORY, java.util.Collections.emptyList(), false);
         }
-        // STRICT/HYBRID는 기존 로직 사용
-        return guardWithEvidence(draft, evidence, maxRegens);
+        // STRICT must not fall back to a mutable request-external profile or a
+        // rumor-friendly mode. HYBRID preserves the existing configured behavior.
+        boolean forceStrictMode = visionMode == VisionMode.STRICT;
+        GuardProfile profile = forceStrictMode ? GuardProfile.STRICT : currentGuardProfile();
+        return guardWithEvidenceUsingProfile(draft, evidence, maxRegens, profile, forceStrictMode);
     }
 
     public GuardDecision guardWithEvidence(
             String draft,
             java.util.List<EvidenceDoc> evidence,
             int maxRegens) {
+        return guardWithEvidenceUsingProfile(draft, evidence, maxRegens, currentGuardProfile(), false);
+    }
+
+    private GuardProfile currentGuardProfile() {
+        return guardProfileProps != null ? guardProfileProps.currentProfile() : GuardProfile.PROFILE_MEMORY;
+    }
+
+    private GuardDecision guardWithEvidenceUsingProfile(
+            String draft,
+            java.util.List<EvidenceDoc> evidence,
+            int maxRegens,
+            GuardProfile profile,
+            boolean forceStrictMode) {
         java.util.List<EvidenceDoc> safeEvidence = (evidence == null) ? java.util.Collections.emptyList() : evidence;
-        // GuardProfileProps 주입 누락된 테스트 환경 대비 방어
-        GuardProfile profile = (guardProfileProps != null)
-                ? guardProfileProps.currentProfile()
-                : GuardProfile.PROFILE_MEMORY;
+        profile = profile == null ? GuardProfile.PROFILE_MEMORY : profile;
         boolean hasEvidence = !safeEvidence.isEmpty();
         boolean noEvidenceTemplate = looksNoEvidenceTemplate(draft);
         boolean structurallyEmpty = looksStructurallyEmpty(draft);
@@ -1723,8 +2157,8 @@ public class EvidenceAwareGuard {
 
             return new GuardDecision(
                     finalDraft,
-                    false, // shouldPersistMemory
-                    false, // shouldReinforceMemory
+                    false, // regenerated
+                    degradedToEvidence,
                     false,
                     false,
                     coverage,
@@ -1732,7 +2166,7 @@ public class EvidenceAwareGuard {
                     DraftQuality.WEAK,
                     GuardAction.ALLOW_NO_MEMORY,
                     safeEvidence,
-                    degradedToEvidence);
+                    false);
         }
         DraftQuality quality = (noEvidenceTemplate || structurallyEmpty)
                 ? DraftQuality.WEAK
@@ -1742,7 +2176,7 @@ public class EvidenceAwareGuard {
         // 증거는 충분한데(Strength != NONE), 답변이 증거를 전혀 반영하지 못함(Coverage < 0.05)
         // 기본적으로는 회피 템플릿으로 보지만,
         // RUMOR_FRIENDLY / NORMAL 모드 + STRONG evidence 인 경우에는 차단하지 않는다.
-        GuardMode mode = resolveMode(draft, safeEvidence);
+        GuardMode mode = forceStrictMode ? GuardMode.STRICT : resolveMode(draft, safeEvidence);
         // [FUTURE_TECH FIX] Treat rumor-friendly mode as FutureTech: allow rumor
         // summary but NEVER persist into memory
         boolean futureTech = FutureTechDetector.isFutureTechQuery(draft);

@@ -159,6 +159,10 @@ public final class VectorMetaKeys {
     public static final String META_LEARNING_CFVM_REWARD = "learning_cfvm_reward";
     public static final String META_LEARNING_REQUERY_PENALTY = "learning_requery_penalty";
     public static final String META_LEARNING_VECTOR_DECISION = "learning_vector_decision";
+    public static final String META_LEARNING_ROI_NEEDLE_SIGNAL_CANDIDATE = "learning_roi_needle_signal_candidate";
+    public static final String META_LEARNING_ROI_SIGNAL_VALUE_SCORE = "learning_roi_signal_value_score";
+    public static final String META_LEARNING_ROI_PROMOTED = "learning_roi_promoted";
+    public static final String META_LEARNING_ROI_REJECT_REASON = "learning_roi_reject_reason";
     public static final String META_AGENT_HANDOFF_MANIFEST = "agent_handoff_manifest";
     public static final String META_AGENT_HANDOFF_MANIFEST_HASH = "agent_handoff_manifest_hash";
     public static final String META_AGENT_HANDOFF_SAMPLE_HASH = "agent_handoff_sample_hash";

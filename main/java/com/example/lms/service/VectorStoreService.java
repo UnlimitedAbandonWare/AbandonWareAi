@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -51,6 +52,7 @@ import java.util.stream.Collectors;
 public class VectorStoreService {
 
     private static final Logger log = LoggerFactory.getLogger(VectorStoreService.class);
+    static final int DEFAULT_QUEUE_MAX_PENDING = 2_048;
 
     private final EmbeddingModel embeddingModel;
 
@@ -84,9 +86,16 @@ public class VectorStoreService {
     @Autowired(required = false)
     private TraceSnapshotStore traceSnapshotStore;
 
+    @Autowired(required = false)
+    private com.example.lms.service.rag.graph.GeneralGraphVectorGate generalGraphVectorGate;
+
     // MERGE_HOOK:PROJ_AGENT::VECTORSTORE_BUFFER_FLUSH_V2
     private final AtomicReference<ConcurrentHashMap<String, BufferEntry>> queueRef =
             new AtomicReference<>(new ConcurrentHashMap<>());
+    private final Object queueStateMutex = new Object();
+    private final AtomicLong rejectedEnqueueCount = new AtomicLong();
+    /** Guarded by {@link #queueStateMutex}. */
+    private int inFlightEntries = 0;
 
     private volatile long backoffUntilEpochMs = 0L;
     private volatile long backoffStepMs = 0L;
@@ -96,6 +105,9 @@ public class VectorStoreService {
 
     @Value("${vectorstore.batch-size:512}")
     private int batchSize;
+
+    @Value("${vectorstore.queue.max-pending:2048}")
+    private int queueMaxPending;
 
     @Value("${vectorstore.shadow.enabled:true}")
     private boolean shadowWriteEnabled;
@@ -222,6 +234,29 @@ public class VectorStoreService {
     ) {
     }
 
+    private record QueueAdmission(
+            boolean accepted,
+            boolean newlyAccepted,
+            int liveSizeAfterAdmission,
+            int effectiveThreshold,
+            int retainedAtDecision,
+            int capacity
+    ) {
+    }
+
+    public static final class VectorQueueCapacityExceededException extends IllegalStateException {
+        private final int capacity;
+
+        public VectorQueueCapacityExceededException(int capacity) {
+            super("vectorstore queue capacity exceeded (capacity=" + Math.max(1, capacity) + ")");
+            this.capacity = Math.max(1, capacity);
+        }
+
+        public int capacity() {
+            return capacity;
+        }
+    }
+
     /** Groups buffered items by correlation context so flush logs remain attributable. */
     private record FlushGroupKey(String sessionId, String traceId, String requestId, boolean debug) {
     }
@@ -249,10 +284,43 @@ public class VectorStoreService {
         if (text == null || text.isBlank()) return;
         Map<String, Object> incomingMeta = (extraMeta == null) ? new LinkedHashMap<>() : new LinkedHashMap<>(extraMeta);
 
+        VectorPoisonGuard.IngestDecision preChunkDecision = null;
+        Exception preChunkGuardFailure = null;
+        boolean preChunkGuardRan = false;
+
         if (documentChunkingService != null
                 && !incomingMeta.containsKey(VectorMetaKeys.META_CHUNK_INDEX)
                 && !"true".equalsIgnoreCase(String.valueOf(incomingMeta.get("chunked")))) {
-            List<DocumentChunkingService.Chunk> chunks = documentChunkingService.split(text, incomingMeta);
+            String chunkingText = text;
+            Map<String, Object> chunkingMeta = incomingMeta;
+            if (vectorPoisonGuard != null) {
+                preChunkGuardRan = true;
+                try {
+                    preChunkDecision = vectorPoisonGuard.inspectIngest(
+                            sessionId,
+                            text,
+                            incomingMeta,
+                            "vectorstore.enqueue.prechunk");
+                    if (preChunkDecision == null || !preChunkDecision.allow()) {
+                        chunkingText = null;
+                    } else {
+                        if (preChunkDecision.text() != null && !preChunkDecision.text().isBlank()) {
+                            chunkingText = preChunkDecision.text();
+                        }
+                        if (preChunkDecision.meta() != null && !preChunkDecision.meta().isEmpty()) {
+                            chunkingMeta = new LinkedHashMap<>(preChunkDecision.meta());
+                        }
+                    }
+                } catch (Exception ex) {
+                    VectorStoreTraceSuppressions.trace("ingest.preChunkGuard", ex);
+                    log.debug("[VectorStore] fail-soft stage={}", "ingest.preChunkGuard");
+                    preChunkGuardFailure = ex;
+                    chunkingText = null;
+                }
+            }
+            List<DocumentChunkingService.Chunk> chunks = chunkingText == null
+                    ? List.of()
+                    : documentChunkingService.split(chunkingText, chunkingMeta);
             if (chunks != null && chunks.size() > 1) {
                 for (DocumentChunkingService.Chunk chunk : chunks) {
                     Map<String, Object> chunkMeta = new LinkedHashMap<>(chunk.metadata());
@@ -293,7 +361,12 @@ public class VectorStoreService {
         String scopeReason = "no_scope_guard";
         if (vectorPoisonGuard != null) {
             try {
-                VectorPoisonGuard.IngestDecision dec = vectorPoisonGuard.inspectIngest(sid, payload, meta, "vectorstore.enqueue");
+                if (preChunkGuardFailure != null) {
+                    throw preChunkGuardFailure;
+                }
+                VectorPoisonGuard.IngestDecision dec = preChunkGuardRan
+                        ? preChunkDecision
+                        : vectorPoisonGuard.inspectIngest(sid, payload, meta, "vectorstore.enqueue");
                 poisonReason = (dec == null) ? "null_guard_decision" : (dec.reason() == null ? "" : dec.reason());
                 if (dec == null) {
                     routedToQuarantine = true;
@@ -311,6 +384,17 @@ public class VectorStoreService {
                     if (dec.meta() != null && !dec.meta().isEmpty()) {
                         meta = new LinkedHashMap<>(dec.meta());
                     }
+                    if (VectorPoisonGuard.REASON_GENERATED_ARTIFACT_PATH.equals(dec.reason())) {
+                        try {
+                            TraceStore.put("ml.vector.ingest.drop", true);
+                            TraceStore.put("ml.vector.ingest.drop.reason",
+                                    VectorPoisonGuard.REASON_GENERATED_ARTIFACT_PATH);
+                        } catch (Exception traceEx) {
+                            VectorStoreTraceSuppressions.trace("ingest.generatedArtifactDrop", traceEx);
+                            log.debug("[VectorStore] fail-soft stage={}", "ingest.generatedArtifactDrop");
+                        }
+                        return;
+                    }
                 } else {
                     if (dec.text() != null && !dec.text().isBlank()) {
                         payload = dec.text();
@@ -320,6 +404,7 @@ public class VectorStoreService {
                     }
                 }
             } catch (Exception ex) {
+                VectorStoreTraceSuppressions.trace("ingest.poisonGuard", ex);
                 routedToQuarantine = true;
                 sid = quarantineSid;
                 poisonReason = "guard_error:" + ex.getClass().getSimpleName();
@@ -567,7 +652,13 @@ public class VectorStoreService {
         boolean dbg0 = truthy(MDC.get("dbgSearch"));
 
         long createdAtMs = System.currentTimeMillis();
-        queueRef.get().putIfAbsent(id, new BufferEntry(id, sid, payload, meta, createdAtMs, traceId0, requestId0, dbg0));
+        QueueAdmission admission = admitToQueue(
+                id,
+                new BufferEntry(id, sid, payload, meta, createdAtMs, traceId0, requestId0, dbg0));
+        if (!admission.accepted()) {
+            recordCapacityRejection(admission);
+            throw new VectorQueueCapacityExceededException(admission.capacity());
+        }
         String safeShadowReason = SafeRedactor.traceLabelOrFallback(shadowReason, "unknown");
 
         // Breadcrumbs (safe) to debug merge-boundary issues.
@@ -623,25 +714,38 @@ public class VectorStoreService {
             log.debug("[VectorStore] fail-soft stage={}", "ingest.audit");
         }
 
-        if (pendingSize() >= batchSize) {
+        if (admission.liveSizeAfterAdmission() >= admission.effectiveThreshold()) {
             flush();
         }
     }
 
     public int pendingSize() {
-        return queueRef.get().size();
+        synchronized (queueStateMutex) {
+            return retainedEntryCountLocked();
+        }
     }
 
     /** Buffer/flush diagnostics (safe to expose without secrets). */
     public VectorBufferStats bufferStats() {
         long now = System.currentTimeMillis();
         long remaining = now < backoffUntilEpochMs ? Math.max(0L, backoffUntilEpochMs - now) : 0L;
+        int queued;
+        int capacity;
+        int inFlight;
+        synchronized (queueStateMutex) {
+            queued = retainedEntryCountLocked();
+            capacity = effectiveQueueCapacity();
+            inFlight = inFlightEntries;
+        }
         return new VectorBufferStats(
-                pendingSize(),
+                queued,
                 lastFlushAttemptEpochMs,
                 lastFlushAtEpochMs,
                 remaining,
-                lastFlushError
+                lastFlushError,
+                capacity,
+                inFlight,
+                rejectedEnqueueCount.get()
         );
     }
 
@@ -650,8 +754,80 @@ public class VectorStoreService {
             long lastAttemptEpochMs,
             long lastSuccessEpochMs,
             long backoffRemainingMillis,
-            String lastError
+            String lastError,
+            int capacity,
+            int inFlight,
+            long rejectedCount
     ) {
+    }
+
+    private QueueAdmission admitToQueue(String id, BufferEntry entry) {
+        int capacity = effectiveQueueCapacity();
+        int threshold = effectiveFlushThreshold(capacity);
+        synchronized (queueStateMutex) {
+            ConcurrentHashMap<String, BufferEntry> live = queueRef.get();
+            if (live.containsKey(id)) {
+                return new QueueAdmission(
+                        true, false, live.size(), threshold, retainedEntryCountLocked(), capacity);
+            }
+            int retained = retainedEntryCountLocked();
+            if (retained >= capacity) {
+                return new QueueAdmission(false, false, live.size(), threshold, retained, capacity);
+            }
+            live.put(id, entry);
+            return new QueueAdmission(
+                    true, true, live.size(), threshold, retained + 1, capacity);
+        }
+    }
+
+    private int effectiveQueueCapacity() {
+        return queueMaxPending > 0 ? queueMaxPending : DEFAULT_QUEUE_MAX_PENDING;
+    }
+
+    private int effectiveFlushThreshold(int capacity) {
+        return Math.min(Math.max(1, batchSize), capacity);
+    }
+
+    private int retainedEntryCountLocked() {
+        return queueRef.get().size() + inFlightEntries;
+    }
+
+    private void recordCapacityRejection(QueueAdmission admission) {
+        long rejected = rejectedEnqueueCount.updateAndGet(
+                current -> current == Long.MAX_VALUE ? Long.MAX_VALUE : current + 1L);
+        try {
+            TraceStore.inc("vectorstore.queue.rejected");
+            TraceStore.put("vectorstore.queue.reject.reason", "capacity");
+            TraceStore.put("vectorstore.queue.capacity", admission.capacity());
+        } catch (Throwable ignored) {
+            VectorStoreTraceSuppressions.trace("ingest.capacityTrace", ignored);
+            log.debug("[VectorStore] fail-soft stage={}", "ingest.capacityTrace");
+        }
+        if (isPowerOfTwo(rejected)) {
+            log.warn("[VectorStore] queue capacity reached capacity={} retained={} rejectedTotal={}",
+                    admission.capacity(), admission.retainedAtDecision(), rejected);
+        }
+    }
+
+    private static boolean isPowerOfTwo(long value) {
+        return value > 0L && (value & (value - 1L)) == 0L;
+    }
+
+    public record VectorFlushOutcome(
+            boolean durable,
+            int succeededCount,
+            int pendingCount,
+            String reasonCode
+    ) {
+        public VectorFlushOutcome {
+            succeededCount = Math.max(0, succeededCount);
+            pendingCount = Math.max(0, pendingCount);
+            String normalizedReason = reasonCode == null ? "" : reasonCode.trim();
+            reasonCode = switch (normalizedReason) {
+                case "unknown", "backoff", "empty", "complete", "store_failure", "source_rejected" -> normalizedReason;
+                default -> "unknown";
+            };
+        }
     }
 
     /**
@@ -681,18 +857,24 @@ public class VectorStoreService {
      * - Uses ids in addAll(ids, embeddings, segments) to prevent duplicates.
      * </p>
      */
-    public synchronized void flush() {
+    public synchronized VectorFlushOutcome flush() {
         long now = System.currentTimeMillis();
         lastFlushAttemptEpochMs = now;
 
         if (now < backoffUntilEpochMs) {
             long remain = backoffUntilEpochMs - now;
             log.debug("[VectorStore] flush suppressed by back-off {} ms remaining (queue={})", remain, pendingSize());
-            return;
+            return new VectorFlushOutcome(false, 0, pendingSize(), "backoff");
         }
 
-        ConcurrentHashMap<String, BufferEntry> snapshotMap = queueRef.getAndSet(new ConcurrentHashMap<>());
-        if (snapshotMap.isEmpty()) return;
+        ConcurrentHashMap<String, BufferEntry> snapshotMap;
+        synchronized (queueStateMutex) {
+            snapshotMap = queueRef.getAndSet(new ConcurrentHashMap<>());
+            inFlightEntries += snapshotMap.size();
+        }
+        if (snapshotMap.isEmpty()) {
+            return new VectorFlushOutcome(true, 0, pendingSize(), "empty");
+        }
 
         List<Map.Entry<String, BufferEntry>> snapshot = new ArrayList<>(snapshotMap.entrySet());
 
@@ -739,6 +921,7 @@ public class VectorStoreService {
         }
 
         java.util.Set<String> okIds = new java.util.HashSet<>();
+        java.util.Set<String> rejectedSourceIds = new java.util.HashSet<>();
 
         try {
             for (Map.Entry<FlushGroupKey, List<Map.Entry<String, BufferEntry>>> grp : groups.entrySet()) {
@@ -824,6 +1007,32 @@ public class VectorStoreService {
                     try {
                         for (int i = 0; i < items.size(); i += batchSize) {
                             List<Map.Entry<String, BufferEntry>> batch = items.subList(i, Math.min(i + batchSize, items.size()));
+                            if (batch.stream().anyMatch(en ->
+                                    com.example.lms.service.rag.graph.GeneralGraphVectorGate.requiresGate(en.getValue().extraMeta()))) {
+                                for (var entry : batch) {
+                                    BufferEntry queued = entry.getValue();
+                                    String id = entry.getKey();
+                                    if (!com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
+                                            generalGraphVectorGate, queued.sessionId(), queued.extraMeta(), () -> {})) {
+                                        markSnapshotBatchDurable(rejectedSourceIds, List.of(id));
+                                        continue;
+                                    }
+                                    TextSegment segment = TextSegment.from(queued.text(), buildMeta(queued));
+                                    var response = embeddingModel.embedAll(List.of(segment));
+                                    var embedding = response == null ? null : response.content();
+                                    validateEmbeddingsOrThrow(embedding, List.of(segment));
+                                    boolean written = com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
+                                            generalGraphVectorGate, queued.sessionId(), queued.extraMeta(),
+                                            () -> embeddingStore.addAll(List.of(id), embedding, List.of(segment)));
+                                    if (written) {
+                                        markSnapshotBatchDurable(okIds, List.of(id));
+                                        okInGroup++;
+                                    } else {
+                                        markSnapshotBatchDurable(rejectedSourceIds, List.of(id));
+                                    }
+                                }
+                                continue;
+                            }
                             List<String> ids = batch.stream().map(Map.Entry::getKey).toList();
 
                             List<TextSegment> segments = batch.stream()
@@ -834,7 +1043,7 @@ public class VectorStoreService {
                             var embeds = (res == null) ? null : res.content();
                             validateEmbeddingsOrThrow(embeds, segments);
                             embeddingStore.addAll(ids, embeds, segments);
-                            okIds.addAll(ids);
+                            markSnapshotBatchDurable(okIds, ids);
                             okInGroup += ids.size();
 
                             if (k.debug()) {
@@ -899,18 +1108,26 @@ public class VectorStoreService {
 
             log.debug("[VectorStore] flushed {} segments in {} groups (store={})",
                     snapshot.size(), groups.size(), embeddingStore.getClass().getSimpleName());
+            return new VectorFlushOutcome(rejectedSourceIds.isEmpty(), okIds.size(), pendingSize(),
+                    rejectedSourceIds.isEmpty() ? "complete" : "source_rejected");
         } catch (Exception e) {
             VectorStoreTraceSuppressions.trace("flush.batch", e);
             log.debug("[VectorStore] fail-soft stage={}", "flush.batch");
             // Restore snapshot to current queue (best-effort), excluding already-flushed ids.
-            ConcurrentHashMap<String, BufferEntry> q = queueRef.get();
             int restored = 0;
-            for (Map.Entry<String, BufferEntry> e2 : snapshot) {
-                if (e2 == null) continue;
-                String id = e2.getKey();
-                if (id != null && okIds.contains(id)) continue;
-                q.putIfAbsent(id, e2.getValue());
-                restored++;
+            int queueNow;
+            synchronized (queueStateMutex) {
+                ConcurrentHashMap<String, BufferEntry> q = queueRef.get();
+                for (Map.Entry<String, BufferEntry> e2 : snapshot) {
+                    if (e2 == null) continue;
+                    String id = e2.getKey();
+                    if (id != null && (okIds.contains(id) || rejectedSourceIds.contains(id))) continue;
+                    if (q.putIfAbsent(id, e2.getValue()) == null) {
+                        restored++;
+                    }
+                    releaseInFlightLocked(1);
+                }
+                queueNow = retainedEntryCountLocked();
             }
 
             lastFlushError = e.toString();
@@ -919,8 +1136,28 @@ public class VectorStoreService {
             backoffUntilEpochMs = System.currentTimeMillis() + backoffStepMs;
 
             log.warn("[VectorStore] batch insert failed; backoff={}ms; restored={} (queueNow={}) : {}",
-                    backoffStepMs, restored, q.size(), e.toString());
+                    backoffStepMs, restored, queueNow, e.toString());
+            return new VectorFlushOutcome(false, okIds.size(), pendingSize(), "store_failure");
         }
+    }
+
+    private void markSnapshotBatchDurable(Set<String> completedIds, List<String> ids) {
+        synchronized (queueStateMutex) {
+            int newlyCompleted = 0;
+            for (String id : ids) {
+                if (completedIds.add(id)) {
+                    newlyCompleted++;
+                }
+            }
+            releaseInFlightLocked(newlyCompleted);
+        }
+    }
+
+    private void releaseInFlightLocked(int count) {
+        if (count < 0 || count > inFlightEntries) {
+            throw new IllegalStateException("vectorstore queue accounting invariant violated");
+        }
+        inFlightEntries -= count;
     }
 
     /** 메타데이터 빌더 - 세션 키(sid) 통일 + extra 메타 병합 */
@@ -958,14 +1195,15 @@ public class VectorStoreService {
 
         // GraphDB manual text is stored as the embedding payload only; keep metadata hash/count oriented.
         String text = be.text();
-        if (isGraphDbManualVectorMeta(meta, be.sessionId())) {
+        boolean graphMetadata = com.example.lms.service.rag.graph.GeneralGraphVectorGate.requiresGate(meta);
+        if (graphMetadata || isGraphDbManualVectorMeta(meta, be.sessionId())) {
             meta.put("summary_redacted", "graphdb_manual_payload_boundary");
             meta.put("keywords_redacted", "graphdb_manual_payload_boundary");
             meta.put("raw_text_metadata_included", "false");
         } else if (text != null && text.length() > 100) {
             meta.put("summary", text.substring(0, 100) + "...");
         }
-        if (!isGraphDbManualVectorMeta(meta, be.sessionId())) {
+        if (!graphMetadata && !isGraphDbManualVectorMeta(meta, be.sessionId())) {
             meta.put("keywords", String.join(",", extractKeywords(text)));
         }
 

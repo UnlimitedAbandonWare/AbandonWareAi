@@ -2,6 +2,7 @@ package com.example.lms.service.disambiguation;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
+import java.util.Locale;
 import java.util.Map;
 
 
@@ -55,7 +56,7 @@ public class DisambiguationResult {
         if (confidence == null) {
             return false;
         }
-        String c = confidence.trim().toLowerCase();
+        String c = confidence.trim().toLowerCase(Locale.ROOT);
         return c.contains("high") || c.contains("confident") || c.contains("sure");
     }
 

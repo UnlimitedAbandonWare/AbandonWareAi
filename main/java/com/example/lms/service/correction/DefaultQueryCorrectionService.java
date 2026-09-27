@@ -40,7 +40,7 @@ public class DefaultQueryCorrectionService implements QueryCorrectionService {
 
         // 4) 양끝 특수문자 정리(문장 내부는 보존)
         //    Punct(구두점), Sm(수학기호), Sk(수정기호) 범주를 양쪽 끝에서만 제거
-        s = s.replaceAll("^[\\p{Punct}\\p{Sm}\\p{Sk}]+", "");
+        s = s.replaceAll("^(?!-\\p{N})[\\p{Punct}\\p{Sm}\\p{Sk}]+", "");
         s = s.replaceAll("[\\p{Punct}\\p{Sm}\\p{Sk}]+$", "");
 
         // 5) 공백 정규화

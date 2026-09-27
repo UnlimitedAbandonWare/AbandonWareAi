@@ -1,24 +1,48 @@
 package com.example.lms.service.answer;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
+import com.example.lms.debug.ai.ChatUsageLedger;
+import com.example.lms.llm.DynamicChatModelFactory;
+import com.example.lms.llm.TimedChatModelCaller;
 import com.example.lms.prompt.PromptBuilder;
 import com.example.lms.prompt.PromptContext;
+import com.example.lms.search.TraceStore;
 import com.example.lms.service.verbosity.VerbosityProfile;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import com.example.lms.trace.SafeRedactor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 
 
 @Service
 public class AnswerExpanderService {
     private static final Logger log = LoggerFactory.getLogger(AnswerExpanderService.class);
+    private static final Pattern RESTRUCTURED_HEADING =
+            Pattern.compile("(?im)^\\s*#{1,6}\\s*RESTRUCTURED\\s*$");
+    private static final Pattern LEADING_DRAFT_HEADING =
+            Pattern.compile("(?i)\\A\\s*#{1,6}\\s*DRAFT\\s*(?:\\R|$)");
+    private static final Pattern NUMBER_TOKEN = Pattern.compile(
+            "[+-]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?");
 
     private final PromptBuilder promptBuilder;
+
+    @Autowired(required = false)
+    private ChatUsageLedger chatUsageLedger;
 
     public AnswerExpanderService(PromptBuilder promptBuilder) {
         this.promptBuilder = java.util.Objects.requireNonNull(promptBuilder, "promptBuilder");
@@ -48,14 +72,23 @@ public class AnswerExpanderService {
                 + "검색 결과에 없는 사실을 '추측해서' 만들지 마.\n\n";
     }
 
+    String noEvidenceRule = safeEvidenceSnippets.isEmpty()
+            ? """
+           - No EVIDENCE was provided. Restructure or lightly polish the DRAFT only.
+           - Prefer keeping a non-empty DRAFT over silence. Do NOT reply with [NO_EVIDENCE] or any placeholder that blanks the answer.
+           - If the DRAFT is already usable, return a lightly cleaned version of the DRAFT.
+           """
+            : """
+           - Prefer EVIDENCE when present; do not invent facts beyond DRAFT/EVIDENCE.
+           """;
+
     return """
            You are a Korean technical editor that ONLY restructures existing content.
 
            HARD RULES:
            - DO NOT add any new facts, entities, character names, places, dates, or numbers not present in the DRAFT or EVIDENCE.
            - DO NOT guess or invent background information to reach the target length.
-           - If the DRAFT lacks sufficient detail AND no EVIDENCE is provided, reply EXACTLY: [NO_EVIDENCE]
-
+           %s
            ALLOWED:
            - Reorder sentences for better flow
            - Add transition phrases using only info already in DRAFT or EVIDENCE
@@ -66,7 +99,7 @@ public class AnswerExpanderService {
 
            ## DRAFT
            %s
-           """.formatted(evidenceBlock, Math.max(1, vp.minWordCount()), draft);
+           """.formatted(noEvidenceRule, evidenceBlock, Math.max(1, vp.minWordCount()), draft);
 }
 
     private static List<String> safeEvidenceSnippets(List<String> evidenceSnippets) {
@@ -84,29 +117,273 @@ public class AnswerExpanderService {
     }
 
     public String expandWithLc(String draft, VerbosityProfile vp, ChatModel model, List<String> evidenceSnippets) {
+        ChatUsageLedger.ExpansionAttempt expansionAttempt = chatUsageLedger == null
+                ? null
+                : chatUsageLedger.beginExpansion();
+        ChatUsageLedger.ModelAttempt modelAttempt = null;
         try {
+            TimeBudget requestBudget = TimeBudgetContext.get();
+            if (requestBudget != null && requestBudget.expired()) {
+                TraceStore.put("answer.expansion.skipped", "request_budget_exhausted");
+                if (expansionAttempt != null) {
+                    expansionAttempt.skippedBeforeModel();
+                }
+                return null;
+            }
             PromptContext ctx = PromptContext.builder()
                     .systemInstruction("You are a cautious Korean editor. Restructure only; never invent.")
                     .userQuery(buildExpandPrompt(draft, vp, evidenceSnippets))
                     .build();
             List<ChatMessage> msgs = java.util.List.of(UserMessage.from(promptBuilder.build(ctx)));
-            String result = model.chat(msgs).aiMessage().text();
+            String result;
+            ChatUsageLedger.ConfiguredCap configuredCap = DynamicChatModelFactory
+                    .configuredTokenBudget(model)
+                    .withRequestContext(
+                            vp == null ? null : vp.targetTokenBudgetOut(),
+                            null,
+                            ChatUsageLedger.CapSource.PROFILE_TARGET);
+            if (requestBudget == null) {
+                if (expansionAttempt != null) {
+                    modelAttempt = expansionAttempt.beginModelInvocation(configuredCap);
+                }
+                ChatResponse response = model.chat(msgs);
+                if (modelAttempt != null) {
+                    modelAttempt.responseReceived(response == null ? null : response.tokenUsage());
+                }
+                result = response == null || response.aiMessage() == null
+                        ? null
+                        : response.aiMessage().text();
+                if (TimedChatModelCaller.isExpectedFailureResponse(result)) {
+                    throw new IllegalStateException("Answer expansion returned an expected-failure route marker");
+                }
+                if (modelAttempt != null && result != null && !result.isBlank()) {
+                    modelAttempt.markSuccessful();
+                }
+            } else {
+                long remainingMs = requestBudget.remainingMillis();
+                if (remainingMs <= 0L) {
+                    TraceStore.put("answer.expansion.skipped", "request_budget_exhausted");
+                    if (expansionAttempt != null) {
+                        expansionAttempt.skippedBeforeModel();
+                    }
+                    return null;
+                }
+                if (expansionAttempt != null) {
+                    modelAttempt = expansionAttempt.beginModelInvocation(configuredCap);
+                }
+                var ai = TimedChatModelCaller.chat(
+                        model,
+                        msgs,
+                        Duration.ofMillis(remainingMs),
+                        "answer_expansion",
+                        model.getClass().getName(),
+                        modelAttempt);
+                result = ai.text();
+            }
 
-            // [NO_EVIDENCE] 프로토콜 처리
-            if (result != null && result.trim().equals("[NO_EVIDENCE]")) {
-                return null; // 확장하지 않고 원문 그대로 사용
+            result = userFacingExpansion(result);
+
+            if (result == null || result.isBlank()) {
+                if (expansionAttempt != null) {
+                    expansionAttempt.rejectedEmpty();
+                }
+                return null;
+            }
+
+            // The editor prompt forbids inventing numbers. Enforce that invariant so a
+            // second model call cannot turn a correct draft value into a different one.
+            if (introducesUnsupportedNumber(draft, result, evidenceSnippets)) {
+                TraceStore.put("answer.expansion.rejected", "numeric_invariant_mismatch");
+                if (expansionAttempt != null) {
+                    expansionAttempt.rejectedNumeric();
+                }
+                return null;
+            }
+
+            // 반대 방향 보완: 결과가 초안의 숫자를 지웠으면 거부한다(예: "7"이 안내문으로 교체).
+            if (dropsDraftNumber(draft, result)) {
+                TraceStore.put("answer.expansion.rejected", "draft_number_dropped");
+                if (expansionAttempt != null) {
+                    expansionAttempt.rejectedNumeric();
+                }
+                return null;
+            }
+
+            // "편집할 원문이 부족합니다" 류의 확장 거부 표식은 초안을 유지한다.
+            if (isExpansionRefusalMarker(result)) {
+                TraceStore.put("answer.expansion.rejected", "expansion_refusal_marker");
+                if (expansionAttempt != null) {
+                    expansionAttempt.rejectedEmpty();
+                }
+                return null;
+            }
+
+            // [NO_EVIDENCE] / soft-empty markers: treat as null expansion so callers KEEP the original draft.
+            if (result != null) {
+                String trimmed = result.trim();
+                String compact = trimmed.replaceAll("\\s+", "");
+                if ("[NO_EVIDENCE]".equals(trimmed)
+                        || "NO_EVIDENCE".equalsIgnoreCase(trimmed)
+                        || compact.contains("근거없다")
+                        || compact.contains("근거없음")) {
+                    if (expansionAttempt != null) {
+                        expansionAttempt.rejectedNoEvidence();
+                    }
+                    TraceStore.put("answer.expansion.rejected", "no_evidence_marker_keep_draft");
+                    return null; // 확장하지 않고 원문 그대로 사용
+                }
             }
 
             // 너무 짧게 요약한 경우도 원문 사용
             if (result != null && result.length() < draft.length() * 0.8) {
+                if (expansionAttempt != null) {
+                    expansionAttempt.rejectedTooShort();
+                }
                 return null;
             }
 
+            if (expansionAttempt != null) {
+                expansionAttempt.accepted();
+            }
             return result;
         } catch (Exception e) {
+            if (modelAttempt != null) {
+                if (TimedChatModelCaller.isHardTimeout(e)) {
+                    modelAttempt.timedOut();
+                } else if (e instanceof CancellationException || e instanceof InterruptedException) {
+                    modelAttempt.cancelled();
+                } else {
+                    modelAttempt.failedBeforeResponse();
+                }
+            }
+            if (expansionAttempt != null) {
+                if (modelAttempt == null) {
+                    expansionAttempt.failedBeforeModel();
+                } else if (TimedChatModelCaller.isHardTimeout(e)) {
+                    expansionAttempt.timedOut();
+                } else if (e instanceof CancellationException || e instanceof InterruptedException) {
+                    expansionAttempt.cancelled();
+                } else {
+                    expansionAttempt.failedAfterModel();
+                }
+            }
             log.debug("[AnswerExpander] expansion failed errorHash={} errorLength={}",
                     SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
             return null; // 확장 실패 시 원문 사용
         }
+    }
+
+    private static String userFacingExpansion(String result) {
+        if (result == null || result.isBlank()) {
+            return result;
+        }
+        Matcher marker = RESTRUCTURED_HEADING.matcher(result);
+        int lastMarkerEnd = -1;
+        while (marker.find()) {
+            lastMarkerEnd = marker.end();
+        }
+        String cleaned = lastMarkerEnd >= 0 ? result.substring(lastMarkerEnd) : result;
+        cleaned = LEADING_DRAFT_HEADING.matcher(cleaned).replaceFirst("");
+        return cleaned.strip();
+    }
+
+    private static boolean introducesUnsupportedNumber(
+            String draft,
+            String result,
+            List<String> evidenceSnippets) {
+        if (result == null || result.isBlank()) {
+            return false;
+        }
+        Set<String> allowed = new HashSet<>();
+        collectNumberTokens(allowed, draft);
+        for (String evidence : safeEvidenceSnippets(evidenceSnippets)) {
+            collectNumberTokens(allowed, evidence);
+        }
+        Matcher resultNumbers = NUMBER_TOKEN.matcher(result);
+        while (resultNumbers.find()) {
+            if (structuralListOrdinal(result, resultNumbers)) {
+                continue;
+            }
+            if (!allowed.contains(canonicalNumber(resultNumbers.group()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void collectNumberTokens(Set<String> target, String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        Matcher matcher = NUMBER_TOKEN.matcher(text);
+        while (matcher.find()) {
+            target.add(canonicalNumber(matcher.group()));
+        }
+    }
+
+    private static String canonicalNumber(String token) {
+        try {
+            return new BigDecimal(token.replace(",", ""))
+                    .stripTrailingZeros()
+                    .toPlainString();
+        } catch (NumberFormatException ignored) {
+            return token;
+        }
+    }
+
+    private static boolean structuralListOrdinal(String text, Matcher number) {
+        int lineStart = text.lastIndexOf('\n', Math.max(0, number.start() - 1)) + 1;
+        if (!text.substring(lineStart, number.start()).isBlank() || number.end() >= text.length()) {
+            return false;
+        }
+        char delimiter = text.charAt(number.end());
+        if (delimiter != '.' && delimiter != ')') {
+            return false;
+        }
+        int afterDelimiter = number.end() + 1;
+        return afterDelimiter < text.length() && Character.isWhitespace(text.charAt(afterDelimiter));
+    }
+
+    /**
+     * 초안에 있던 숫자가 확장 결과에서 전부 사라졌는지 검사한다.
+     * introducesUnsupportedNumber가 "새 숫자 추가"를 막는다면, 이 검사는
+     * "기존 숫자 삭제"를 막는 반대 방향 보호다.
+     */
+    private static boolean dropsDraftNumber(String draft, String result) {
+        if (draft == null || draft.isBlank() || result == null || result.isBlank()) {
+            return false;
+        }
+        Set<String> required = new HashSet<>();
+        Matcher draftNumbers = NUMBER_TOKEN.matcher(draft);
+        while (draftNumbers.find()) {
+            if (structuralListOrdinal(draft, draftNumbers)) {
+                continue;
+            }
+            required.add(canonicalNumber(draftNumbers.group()));
+        }
+        if (required.isEmpty()) {
+            return false;
+        }
+        Set<String> present = new HashSet<>();
+        collectNumberTokens(present, result);
+        required.removeAll(present);
+        return !required.isEmpty();
+    }
+
+    /** 확장기가 편집 불가를 뜻하는 자기 거부 문구를 반환했는지 검사한다. */
+    private static boolean isExpansionRefusalMarker(String result) {
+        if (result == null || result.isBlank()) {
+            return false;
+        }
+        String compact = result.replaceAll("\\s+", "").toLowerCase(java.util.Locale.ROOT);
+        return compact.contains("원문이부족")
+                || compact.contains("편집할원문")
+                || compact.contains("편집할내용이없")
+                || compact.contains("확장할수없")
+                || compact.contains("확장할내용이없")
+                || compact.contains("cannotexpand")
+                || compact.contains("unabletoexpand")
+                || compact.contains("nothingtoexpand")
+                || compact.contains("insufficientcontent");
     }
 }

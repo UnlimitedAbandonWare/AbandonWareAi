@@ -1,9 +1,11 @@
 package com.example.lms.service.chat.interceptor;
 
 import com.example.lms.dto.answer.AnswerUnderstanding;
+import com.example.lms.search.TraceStore;
 import com.example.lms.service.understanding.AnswerUnderstandingService;
 import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.chat.ChatStreamEmitter;
+import com.example.lms.service.chat.ChatRunExecutionContext;
 import com.example.lms.trace.SafeRedactor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +58,14 @@ public class UnderstandAndMemorizeInterceptor {
                               String question,
                               String finalAnswer,
                               boolean requestEnabled) {
+        afterVerified(sessionKey, question, finalAnswer, requestEnabled, null);
+    }
+
+    public void afterVerified(String sessionKey,
+                              String question,
+                              String finalAnswer,
+                              boolean requestEnabled,
+                              ChatRunExecutionContext runContext) {
         if (!globalEnabled) return;
         if (!requestEnabled) return;
         if (finalAnswer == null || finalAnswer.isBlank()) return;
@@ -70,6 +80,7 @@ public class UnderstandAndMemorizeInterceptor {
                 } catch (Exception e) {
                     log.warn("[Understand] memory store failed. errorHash={} errorLength={}",
                             SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+                    traceFailSoft("memoryStore", e);
                 }
                 try {
                     
@@ -83,16 +94,23 @@ try {
 } catch (Exception ignore) {
     log.debug("[Understand] meta persistence failed. errorHash={} errorLength={}",
             SafeRedactor.hashValue(messageOf(ignore)), messageLength(ignore));
+    traceFailSoft("metaPersistence", ignore);
 }
-chatStreamEmitter.emitUnderstanding(sessionKey, u);
+if (runContext != null) {
+    chatStreamEmitter.emitUnderstanding(runContext, u);
+} else {
+    chatStreamEmitter.emitUnderstanding(sessionKey, u);
+}
                 } catch (Exception e) {
                     log.debug("[Understand] SSE emit failed. errorHash={} errorLength={}",
                             SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+                    traceFailSoft("sseEmit", e);
                 }
             }
         } catch (Exception ex) {
             log.warn("[Understand] summarization failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(ex)), messageLength(ex));
+            traceFailSoft("summarization", ex);
         }
     }
 
@@ -123,6 +141,32 @@ chatStreamEmitter.emitUnderstanding(sessionKey, u);
             }
         }
         return sb.toString().trim();
+    }
+
+    private static void traceFailSoft(String stage, Throwable t) {
+        try {
+            String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
+            String errorType = SafeRedactor.traceLabelOrFallback(
+                    t == null ? null : t.getClass().getSimpleName(), "unknown");
+            TraceStore.inc("understanding.failSoft.count");
+            TraceStore.put("understanding.failSoft.stage", safeStage);
+            TraceStore.put("understanding.failSoft.errorType", errorType);
+            TraceStore.put("understanding.failSoft." + safeStage, true);
+            TraceStore.put("understanding.failSoft." + safeStage + ".errorType", errorType);
+            TraceStore.put("understanding.failSoft." + safeStage + ".errorHash", SafeRedactor.hashValue(messageOf(t)));
+            TraceStore.put("understanding.failSoft." + safeStage + ".errorLength", messageLength(t));
+        } catch (RuntimeException traceFailure) {
+            log.debug("[Understand] fail-soft trace failed stage={} errorType={}",
+                    safeTraceLabel(stage), safeTraceLabel(traceFailure == null ? null : traceFailure.getClass().getSimpleName()));
+        }
+    }
+
+    private static String safeTraceLabel(String value) {
+        if (value == null || value.isBlank()) {
+            return "unknown";
+        }
+        String sanitized = value.replaceAll("[^A-Za-z0-9_.:-]", "_");
+        return sanitized.isBlank() ? "unknown" : sanitized;
     }
 
     private static String messageOf(Throwable t) {
@@ -156,6 +200,7 @@ private static Long parseNumericSessionId(String key) {
         } catch (NumberFormatException ignore) {
             log.debug("[Understand] session id parse failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(ignore)), messageLength(ignore));
+            traceFailSoft("sessionIdParse", ignore);
             return null;
         }
     }

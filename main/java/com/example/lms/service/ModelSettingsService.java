@@ -42,7 +42,7 @@ public class ModelSettingsService {
     @Value("${app.ai.openai-chat-models:}")
     private String openAiChatModels;
 
-    @Value("${app.ai.local-chat-models:${llm.local-chat-models:gemma4:26b,qwen3:30b,qwen3-coder:30b,gemma3:27b,qwen3-vl:8b,qwen3:8b,qwen2.5:7b-instruct,qwen2.5:7b,gemma3:4b}}")
+    @Value("${app.ai.local-chat-models:${llm.local-chat-models:gemma4:26b,smtek/Qwen3.8-27B:Q3_K_XL,qwen3-vl:8b,qwen3.5:9b,gemma4:12b}}")
     private String localChatModels;
 
     @Transactional
@@ -65,6 +65,11 @@ public class ModelSettingsService {
             log.warn("[ModelSettings] embedding/legacy model refused modelHash={} modelLength={}",
                     modelHash, modelLength);
             throw new IllegalArgumentException("Embedding or legacy models cannot be used as the default chat model.");
+        }
+        if (ModelCapabilities.isPlaceholderModelId(trimmedModelId)) {
+            log.warn("[ModelSettings] placeholder model refused modelHash={} modelLength={}",
+                    modelHash, modelLength);
+            throw new IllegalArgumentException("Selected model is not a concrete chat model.");
         }
 
         if (isLocalProvider() && isRemoteLookingModelId(lower) && !effectiveAllowRemote) {

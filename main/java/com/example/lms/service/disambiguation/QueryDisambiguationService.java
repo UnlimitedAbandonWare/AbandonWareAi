@@ -3,6 +3,7 @@ package com.example.lms.service.disambiguation;
 import ai.abandonware.nova.orch.failpattern.FailurePatternOrchestrator;
 
 import com.example.lms.infra.resilience.IrregularityProfiler;
+import com.example.lms.infra.resilience.FriendShieldPatternDetector;
 import com.example.lms.infra.resilience.NightmareBreaker;
 import com.example.lms.infra.resilience.NightmareKeys;
 import com.example.lms.infra.resilience.AuxDownTracker;
@@ -142,12 +143,17 @@ public class QueryDisambiguationService {
         if (shouldSkipLlmForDefinitionalQuery(query, history)) {
             return (seed != null) ? seed : fallback(query);
         }
+        if (shouldSkipLlmForDiagnosticSmokeQuery(query, history)) {
+            traceDisambiguationSkip("diagnostic_smoke", query);
+            return (seed != null) ? seed : fallback(query);
+        }
 
         // UAW: Request-scoped aux degradation flags should block additional disambiguation LLM calls.
         // Even if this service is invoked, we do not want to fan out to more auxiliary LLM requests.
         try {
             var gctx = GuardContextHolder.getOrDefault();
             boolean shouldBlock = gctx != null && (gctx.isAuxHardDown() || gctx.isAuxDegraded()
+                    || gctx.isCheapSearchMode()
                     || gctx.isStrikeMode() || gctx.isCompressionMode() || gctx.isBypassMode());
             if (shouldBlock) {
                 AuxBlockedReason reason = AuxBlockedReason.fromContext(gctx);
@@ -186,6 +192,8 @@ public class QueryDisambiguationService {
                     try {
                         AuxBlockTracker.markStageBlocked("disambiguation", reason, "QueryDisambiguationService.clarify", NightmareKeys.DISAMBIGUATION_CLARIFY);
                         TraceStore.putIfAbsent("aux.disambiguation", "blocked:" + reason.code());
+                        TraceStore.put("aux.disambiguation.skipped", true);
+                        TraceStore.put("aux.disambiguation.skipReason", reason.code());
                     } catch (Throwable ignore) { DisambiguationTraceSuppressions.trace("auxBlocked.trace", ignore); log.debug("[Disambig] fail-soft stage={}", "auxBlocked.trace"); }
                     log.debug("[Disambig] blocked by request-scoped signal ({}), using deterministic path. queryHash={} queryLength={}",
                             reason.code(), queryHash, queryLength);
@@ -298,9 +306,13 @@ public class QueryDisambiguationService {
         String queryDisambiguationPrompt = promptBuilder.buildUniversal(query, history, seed);
 
         // ✅ 서킷 오픈 시 즉시 우회 (보조 단계가 전체 오케스트레이션을 끌지 않게)
+        NightmareBreaker.CallPermit permit = null;
+        boolean permitCompleted = false;
+        boolean modelResponseReceived = false;
+        long modelStarted = 0L;
         if (nightmareBreaker != null) {
             try {
-                nightmareBreaker.checkOpenOrThrow(NightmareKeys.DISAMBIGUATION_CLARIFY);
+                permit = nightmareBreaker.acquire(NightmareKeys.DISAMBIGUATION_CLARIFY, "disambiguation");
             } catch (NightmareBreaker.OpenCircuitException oce) {
                 DisambiguationTraceSuppressions.trace("breakerOpen.exception", oce);
                 log.debug("[Disambig] fail-soft stage={}", "breakerOpen.exception");
@@ -335,8 +347,16 @@ public class QueryDisambiguationService {
         // 4) LLM 호출 및 JSON 파싱
         try {
             // 단계별 key로 breaker 상태를 공유해야 aux-down 신호가 오케스트레이션까지 전파된다.
-            String raw = llmClient.completeWithKey(NightmareKeys.DISAMBIGUATION_CLARIFY, queryDisambiguationPrompt);
+            modelStarted = System.nanoTime();
+            String raw = permit == null
+                    ? llmClient.complete(queryDisambiguationPrompt)
+                    : llmClient.completeWithPermit(permit, "disambiguation", queryDisambiguationPrompt);
+            modelResponseReceived = true;
             if (raw == null || raw.isBlank()) {
+                if (permit != null) {
+                    permit.completeBlank("disambiguation");
+                    permitCompleted = true;
+                }
                 log.warn("[Disambig] LLM returned blank response, falling back. queryHash={} queryLength={}",
                         queryHash, queryLength);
                 if (debugEventStore != null) {
@@ -367,10 +387,24 @@ public class QueryDisambiguationService {
                 return (seed != null) ? seed : fallback(query);
             }
 
+            if (FriendShieldPatternDetector.looksLikeSilentFailure(raw)) {
+                if (permit != null) {
+                    permit.completeSilentFailure("disambiguation", "friendshield");
+                    permitCompleted = true;
+                }
+                AuxDownTracker.markSoft("disambiguation", "friendshield");
+                traceQueryRewriteFallback(query, "disambiguation-friendshield-fallback");
+                return (seed != null) ? seed : fallback(query);
+            }
+
             String cleaned = sanitizeJson(raw);
 
             DisambiguationResult r = om.readValue(cleaned, DisambiguationResult.class);
             if (r == null) {
+                if (permit != null) {
+                    permit.completeSilentFailure("disambiguation", "null-result");
+                    permitCompleted = true;
+                }
                 log.warn("[Disambig] ObjectMapper produced null result, falling back. queryHash={} queryLength={}",
                         queryHash, queryLength);
                 return fallback(query);
@@ -390,8 +424,23 @@ public class QueryDisambiguationService {
                 r.setAttributes(Collections.emptyMap());
             }
 
+            if (permit != null) {
+                permit.completeSuccess(Math.max(0L, (System.nanoTime() - modelStarted) / 1_000_000L));
+                permitCompleted = true;
+            }
             return r;
         } catch (Exception e) {
+            if (permit != null && !permitCompleted) {
+                NightmareBreaker.FailureKind kind = NightmareBreaker.classify(e);
+                if (kind == NightmareBreaker.FailureKind.INTERRUPTED
+                        || e instanceof java.util.concurrent.CancellationException) {
+                    permit.completeCancelled(e, "disambiguation");
+                } else if (modelResponseReceived) {
+                    permit.completeSilentFailure("disambiguation", "invalid-json");
+                } else {
+                    permit.completeFailure(kind, e, "disambiguation");
+                }
+            }
             log.warn("[Disambig] LLM disambiguation failed, falling back. queryHash={} queryLength={} errorHash={} errorLength={}",
                     queryHash, queryLength, SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             if (irregularityProfiler != null) {
@@ -488,6 +537,56 @@ public class QueryDisambiguationService {
 
         // Conservative: only skip for short queries. Longer queries often contain context.
         return q.length() <= 40;
+    }
+
+    private boolean shouldSkipLlmForDiagnosticSmokeQuery(String query, List<String> history) {
+        if (query == null) return false;
+        String q = query.trim();
+        if (q.isEmpty()) return false;
+        String lower = q.toLowerCase(Locale.ROOT);
+
+        boolean diagnostic =
+                lower.contains("스모크")
+                        || lower.contains("smoke")
+                        || lower.contains("heartbeat")
+                        || lower.contains("헬스체크")
+                        || lower.contains("health check")
+                        || lower.contains("디버그")
+                        || lower.contains("debug");
+        boolean localUiOrRoute =
+                lower.contains("ui")
+                        || lower.contains("브라우저")
+                        || lower.contains("browser")
+                        || lower.contains("챗봇")
+                        || lower.contains("chat")
+                        || lower.contains("rag/auto")
+                        || lower.contains("설정")
+                        || lower.contains("상태")
+                        || lower.contains("경로")
+                        || lower.contains("route");
+        if (!diagnostic || !localUiOrRoute) return false;
+
+        // Diagnostic smoke/status prompts should stay cheap and deterministic.
+        return q.length() <= 140;
+    }
+
+    private static void traceDisambiguationSkip(String reason, String query) {
+        try {
+            TraceStore.put("aux.disambiguation.skipped", true);
+            TraceStore.put("aux.disambiguation.skipReason",
+                    SafeRedactor.traceLabelOrFallback(reason, "shortcut"));
+            TraceStore.put("aux.disambiguation.skipQueryHash", SafeRedactor.hashValue(query));
+            TraceStore.put("aux.disambiguation.skipQueryLength", query == null ? 0 : query.length());
+            if ("diagnostic_smoke".equals(reason)) {
+                TraceStore.put("aux.queryTransformer.diagnosticSmokeScope", true);
+                TraceStore.putIfAbsent("aux.queryTransformer.skipped", true);
+                TraceStore.putIfAbsent("aux.queryTransformer.skipReason", "diagnostic_smoke");
+                TraceStore.putIfAbsent("aux.queryTransformer.skipQueryHash", SafeRedactor.hashValue(query));
+                TraceStore.putIfAbsent("aux.queryTransformer.skipQueryLength", query == null ? 0 : query.length());
+            }
+        } catch (RuntimeException ex) {
+            traceSuppressed("diagnosticSkip.trace", ex);
+        }
     }
 
 	private DisambiguationResult fallback(String query) {

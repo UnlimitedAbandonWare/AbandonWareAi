@@ -48,7 +48,7 @@ public class SettingsService {
     @Value("${openai.api.model.default:${llm.chat-model:gemma4:26b}}")
     private String defaultModel;
 
-    @Value("${openai.api.temperature.default:0.7}")
+    @Value("${openai.api.temperature.default:${llm.chat.temperature:0.3}}")
     private String defaultTemperature;
 
     @Value("${openai.api.top-p.default:1.0}")

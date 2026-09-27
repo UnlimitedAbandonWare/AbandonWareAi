@@ -1,5 +1,9 @@
 package com.example.lms.service;
 
+import com.example.lms.search.policy.GrokPromotionDiscovery;
+
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import org.springframework.lang.Nullable;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeoutException;
@@ -17,6 +21,7 @@ import org.springframework.web.reactive.function.client.WebClientRequestExceptio
 import org.springframework.http.ResponseEntity;
 import com.example.lms.search.RateLimitPolicy;
 import com.example.lms.search.TraceStore;
+import com.example.lms.search.WebProviderTraceReasons;
 import com.example.lms.search.policy.AdaptiveSearchQueryVariants;
 import com.example.lms.infra.resilience.NightmareBreaker;
 import com.example.lms.infra.resilience.NightmareKeys;
@@ -67,6 +72,7 @@ import java.util.Arrays;
 import java.util.stream.Stream;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
@@ -231,6 +237,8 @@ public class NaverSearchService implements WebSearchProvider {
      * 한 번의 사용자 질의에 대한 전체 검색 추적
      */
     public static final class SearchTrace {
+        /** Request-owned terminal category. UNKNOWN never authorizes a zero-result retry. */
+        public String outcomeClass = "UNKNOWN";
         public final List<SearchStep> steps = new ArrayList<>();
         public boolean domainFilterEnabled;
         public boolean keywordFilterEnabled;
@@ -272,6 +280,69 @@ public class NaverSearchService implements WebSearchProvider {
      * 스니펫 + 추적 묶음
      */
     public record SearchResult(List<String> snippets, SearchTrace trace) {
+    }
+
+    /** One subscribed HTTP attempt owns these counters; shared scalar trace fields are not read back. */
+    private static final class NaverObservation extends java.util.concurrent.ConcurrentHashMap<String, Object> {
+        private final Map<String, Object> context;
+        private final java.util.concurrent.atomic.AtomicBoolean published = new java.util.concurrent.atomic.AtomicBoolean();
+
+        private NaverObservation(String query, Map<String, Object> context, boolean clientAttempt) {
+            this.context = context;
+            putAll(TraceStore.searchCorrelation(context));
+            put("provider", "naver");
+            put("queryHash", SafeRedactor.hashValue(query));
+            put("countScope", "single_response_items_array");
+            put("clientAttemptObserved", clientAttempt);
+            put("clientAttemptBoundary", "webclient_subscription");
+            put("providerReceiptObserved", false);
+            put("startedAtEpochMs", System.currentTimeMillis());
+            for (String key : List.of("rawSize", "parsedCount", "rawCount", "afterBlockedCount",
+                    "afterStrictCount", "formattedBeforeDedupCount", "afterDedupCount", "afterFilterCount", "httpStatus")) {
+                put(key, "unknown");
+            }
+            put("failureClass", "unknown");
+        }
+
+        private void finish() {
+            if (!published.compareAndSet(false, true)) return;
+            put("finishedAtEpochMs", System.currentTimeMillis());
+            Map<String, Object> immutable = Map.copyOf(this);
+            try {
+                withTraceContext(context, () -> {
+                    TraceStore.append("web.naver.filter.runs", immutable);
+                    return null;
+                });
+            } catch (RuntimeException unavailableTraceSink) {
+                // An immutable/closed observation sink must never replace the provider outcome.
+            }
+        }
+    }
+
+    private record ObservedNaverResponse(ResponseEntity<String> entity, NaverObservation observation) { }
+
+    private record NaverAttemptOutcome(List<String> snippets, String failureClass) {
+        private static NaverAttemptOutcome fromSnippets(List<String> snippets) {
+            List<String> safe = snippets == null ? List.of() : snippets;
+            return new NaverAttemptOutcome(safe, safe.isEmpty() ? "TRUE_ZERO" : null);
+        }
+
+        private static NaverAttemptOutcome failure(String failureClass) {
+            return new NaverAttemptOutcome(List.of(), failureClass);
+        }
+
+        private boolean allowsBoundedVariant() {
+            return "TRUE_ZERO".equals(failureClass);
+        }
+    }
+
+    private static final class NaverClassifiedFailure extends RuntimeException {
+        private final String failureClass;
+
+        private NaverClassifiedFailure(String failureClass) {
+            super(failureClass, null, false, false);
+            this.failureClass = failureClass;
+        }
     }
 
     /**
@@ -441,11 +512,13 @@ public class NaverSearchService implements WebSearchProvider {
         }
         synchronized (this) {
             if (naverIoScheduler == null) {
-                // Prefer context-aware executor (preserves MDC/TraceStore) over Reactor's
-                // shared boundedElastic.
-                naverIoScheduler = (llmFastExecutor != null)
-                        ? Schedulers.fromExecutor(llmFastExecutor)
-                        : Schedulers.boundedElastic();
+                // Capture the same request budget before crossing the scheduler boundary.
+                // This scheduler owns its wrapper, never the injected or shared executor.
+                java.util.concurrent.Executor executor = llmFastExecutor != null
+                        ? llmFastExecutor
+                        : command -> Schedulers.boundedElastic().schedule(command);
+                naverIoScheduler = Schedulers.fromExecutor(
+                        command -> executor.execute(ContextPropagation.wrap(command)));
             }
             return naverIoScheduler;
         }
@@ -473,6 +546,21 @@ public class NaverSearchService implements WebSearchProvider {
 
     static int clampNaverDisplay(int requested) {
         return Math.max(10, Math.min(100, requested));
+    }
+
+    private int configuredNaverMaximum() {
+        return clampNaverDisplay(display);
+    }
+
+    private int admitNaverTopK(int requested) {
+        if (requested <= 0) {
+            return 0;
+        }
+        return Math.min(requested, configuredNaverMaximum());
+    }
+
+    private int outboundDisplayFor(int admittedTopK) {
+        return admittedTopK <= 0 ? 0 : clampNaverDisplay(admittedTopK);
     }
 
     // [REMOVED] 비공식 HTML 크롤링 폴백/헤징은 운영 리스크(봇 차단/캡차)로 인해 제거.
@@ -856,7 +944,7 @@ public class NaverSearchService implements WebSearchProvider {
             EmbeddingStore<TextSegment> embeddingStore,
             EmbeddingModel embeddingModel,
             @Lazy Supplier<Long> sessionIdProvider,
-            QueryContextPreprocessor preprocessor, // ⭐ NEW
+            @Qualifier("compositeQueryContextPreprocessor") QueryContextPreprocessor preprocessor, // ⭐ NEW
             /* 🔴 키 CSV를 생성자 파라미터로 주입받는다 */
             @Value("${naver.keys:${NAVER_KEYS:}}") String naverKeysCsv,
             @Value("${naver.client-id:${NAVER_CLIENT_ID:}}") String naverClientId,
@@ -883,8 +971,19 @@ public class NaverSearchService implements WebSearchProvider {
         this.naverKeysPresent = !ConfigValueGuards.isMissing(naverKeysCsv);
         this.naverClientPairPresent = !ConfigValueGuards.isMissing(naverClientId)
                 && !ConfigValueGuards.isMissing(naverClientSecret);
-        String resolved = KeyResolver.resolveNaverKeysCsvSafe(keyResolverProvider);
-        if (ConfigValueGuards.isMissing(resolved)) {
+        KeyResolver injectedKeyResolver = null;
+        try {
+            injectedKeyResolver = keyResolverProvider == null ? null : keyResolverProvider.getIfAvailable();
+        } catch (BeansException unavailable) {
+            TraceStore.put("naver.cred.keyResolver.failureClass", "key_resolver_unavailable");
+            TraceStore.put("naver.credential.keyResolver.failureClass", "key_resolver_unavailable");
+        }
+        String resolved;
+        if (injectedKeyResolver != null) {
+            // A present resolver is authoritative, including its conflict-disabled result.
+            // Never rebuild conflicting aliases through the legacy constructor bridge.
+            resolved = injectedKeyResolver.resolveNaverKeysCsvSafe();
+        } else {
             resolved = NaverCredentialBridge.resolveKeysCsv(naverKeysCsv, naverClientId, naverClientSecret);
         }
         this.naverKeysCsv = resolved;
@@ -1008,18 +1107,13 @@ public class NaverSearchService implements WebSearchProvider {
                 // Without this, reactive callbacks may lose correlation ids and logs can show
                 // rid-missing/sid-missing placeholders.
                 .executor(cmd -> java.util.concurrent.ForkJoinPool.commonPool().execute(ContextPropagation.wrap(cmd)))
-                // ✅ 캐시 키는 "salt||canonical(query)". 로더에는 순수 query만 전달.
+                // Cache key payload is "boundedDisplay:canonical(query)" so one
+                // request's smaller fetch cannot starve a later larger request.
                 .buildAsync((key, executor) -> {
-                    String q = key;
-                    // [FIX] cacheSalt() 내부에도 '||'가 발생할 수 있으므로 마지막 구분자로 분리한다.
-                    int sep = key.lastIndexOf("||");
-                    if (sep >= 0 && sep + 2 < key.length()) {
-                        q = key.substring(sep + 2);
-                    }
-                    // 혹시 남아 있을 수 있는 잔여 파이프 제거
-                    q = q.replaceAll("^\\|+", "").trim();
+                    String q = queryFromCacheKey(key);
+                    int outboundDisplay = outboundDisplayFromCacheKey(key);
                     SearchPolicy policy = policyFromCacheKey(key);
-                    return callNaverApiMono(q, policy).toFuture();
+                    return callNaverApiMono(q, policy, outboundDisplay).toFuture();
                 });
 
         this.recentSnippetCache = Caffeine.newBuilder()
@@ -1158,19 +1252,19 @@ public class NaverSearchService implements WebSearchProvider {
     // ──────────────────────────────────────────────
 
     private Duration resolveSyncBlockTimeout(@Nullable Duration override) {
-        Duration base = Duration.ofMillis(Math.max(250L, syncBlockTimeoutMs));
-        if (override == null) {
-            return base;
-        }
-        try {
-            long ms = override.toMillis();
-            if (ms <= 0L) {
-                return base;
+        long allowedMs = Math.max(250L, syncBlockTimeoutMs);
+        if (override != null) {
+            try {
+                long ms = override.toMillis();
+                if (ms > 0L) allowedMs = ms;
+            } catch (Throwable ignore) {
+                NaverTraceSuppressions.traceSuppressed("syncBlockTimeout.override", ignore);
             }
-            return override;
-        } catch (Throwable ignore) {
-            NaverTraceSuppressions.traceSuppressed("syncBlockTimeout.override", ignore); return base;
         }
+        TimeBudget budget = TimeBudgetContext.get();
+        if (budget != null) allowedMs = budget.capWaitMillis(allowedMs);
+        allowedMs = Math.min(allowedMs, com.example.lms.trace.TraceContext.current().remainingMillis());
+        return Duration.ofMillis(allowedMs);
     }
 
     /** (임시) 동기 호출을 원하는 곳에서 사용 - block 시간은 설정/오버라이드 기반 */
@@ -1183,6 +1277,9 @@ public class NaverSearchService implements WebSearchProvider {
      */
     public List<String> searchSnippetsSync(String query, int topK, @Nullable Duration blockTimeout) {
         Duration t = resolveSyncBlockTimeout(blockTimeout);
+        if (Thread.currentThread().isInterrupted() || t.isZero()) {
+            return stoppedSyncSearch(query, topK).snippets();
+        }
         try {
             return searchSnippetsMono(query, topK)
                     .blockOptional(t)
@@ -1238,7 +1335,8 @@ public class NaverSearchService implements WebSearchProvider {
      */
     public List<String> searchSnippetsCacheOnly(String query, int topK, @Nullable java.util.List<SearchPolicy> ladder) {
         try {
-            if (!StringUtils.hasText(query) || topK <= 0) {
+            int resultLimit = admitNaverTopK(topK);
+            if (!StringUtils.hasText(query) || resultLimit <= 0) {
                 return List.of();
             }
             if (this.cache == null) {
@@ -1297,7 +1395,7 @@ public class NaverSearchService implements WebSearchProvider {
                 for (String qv : qCandidates) {
                     if (!StringUtils.hasText(qv)) continue;
 
-                    String key = cacheKeyFor(qv, pol);
+                    String key = cacheKeyFor(qv, pol, outboundDisplayFor(resultLimit));
                     java.util.concurrent.CompletableFuture<List<String>> fut = null;
                     try {
                         fut = this.cache.getIfPresent(key);
@@ -1325,7 +1423,7 @@ public class NaverSearchService implements WebSearchProvider {
                     for (String s : hit) {
                         if (!StringUtils.hasText(s)) continue;
                         dedup.add(s);
-                        if (dedup.size() >= topK) break;
+                        if (dedup.size() >= resultLimit) break;
                     }
 
                     List<String> out = new java.util.ArrayList<>(dedup);
@@ -1360,6 +1458,9 @@ public class NaverSearchService implements WebSearchProvider {
     /** Trace Facade (오버로드): block timeout 주입 */
     public SearchResult searchWithTraceSync(String query, int topK, @Nullable Duration blockTimeout) {
         Duration t = resolveSyncBlockTimeout(blockTimeout);
+        if (Thread.currentThread().isInterrupted() || t.isZero()) {
+            return stoppedSyncSearch(query, topK);
+        }
         long startedNs = System.nanoTime();
         try {
             return searchWithTraceMono(query, topK).block(t);
@@ -1377,17 +1478,30 @@ public class NaverSearchService implements WebSearchProvider {
                     query == null ? "" : SafeRedactor.hashValue(query),
                     query == null ? 0 : query.length(),
                     t.toMillis());
-            SearchTrace trace = new SearchTrace();
-            trace.query = traceQueryLabel(query);
-            trace.queryHash = SafeRedactor.hashValue(query);
-            trace.queryLength = query == null ? 0 : query.length();
-            trace.queryTokenBucket = queryTokenBucket(query);
-            trace.provider = getName();
-            trace.totalMs = tookMs;
-            trace.steps.add(new SearchStep(failureReason, 0, 0, tookMs));
             // Preserve legacy behaviour as much as possible: return an empty result shell.
-            return new SearchResult(List.of(), trace);
+            return emptySyncFailure(query, failureReason, tookMs);
         }
+    }
+
+    private SearchResult stoppedSyncSearch(String query, int topK) {
+        String reason = Thread.currentThread().isInterrupted() ? "cancelled" : "request_budget_exhausted";
+        traceNaverFailure(query, topK, -1, reason, false, !"cancelled".equals(reason), null, 0L);
+        return emptySyncFailure(query, reason, 0L);
+    }
+
+    private SearchResult emptySyncFailure(String query, String reason, long tookMs) {
+        SearchTrace trace = new SearchTrace();
+        trace.outcomeClass = "cancelled".equals(reason) ? "CLIENT_CANCELLED"
+                : reason != null && (reason.contains("timeout") || reason.contains("budget"))
+                        ? "TIMEOUT_OR_BUDGET" : "PROVIDER_ERROR";
+        trace.query = traceQueryLabel(query);
+        trace.queryHash = SafeRedactor.hashValue(query);
+        trace.queryLength = query == null ? 0 : query.length();
+        trace.queryTokenBucket = queryTokenBucket(query);
+        trace.provider = getName();
+        trace.totalMs = tookMs;
+        trace.steps.add(new SearchStep(reason, 0, 0, tookMs));
+        return new SearchResult(List.of(), trace);
     }
 
     /** LLM 답변까지 받아서 ‘딥 리서치’ 검색을 수행하는 Mono 버전 */
@@ -1432,7 +1546,9 @@ public class NaverSearchService implements WebSearchProvider {
         return searchSnippetsInternal(query, topK, trace, null)
                 .map(snippets -> {
                     trace.totalMs = (System.nanoTime() - t0) / 1_000_000L;
-                    if (Boolean.TRUE.equals(TraceStore.get("web.naver.providerDisabled"))) {
+                    if (!snippets.isEmpty()) trace.outcomeClass = "NONE";
+                    else if ("NONE".equals(trace.outcomeClass)) trace.outcomeClass = "FILTER_ZERO";
+                    if ("AUTH_OR_CONFIG".equals(trace.outcomeClass)) {
                         trace.steps.add(new SearchStep("키 미설정으로 호출 생략", 0, 0, 0));
                     }
                     return new SearchResult(snippets, trace);
@@ -1482,8 +1598,14 @@ public class NaverSearchService implements WebSearchProvider {
             int topK,
             SearchTrace trace,
             @Nullable String assistantAnswer) {
+        final int resultLimit = admitNaverTopK(topK);
+        if (resultLimit <= 0) {
+            return Mono.just(Collections.emptyList());
+        }
+        final int outboundDisplay = outboundDisplayFor(resultLimit);
         GuardContext ctx = GuardContextHolder.get();
         final Map<String, Object> callerTraceContext = TraceStore.context();
+        final boolean boundedRoute = traceBool("web.boundedRoute");
         // Privacy boundary: allow orchestration to block outbound web search entirely.
         // (Higher-level providers already enforce this, but keep a final fail-safe here
         // in case a call path reaches NaverSearchService directly.)
@@ -1531,23 +1653,10 @@ public class NaverSearchService implements WebSearchProvider {
             return Mono.just(Collections.emptyList());
         }
         if (!hasCreds()) {
-            traceNaverCounts(query, topK, 0, 0, true, naverDisabledReason());
+            if (trace != null) trace.outcomeClass = "AUTH_OR_CONFIG";
+            traceNaverCounts(query, resultLimit, 0, 0, true, naverDisabledReason());
+            traceNaverClassifiedOutcome("AUTH_OR_CONFIG", false, true);
             return Mono.just(Collections.emptyList());
-        }
-
-        // Circuit breaker (fail-fast). Includes HALF_OPEN trial gating via
-        // checkOpenOrThrow().
-        if (nightmareBreaker != null) {
-            try {
-                nightmareBreaker.checkOpenOrThrow(NightmareKeys.WEBSEARCH_NAVER);
-            } catch (NightmareBreaker.OpenCircuitException e) {
-                long remainingMs = nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
-                TraceStore.put("web.rateLimited", true);
-                NaverTraceSignals.traceBreakerOpen(remainingMs);
-                log.warn("[NaverSearch] NightmareBreaker OPEN for Naver (remain={}ms), skipping Naver call",
-                        remainingMs);
-                return Mono.just(Collections.emptyList());
-            }
         }
 
         // [FIX] 람다 캡처를 위해 effectively final 변수 생성
@@ -1668,7 +1777,7 @@ public class NaverSearchService implements WebSearchProvider {
 
         // assistantAnswer(딥-리서치) 브랜치 - QueryTransformer + 키워드 힌트 통합
 
-        if (assistantAnswer != null && !assistantAnswer.isBlank()) {
+        if (!boundedRoute && assistantAnswer != null && !assistantAnswer.isBlank()) {
 
             Mono<List<String>> qsMono = Mono.fromCallable(() -> {
                 // assistantAnswer 기반 확장: 실패/지연 시 즉시 폴백
@@ -1709,12 +1818,14 @@ public class NaverSearchService implements WebSearchProvider {
                 int n = qs.size();
                 long overallMs = Math.max(apiTimeoutMs, perCallMs * n + 150);
                 return Flux.fromIterable(qs)
-                        .flatMap(q -> withTraceContext(callerTraceContext, () -> callNaverApiMono(q, policy))
+                        .flatMap(q -> withTraceContext(callerTraceContext,
+                                () -> callNaverApiMono(q, policy, outboundDisplay))
                                 .timeout(Duration.ofMillis(perCallMs)), 2)
                         .flatMapIterable(snippets -> snippets)
                         .map(snippet -> sanitizeSnippet((String) snippet))
                         .filter(s -> StringUtils.hasText(s))
                         .distinct()
+                        .take(resultLimit)
                         .timeout(Duration.ofMillis(overallMs))
                         .collectList()
                         .onErrorReturn(Collections.emptyList());
@@ -1723,7 +1834,9 @@ public class NaverSearchService implements WebSearchProvider {
 
         // 기본 확장 쿼리로 초기화
 
-        Mono<List<String>> expandedQueriesMono = Mono.fromCallable(() -> {
+        Mono<List<String>> expandedQueriesMono = boundedRoute
+                ? Mono.just(List.of(normalized))
+                : Mono.fromCallable(() -> {
             List<String> base = expandQueries(normalized);
             if (queryTransformer == null)
                 return base;
@@ -1740,6 +1853,10 @@ public class NaverSearchService implements WebSearchProvider {
                 .subscribeOn(ioScheduler())
                 .timeout(Duration.ofMillis(queryTransformTimeoutMs))
                 .onErrorReturn(expandQueries(normalized));
+
+        if (boundedRoute) {
+            traceNaverAdaptiveSkipped("bounded-route");
+        }
 
         return expandedQueriesMono.flatMap(qs -> {
             List<String> expandedQueries = qs;
@@ -1767,12 +1884,13 @@ public class NaverSearchService implements WebSearchProvider {
             LinkedHashSet<String> acc = new LinkedHashSet<>();
             // ▶ 순차 실행 조기 종료 (일반 검색 브랜치)
             Flux<String> snippetFlux = Flux.fromIterable(expandedQueries)
-                    .flatMap(q -> Mono.defer(() -> Mono.fromFuture(withTraceContext(callerTraceContext, () -> cache.get(cacheKeyFor(q, policy)))))
+                    .flatMap(q -> Mono.defer(() -> awaitCacheFuture(withTraceContext(callerTraceContext,
+                                    () -> cache.get(cacheKeyFor(q, policy, outboundDisplay)))))
                             .subscribeOn(ioScheduler()), 3)
                     .flatMapIterable(list -> list)
                     .filter(acc::add) // 중복 제거(LinkedHashSet)
                     .onBackpressureBuffer()
-                    .take(topK); // ★ topK 확보 시 즉시 종료
+                    .take(resultLimit); // ★ admitted topK 확보 시 즉시 종료
 
             // ▶ 전체 검색 파이프라인 타임아웃 (상한을 25초로 상향)
             // - perCallMs : 1.5s~3.0s 구간으로 완화 (apiTimeoutMs 기반)
@@ -1788,7 +1906,8 @@ public class NaverSearchService implements WebSearchProvider {
                 Map<String, Double> rrf = new java.util.HashMap<>();
                 return Flux.fromIterable(expandedQueries)
                         .flatMap(
-                                q -> Mono.defer(() -> Mono.fromFuture(withTraceContext(callerTraceContext, () -> cache.get(cacheKeyFor(q, policy)))))
+                                q -> Mono.defer(() -> awaitCacheFuture(withTraceContext(callerTraceContext,
+                                                () -> cache.get(cacheKeyFor(q, policy, outboundDisplay)))))
                                         .subscribeOn(ioScheduler()),
                                 3)
                         .doOnNext(list -> {
@@ -1801,17 +1920,17 @@ public class NaverSearchService implements WebSearchProvider {
                         .then(Mono.fromSupplier(() -> rrf.entrySet().stream()
                                 .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
                                 .map(Map.Entry::getKey)
-                                .limit(topK)
+                                .limit(resultLimit)
                                 .toList()))
                         .timeout(Duration.ofMillis(overallMs))
                         .onErrorResume(e -> {
                             if (e instanceof TimeoutException) {
-                                traceNaverFailure(queryCopy2, topK, -1, "timeout", false, true, null, overallMs);
+                                traceNaverFailure(queryCopy2, resultLimit, -1, "timeout", false, true, null, overallMs);
                                 log.warn("[AWX2AF2][search][naver] timeout timeoutMs={} queryHash={} queryLength={}",
                                         overallMs, SafeRedactor.hashValue(queryCopy2),
                                         queryCopy2 == null ? 0 : queryCopy2.length());
                             } else {
-                                traceNaverFailure(queryCopy2, topK, naverHttpStatus(e), naverFailureReason(e),
+                                traceNaverFailure(queryCopy2, resultLimit, naverHttpStatus(e), naverFailureReason(e),
                                         isNaverRateLimited(e), isNaverTimeoutFailure(e), naverErrorBody(e), 0L);
                                 log.warn("[NaverSearch] Error during search failureReason={} errorType={} queryHash={} queryLength={}",
                                         naverFailureReason(e),
@@ -1837,13 +1956,11 @@ public class NaverSearchService implements WebSearchProvider {
                             }
                             return Mono.just(Collections.emptyList());
                         })
-                        .doOnNext(list -> {
-                            Long sid = sessionIdProvider.get();
-                            if (sid != null)
-                                reinforceSnippets(sid, queryCopy2, list);
-                        });
+                        .doOnNext(list -> reinforceRetrievedSnippets(queryCopy2, list));
             }
-            return collectNaverAdaptive(expandedQueries, policy, topK, queryCopy2, overallMs, perCallMs, callerTraceContext)
+            return collectNaverAdaptive(expandedQueries, policy, resultLimit, outboundDisplay,
+                    queryCopy2, overallMs, perCallMs,
+                    callerTraceContext, boundedRoute, trace)
                     .collectList()
                     .timeout(Duration.ofMillis(overallMs))
                     .doOnNext(list -> {
@@ -1856,13 +1973,13 @@ public class NaverSearchService implements WebSearchProvider {
                     })
                     .onErrorResume(e -> {
                         if (e instanceof TimeoutException) {
-                            traceNaverFailure(queryCopy2, topK, -1, "timeout", false, true, null, overallMs);
+                            traceNaverFailure(queryCopy2, resultLimit, -1, "timeout", false, true, null, overallMs);
                             log.warn("[AWX2AF2][search][naver] timeout timeoutMs={} queryHash={} queryLength={}",
                                     overallMs,
                                     SafeRedactor.hashValue(queryCopy2),
                                     queryCopy2 == null ? 0 : queryCopy2.length());
                         } else {
-                            traceNaverFailure(queryCopy2, topK, naverHttpStatus(e), naverFailureReason(e),
+                            traceNaverFailure(queryCopy2, resultLimit, naverHttpStatus(e), naverFailureReason(e),
                                     isNaverRateLimited(e), isNaverTimeoutFailure(e), naverErrorBody(e), 0L);
                             log.warn("[NaverSearch] Error during search failureReason={} errorType={} queryHash={} queryLength={}",
                                     naverFailureReason(e),
@@ -1888,21 +2005,35 @@ public class NaverSearchService implements WebSearchProvider {
                         }
                         return Mono.just(Collections.emptyList());
                     })
-                    .doOnNext(list -> {
-                        Long sid = sessionIdProvider.get();
-                        if (sid != null)
-                            reinforceSnippets(sid, queryCopy2, list);
-                    });
+                    .doOnNext(list -> reinforceRetrievedSnippets(queryCopy2, list));
         });
+    }
+
+    private static void observeOutcome(SearchTrace trace, NaverAttemptOutcome outcome) {
+        if (trace != null) trace.outcomeClass = outcome.failureClass() == null ? "NONE" : outcome.failureClass();
     }
 
     private Flux<String> collectNaverAdaptive(List<String> candidateQueries,
                                                SearchPolicy policy,
                                                int topK,
+                                               int outboundDisplay,
                                                String originalQuery,
                                                long overallMs,
                                                long fallbackPerCallMs,
-                                               Map<String, Object> callerTraceContext) {
+                                               Map<String, Object> callerTraceContext,
+                                               boolean boundedRoute, SearchTrace trace) {
+        if (boundedRoute) {
+            if (candidateQueries == null || candidateQueries.isEmpty()) {
+                return Flux.empty();
+            }
+            long perCallMs = Math.max(adaptivePerCallFloorMs, fallbackPerCallMs);
+            return loadNaverAttempt(candidateQueries.get(0), policy, outboundDisplay, perCallMs, callerTraceContext)
+                    .doOnNext(outcome -> observeOutcome(trace, outcome))
+                    .flatMapIterable(NaverAttemptOutcome::snippets)
+                    .map(snippet -> sanitizeSnippet((String) snippet))
+                    .filter(StringUtils::hasText)
+                    .take(topK);
+        }
         AdaptiveSearchQueryVariants.Plan initialPlan = planNaverVariants(originalQuery, candidateQueries, false, false);
         List<String> queries = initialPlan.queries();
         traceNaverAdaptive(initialPlan, 0, 0);
@@ -1910,31 +2041,18 @@ public class NaverSearchService implements WebSearchProvider {
         if (queries.isEmpty()) {
             return Flux.empty();
         }
-        if (!adaptiveSearchEnabled || queries.size() <= 1) {
-            LinkedHashSet<String> acc = new LinkedHashSet<>();
-            return Flux.fromIterable(queries)
-                    .flatMap(q -> Mono.defer(() -> Mono.fromFuture(withTraceContext(callerTraceContext, () -> cache.get(cacheKeyFor(q, policy)))))
-                            .subscribeOn(ioScheduler()), 3)
-                    .flatMapIterable(list -> list)
-                    .map(snippet -> sanitizeSnippet((String) snippet))
-                    .filter(StringUtils::hasText)
-                    .filter(acc::add)
-                    .onBackpressureBuffer()
-                    .take(topK);
-        }
-
         String baseQuery = queries.get(0);
         long firstPerCallMs = Math.max(adaptivePerCallFloorMs,
                 Math.min(Math.max(adaptivePerCallFloorMs, fallbackPerCallMs), initialPlan.perCallMs()));
+        long discoveryDeadlineNs = System.nanoTime()
+                + Math.max(1L, Math.min(overallMs, initialPlan.budgetMs())) * 1_000_000L;
 
-        return Mono.defer(() -> Mono.fromFuture(withTraceContext(callerTraceContext, () -> cache.get(cacheKeyFor(baseQuery, policy)))))
-                .subscribeOn(ioScheduler())
-                .timeout(Duration.ofMillis(firstPerCallMs))
-                .onErrorReturn(Collections.emptyList())
-                .flatMapMany(baseSnippets -> {
+        return loadNaverAttempt(baseQuery, policy, outboundDisplay, firstPerCallMs, callerTraceContext)
+                .doOnNext(outcome -> observeOutcome(trace, outcome))
+                .flatMapMany(baseOutcome -> {
                     LinkedHashSet<String> acc = new LinkedHashSet<>();
-                    if (baseSnippets != null) {
-                        for (String snippet : baseSnippets) {
+                    if (baseOutcome.snippets() != null) {
+                        for (String snippet : baseOutcome.snippets()) {
                             String sanitized = sanitizeSnippet(snippet);
                             if (StringUtils.hasText(sanitized)) {
                                 acc.add(sanitized);
@@ -1945,29 +2063,24 @@ public class NaverSearchService implements WebSearchProvider {
                         }
                     }
 
-                    boolean providerEmpty = acc.isEmpty();
-                    boolean afterFilterStarved = Boolean.TRUE.equals(TraceStore.get("web.naver.afterFilterStarved"));
-                    boolean providerGated = Boolean.TRUE.equals(TraceStore.get("web.naver.timeout"))
-                            || Boolean.TRUE.equals(TraceStore.get("web.naver.rateLimited"))
-                            || Boolean.TRUE.equals(TraceStore.get("web.naver.providerDisabled"));
+                    boolean trueZero = baseOutcome.allowsBoundedVariant();
                     AdaptiveSearchQueryVariants.Plan resultPlan = planNaverVariants(
                             originalQuery,
                             queries,
-                            providerEmpty,
-                            afterFilterStarved);
+                            trueZero,
+                            false);
                     traceNaverAdaptive(resultPlan, acc.size(), acc.size());
 
                     List<String> resultQueries = resultPlan.queries();
                     List<String> variants = resultQueries.size() <= 1
                             ? List.of()
                             : resultQueries.subList(1, resultQueries.size());
+                    boolean promotionDiscovery = adaptiveSearchEnabled
+                            && GrokPromotionDiscovery.matches(originalQuery)
+                            && (trueZero || baseOutcome.failureClass() == null);
                     boolean shouldRunVariants = !variants.isEmpty()
-                            && acc.size() < topK
-                            && !providerGated
-                            && (providerEmpty
-                                    || afterFilterStarved
-                                    || "compound-query".equals(resultPlan.triggerReason())
-                                    || "recall-policy".equals(resultPlan.triggerReason()));
+                            && (promotionDiscovery || acc.size() < topK)
+                            && (promotionDiscovery || trueZero);
 
                     if (!shouldRunVariants) {
                         return Flux.fromIterable(acc);
@@ -1975,18 +2088,92 @@ public class NaverSearchService implements WebSearchProvider {
 
                     long perCallMs = Math.max(adaptivePerCallFloorMs,
                             Math.min(Math.max(adaptivePerCallFloorMs, fallbackPerCallMs), resultPlan.perCallMs()));
+                    if (promotionDiscovery) {
+                        if (callerTraceContext != null) callerTraceContext.put("web.naver.promotionDiscovery.reason",
+                                acc.isEmpty() ? "base_empty" : "base_results_not_exhaustive");
+                        // Do not emit the full base first: downstream take(topK) would cancel discovery.
+                        return Flux.fromIterable(variants)
+                                .concatMap(q -> Mono.defer(() -> {
+                                    long remainingMs = (discoveryDeadlineNs - System.nanoTime()) / 1_000_000L;
+                                    if (remainingMs < Math.max(1L, adaptivePerCallFloorMs)) {
+                                        if (callerTraceContext != null) callerTraceContext.put(
+                                                "web.naver.promotionDiscovery.stopReason", "budget");
+                                        return Mono.<NaverAttemptOutcome>empty();
+                                    }
+                                    return loadNaverAttempt(q, policy, outboundDisplay,
+                                            Math.min(perCallMs, remainingMs), callerTraceContext);
+                                }))
+                                .takeUntil(outcome -> outcome.failureClass() != null && !outcome.allowsBoundedVariant())
+                                .collectList()
+                                .flatMapMany(outcomes -> {
+                                    List<List<String>> lanes = new ArrayList<>();
+                                    for (NaverAttemptOutcome outcome : outcomes) {
+                                        lanes.add(outcome.snippets().stream()
+                                                .map(NaverSearchService::sanitizeSnippet)
+                                                .filter(StringUtils::hasText).toList());
+                                    }
+                                    lanes.add(new ArrayList<>(acc));
+                                    return Flux.fromIterable(GrokPromotionDiscovery.mergeEvidence(lanes, topK));
+                                });
+                    }
                     return Flux.concat(
                             Flux.fromIterable(acc),
                             Flux.fromIterable(variants)
-                                    .flatMap(q -> Mono.defer(() -> Mono.fromFuture(withTraceContext(callerTraceContext, () -> cache.get(cacheKeyFor(q, policy)))))
-                                            .subscribeOn(ioScheduler())
-                                            .timeout(Duration.ofMillis(perCallMs))
-                                            .onErrorReturn(Collections.emptyList()), 2)
-                                    .flatMapIterable(list -> list)
+                                    .concatMap(q -> loadNaverAttempt(q, policy, outboundDisplay,
+                                            perCallMs, callerTraceContext).doOnNext(outcome -> observeOutcome(trace, outcome)))
+                                    .takeUntil(outcome -> !outcome.allowsBoundedVariant())
+                                    .flatMapIterable(NaverAttemptOutcome::snippets)
                                     .map(snippet -> sanitizeSnippet((String) snippet))
                                     .filter(StringUtils::hasText)
                                     .filter(acc::add))
                             .take(topK);
+                });
+    }
+
+    private Mono<NaverAttemptOutcome> loadNaverAttempt(String query,
+                                                       SearchPolicy policy,
+                                                       long timeoutMs,
+                                                       Map<String, Object> callerTraceContext) {
+        int defaultLimit = admitNaverTopK(webTopK);
+        return loadNaverAttempt(query, policy, outboundDisplayFor(defaultLimit), timeoutMs, callerTraceContext);
+    }
+
+    private Mono<NaverAttemptOutcome> loadNaverAttempt(String query,
+                                                       SearchPolicy policy,
+                                                       int outboundDisplay,
+                                                       long timeoutMs,
+                                                       Map<String, Object> callerTraceContext) {
+        final String cacheKey = cacheKeyFor(query, policy, outboundDisplay);
+        return Mono.defer(() -> {
+                    java.util.concurrent.CompletableFuture<List<String>> resultFuture =
+                            withTraceContext(callerTraceContext, () -> cache.get(cacheKey));
+                    resultFuture.whenComplete((snippets, error) -> {
+                        if (error == null && (snippets == null || snippets.isEmpty())) {
+                            cache.asMap().remove(cacheKey, resultFuture);
+                        }
+                    });
+                    return awaitCacheFuture(resultFuture);
+                })
+                .subscribeOn(ioScheduler())
+                .timeout(Duration.ofMillis(timeoutMs))
+                .map(NaverAttemptOutcome::fromSnippets)
+                .doOnNext(outcome -> {
+                    if (outcome.allowsBoundedVariant()) {
+                        withTraceContext(callerTraceContext, () -> {
+                            traceNaverClassifiedOutcome("TRUE_ZERO", true, false);
+                            return null;
+                        });
+                    }
+                })
+                .onErrorResume(error -> {
+                    NaverClassifiedFailure classified = findNaverClassifiedFailure(error);
+                    String failureClass = classified == null
+                            ? (isNaverTimeoutFailure(error) ? "TIMEOUT_OR_BUDGET" : "PROVIDER_ERROR")
+                            : classified.failureClass;
+                    if (classified == null) {
+                        traceNaverClassifiedOutcome(failureClass, true, true);
+                    }
+                    return Mono.just(NaverAttemptOutcome.failure(failureClass));
                 });
     }
 
@@ -2005,9 +2192,26 @@ public class NaverSearchService implements WebSearchProvider {
                         maxOverallMs,
                         maxOverallMs,
                         Math.max(1L, adaptivePerCallFloorMs),
-                        false,
+                        adaptiveRecallModeRequested(),
                         providerEmpty,
                         afterFilterStarved));
+    }
+
+    private static boolean adaptiveRecallModeRequested() {
+        Object recall = TraceStore.get("chatApi.web.recallModeRequested");
+        if (Boolean.TRUE.equals(recall)) {
+            return true;
+        }
+        Object workflowRecall = TraceStore.get("web.query.rewrite.recallModeRequested");
+        if (Boolean.TRUE.equals(workflowRecall)) {
+            return true;
+        }
+        String searchMode = String.valueOf(TraceStore.get("chatApi.web.searchMode"));
+        return "FORCE_DEEP".equalsIgnoreCase(searchMode)
+                || "RECALL".equalsIgnoreCase(searchMode)
+                || "RECALL".equalsIgnoreCase(String.valueOf(TraceStore.get("search.policy.mode")))
+                || "exploratory".equalsIgnoreCase(String.valueOf(TraceStore.get("search.policy.rewriteTemperatureProfile")))
+                || "exploratory".equalsIgnoreCase(String.valueOf(TraceStore.get("web.query.rewrite.requestedTemperatureProfile")));
     }
 
     private void traceNaverAdaptive(AdaptiveSearchQueryVariants.Plan plan, int returnedCount, int afterFilterCount) {
@@ -2022,10 +2226,56 @@ public class NaverSearchService implements WebSearchProvider {
             TraceStore.put("web.naver.adaptive.expansionCount", Math.max(0, plan.expansionCount()));
             TraceStore.put("web.naver.adaptive.budgetMs", Math.max(0L, plan.budgetMs()));
             TraceStore.put("web.naver.adaptive.perCallMs", Math.max(0L, plan.perCallMs()));
+            TraceStore.put("web.naver.adaptive.temperatureProfile",
+                    SafeRedactor.traceLabelOrFallback(plan.temperatureProfile(), "unknown"));
+            TraceStore.put("web.naver.adaptive.validationTemperature", plan.validationTemperature());
+            TraceStore.put("web.naver.adaptive.explorationTemperature", plan.explorationTemperature());
+            TraceStore.put("web.naver.adaptive.explorationRate", plan.explorationRate());
+            AdaptiveSearchQueryVariants.Diagnostics diagnostics = plan.diagnostics();
+            List<String> variantLaneTemperatureHints = plan.variantLaneTemperatureHints();
+            TraceStore.put("web.naver.adaptive.querySeedHash12", diagnostics.querySeedHash12());
+            TraceStore.put("web.naver.adaptive.variantSetHash12", diagnostics.variantSetHash12());
+            TraceStore.put("web.naver.adaptive.verificationLaneCount", diagnostics.verificationLaneCount());
+            TraceStore.put("web.naver.adaptive.explorationLaneCount", diagnostics.explorationLaneCount());
+            TraceStore.put("web.naver.adaptive.laneLabels", diagnostics.laneLabels());
+            TraceStore.put("web.naver.adaptive.variantLaneTemperatureHints", variantLaneTemperatureHints);
             TraceStore.put("web.naver.adaptive.returnedCount", Math.max(0, returnedCount));
             TraceStore.put("web.naver.adaptive.afterFilterCount", Math.max(0, afterFilterCount));
+            TraceStore.put("web.query.variantCount", Math.max(0, plan.queries().size() - 1));
+            TraceStore.put("web.query.rewrite.temperatureProfile",
+                    SafeRedactor.traceLabelOrFallback(plan.temperatureProfile(), "unknown"));
+            TraceStore.put("web.query.rewrite.validationTemperature", plan.validationTemperature());
+            TraceStore.put("web.query.rewrite.explorationTemperature", plan.explorationTemperature());
+            TraceStore.put("web.query.rewrite.explorationRate", plan.explorationRate());
+            TraceStore.put("web.query.rewrite.querySeedHash12", diagnostics.querySeedHash12());
+            TraceStore.put("web.query.rewrite.variantSetHash12", diagnostics.variantSetHash12());
+            TraceStore.put("web.query.rewrite.verificationLaneCount", diagnostics.verificationLaneCount());
+            TraceStore.put("web.query.rewrite.explorationLaneCount", diagnostics.explorationLaneCount());
+            TraceStore.put("web.query.rewrite.laneLabels", diagnostics.laneLabels());
+            TraceStore.put("web.query.rewrite.laneSummary", diagnostics.laneSummary());
+            TraceStore.put("web.query.rewrite.variantLaneTemperatureHints", variantLaneTemperatureHints);
+            TraceStore.put("web.rewritePlan.seedHash12", diagnostics.querySeedHash12());
+            TraceStore.put("web.rewritePlan.variantHash12", diagnostics.variantSetHash12());
+            TraceStore.put("web.rewritePlan.verificationCount", diagnostics.verificationLaneCount());
+            TraceStore.put("web.rewritePlan.explorationCount", diagnostics.explorationLaneCount());
+            TraceStore.put("web.rewritePlan.laneSummary", diagnostics.laneSummary());
+            TraceStore.put("web.rewritePlan.variantLaneTemperatureHints", variantLaneTemperatureHints);
         } catch (Throwable ignore) {
             NaverTraceSuppressions.traceSuppressed("adaptive.telemetry", ignore);
+        }
+    }
+
+    private void traceNaverAdaptiveSkipped(String reason) {
+        try {
+            TraceStore.put("web.naver.adaptive.enabled", false);
+            TraceStore.put("web.naver.adaptive.triggerReason",
+                    SafeRedactor.traceLabelOrFallback(reason, "skipped"));
+            TraceStore.put("web.naver.adaptive.variantCount", 0);
+            TraceStore.put("web.naver.adaptive.sliceCount", 0);
+            TraceStore.put("web.naver.adaptive.expansionCount", 0);
+            TraceStore.put("web.query.variantCount", 0);
+        } catch (Throwable ignore) {
+            NaverTraceSuppressions.traceSuppressed("adaptive.skippedTelemetry", ignore);
         }
     }
 
@@ -2109,11 +2359,25 @@ public class NaverSearchService implements WebSearchProvider {
      */
     // ─── 기존 호환 ───
     private Mono<List<String>> callNaverApiMono(String query) {
-        return callNaverApiMono(query, defaultPolicy());
+        return callNaverApiMono(query, defaultPolicy(), configuredNaverMaximum());
     }
 
     // ─── 신규: 정책 파라미터 버전 ───
     private Mono<List<String>> callNaverApiMono(String query, SearchPolicy policy) {
+        return callNaverApiMono(query, policy, configuredNaverMaximum());
+    }
+
+    private Mono<List<String>> callNaverApiMono(String query,
+                                                SearchPolicy policy,
+                                                int outboundDisplay) {
+        int boundedDisplay = Math.min(configuredNaverMaximum(), clampNaverDisplay(outboundDisplay));
+        return Mono.defer(() -> callNaverApiMonoSubscribed(query, policy, boundedDisplay));
+    }
+
+    /** One subscribed cache load owns one breaker permit through response parsing. */
+    private Mono<List<String>> callNaverApiMonoSubscribed(String query,
+                                                         SearchPolicy policy,
+                                                         int fetch) {
         if (isBlank(query)) {
             return Mono.just(Collections.emptyList());
         }
@@ -2123,22 +2387,14 @@ public class NaverSearchService implements WebSearchProvider {
             log.warn(
                     "Naver client id/secret not configured; returning empty results (provider fallback will handle). ");
             traceNaverCounts(query, 0, 0, 0, true, naverDisabledReason());
-            return Mono.just(Collections.emptyList());
+            traceNaverClassifiedOutcome("AUTH_OR_CONFIG", false, true);
+            return Mono.error(new NaverClassifiedFailure("AUTH_OR_CONFIG"));
         }
 
-        // Circuit breaker fail-fast (includes HALF_OPEN trial gating).
-        if (nightmareBreaker != null) {
-            try {
-                nightmareBreaker.checkOpenOrThrow(NightmareKeys.WEBSEARCH_NAVER);
-            } catch (NightmareBreaker.OpenCircuitException e) {
-                long remainingMs = nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
-                NaverTraceSignals.traceBreakerOpen(remainingMs);
-                log.warn("[Naver API] NightmareBreaker OPEN for Naver (remain={}ms) → skipping API call",
-                        nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER));
-                return Mono.just(Collections.emptyList());
-            }
+        final TimeBudget requestBudget = TimeBudgetContext.get();
+        if (requestBudget != null && requestBudget.expired()) {
+            return expiredNaverSubscription(query, fetch, null, TraceStore.context());
         }
-
         String apiQuery = appendLocationSuffix(query);
 
         // Apply a short cooldown lock before invoking the external API. When a lock
@@ -2157,15 +2413,14 @@ public class NaverSearchService implements WebSearchProvider {
                     log.debug("[AWX2AF2][search][naver] cooldown active queryHash={} queryLength={} -> skipping API call",
                             SafeRedactor.hashValue(apiQuery),
                             apiQuery == null ? 0 : apiQuery.length());
-                    return Mono.just(Collections.emptyList());
+                    traceNaverClassifiedOutcome("BREAKER_OR_COOLDOWN", false, true);
+                    return Mono.error(new NaverClassifiedFailure("BREAKER_OR_COOLDOWN"));
                 }
             } catch (Exception ignore) {
                 NaverTraceSuppressions.traceSuppressed("cooldown.lock", ignore);
             }
         }
 
-        /* topK보다 적게 받아와 결과가 부족해지는 문제 → {스터프2} 전략 반영 */
-        int fetch = clampNaverDisplay(Math.max(display, webTopK));
         // NOTE: Use absolute URL to remain resilient even if WebClient baseUrl
         // is misconfigured.
         URI uri = UriComponentsBuilder.fromHttpUrl("https://openapi.naver.com/v1/search/webkr.json")
@@ -2178,7 +2433,24 @@ public class NaverSearchService implements WebSearchProvider {
         NaverCredentialBridge.Credential first = nextKey();
         if (first == null) {
             traceNaverCounts(query, fetch, 0, 0, true, naverDisabledReason());
-            return Mono.just(List.of());
+            traceNaverClassifiedOutcome("AUTH_OR_CONFIG", false, true);
+            return Mono.error(new NaverClassifiedFailure("AUTH_OR_CONFIG"));
+        }
+
+        final NightmareBreaker.CallPermit permit;
+        if (nightmareBreaker == null) {
+            permit = null;
+        } else {
+            try {
+                permit = nightmareBreaker.acquire(NightmareKeys.WEBSEARCH_NAVER, "wire");
+            } catch (NightmareBreaker.OpenCircuitException e) {
+                long remainingMs = nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
+                NaverTraceSignals.traceBreakerOpen(remainingMs);
+                log.warn("[Naver API] NightmareBreaker OPEN for Naver (remain={}ms) - skipping API call",
+                        remainingMs);
+                traceNaverClassifiedOutcome("BREAKER_OR_COOLDOWN", false, true);
+                return Mono.error(new NaverClassifiedFailure("BREAKER_OR_COOLDOWN"));
+            }
         }
 
         String randomAgent = USER_AGENTS[new java.util.Random().nextInt(USER_AGENTS.length)];
@@ -2202,7 +2474,7 @@ public class NaverSearchService implements WebSearchProvider {
                 (String) TraceStore.get("sid"),
                 (String) TraceStore.get("sessionId"));
 
-        Mono<ResponseEntity<String>> primary = web.get()
+        Mono<ResponseEntity<String>> wire = web.get()
                 .uri(uri)
                 .headers(h -> {
                     if (capturedRid != null && !capturedRid.isBlank()) {
@@ -2216,9 +2488,31 @@ public class NaverSearchService implements WebSearchProvider {
                 .header("X-Naver-Client-Secret", first.secret())
                 .header("User-Agent", randomAgent)
                 .retrieve()
-                .toEntity(String.class)
+                .toEntity(String.class);
+        long subscriptionDelayMs = Math.max(0L, Math.min(200L, ratePolicy.currentDelayMs()));
+        if (requestBudget != null) subscriptionDelayMs = requestBudget.capWaitMillis(subscriptionDelayMs);
+        java.util.concurrent.atomic.AtomicReference<NaverObservation> latestObservation = new java.util.concurrent.atomic.AtomicReference<>();
+        Mono<ObservedNaverResponse> primary = Mono.defer(() -> {
+                    // Re-evaluated on initial subscription and every retry. Never cancel a wire
+                    // operation already shared by cache waiters merely because one waiter left.
+                    if (requestBudget != null && requestBudget.expired()) {
+                        return expiredNaverSubscription(query, fetch, permit, capturedTraceContext);
+                    }
+                    var attemptContext = TraceStore.searchContext(capturedTraceContext, "providerAttemptId");
+                    var observation = new NaverObservation(query, attemptContext, true);
+                    latestObservation.set(observation);
+                    return wire.map(entity -> new ObservedNaverResponse(entity, observation))
+                            .doOnCancel(() -> observation.put("clientCancellationDelivered", true))
+                            .doOnError(error -> {
+                                int status = naverHttpStatus(error);
+                                if (status > 0) observation.put("httpStatus", status);
+                                observation.put("failureClass", classifyNaverFailureClass(status,
+                                        isNaverRateLimited(error), isNaverTimeoutFailure(error), naverFailureReason(error)));
+                                observation.finish();
+                            });
+                })
                 // 구독 지연(레이트리밋/Retry-After 반영)
-                .delaySubscription(Duration.ofMillis(Math.max(0, Math.min(200, ratePolicy.currentDelayMs()))))
+                .delaySubscription(Duration.ofMillis(subscriptionDelayMs))
                 // ECO-FIX v3.0: 일관된 타임아웃만 적용하고 재시도는 상위 WebSearchRetriever에서 수행.
                 .timeout(Duration.ofMillis(apiTimeoutMs));
 
@@ -2226,42 +2520,81 @@ public class NaverSearchService implements WebSearchProvider {
         // list
         // so that the upper provider/orchestrator can decide whether to call another
         // engine.
-        if (retryMaxAttempts > 0) {
+        boolean boundedRoute = traceBool("web.boundedRoute");
+        if (retryMaxAttempts > 0 && !boundedRoute) {
             primary = primary.retryWhen(
                     Retry.backoff(retryMaxAttempts, Duration.ofMillis(Math.max(0L, retryInitialBackoffMs)))
                             .maxBackoff(Duration.ofMillis(Math.max(retryInitialBackoffMs, retryMaxBackoffMs)))
                             .jitter(Math.max(0.0d, Math.min(1.0d, retryJitter)))
-                            .filter(this::isRetryableNaverError)
+                            .filter(error -> (requestBudget == null || !requestBudget.expired())
+                                    && isRetryableNaverError(error))
                             .doBeforeRetry(rs -> {
                                 try {
                                     TraceStore.inc("web.naver.retry.count");
                                     TraceStore.put("web.naver.retry.last", String.valueOf(rs.totalRetries() + 1));
+                                    TraceStore.put("web.naver.retry.lastHttpStatus", naverHttpStatus(rs.failure()));
+                                    TraceStore.put("web.naver.retry.lastFailureClass", classifyNaverFailureClass(
+                                            naverHttpStatus(rs.failure()), isNaverRateLimited(rs.failure()),
+                                            isNaverTimeoutFailure(rs.failure()), naverFailureReason(rs.failure())));
                                 } catch (Exception suppressed) { NaverTraceSuppressions.traceSuppressed("retry.countTrace", suppressed); }
                             }));
+        } else if (retryMaxAttempts > 0) {
+            try {
+                TraceStore.put("web.naver.retry.skipped", true);
+                TraceStore.put("web.naver.retry.skipReason", "bounded-route");
+            } catch (Exception suppressed) {
+                NaverTraceSuppressions.traceSuppressed("retry.boundedTrace", suppressed);
+            }
         }
 
         Mono<List<String>> primaryParsed = primary
-                .map(entity -> {
+                .map(observed -> {
+                    ResponseEntity<String> entity = observed.entity();
+                    NaverObservation observation = observed.observation();
+                    observation.put("httpStatus", entity.getStatusCode().value());
                     try {
                         ratePolicy.updateFromHeaders(entity.getHeaders());
                     } catch (Exception suppressed) { NaverTraceSuppressions.traceSuppressed("ratePolicy.headers.success", suppressed); }
 
-                    if (nightmareBreaker != null) {
-                        long elapsedMs = (System.nanoTime() - startedNs) / 1_000_000L;
-                        nightmareBreaker.recordSuccess(NightmareKeys.WEBSEARCH_NAVER, elapsedMs);
-                    }
                     String json = entity.getBody();
                     if (debugJson && json != null) {
                         log.debug("[AWX2AF2][search][naver] raw response received bodyLen={} bodyHash={} queryHash={}",
                                 json.length(), SafeRedactor.hashValue(json), SafeRedactor.hashValue(query));
                     }
-                    return withTraceContext(capturedTraceContext, () -> parseNaverResponse(query, json, policy));
+                    if (isBlank(json)) {
+                        if (permit != null) {
+                            permit.completeBlank("body");
+                        }
+                        traceNaverClassifiedOutcome("PROVIDER_ERROR", true, true);
+                        observation.put("failureClass", "EMPTY_BODY");
+                        observation.finish();
+                        throw new NaverClassifiedFailure("PROVIDER_ERROR");
+                    }
+                    try {
+                        List<String> parsed = withTraceContext(observation.context,
+                                () -> parseNaverResponse(query, json, policy, observation));
+                        if (permit != null) {
+                            permit.completeSuccess(elapsedMs(startedNs));
+                        }
+                        return parsed;
+                    } catch (NaverClassifiedFailure classified) {
+                        if (permit != null) {
+                            if ("FILTER_ZERO".equals(classified.failureClass)) {
+                                permit.completeAbandoned("parse", "filter-zero");
+                            } else {
+                                permit.completeFailure(NightmareBreaker.FailureKind.UNKNOWN,
+                                        classified, "parse");
+                            }
+                        }
+                        throw classified;
+                    }
                 })
 
                 .onErrorResume(WebClientResponseException.class, e -> {
-                    // On error return empty list; fallback is handled below.
                     int sc = e.getStatusCode().value();
                     long tookMs = elapsedMs(startedNs);
+                    String failureClass = classifyNaverFailureClass(sc, sc == 429, false, "http-error");
+                    String failureReason = sc == 429 ? "rate-limit" : "http-error";
 
                     // Even on error, we may still have Retry-After style headers.
                     try {
@@ -2269,13 +2602,12 @@ public class NaverSearchService implements WebSearchProvider {
                     } catch (Exception suppressed) { NaverTraceSuppressions.traceSuppressed("ratePolicy.headers.error", suppressed); }
 
                     long retryAfterMs = sc == 429 ? Math.max(0L, ratePolicy.retryAfterMs()) : 0L;
-                    if (nightmareBreaker != null) {
+                    if (permit != null) {
                         if (sc == 429) {
-                            nightmareBreaker.recordRateLimit(
-                                    NightmareKeys.WEBSEARCH_NAVER,
-                                    query,
+                            permit.completeRateLimit(
+                                    "wire",
                                     e,
-                                    "HTTP 429",
+                                    "http-429",
                                     retryAfterMs > 0 ? retryAfterMs : null);
                         } else {
                             NightmareBreaker.FailureKind kind;
@@ -2284,7 +2616,7 @@ public class NaverSearchService implements WebSearchProvider {
                             } else {
                                 kind = NightmareBreaker.FailureKind.HTTP_4XX;
                             }
-                            nightmareBreaker.recordFailure(NightmareKeys.WEBSEARCH_NAVER, kind, e, query);
+                            permit.completeFailure(kind, e, "wire");
                         }
                     }
 
@@ -2297,53 +2629,86 @@ public class NaverSearchService implements WebSearchProvider {
                         if (sc == 429) {
                             traceNaverRemoteCooldown("rate-limit", retryAfterMs);
                         }
-                        traceNaverFailure(query, fetch, sc, sc == 429 ? "rate-limit" : "http-error",
+                        traceNaverFailure(query, fetch, sc, failureReason,
                                 sc == 429, false, e.getResponseBodyAsString(), tookMs);
+                        traceNaverClassifiedOutcome(failureClass, true, true);
                         return null;
                     });
                     log.warn("[AWX][search][naver] api failed failureReason={} httpStatus={} queryHash={} queryLength={} tookMs={}",
-                            sc == 429 ? "rate-limit" : "http-error",
+                            failureReason,
                             sc,
                             query == null ? "" : SafeRedactor.hashValue(query),
                             query == null ? 0 : query.length(),
                             tookMs);
-                    return Mono.just(Collections.emptyList());
+                    return Mono.error(new NaverClassifiedFailure(failureClass));
                 })
                 .onErrorResume(t -> {
+                    NaverClassifiedFailure classified = findNaverClassifiedFailure(t);
+                    if (classified != null) {
+                        return Mono.error(classified);
+                    }
                     if (t instanceof InterruptedException) {
                         restoreInterruptFlag();
                     }
 
-                    if (nightmareBreaker != null) {
-                        NightmareBreaker.FailureKind kind = NightmareBreaker.FailureKind.UNKNOWN;
-                        if (t instanceof java.util.concurrent.TimeoutException) {
-                            kind = NightmareBreaker.FailureKind.TIMEOUT;
-                        } else if (t instanceof WebClientRequestException) {
-                            kind = NightmareBreaker.FailureKind.TIMEOUT;
-                        } else if (t instanceof InterruptedException) {
-                            kind = NightmareBreaker.FailureKind.INTERRUPTED;
+                    if (permit != null) {
+                        NightmareBreaker.FailureKind kind = NightmareBreaker.classify(t);
+                        if (kind == NightmareBreaker.FailureKind.INTERRUPTED) {
+                            permit.completeCancelled(t, "wire");
+                        } else if (kind == NightmareBreaker.FailureKind.RATE_LIMIT) {
+                            permit.completeRateLimit("wire", t, "rate-limit", null);
+                        } else {
+                            permit.completeFailure(kind, t, "wire");
                         }
-                        nightmareBreaker.recordFailure(NightmareKeys.WEBSEARCH_NAVER, kind, t, query);
                     }
 
                     long tookMs = elapsedMs(startedNs);
+                    String failureReason = naverFailureReason(t);
+                    String failureClass = classifyNaverFailureClass(
+                            naverHttpStatus(t),
+                            isNaverRateLimited(t),
+                            isNaverTimeoutFailure(t),
+                            failureReason);
                     withTraceContext(capturedTraceContext, () -> {
-                        traceNaverFailure(query, fetch, naverHttpStatus(t), naverFailureReason(t),
+                        traceNaverFailure(query, fetch, naverHttpStatus(t), failureReason,
                                 isNaverRateLimited(t), isNaverTimeoutFailure(t), naverErrorBody(t), tookMs);
+                        traceNaverClassifiedOutcome(failureClass, true, true);
                         return null;
                     });
                     log.warn("[AWX][search][naver] api failed failureReason={} errorType={} queryHash={} queryLength={} tookMs={}",
-                            naverFailureReason(t),
+                            failureReason,
                             naverErrorType(t),
                             SafeRedactor.hashValue(query),
                             query == null ? 0 : query.length(),
                             tookMs);
-                    return Mono.just(Collections.emptyList());
+                    return Mono.error(new NaverClassifiedFailure(failureClass));
                 })
-                .onErrorReturn(Collections.emptyList());
+                .doFinally(signalType -> {
+                    NaverObservation observation = latestObservation.get();
+                    if (observation != null && !observation.published.get()) {
+                        observation.put("failureClass", signalType == reactor.core.publisher.SignalType.CANCEL
+                                ? "CLIENT_CANCELLED" : "TIMEOUT_OR_BUDGET");
+                        observation.finish();
+                    }
+                    if (permit != null && signalType == reactor.core.publisher.SignalType.CANCEL) {
+                        permit.completeCancelled(null, "reactor-cancel");
+                    }
+                });
 
-        return primaryParsed;
+        return primaryParsed.map(items -> items.stream().limit(fetch).toList());
 
+    }
+
+    private <T> Mono<T> expiredNaverSubscription(String query, int fetch,
+                                                NightmareBreaker.CallPermit permit,
+                                                Map<String, Object> capturedTraceContext) {
+        if (permit != null) permit.completeAbandoned("wire", "request_budget_exhausted");
+        withTraceContext(capturedTraceContext, () -> {
+            traceNaverFailure(query, fetch, -1, "request_budget_exhausted", false, true, null, 0L);
+            traceNaverClassifiedOutcome("TIMEOUT_OR_BUDGET", false, true);
+            return null;
+        });
+        return Mono.error(new NaverClassifiedFailure("TIMEOUT_OR_BUDGET"));
     }
 
     private static boolean looksFresh(String q) {
@@ -2377,6 +2742,11 @@ public class NaverSearchService implements WebSearchProvider {
 
     // ─── 신규: 정책 파라미터 버전 ───
     private List<String> filterAndFormatItems(List<NaverItem> items, String query, SearchPolicy policy) {
+        return filterAndFormatItems(items, query, policy, null);
+    }
+
+    private List<String> filterAndFormatItems(List<NaverItem> items, String query, SearchPolicy policy,
+                                               NaverObservation observation) {
         if (items == null || items.isEmpty()) {
             return Collections.emptyList();
         }
@@ -2537,7 +2907,8 @@ public class NaverSearchService implements WebSearchProvider {
                 run.put("profile", finalEffectiveProfile);
             }
             run.put("starvedByStrictDomain", starvedByStrictDomain);
-            TraceStore.append("web.naver.filter.runs", run);
+            if (observation == null) TraceStore.append("web.naver.filter.runs", run);
+            else observation.putAll(run);
         } catch (Exception ignore) {
             NaverTraceSuppressions.traceSuppressed("filter.runAppendTrace", ignore);
         }
@@ -2680,6 +3051,10 @@ public class NaverSearchService implements WebSearchProvider {
                     domainWeight(extractHref(a))));
         }
 
+        if (observation != null) {
+            observation.put("formattedBeforeDedupCount", survivingItems.size());
+            observation.put("afterDedupCount", lines.size());
+        }
         return lines;
     }
 
@@ -2690,6 +3065,11 @@ public class NaverSearchService implements WebSearchProvider {
 
     // ─── 신규: 정책 파라미터 버전 ───
     private List<String> parseNaverResponse(String query, String json, SearchPolicy policy) {
+        return parseNaverResponse(query, json, policy, new NaverObservation(query, TraceStore.context(), false));
+    }
+
+    private List<String> parseNaverResponse(String query, String json, SearchPolicy policy,
+                                             NaverObservation observation) {
         if (isBlank(json)) {
             return Collections.emptyList();
         }
@@ -2697,13 +3077,18 @@ public class NaverSearchService implements WebSearchProvider {
             // 1) items 존재 및 크기(원시) 확인
             JsonNode root = om.readTree(json);
             JsonNode itemsNode = root.path("items");
+            if (!root.isObject() || !root.has("items") || !itemsNode.isArray()) {
+                throw new IllegalArgumentException("invalid naver response shape");
+            }
             int rawSize = itemsNode.isArray() ? itemsNode.size() : -1;
+            observation.put("rawSize", rawSize);
 
             // 2) DTO 역직렬화
             NaverResponse resp = om.readValue(json, NaverResponse.class);
             List<NaverItem> items = (resp.items() == null)
                     ? Collections.emptyList()
                     : resp.items();
+            observation.put("parsedCount", items.size());
 
             if (items.isEmpty()) {
                 // Provider stage: distinguish "Naver returned 0 items" vs "items existed but were filtered".
@@ -2728,7 +3113,7 @@ public class NaverSearchService implements WebSearchProvider {
                         run.put("policy.domainFilterEnabled", policy.domainFilterEnabled());
                         run.put("policy.domainPolicy", policy.domainPolicy());
                     }
-                    TraceStore.append("web.naver.filter.runs", run);
+                    observation.putAll(run);
                 } catch (Exception ignore) {
                     NaverTraceSuppressions.traceSuppressed("filter.emptyRunTrace", ignore);
                 }
@@ -2739,11 +3124,15 @@ public class NaverSearchService implements WebSearchProvider {
                             SafeRedactor.hashValue(query));
                 }
                 traceNaverCounts(query, display, 0, 0, false, null);
+                for (String key : List.of("afterBlockedCount", "formattedBeforeDedupCount", "afterDedupCount", "afterFilterCount")) {
+                    observation.put(key, 0);
+                }
+                observation.put("failureClass", "TRUE_ZERO");
                 return Collections.emptyList();
             }
 
             // 3) 공통 필터 & Fail-Soft & 포맷팅
-            List<String> lines = filterAndFormatItems(items, query, policy);
+            List<String> lines = filterAndFormatItems(items, query, policy, observation);
 
             // 4) 기존 중의성/버전 필터 재적용
             lines = applyDisambiguationFilters(query, lines);
@@ -2779,8 +3168,18 @@ public class NaverSearchService implements WebSearchProvider {
                         rawSize, policy == null ? null : policy.domainPolicy(), apiTimeoutMs);
             }
             traceNaverCounts(query, display, items.size(), lines.size(), false, null);
+            observation.put("afterFilterCount", lines.size());
+            observation.put("failureClass", lines.isEmpty() ? "FILTER_ZERO" : "NONE");
+            if (items.size() > 0 && lines.isEmpty()) {
+                traceNaverClassifiedOutcome("FILTER_ZERO", true, false);
+                throw new NaverClassifiedFailure("FILTER_ZERO");
+            }
             return lines;
+        } catch (NaverClassifiedFailure classified) {
+            throw classified;
         } catch (Exception e) {
+            observation.put("failureClass", observation.get("parsedCount") instanceof Number ? "TRANSFORM_ERROR"
+                    : observation.get("rawSize") instanceof Number ? "ITEM_MAPPING_ERROR" : "PARSE_ERROR");
             log.error("[Naver Parse] JSON parse failed errorType={} bodyHash={} bodyLength={}",
                     naverErrorType(e),
                     json == null ? "" : SafeRedactor.hashValue(json),
@@ -2789,7 +3188,10 @@ public class NaverSearchService implements WebSearchProvider {
                 log.debug("[AWX2AF2][search][naver] parse failed bodyLen={} bodyHash={} queryHash={}",
                         json == null ? 0 : json.length(), SafeRedactor.hashValue(json), SafeRedactor.hashValue(query));
             }
-            return Collections.emptyList();
+            traceNaverClassifiedOutcome("PARSE_ERROR", true, true);
+            throw new NaverClassifiedFailure("PARSE_ERROR");
+        } finally {
+            observation.finish();
         }
     }
 
@@ -2804,19 +3206,6 @@ public class NaverSearchService implements WebSearchProvider {
         String qTrim = query.trim();
         if (qTrim.length() < 2) {
             return Collections.emptyList();
-        }
-
-        // Circuit breaker fail-fast (includes HALF_OPEN trial gating).
-        if (nightmareBreaker != null) {
-            try {
-                nightmareBreaker.checkOpenOrThrow(NightmareKeys.WEBSEARCH_NAVER);
-            } catch (NightmareBreaker.OpenCircuitException e) {
-                long remainingMs = nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
-                NaverTraceSignals.traceBreakerOpen(remainingMs);
-                log.warn("[Naver API] NightmareBreaker OPEN for Naver (remain={}ms) → skipping API call",
-                        nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER));
-                return Collections.emptyList();
-            }
         }
 
         // Append suffix if configured
@@ -2850,6 +3239,7 @@ public class NaverSearchService implements WebSearchProvider {
                 .toUri();
 
         boolean acquired = false;
+        NightmareBreaker.CallPermit permit = null;
         try {
             REQUEST_SEMAPHORE.acquire(); // 동시에 2개까지만 호출
             acquired = true;
@@ -2858,6 +3248,17 @@ public class NaverSearchService implements WebSearchProvider {
             if (key == null) {
                 throw new IllegalStateException(
                         "NAVER API keys are not configured. Set env vars NAVER_CLIENT_ID / NAVER_CLIENT_SECRET (or NAVER_KEYS).");
+            }
+            if (nightmareBreaker != null) {
+                try {
+                    permit = nightmareBreaker.acquire(NightmareKeys.WEBSEARCH_NAVER, "wire-sync");
+                } catch (NightmareBreaker.OpenCircuitException e) {
+                    long remainingMs = nightmareBreaker.remainingOpenMs(NightmareKeys.WEBSEARCH_NAVER);
+                    NaverTraceSignals.traceBreakerOpen(remainingMs);
+                    log.warn("[Naver API] NightmareBreaker OPEN for Naver (remain={}ms) - skipping API call",
+                            remainingMs);
+                    return Collections.emptyList();
+                }
             }
             String id = key.id();
             String secret = key.secret();
@@ -2882,13 +3283,13 @@ public class NaverSearchService implements WebSearchProvider {
                     TraceStore.put("web.naver.429", true);
                     long retryAfterMs = Math.max(0L, ratePolicy.retryAfterMs());
                     traceNaverRemoteCooldown("rate-limit", retryAfterMs);
-                    if (nightmareBreaker != null) {
-                        nightmareBreaker.recordRateLimit(
-                                NightmareKeys.WEBSEARCH_NAVER,
-                                query,
+                    if (permit != null) {
+                        permit.completeRateLimit(
+                                "wire-sync",
                                 e,
-                                "HTTP 429",
+                                "http-429",
                                 retryAfterMs > 0 ? retryAfterMs : null);
+                        permit = null;
                     }
                     log.warn("Naver API 429 Too Many Requests; returning empty (provider fallback will handle)");
                     traceNaverFailure(query, display, 429, "rate-limit", true, false,
@@ -2899,6 +3300,10 @@ public class NaverSearchService implements WebSearchProvider {
             }
 
             if (json == null || isBlank(json)) {
+                if (permit != null) {
+                    permit.completeBlank("body");
+                    permit = null;
+                }
                 return Collections.emptyList();
             }
 
@@ -2907,8 +3312,9 @@ public class NaverSearchService implements WebSearchProvider {
             List<String> lines = parseNaverResponse(query, json);
 
             long tookMs = Duration.between(start, Instant.now()).toMillis();
-            if (nightmareBreaker != null) {
-                nightmareBreaker.recordSuccess(NightmareKeys.WEBSEARCH_NAVER, tookMs);
+            if (permit != null) {
+                permit.completeSuccess(tookMs);
+                permit = null;
             }
 
             log.info("[AWX2AF2][search][naver] api success queryHash={} queryLength={} returnedCount={} tookMs={}",
@@ -2929,11 +3335,9 @@ public class NaverSearchService implements WebSearchProvider {
         } catch (InterruptedException ie) {
             NaverTraceSuppressions.traceSuppressed("api.interrupted", ie);
             restoreInterruptFlag();
-            if (nightmareBreaker != null) {
-                nightmareBreaker.recordFailure(NightmareKeys.WEBSEARCH_NAVER,
-                        NightmareBreaker.FailureKind.INTERRUPTED,
-                        ie,
-                        query);
+            if (permit != null) {
+                permit.completeCancelled(ie, "wire-sync");
+                permit = null;
             }
             traceNaverFailure(query, display, -1, "interrupted", false, false, null,
                     Duration.between(start, Instant.now()).toMillis());
@@ -2943,13 +3347,19 @@ public class NaverSearchService implements WebSearchProvider {
             return java.util.Collections.emptyList();
         } catch (Exception ex) {
             NaverTraceSuppressions.traceSuppressed("api.failure", ex);
-            if (nightmareBreaker != null) {
-                NightmareBreaker.FailureKind kind = NightmareBreaker.FailureKind.UNKNOWN;
-                if (ex instanceof WebClientResponseException wcre) {
-                    int sc = wcre.getStatusCode().value();
-                    kind = (sc >= 500) ? NightmareBreaker.FailureKind.HTTP_5XX : NightmareBreaker.FailureKind.HTTP_4XX;
+            if (permit != null) {
+                if (ex instanceof NaverClassifiedFailure classified
+                        && "FILTER_ZERO".equals(classified.failureClass)) {
+                    permit.completeAbandoned("parse", "filter-zero");
+                } else {
+                    NightmareBreaker.FailureKind kind = NightmareBreaker.classify(ex);
+                    if (kind == NightmareBreaker.FailureKind.RATE_LIMIT) {
+                        permit.completeRateLimit("wire-sync", ex, "rate-limit", null);
+                    } else {
+                        permit.completeFailure(kind, ex, "wire-sync");
+                    }
                 }
-                nightmareBreaker.recordFailure(NightmareKeys.WEBSEARCH_NAVER, kind, ex, query);
+                permit = null;
             }
             traceNaverFailure(query, display, naverHttpStatus(ex), naverFailureReason(ex),
                     isNaverRateLimited(ex), isNaverTimeoutFailure(ex), naverErrorBody(ex),
@@ -2961,6 +3371,9 @@ public class NaverSearchService implements WebSearchProvider {
                     query == null ? 0 : query.length());
             return java.util.Collections.emptyList();
         } finally {
+            if (permit != null) {
+                permit.completeAbandoned("wire-sync", "non-terminal");
+            }
             if (acquired) {
                 REQUEST_SEMAPHORE.release();
             }
@@ -3069,8 +3482,10 @@ public class NaverSearchService implements WebSearchProvider {
             TraceStore.put("web.naver.queryHash", query == null ? "" : SafeRedactor.hashValue(query));
             TraceStore.put("web.naver.queryLength", query == null ? 0 : query.length());
             TraceStore.put("web.naver.queryTokenBucket", queryTokenBucket(query)); TraceStore.put("web.naver.httpStatus", null); TraceStore.put("web.naver.429", false); TraceStore.put("web.naver.rateLimited", false); TraceStore.put("web.naver.timeout", false); TraceStore.put("web.naver.cancelled", false);
-            TraceStore.put("web.naver.failureReason",
-                    classifyNaverCountFailure(returned, after, providerDisabled));
+            String failureReason = classifyNaverCountFailure(returned, after, providerDisabled);
+            TraceStore.put("web.naver.failureReason", failureReason);
+            traceCommonWebProviderCounts("naver", query, returned, after, providerDisabled, disabledReason,
+                    failureReason);
             if (providerDisabled) {
                 String reason = disabledReason == null || disabledReason.isBlank()
                         ? "disabled"
@@ -3085,6 +3500,43 @@ public class NaverSearchService implements WebSearchProvider {
         } catch (Exception ignore) {
             NaverTraceSuppressions.traceSuppressed("counts.trace", ignore);
         }
+    }
+
+    private static void traceCommonWebProviderCounts(String provider,
+                                                     String query,
+                                                     int returned,
+                                                     int after,
+                                                     boolean providerDisabled,
+                                                     String disabledReason,
+                                                     String failureReason) {
+        String safeProvider = SafeRedactor.traceLabelOrFallback(provider, "unknown");
+        TraceStore.put("web.provider.name", safeProvider);
+        TraceStore.put("web.provider.enabled", !providerDisabled);
+        TraceStore.put("web.provider.resultCount", Math.max(0, returned));
+        TraceStore.put("web.provider.disabledReason", providerDisabled
+                ? WebProviderTraceReasons.disabledReason(disabledReason)
+                : null);
+        TraceStore.put("web.query.hash", query == null || query.isBlank()
+                ? null
+                : SafeRedactor.hashValue(query));
+        TraceStore.put("web.query.length", query == null ? 0 : query.length());
+        TraceStore.putIfAbsent("web.query.variantCount", 0);
+        if (returned > 0 && after <= 0) {
+            TraceStore.put("web.filter.starvationReason", "after-filter-starvation");
+        }
+        String commonReason = commonFailSoftReason(failureReason);
+        if (commonReason != null) {
+            TraceStore.put("web.failsoft.reason", commonReason);
+        }
+    }
+
+    private static String commonFailSoftReason(String reason) {
+        String safe = SafeRedactor.traceLabelOrFallback(reason, "none");
+        return switch (safe) {
+            case "none" -> null;
+            case "provider-empty" -> "empty-provider-output";
+            default -> safe;
+        };
     }
 
     private void traceNaverFailure(String query,
@@ -3216,13 +3668,70 @@ public class NaverSearchService implements WebSearchProvider {
         return false;
     }
 
+    private static NaverClassifiedFailure findNaverClassifiedFailure(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof NaverClassifiedFailure classified) {
+                return classified;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private static String classifyNaverFailureClass(int httpStatus,
+                                                    boolean rateLimited,
+                                                    boolean timeout,
+                                                    String failureReason) {
+        if (httpStatus == 401 || httpStatus == 403) {
+            return "AUTH_OR_CONFIG";
+        }
+        if (httpStatus == 429 || rateLimited) {
+            return "RATE_LIMIT";
+        }
+        if (timeout || httpStatus == 408 || httpStatus == 504) {
+            return "TIMEOUT_OR_BUDGET";
+        }
+        String safeReason = failureReason == null
+                ? ""
+                : failureReason.toLowerCase(java.util.Locale.ROOT);
+        if (safeReason.contains("breaker") || safeReason.contains("cooldown")) {
+            return "BREAKER_OR_COOLDOWN";
+        }
+        return "PROVIDER_ERROR";
+    }
+
+    private static void traceNaverClassifiedOutcome(String failureClass,
+                                                    boolean providerAttemptObserved,
+                                                    boolean unobservedCounts) {
+        try {
+            String safeClass = SafeRedactor.traceLabelOrFallback(failureClass, "PROVIDER_ERROR");
+            TraceStore.put("web.naver.failureClass", safeClass);
+            TraceStore.put("web.failureClass", safeClass);
+            TraceStore.put("web.naver.providerAttemptObserved", providerAttemptObserved);
+            if ("TRUE_ZERO".equals(safeClass) && providerAttemptObserved) {
+                TraceStore.put("web.naver.providerResultCount", 0);
+                TraceStore.put("web.naver.preFilterCount", 0);
+                TraceStore.put("web.naver.postFilterCount", 0);
+                TraceStore.put("web.naver.mergeCount", "unknown");
+            } else if (unobservedCounts) {
+                TraceStore.put("web.naver.providerResultCount", "unknown");
+                TraceStore.put("web.naver.preFilterCount", "unknown");
+                TraceStore.put("web.naver.postFilterCount", "unknown");
+                TraceStore.put("web.naver.mergeCount", "unknown");
+            }
+        } catch (Exception suppressed) {
+            NaverTraceSuppressions.traceSuppressed("classifiedOutcome.trace", suppressed);
+        }
+    }
+
     private static String naverFailureReason(Throwable t) {
         if (isNaverRateLimited(t)) {
             return "rate-limit";
         }
         Throwable cur = t;
         while (cur != null) {
-            if (cur instanceof java.util.concurrent.CancellationException) return "cancelled";
+            if (cur instanceof java.util.concurrent.CancellationException || cur instanceof InterruptedException) return "cancelled";
             String type = cur.getClass().getName().toLowerCase(java.util.Locale.ROOT);
             String msg = cur.getMessage() == null ? "" : cur.getMessage().toLowerCase(java.util.Locale.ROOT);
             if (type.contains("cancellationexception") || msg.contains("cancelled") || msg.contains("canceled")) return "cancelled";
@@ -3230,9 +3739,6 @@ public class NaverSearchService implements WebSearchProvider {
         }
         if (isNaverTimeoutFailure(t)) {
             return "timeout";
-        }
-        if (t instanceof InterruptedException) {
-            return "interrupted";
         }
         if (naverHttpStatus(t) > 0) {
             return "http-error";
@@ -3632,6 +4138,18 @@ public class NaverSearchService implements WebSearchProvider {
             SearchStatus status,
             List<String> snippets,
             @Nullable String failureReason) {
+    }
+
+    private void reinforceRetrievedSnippets(String query, List<String> snippets) {
+        // Optional enrichment must not turn successfully retrieved evidence into a search failure.
+        try {
+            Long sid = sessionIdProvider.get();
+            if (sid != null) {
+                reinforceSnippets(sid, query, snippets);
+            }
+        } catch (RuntimeException unavailable) {
+            NaverTraceSuppressions.traceSuppressed("memory.reinforceRetrievedSnippets", unavailable);
+        }
     }
 
     private void reinforceSnippets(Long sessionId, String query, List<String> snippets) {
@@ -4153,12 +4671,50 @@ public class NaverSearchService implements WebSearchProvider {
 
     // ─── 신규: 정책 포함 버전 ───
     private String cacheKeyFor(String query, SearchPolicy policy) {
-        return cacheSalt(policy) + "||" + Q.canonical(query);
+        return cacheKeyFor(query, policy, configuredNaverMaximum());
+    }
+
+    private String cacheKeyFor(String query, SearchPolicy policy, int outboundDisplay) {
+        int boundedDisplay = Math.min(configuredNaverMaximum(), clampNaverDisplay(outboundDisplay));
+        return cacheSalt(policy) + "||" + boundedDisplay + ":" + Q.canonical(query);
     }
 
     // ─── 기존 호환: 기본 정책으로 위임 ───
     private String cacheKeyFor(String q) {
         return cacheKeyFor(q, defaultPolicy());
+    }
+
+    private String queryFromCacheKey(String key) {
+        String payload = key;
+        int sep = key.lastIndexOf("||");
+        if (sep >= 0 && sep + 2 < key.length()) {
+            payload = key.substring(sep + 2);
+        }
+        int displaySeparator = payload.indexOf(':');
+        if (displaySeparator >= 0 && displaySeparator + 1 < payload.length()) {
+            payload = payload.substring(displaySeparator + 1);
+        }
+        return payload.replaceAll("^\\|+", "").trim();
+    }
+
+    private int outboundDisplayFromCacheKey(String key) {
+        try {
+            int sep = key.lastIndexOf("||");
+            String payload = sep >= 0 ? key.substring(sep + 2) : key;
+            int displaySeparator = payload.indexOf(':');
+            if (displaySeparator > 0) {
+                int parsed = Integer.parseInt(payload.substring(0, displaySeparator));
+                return Math.min(configuredNaverMaximum(), clampNaverDisplay(parsed));
+            }
+        } catch (RuntimeException ignore) {
+            NaverTraceSuppressions.traceSuppressed("cacheKey.display", ignore);
+        }
+        return configuredNaverMaximum();
+    }
+
+    private static <T> Mono<T> awaitCacheFuture(java.util.concurrent.CompletableFuture<T> sharedFuture) {
+        java.util.concurrent.CompletableFuture<T> waiterFuture = sharedFuture.thenApply(value -> value);
+        return Mono.fromFuture(waiterFuture);
     }
 
     /**
@@ -4406,9 +4962,12 @@ public class NaverSearchService implements WebSearchProvider {
     }
 
     /**
-     * 스니펫 문자열을 정제(HTML 태그 제거, 공백 정리).
+     * Preserve the formatted source anchor; its title/description were already stripped.
      */
     private static String sanitizeSnippet(String snippet) {
+        if (snippet != null && snippet.startsWith("- <a href=\"")) {
+            return snippet.trim();
+        }
         return stripHtml(snippet);
     }
 }

@@ -50,6 +50,9 @@ public class ModelSyncService {
     @Value("${openai.api.key:${OPENAI_API_KEY:}}")
     private String apiKey;
 
+    @Value("${modelfetch.legacy-sync-enabled:false}")
+    private boolean legacySyncEnabled;
+
     @Scheduled(cron = "0 0 0 * * *")
     @Transactional
     public void fetchAndStoreModels() {
@@ -57,6 +60,12 @@ public class ModelSyncService {
             TraceStore.put("model.sync.providerDisabled", true);
             TraceStore.put("model.sync.disabledReason", "missing_openai_api_key");
             log.warn("[AWX][model-sync] provider=OpenAI enabled=false disabledReason=missing_openai_api_key");
+            return;
+        }
+        if (!legacySyncEnabled) {
+            TraceStore.put("model.sync.enabled", false);
+            TraceStore.put("model.sync.disabledReason", "legacy_sync_disabled");
+            log.info("[AWX][model-sync] enabled=false disabledReason=legacy_sync_disabled");
             return;
         }
         String normalizedApiKey = apiKey.trim();

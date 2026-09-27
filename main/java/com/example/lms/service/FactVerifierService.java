@@ -2,6 +2,9 @@
 // src/main/java/com/example/lms/service/FactVerifierService.java
 package com.example.lms.service;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
+import com.example.lms.llm.TimedChatModelCaller;
 import com.example.lms.service.rag.detector.QueryRiskClassifier;
 import com.example.lms.service.rag.detector.RiskBand;
 import com.example.lms.util.FutureTechDetector;
@@ -13,6 +16,7 @@ import com.example.lms.service.verification.FactStatusClassifier;
 import com.example.lms.service.verification.FactVerificationStatus;
 import com.example.lms.service.verification.NamedEntityValidator;
 import com.example.lms.service.verification.SourceAnalyzerService;
+import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
@@ -21,6 +25,7 @@ import com.example.lms.prompt.PromptContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import java.time.Duration;
 import java.util.*;
 import java.util.regex.Pattern;
 import org.slf4j.LoggerFactory;
@@ -70,6 +75,17 @@ public class FactVerifierService {
 
     private static final int MIN_CONTEXT_CHARS = 80;
     private static final int MAX_HEALING_RETRIES = 2;
+    private static final Pattern META_VERDICT_PATTERN = Pattern.compile(
+            "\\A\\s*(CONSISTENT|MISMATCH|INSUFFICIENT)"
+                    + "(?:\\s*(?:\\||:|-)\\s*(\\S[^\\r\\n]*))?\\s*\\z",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern META_CONTROL_PREFIX_PATTERN = Pattern.compile(
+            "\\A\\s*(?:CONSISTENT|MISMATCH|INSUFFICIENT)(?:\\b|\\s*(?:\\||:|-))",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern CORRECTION_ENVELOPE_PATTERN = Pattern.compile(
+            "\\A\\s*STATUS:\\s*(PASS|CORRECTED|INSUFFICIENT)\\s*\\R+"
+                    + "\\s*CONTENT:\\s*(\\S[\\s\\S]*?)\\s*\\z",
+            Pattern.CASE_INSENSITIVE);
 
     /** 컨텍스트-질문 정합성 메타 점검용 프롬프트 */
     private static final String META_TEMPLATE = """
@@ -128,12 +144,38 @@ public class FactVerifierService {
 
     /** 메모리 증거와 후속 질문 여부까지 반영하는 핵심 검증 메서드 */
     public String verify(String question, String context, String memory, String draft, String model, boolean isFollowUp) {
-        return verifyInternal(question, context, memory, draft, model, isFollowUp, 0);
+        return verifyDetailed(question, context, memory, draft, model, isFollowUp).answer();
+    }
+
+    public DetailedVerificationResult verifyDetailed(
+            String question,
+            String context,
+            String memory,
+            String draft,
+            String model,
+            boolean isFollowUp) {
+        VerificationState state = new VerificationState();
+        String answer = verifyInternal(question, context, memory, draft, model, isFollowUp, 0, state);
+        return new DetailedVerificationResult(
+                answer,
+                state.status,
+                state.outcomeKnown,
+                state.acceptedForMemory);
+    }
+
+    public record DetailedVerificationResult(
+            String answer,
+            String status,
+            boolean outcomeKnown,
+            boolean acceptedForMemory) {
     }
 
     private String verifyInternal(String question, String context, String memory, String draft, String model,
-                                  boolean isFollowUp, int attempt) {
-        if (!StringUtils.hasText(draft)) return "";
+                                  boolean isFollowUp, int attempt, VerificationState state) {
+        if (!StringUtils.hasText(draft)) {
+            state.reject("unknown");
+            return "";
+        }
 
         if (namedEntityValidator != null) {
             List<String> evidenceList = new ArrayList<>();
@@ -150,9 +192,10 @@ public class FactVerifierService {
                     List<String> uc = computeUnsupportedEntities(context, memory, draft);
                     if (!uc.isEmpty()) {
                         String healed = correctiveRegenerate(question, context, memory, draft, model, uc);
-                        return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                        return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1, state);
                     }
                 }
+                state.reject("rejected");
                 return "정보 없음";
             }
         }
@@ -162,10 +205,14 @@ public class FactVerifierService {
 
         if (!hasSufficientContext && !hasSufficientMemory) {
             var result = claimVerifier.verifyClaims("", draft, model);
+            state.reject(result.outcomeKnown() ? "insufficient" : "unknown");
             return result.verifiedAnswer();
         }
 
-        if (StringUtils.hasText(context) && context.contains("[검색 결과 없음]")) return draft;
+        if (StringUtils.hasText(context) && context.contains("[검색 결과 없음]")) {
+            state.reject("insufficient");
+            return draft;
+        }
 
         try {
             String mergedContext = mergeContext(context, memory);
@@ -180,13 +227,16 @@ public class FactVerifierService {
                 String header = "※ 아래 내용은 공식 발표가 아니라 웹 검색에서 수집된 루머/유출/예상 정보 기반이며, 변경될 수 있습니다\n\n";
                 String out = (draft == null ? "" : draft.trim());
                 if (!out.startsWith("※")) out = header + out;
+                state.reject("insufficient");
                 return out;
             }
             if (credibility == SourceCredibility.FAN_MADE_SPECULATION || credibility == SourceCredibility.CONFLICTING) {
                 log.warn("[Meta-Verify] 낮은 신뢰도({}) 탐지 -> 답변 차단", credibility);
+                state.reject("rejected");
                 return "웹에서 찾은 정보는 공식 발표가 아니거나, 커뮤니티의 추측일 가능성이 높습니다. 이에 기반한 답변은 부정확할 수 있어 제공하지 않습니다.";
             }
         } catch (Exception e) {
+            state.markFailSoft();
             log.debug("[Meta-Verify] Source analysis failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
@@ -194,22 +244,44 @@ public class FactVerifierService {
         try {
             String metaPrompt = buildVerifierPrompt("FACT_META_CHECK", META_TEMPLATE, question, context);
             String metaVerdict = callChatModel(metaPrompt);
-            if (metaVerdict.trim().toUpperCase(Locale.ROOT).startsWith("MISMATCH")) {
-                boolean futureTechMeta = FutureTechDetector.isFutureTechQuery(question);
-                if (futureTechMeta) {
-                    // [FUTURE_TECH FIX] 출시 전/루머 영역은 컨텍스트 상충이 흔하므로, 즉시 "정보 없음"으로 탈출하지 않는다.
-                    log.debug("[Verify] META-CHECK detected MISMATCH (FutureTech) -> continue with labeling");
-                } else {
-                    log.debug("[Verify] META-CHECK detected MISMATCH -> '정보 없음' 반환");
-                    return "정보 없음";
+            MetaVerdict parsedMetaVerdict = parseMetaVerdict(metaVerdict);
+            if (parsedMetaVerdict == null) {
+                state.markFailSoft();
+                log.debug("[Verify] META-CHECK malformed rawHash={} rawLength={}",
+                        SafeRedactor.hashValue(metaVerdict), metaVerdict == null ? 0 : metaVerdict.length());
+            } else {
+                switch (parsedMetaVerdict) {
+                    case CONSISTENT -> {
+                        // Continue to the structured fact/claim verification stages.
+                    }
+                    case INSUFFICIENT -> {
+                        state.reject("insufficient");
+                        return draft;
+                    }
+                    case MISMATCH -> {
+                        boolean futureTechMeta = FutureTechDetector.isFutureTechQuery(question);
+                        if (futureTechMeta) {
+                            // Preserve the labeled answer but keep memory fail-closed.
+                            log.debug("[Verify] META-CHECK detected MISMATCH (FutureTech) -> continue with labeling");
+                            state.markFailSoft();
+                        } else {
+                            log.debug("[Verify] META-CHECK detected MISMATCH -> '정보 없음' 반환");
+                            state.reject("rejected");
+                            return "정보 없음";
+                        }
+                    }
                 }
             }
         } catch (Exception e) {
+            state.markFailSoft();
             log.debug("[Verify] META-CHECK failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
 
         FactVerificationStatus status = classifier.classify(question, context, draft, model);
+        if (TraceStore.get("factStatusClassifier.judge.disabledReason") != null) {
+            state.markFailSoft();
+        }
 
         boolean isGrounded = isGroundedInContext(context, extractEntities(draft), 2);
         List<String> ragLines = toLines(context);
@@ -234,33 +306,51 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                 List<String> uc = computeUnsupportedEntities(context, memory, draft);
                 if (!uc.isEmpty()) {
                     String healed = correctiveRegenerate(question, context, memory, draft, model, uc);
-                    return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                    return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1, state);
                 }
             }
             var result = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
+            state.reject(result.outcomeKnown() ? "insufficient" : "unknown");
             return result.verifiedAnswer().isBlank() ? "정보 없음" : result.verifiedAnswer();
         }
 
         switch (status) {
-            case PASS, INSUFFICIENT:
+            case PASS:
                 var passResult = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
                 String passAnswer = passResult.verifiedAnswer();
                 if (attempt < MAX_HEALING_RETRIES) {
                     List<String> ucPass = computeUnsupportedEntities(context, memory, passAnswer);
                     if (!ucPass.isEmpty()) {
                         String healed = correctiveRegenerate(question, context, memory, passAnswer, model, ucPass);
-                        return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                        return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1, state);
                     }
                 }
+                state.accept(
+                        "pass",
+                        passResult.outcomeKnown(),
+                        passResult.acceptedForMemory());
                 return passAnswer;
+
+            case INSUFFICIENT:
+                var insufficientResult = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
+                state.reject(insufficientResult.outcomeKnown() ? "insufficient" : "unknown");
+                return insufficientResult.verifiedAnswer();
 
             case CORRECTED:
                 log.debug("[Verify] CORRECTED 상태이며 근거 충분 -> LLM 기반 수정 시도");
                 String correctionPrompt = buildVerifierPrompt("FACT_CORRECTION", CORRECTION_TEMPLATE, question, context, draft);
                 try {
                     String rawResponse = callChatModel(correctionPrompt);
-                    int contentStartIndex = rawResponse.indexOf("CONTENT:");
-                    String correctedText = (contentStartIndex > -1) ? rawResponse.substring(contentStartIndex + 8).trim() : rawResponse.trim();
+                    CorrectionEnvelope correction = parseCorrectionEnvelope(rawResponse);
+                    if (!correction.valid()) {
+                        state.markFailSoft();
+                        return draft;
+                    }
+                    if ("INSUFFICIENT".equals(correction.status())) {
+                        state.reject("insufficient");
+                        return correction.content();
+                    }
+                    String correctedText = correction.content();
 
                     var finalResult = claimVerifier.verifyClaims(mergeContext(context, memory), correctedText, model);
                     String finalAns = finalResult.verifiedAnswer();
@@ -268,19 +358,85 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                         List<String> ucFinal = computeUnsupportedEntities(context, memory, finalAns);
                         if (!ucFinal.isEmpty()) {
                             String healed = correctiveRegenerate(question, context, memory, finalAns, model, ucFinal);
-                            return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1);
+                            return verifyInternal(question, context, memory, healed, model, isFollowUp, attempt + 1, state);
                         }
                     }
+                    String verifiedStatus = "PASS".equals(correction.status())
+                            ? "pass"
+                            : "corrected";
+                    state.accept(
+                            verifiedStatus,
+                            finalResult.outcomeKnown(),
+                            finalResult.acceptedForMemory() && StringUtils.hasText(finalAns));
                     return finalAns;
                 } catch (Exception e) {
                     log.error("Correction generation failed, falling back to '정보 없음'. errorHash={} errorLength={}",
                             SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+                    state.reject("unknown");
                     return "정보 없음";
                 }
 
             default:
+                state.reject("unknown");
                 return draft;
         }
+    }
+
+    private static MetaVerdict parseMetaVerdict(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        List<String> lines = Arrays.stream(raw.strip().split("\\R"))
+                .map(String::trim)
+                .filter(StringUtils::hasText)
+                .toList();
+        if (lines.isEmpty() || lines.size() > 2) {
+            return null;
+        }
+        var matcher = META_VERDICT_PATTERN.matcher(lines.get(0));
+        if (!matcher.matches()) {
+            return null;
+        }
+        if (isMetaControlReason(matcher.group(2))) {
+            return null;
+        }
+        if (lines.size() == 2) {
+            String reason = lines.get(1);
+            if (isMetaControlReason(reason)) {
+                return null;
+            }
+        }
+        return switch (matcher.group(1).toUpperCase(Locale.ROOT)) {
+            case "CONSISTENT" -> MetaVerdict.CONSISTENT;
+            case "MISMATCH" -> MetaVerdict.MISMATCH;
+            case "INSUFFICIENT" -> MetaVerdict.INSUFFICIENT;
+            default -> null;
+        };
+    }
+
+    private static boolean isMetaControlReason(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String normalized = value.strip();
+        return META_CONTROL_PREFIX_PATTERN.matcher(normalized).find()
+                || normalized.toUpperCase(Locale.ROOT).startsWith("STATUS:");
+    }
+
+    private static CorrectionEnvelope parseCorrectionEnvelope(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return CorrectionEnvelope.invalid();
+        }
+        var matcher = CORRECTION_ENVELOPE_PATTERN.matcher(raw);
+        if (!matcher.matches()) {
+            return CorrectionEnvelope.invalid();
+        }
+        String status = matcher.group(1).toUpperCase(Locale.ROOT);
+        String content = matcher.group(2).trim();
+        if (!StringUtils.hasText(content)) {
+            return CorrectionEnvelope.invalid();
+        }
+        return new CorrectionEnvelope(status, content, true);
     }
 
     private String buildVerifierPrompt(String stage, String template, Object... args) {
@@ -294,9 +450,24 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
 
     private String callChatModel(String factVerifierPrompt) {
         try {
-            var res = verifier.chat(UserMessage.from(factVerifierPrompt));
-            if (res == null || res.aiMessage() == null) return "";
-            var ai = res.aiMessage();
+            TimeBudget requestBudget = TimeBudgetContext.get();
+            if (requestBudget != null && requestBudget.expired()) return "";
+            var userMessage = UserMessage.from(factVerifierPrompt);
+            dev.langchain4j.data.message.AiMessage ai;
+            if (requestBudget == null) {
+                var res = verifier.chat(userMessage);
+                ai = res == null ? null : res.aiMessage();
+            } else {
+                long remainingMs = requestBudget.remainingMillis();
+                if (remainingMs <= 0L) return "";
+                ai = TimedChatModelCaller.chat(
+                        verifier,
+                        List.of(userMessage),
+                        Duration.ofMillis(remainingMs),
+                        "fact_verifier_judge",
+                        verifier.getClass().getName());
+            }
+            if (ai == null) return "";
             return ai.text() == null ? "" : ai.text();
         } catch (Exception e) {
             log.debug("[FactVerifier] ChatModel call failed. errorHash={} errorLength={}",
@@ -314,6 +485,64 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
             sb.append('\n');
         }
         return callChatModel(sb.toString());
+    }
+
+    private static final class VerificationState {
+        private String status = "unknown";
+        private boolean outcomeKnown;
+        private boolean acceptedForMemory;
+        private boolean failSoft;
+
+        private void markFailSoft() {
+            failSoft = true;
+            status = "unknown";
+            outcomeKnown = false;
+            acceptedForMemory = false;
+        }
+
+        private void accept(
+                String acceptedStatus,
+                boolean knownOutcome,
+                boolean positiveOutcome) {
+            if (!knownOutcome || failSoft) {
+                reject("unknown");
+                return;
+            }
+            if (!positiveOutcome) {
+                reject("rejected");
+                return;
+            }
+            status = acceptedStatus;
+            outcomeKnown = true;
+            acceptedForMemory = true;
+        }
+
+        private void reject(String rejectedStatus) {
+            String safeStatus = rejectedStatus == null || rejectedStatus.isBlank()
+                    ? "unknown"
+                    : rejectedStatus;
+            if (failSoft || "unknown".equals(safeStatus)) {
+                status = "unknown";
+                outcomeKnown = false;
+                acceptedForMemory = false;
+                return;
+            }
+            status = safeStatus;
+            outcomeKnown = true;
+            acceptedForMemory = false;
+        }
+    }
+
+    private enum MetaVerdict {
+        CONSISTENT,
+        MISMATCH,
+        INSUFFICIENT
+    }
+
+    private record CorrectionEnvelope(String status, String content, boolean valid) {
+        private static CorrectionEnvelope invalid() {
+            return new CorrectionEnvelope("UNKNOWN", "", false);
+        }
     }
 
     private List<String> computeUnsupportedEntities(String ctx, String mem, String text) {

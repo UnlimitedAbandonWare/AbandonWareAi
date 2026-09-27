@@ -58,13 +58,15 @@ public class CitationGate {
     }
 
     private static void traceDecision(GateDecision decision, int count, int required, double allowlistRatio) {
-        TraceStore.put("guard.citation.decision", decision == null ? "UNKNOWN" : decision.name());
+        String decisionName = decision == null ? "UNKNOWN" : decision.name();
+        TraceStore.put("guard.citation.decision", decisionName);
         TraceStore.put("guard.citation.sourceCount", Math.max(0, count));
         TraceStore.put("guard.citation.requiredCount", Math.max(0, required));
         TraceStore.put("guard.citation.allowlistRatio",
                 Double.isFinite(allowlistRatio) ? Math.max(0.0d, Math.min(1.0d, allowlistRatio)) : 0.0d);
         TraceStore.put("gate.citation.count", Math.max(0, count));
         TraceStore.put("gate.citation.passed", decision == GateDecision.PASS);
+        TraceStore.put("web.citation.gateStatus", decisionName);
         TraceStore.put("gate.hypernova.override", false);
     }
 

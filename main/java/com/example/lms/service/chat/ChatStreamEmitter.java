@@ -3,6 +3,7 @@ package com.example.lms.service.chat;
 import com.example.lms.dto.answer.AnswerUnderstanding;
 import com.example.lms.dto.ChatStreamEvent;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.search.TraceStore;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,22 @@ public class ChatStreamEmitter {
     private final Map<String, Sinks.Many<ServerSentEvent<ChatStreamEvent>>> sinks = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** Register the producer sink for one exact run. */
+    public boolean registerSink(ChatRunExecutionContext context,
+                                Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink) {
+        return context != null
+                && sink != null
+                && context.registerProducerSink(sink);
+    }
+
+    /** Remove only the exact producer mapping installed by this run. */
+    public boolean unregisterSink(ChatRunExecutionContext context,
+                                  Sinks.Many<ServerSentEvent<ChatStreamEvent>> expectedSink) {
+        return context != null
+                && expectedSink != null
+                && context.unregisterProducerSink(expectedSink);
+    }
+
     /**
      * Register an SSE sink for a given session.  This should be called at the
      * start of a streaming request.  Any existing sink under the same key
@@ -56,6 +73,15 @@ public class ChatStreamEmitter {
         sinks.remove(sessionKey);
     }
 
+    /** Conditional legacy cleanup; late owners cannot remove a replacement sink. */
+    public boolean unregisterSink(
+            String sessionKey,
+            Sinks.Many<ServerSentEvent<ChatStreamEvent>> expectedSink) {
+        return sessionKey != null
+                && expectedSink != null
+                && sinks.remove(sessionKey, expectedSink);
+    }
+
     /**
      * Emit an understanding summary over SSE to the registered sink for the
      * session.  The summary is serialized to JSON and included in the
@@ -69,12 +95,36 @@ public class ChatStreamEmitter {
         if (sessionKey == null || summary == null) return;
         var sink = sinks.get(sessionKey);
         if (sink == null) return;
+        emitUnderstanding(sink, summary);
+    }
+
+    public void emitUnderstanding(ChatRunExecutionContext context, AnswerUnderstanding summary) {
+        if (context == null || summary == null) return;
         try {
             String json = objectMapper.writeValueAsString(summary);
             ChatStreamEvent event = ChatStreamEvent.understanding(json);
-            sink.tryEmitNext(ServerSentEvent.<ChatStreamEvent>builder(event)
+            context.emitToProducer(ServerSentEvent.<ChatStreamEvent>builder(event)
                     .event(event.type())
                     .build());
+        } catch (JsonProcessingException e) {
+            log.warn("[Emitter] Failed to serialize understanding. errorHash={} errorLength={}",
+                    SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+        }
+    }
+
+    private void emitUnderstanding(Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink,
+                                   AnswerUnderstanding summary) {
+        try {
+            String json = objectMapper.writeValueAsString(summary);
+            ChatStreamEvent event = ChatStreamEvent.understanding(json);
+            Sinks.EmitResult emitResult = sink.tryEmitNext(ServerSentEvent.<ChatStreamEvent>builder(event)
+                    .event(event.type())
+                    .build());
+            if (emitResult.isFailure()) {
+                TraceStore.inc("chat.stream.emitter.failure.count");
+                TraceStore.put("chat.stream.emitter.failure.reason", emitResult.name().toLowerCase(java.util.Locale.ROOT));
+                TraceStore.put("chat.stream.emitter.failure.stage", "understanding");
+            }
         } catch (JsonProcessingException e) {
             log.warn("[Emitter] Failed to serialize understanding. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -86,6 +136,14 @@ public class ChatStreamEmitter {
     }
     public void sendStatus(String sessionKey, String text) {
         send(sessionKey, com.example.lms.dto.ChatStreamEvent.status(text));
+    }
+
+    public void sendToken(ChatRunExecutionContext context, String text) {
+        send(context, com.example.lms.dto.ChatStreamEvent.token(text));
+    }
+
+    public void sendStatus(ChatRunExecutionContext context, String text) {
+        send(context, com.example.lms.dto.ChatStreamEvent.status(text));
     }
 
     /**
@@ -100,11 +158,28 @@ public class ChatStreamEmitter {
         var sink = sinks.get(sessionKey);
         if (sink == null) return;
         try {
-            sink.tryEmitNext(ServerSentEvent.<com.example.lms.dto.ChatStreamEvent>builder(event)
+            Sinks.EmitResult emitResult = sink.tryEmitNext(ServerSentEvent.<com.example.lms.dto.ChatStreamEvent>builder(event)
+                    .event(event.type())
+                    .build());
+            if (emitResult.isFailure()) {
+                TraceStore.inc("chat.stream.emitter.failure.count");
+                TraceStore.put("chat.stream.emitter.failure.reason", emitResult.name().toLowerCase(java.util.Locale.ROOT));
+                TraceStore.put("chat.stream.emitter.failure.stage", "send");
+            }
+        } catch (Exception e) {
+            log.warn("[Emitter] Failed to send SSE event. errorHash={} errorLength={}",
+                    SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+        }
+    }
+
+    private void send(ChatRunExecutionContext context, com.example.lms.dto.ChatStreamEvent event) {
+        if (context == null || event == null) return;
+        try {
+            context.emitToProducer(ServerSentEvent.<com.example.lms.dto.ChatStreamEvent>builder(event)
                     .event(event.type())
                     .build());
         } catch (Exception e) {
-            log.warn("[Emitter] Failed to send SSE event. errorHash={} errorLength={}",
+            log.warn("[Emitter] Failed to send exact-run SSE event. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
     }

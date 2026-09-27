@@ -5,7 +5,9 @@ import org.slf4j.LoggerFactory;
 import java.util.Locale;
 import java.util.regex.Pattern;
 import com.example.lms.service.VectorStoreService;
+import com.example.lms.domain.ChatMessage;
 import com.example.lms.entity.TranslationMemory;
+import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.TranslationMemoryRepository;
 import com.example.lms.service.reinforcement.RewardScoringEngine;
 import com.example.lms.service.reinforcement.SnippetPruner;
@@ -61,6 +63,17 @@ public class MemoryReinforcementService {
             double evidenceScore,
             String planId,
             boolean hasCitation) {
+    }
+
+    /** Fixed neutral signal when the durable rated assistant no longer exists. */
+    public static final class RatedRecordNotFoundException extends RuntimeException {
+        private RatedRecordNotFoundException() {
+            super("rated_record_not_found");
+        }
+
+        public static RatedRecordNotFoundException notFound() {
+            return new RatedRecordNotFoundException();
+        }
     }
 
     // ─────────────────────────────────────────────────────────
@@ -234,6 +247,9 @@ public class MemoryReinforcementService {
 
     /* ─────────────── DI ─────────────── */
     private final TranslationMemoryRepository memoryRepository;
+
+    @Autowired
+    private ChatMessageRepository chatMessageRepository;
     private final RewardScoringEngine rewardEngine = RewardScoringEngine.DEFAULT;
     private final VectorStoreService vectorStoreService;
     private final SnippetPruner snippetPruner;
@@ -443,6 +459,64 @@ public class MemoryReinforcementService {
     @Transactional(propagation = Propagation.REQUIRES_NEW, noRollbackFor = DataIntegrityViolationException.class)
     public int bumpOnly(String hash) {
         return memoryRepository.incrementHitCountBySourceHash(hash);
+    }
+
+    /**
+     * Apply feedback only after the API boundary resolved one durable assistant
+     * record and bound its safe content hash to the authoritative stored text.
+     */
+    public void applyFeedbackToRatedAssistant(
+            String sessionId,
+            Long ratedMessageId,
+            String ratedContentHash,
+            String messageContent,
+            boolean positive,
+            String correctedText) {
+        if (!memoryEnabled) {
+            applyFeedback(sessionId, messageContent, positive, correctedText);
+            return;
+        }
+        String expectedContentHash = com.example.lms.trace.SafeRedactor.hashValue(messageContent);
+        boolean validTarget = ratedMessageId != null
+                && ratedMessageId > 0L
+                && StringUtils.hasText(messageContent)
+                && StringUtils.hasText(ratedContentHash)
+                && MessageDigest.isEqual(
+                        expectedContentHash.getBytes(StandardCharsets.UTF_8),
+                        ratedContentHash.getBytes(StandardCharsets.UTF_8));
+        if (!validTarget) {
+            throw new IllegalArgumentException("rated_record_invalid");
+        }
+        Long numericSessionId = parseRatedSessionId(sessionId);
+        if (numericSessionId == null) {
+            throw new IllegalArgumentException("rated_record_invalid");
+        }
+        if (chatMessageRepository == null) {
+            throw new IllegalStateException("rated_record_repository_unavailable");
+        }
+        ChatMessage durableRecord = chatMessageRepository.findById(ratedMessageId)
+                .filter(message -> "assistant".equalsIgnoreCase(message.getRole()))
+                .filter(message -> message.getSession() != null)
+                .filter(message -> java.util.Objects.equals(
+                        numericSessionId,
+                        message.getSession().getId()))
+                .orElseThrow(RatedRecordNotFoundException::notFound);
+        if (!java.util.Objects.equals(messageContent, durableRecord.getContent())) {
+            throw new IllegalArgumentException("rated_record_invalid");
+        }
+        applyFeedback(sessionId, durableRecord.getContent(), positive, correctedText);
+    }
+
+    private static Long parseRatedSessionId(String sessionId) {
+        if (!StringUtils.hasText(sessionId)) {
+            return null;
+        }
+        try {
+            long parsed = Long.parseLong(sessionId);
+            return parsed > 0L ? parsed : null;
+        } catch (NumberFormatException invalid) {
+            return null;
+        }
     }
 
     public void applyFeedback(String sessionId,

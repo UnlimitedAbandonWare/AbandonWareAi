@@ -34,6 +34,7 @@ import java.util.function.Supplier;
 public final class DecoratingEmbeddingModel implements EmbeddingModel {
 
     private static final Logger log = LoggerFactory.getLogger(DecoratingEmbeddingModel.class);
+    private static final int PER_ITEM_FALLBACK_CONSECUTIVE_FAILURE_LIMIT = 3;
 
     private final EmbeddingModel delegate;
     private final EmbeddingCache cache;
@@ -69,6 +70,12 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
 
     @Override
     public Response<List<Embedding>> embedAll(List<TextSegment> textSegments) {
+        try {
+            TraceStore.put("embed.failover.used.cur", null);
+            TraceStore.put("embed.failover.stage.cur", null);
+            TraceStore.put("embed.batch.perItemFallback.stopped", false);
+            TraceStore.put("embed.batch.perItemFallback.remaining", 0);
+        } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("decorator.batchFailoverResetTrace", ignore); log.debug("[Embedding] fail-soft stage={}", "decorator.batchFailoverResetTrace"); }
         if (textSegments == null || textSegments.isEmpty()) {
             return Response.from(List.of());
         }
@@ -133,10 +140,6 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
 
     private List<Embedding> batchEmbedMisses(List<TextSegment> misses, List<String> missKeys) {
         boolean dbg = isDbgSearch();
-        try {
-            TraceStore.put("embed.failover.used.cur", null);
-            TraceStore.put("embed.failover.stage.cur", null);
-        } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("decorator.batchFailoverResetTrace", ignore); log.debug("[Embedding] fail-soft stage={}", "decorator.batchFailoverResetTrace"); }
 
         Response<List<Embedding>> response = null;
         try {
@@ -159,11 +162,47 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
             log.warn("[EMBED_TRACE] batch embed miss path returned size={} expected={} -> per-item fallback",
                     batch == null ? -1 : batch.size(), misses.size());
             List<Embedding> fallback = new ArrayList<>(misses.size());
+            int consecutiveUnrecoveredFailures = 0;
             for (int i = 0; i < misses.size(); i++) {
                 TextSegment ts = misses.get(i);
                 String key = missKeys.get(i);
-                float[] vec = getCachedVector(key, () -> delegate.embed(ts), "segment");
+                AtomicBoolean singleComputeUnavailable = new AtomicBoolean(false);
+                float[] vec = getCachedVector(key, () -> {
+                    try {
+                        Response<Embedding> single = delegate.embed(ts);
+                        Embedding content = single == null ? null : single.content();
+                        float[] direct = content == null ? null : content.vector();
+                        if (direct == null || direct.length == 0) {
+                            singleComputeUnavailable.set(true);
+                        }
+                        return single;
+                    } catch (RuntimeException | Error failure) {
+                        singleComputeUnavailable.set(true);
+                        throw failure;
+                    }
+                }, "segment");
                 fallback.add(Embedding.from(vec));
+                if (singleComputeUnavailable.get() && vec.length == 0) {
+                    consecutiveUnrecoveredFailures++;
+                } else {
+                    consecutiveUnrecoveredFailures = 0;
+                }
+                if (consecutiveUnrecoveredFailures >= PER_ITEM_FALLBACK_CONSECUTIVE_FAILURE_LIMIT) {
+                    int remaining = misses.size() - i - 1;
+                    for (int j = 0; j < remaining; j++) {
+                        fallback.add(Embedding.from(new float[0]));
+                    }
+                    try {
+                        TraceStore.put("embed.batch.perItemFallback.stopped", true);
+                        TraceStore.put("embed.batch.perItemFallback.remaining", remaining);
+                    } catch (Exception ignore) {
+                        EmbeddingTraceSuppressions.trace("decorator.perItemFallbackStopTrace", ignore);
+                        log.debug("[Embedding] fail-soft stage={}", "decorator.perItemFallbackStopTrace");
+                    }
+                    log.warn("[EMBED_TRACE] per-item fallback stopped after consecutive unrecovered failures attempted={} consecutiveFailures={} remaining={}",
+                            i + 1, consecutiveUnrecoveredFailures, remaining);
+                    break;
+                }
             }
             return fallback;
         }
@@ -316,14 +355,14 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
         if (fingerprint != null) {
             return EmbeddingCache.keyForV2(
                     fingerprint.provider(),
-                    fingerprint.model(),
+                    cacheIdentity(),
                     fingerprint.dimensions(),
                     "query",
                     "q",
-                    text
+                    com.example.lms.trace.SafeRedactor.hashValue(text)
             );
         }
-        return EmbeddingCache.keyFor(text);
+        return EmbeddingCache.keyFor(cacheIdentity() + "|" + com.example.lms.trace.SafeRedactor.hashValue(text));
     }
 
     private String cacheKeyFor(TextSegment ts) {
@@ -345,15 +384,21 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
             } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("decorator.cacheKeyMetadataTrace", ignore); log.debug("[Embedding] fail-soft stage={}", "decorator.cacheKeyMetadataTrace"); }
             return EmbeddingCache.keyForV2(
                     fingerprint.provider(),
-                    fingerprint.model(),
+                    cacheIdentity(),
                     fingerprint.dimensions(),
                     domain,
                     docId,
-                    text
+                    com.example.lms.trace.SafeRedactor.hashValue(text)
             );
         }
 
-        return EmbeddingCache.keyFor(text);
+        return EmbeddingCache.keyFor(cacheIdentity() + "|" + com.example.lms.trace.SafeRedactor.hashValue(text));
+    }
+
+    private String cacheIdentity() {
+        String runtime = delegate instanceof OllamaEmbeddingModel ollama ? ollama.cacheIdentity() : "configured";
+        return com.example.lms.trace.SafeRedactor.hashValue(
+                (fingerprint == null ? "unknown" : fingerprint.fingerprint()) + "|" + runtime);
     }
 
     private static boolean isDbgSearch() {
