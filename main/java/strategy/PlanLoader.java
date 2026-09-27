@@ -1,9 +1,13 @@
 package strategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.io.InputStream;
 import java.util.Map;
 public class PlanLoader {
+  private static final Logger log = LoggerFactory.getLogger(PlanLoader.class);
+
   private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
   private final String defaultPlan;
   public PlanLoader(String defaultPlan){ this.defaultPlan = defaultPlan; }
@@ -19,7 +23,14 @@ public class PlanLoader {
               flags.getOrDefault("officialSourcesOnly", false),
               flags.getOrDefault("diversityReranker", true));
     } catch(Exception e){
+      logFailSoft("load", e);
       return new Plan(10,5,false,true);
+    }
+  }
+  private static void logFailSoft(String stage, Exception e) {
+    if (log.isDebugEnabled()) {
+      String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+      log.debug("[AWX][strategy][plan-loader] failSoft stage={} errorType={}", stage, errorType);
     }
   }
   public record Plan(int webK, int vectorK, boolean officialOnly, boolean diversity){}

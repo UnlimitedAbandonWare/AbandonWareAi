@@ -7,6 +7,8 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.OffsetDateTime;
 import java.util.Locale;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 
 
@@ -15,6 +17,8 @@ import java.util.Locale;
  * {"ts":"/* ... *&#47;","flow":"/* ... *&#47;","steps":["plan","retrieve",/* ... *&#47;],"sigma":[0.123456,/* ... *&#47;],"S":0.987654}
  */
 public class OrchestrationTraceTool {
+
+    private static final Logger log = Logger.getLogger(OrchestrationTraceTool.class.getName());
 
     public static class Result {
         public boolean ok;
@@ -93,7 +97,15 @@ public class OrchestrationTraceTool {
             return new Result(true, p.toAbsolutePath().toString());
         } catch (Exception e) {
             // Swallow to avoid interrupting the main flow; report path as best-effort
+            logFailSoft("writeTrace", e);
             return new Result(false, p.toAbsolutePath().toString());
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isLoggable(Level.FINE)) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.fine("[AWX][trace][orchestration] failSoft stage=" + stage + " errorType=" + errorType);
         }
     }
 }

@@ -9,6 +9,8 @@ import java.util.UUID;
  * Injects request id if missing.
  */
 public class RequestIdHeaderFilter implements Filter {
+    private static final System.Logger LOG = System.getLogger(RequestIdHeaderFilter.class.getName());
+
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
         if (request instanceof HttpServletRequest) {
@@ -16,7 +18,7 @@ public class RequestIdHeaderFilter implements Filter {
             String rid = r.getHeader("X-Request-Id");
             if (rid == null || rid.isEmpty()) {
                 // No mutation to headers here; just log placeholder.
-                System.out.println("request.id=" + UUID.randomUUID());
+                LOG.log(System.Logger.Level.DEBUG, "request.id.generated={0}", UUID.randomUUID());
             }
         }
         chain.doFilter(request, response);
