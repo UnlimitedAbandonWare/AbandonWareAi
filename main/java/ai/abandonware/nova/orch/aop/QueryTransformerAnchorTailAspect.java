@@ -3,6 +3,7 @@ package ai.abandonware.nova.orch.aop;
 import ai.abandonware.nova.orch.anchor.AnchorNarrower;
 import ai.abandonware.nova.orch.compress.AnchorTailQueryCompressor;
 import com.example.lms.search.TraceStore;
+import com.example.lms.search.SearchQueryConstraints;
 import com.example.lms.trace.SafeRedactor;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -66,6 +67,11 @@ public class QueryTransformerAnchorTailAspect {
 
         if (condensed.length() >= userPrompt.trim().length()) {
             traceSkipped("not_shorter");
+            return pjp.proceed();
+        }
+
+        if (!SearchQueryConstraints.preserves(userPrompt, condensed)) {
+            traceSkipped("search_constraints_lost");
             return pjp.proceed();
         }
 

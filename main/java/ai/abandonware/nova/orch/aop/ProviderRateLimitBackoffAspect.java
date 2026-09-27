@@ -451,7 +451,15 @@ public class ProviderRateLimitBackoffAspect {
                 ? "unknown"
                 : provider.trim().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_.-]+", "_");
         String type = "cancelled";
+        Throwable root = rootCause(t);
+        boolean interrupted = root instanceof InterruptedException || Thread.currentThread().isInterrupted();
+        if (interrupted) {
+            Thread.interrupted();
+        }
         try {
+            if (interrupted) {
+                TraceStore.put("interrupt.cleaned", true);
+            }
             TraceStore.inc("web.failsoft.cancelled." + p + ".count");
             TraceStore.put("web.failsoft.cancelled." + p + ".lastType", type);
             TraceStore.put("web.failsoft.rateLimitBackoff." + p + ".last.kind", "CANCELLED_NO_BREAKER");

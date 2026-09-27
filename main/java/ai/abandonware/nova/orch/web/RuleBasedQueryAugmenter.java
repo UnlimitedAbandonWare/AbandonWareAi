@@ -65,6 +65,8 @@ public class RuleBasedQueryAugmenter {
             base.addAll(generalAugmentations(canonical));
         }
 
+        base.addAll(namedOfficialRescueQueries(canonical));
+
         // Operator-tunable rescue query templates (OFFICIAL/DOCS starvation).  Keep it small.
         base.addAll(rescueFromConfig(canonical));
 
@@ -76,7 +78,7 @@ public class RuleBasedQueryAugmenter {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         for (String q : base) {
             if (q == null || q.isBlank()) continue;
-            out.add(applyNegatives(q, negatives));
+            out.add(isNamedOfficialScopedRescueQuery(q) ? q : applyNegatives(q, negatives));
         }
 
         return new Augment(canonical, new ArrayList<>(out), negatives, intent);
@@ -171,7 +173,42 @@ public class RuleBasedQueryAugmenter {
         return out;
     }
 
-private List<String> techAugmentations(String canonical) {
+    private List<String> namedOfficialRescueQueries(String canonical) {
+        List<String> out = new ArrayList<>();
+        String lower = canonical == null ? "" : canonical.toLowerCase(Locale.ROOT);
+        if (lower.isBlank()) {
+            return out;
+        }
+        if (lower.contains("openai")) {
+            if (looksLikeOpenAiFreshnessProbe(lower)) {
+                out.add("site:developers.openai.com/api/docs/changelog OpenAI API changelog latest release notes official docs");
+                out.add("site:openai.com OpenAI changelog release notes latest official docs");
+            }
+            out.add("site:developers.openai.com OpenAI Responses API web_search file_search computer_use official documentation");
+        }
+        if (lower.contains("supabase")) {
+            out.add("site:supabase.com Supabase MCP read_only project_ref official documentation");
+        }
+        return out;
+    }
+
+    private static boolean looksLikeOpenAiFreshnessProbe(String lower) {
+        String q = lower == null ? "" : lower.toLowerCase(Locale.ROOT);
+        return q.contains("changelog")
+                || q.contains("release notes")
+                || q.contains("latest")
+                || q.contains("current")
+                || q.contains("docs/changelog");
+    }
+
+    private static boolean isNamedOfficialScopedRescueQuery(String query) {
+        String lower = query == null ? "" : query.toLowerCase(Locale.ROOT);
+        return lower.startsWith("site:developers.openai.com ")
+                || lower.startsWith("site:openai.com ")
+                || lower.startsWith("site:supabase.com ");
+    }
+
+    private List<String> techAugmentations(String canonical) {
         String lower = canonical == null ? "" : canonical.toLowerCase(Locale.ROOT);
         List<String> out = new ArrayList<>();
 

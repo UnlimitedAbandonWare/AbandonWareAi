@@ -60,6 +60,10 @@ final class WebFailSoftRescueQuerySorter {
                 || t.contains("developers") || t.contains("api reference") || t.contains("reference")) {
             score += 3;
         }
+        if (t.contains("changelog") || t.contains("release notes") || t.contains("latest")
+                || t.contains("current")) {
+            score += 4;
+        }
         if (t.contains("site:") || t.contains("docs.") || t.contains("developer.") || t.contains("developers.")) {
             score += 1;
         }

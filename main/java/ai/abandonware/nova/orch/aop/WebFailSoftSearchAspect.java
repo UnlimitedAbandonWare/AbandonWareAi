@@ -217,6 +217,21 @@ public class WebFailSoftSearchAspect {
         }
         List<String> staged = applyStages(raw, ctx, aug, topK, canonical);
 
+        // Hybrid's bounded provider route already owns its sole re-search decision.
+        // Returning here prevents this aspect's independent min-citation, quality, and
+        // empty-staged rescue loops from multiplying provider calls.
+        if (truthyTraceFlag(TraceStore.get("web.boundedRoute"))) {
+            try {
+                TraceStore.put("web.failsoft.extraCalls.skipped", true);
+                TraceStore.put("web.failsoft.extraCalls.skipped.reason", "boundedRoute");
+            } catch (Exception ignore) {
+                WebFailSoftTraceSuppressions.trace("boundedRoute.extraCallsTrace", ignore);
+            }
+            summarizeAwaitEventsForTrace();
+            maybeApplyProviderBackoffFromAwaitSummary();
+            return staged == null ? List.of() : staged;
+        }
+
         // [UAW] If web is hard-down (both providers skipped / effective down), avoid
         // any extra web calls
         // inside this aspect (they will just spin on merged=0).
@@ -251,6 +266,16 @@ public class WebFailSoftSearchAspect {
             }
         } catch (Exception ignore) {
             WebFailSoftTraceSuppressions.trace("webFailSoft.webHardDownTrace", ignore);
+        }
+
+        boolean cheapSearchMode = isCheapSearchModeActive(ctx);
+        if (cheapSearchMode) {
+            try {
+                TraceStore.put("web.failsoft.extraCalls.skipped", true);
+                TraceStore.put("web.failsoft.extraCalls.skipped.reason", "cheapSearchMode");
+            } catch (Exception ignore) {
+                WebFailSoftTraceSuppressions.trace("cheapSearchMode.extraCallsTrace", ignore);
+            }
         }
 
         // Min-citations rescue (officialOnly): when we are below minCitations, try a
@@ -294,6 +319,7 @@ public class WebFailSoftSearchAspect {
             int candidateCount = qCandidates.size();
 
             boolean eligible = !webHardDown
+                    && !cheapSearchMode
                     && officialOnly
                     && deficit > 0
                     && props.isAllowExtraSearchCalls()
@@ -308,6 +334,8 @@ public class WebFailSoftSearchAspect {
                     preflightBlockReason = "notOfficialOnly";
                 } else if (deficit <= 0) {
                     preflightBlockReason = "noDeficit";
+                } else if (cheapSearchMode) {
+                    preflightBlockReason = "cheapSearchMode";
                 } else if (webHardDown) {
                     preflightBlockReason = "webHardDown";
                 } else if (!props.isAllowExtraSearchCalls() || props.getMaxExtraSearchCalls() <= 0) {
@@ -477,7 +505,17 @@ public class WebFailSoftSearchAspect {
         // "force OFFICIAL/DOCS" without depending on LLM query transforms.
         try {
             Object needRescue = TraceStore.get("web.failsoft.starvationFallback.qualityGate.needRescueExtraSearch");
+            if (Boolean.TRUE.equals(needRescue) && cheapSearchMode) {
+                try {
+                    TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.skipped", true);
+                    TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.skipReason",
+                            "cheapSearchMode");
+                } catch (Exception ignore) {
+                    WebFailSoftTraceSuppressions.trace("qualityGate.rescueCheapSkipTrace", ignore);
+                }
+            }
             if (Boolean.TRUE.equals(needRescue)
+                    && !cheapSearchMode
                     && !webHardDown
                     && props.isAllowExtraSearchCalls()
                     && aug.queries() != null
@@ -510,6 +548,7 @@ public class WebFailSoftSearchAspect {
                     if (calls++ >= callBudget)
                         break;
                     try {
+                        maybeWaitForShortBraveCooldownBeforeQualityGateRescue();
                         long t0 = System.nanoTime();
                         List<String> raw2 = castList(pjp.proceed(new Object[] { q2, topK }));
                         List<String> staged2 = applyStages(raw2, ctx, aug, topK, q2);
@@ -588,6 +627,7 @@ public class WebFailSoftSearchAspect {
 
         // Deterministic extra calls if strict staging yielded nothing.
         if ((staged == null || staged.isEmpty())
+                && !cheapSearchMode
                 && !webHardDown
                 && props.isAllowExtraSearchCalls()
                 && aug.queries() != null
@@ -630,6 +670,14 @@ public class WebFailSoftSearchAspect {
                             NightmareBreaker.classify(e),
                             SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
                 }
+            }
+        }
+        if ((staged == null || staged.isEmpty()) && cheapSearchMode) {
+            try {
+                TraceStore.put("web.failsoft.extraSearch.skipped", true);
+                TraceStore.put("web.failsoft.extraSearch.skipReason", "cheapSearchMode");
+            } catch (Exception ignore) {
+                WebFailSoftTraceSuppressions.trace("extraSearch.cheapSkipTrace", ignore);
             }
         }
 
@@ -707,6 +755,19 @@ public class WebFailSoftSearchAspect {
         }
 
         List<String> staged = applyStages(res.snippets(), ctx, aug, topK, canonical);
+        if (truthyTraceFlag(TraceStore.get("web.boundedRoute"))) {
+            try {
+                TraceStore.put("web.failsoft.extraCalls.skipped", true);
+                TraceStore.put("web.failsoft.extraCalls.skipped.reason", "boundedRoute");
+            } catch (Exception ignore) {
+                WebFailSoftTraceSuppressions.trace("boundedRoute.traceExtraCallsTrace", ignore);
+            }
+            summarizeAwaitEventsForTrace();
+            maybeApplyProviderBackoffFromAwaitSummary();
+            return new NaverSearchService.SearchResult(staged == null ? List.of() : staged, res.trace());
+        }
+        staged = rescueQualityGateForSearchWithTrace(pjp, staged, ctx, aug, topK, canonical,
+                computeWebHardDown(res.snippets(), ctx), isCheapSearchModeActive(ctx));
         if (res.trace() != null) {
             try {
                 String dp = ctx == null ? null : stringOrNull(ctx.getDomainProfile());
@@ -720,6 +781,203 @@ public class WebFailSoftSearchAspect {
         summarizeAwaitEventsForTrace();
         maybeApplyProviderBackoffFromAwaitSummary();
         return new NaverSearchService.SearchResult(staged, res.trace());
+    }
+
+    private List<String> rescueQualityGateForSearchWithTrace(ProceedingJoinPoint pjp,
+                                                             List<String> staged,
+                                                             @Nullable GuardContext ctx,
+                                                             RuleBasedQueryAugmenter.Augment aug,
+                                                             int topK,
+                                                             String canonical,
+                                                             boolean webHardDown,
+                                                             boolean cheapSearchMode) {
+        try {
+            Object needRescue = TraceStore.get("web.failsoft.starvationFallback.qualityGate.needRescueExtraSearch");
+            if (Boolean.TRUE.equals(needRescue) && cheapSearchMode) {
+                TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.skipped", true);
+                TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.skipReason",
+                        "cheapSearchMode");
+            }
+            if (!Boolean.TRUE.equals(needRescue)
+                    || cheapSearchMode
+                    || webHardDown
+                    || !props.isAllowExtraSearchCalls()
+                    || props.getMaxExtraSearchCalls() <= 0
+                    || aug == null
+                    || aug.queries() == null) {
+                return staged;
+            }
+
+            List<String> qCandidates = new ArrayList<>();
+            for (String q2 : aug.queries()) {
+                if (q2 == null || q2.isBlank() || q2.equals(canonical)) {
+                    continue;
+                }
+                qCandidates.add(q2);
+            }
+            WebFailSoftRescueQuerySorter.sortOfficialDocsRescueQueries(qCandidates, ctx,
+                    "web.failsoft.starvationFallback.qualityGate.rescueSort");
+
+            int callBudget = Math.max(0, Math.min(props.getMaxExtraSearchCalls(), 4));
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.attempted", true);
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueInserted", false);
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.candidates",
+                    SafeRedactor.diagnosticValue(
+                            "web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.queryCandidates",
+                            capList(new ArrayList<>(qCandidates), 5)));
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.budget", callBudget);
+
+            int calls = 0;
+            for (String q2 : qCandidates) {
+                if (calls++ >= callBudget) {
+                    break;
+                }
+                try {
+                    maybeWaitForShortBraveCooldownBeforeQualityGateRescue();
+                    long t0 = System.nanoTime();
+                    Object obj2 = pjp.proceed(new Object[] { q2, topK });
+                    if (!(obj2 instanceof NaverSearchService.SearchResult res2)) {
+                        continue;
+                    }
+                    List<String> staged2 = applyStages(res2.snippets(), ctx, aug, topK, q2);
+                    String rescueSnippet = firstOfficialOrDocsSnippet(staged2);
+                    Map<String, Object> ev = new LinkedHashMap<>();
+                    ev.put("seq", TraceStore.nextSequence(
+                            "web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.attempts"));
+                    ev.put("executedQuery", SafeRedactor.diagnosticValue(
+                            "web.failsoft.starvationFallback.qualityGate.executedQuery", canonical, 240));
+                    ev.put("rescueQuery", SafeRedactor.diagnosticValue(
+                            "web.failsoft.starvationFallback.qualityGate.rescueQuery", q2, 240));
+                    ev.put("outCount", staged2 == null ? 0 : staged2.size());
+                    ev.put("foundOfficialOrDocs", rescueSnippet != null && !rescueSnippet.isBlank());
+                    ev.put("tookMs", Math.max(0L, (System.nanoTime() - t0) / 1_000_000L));
+                    TraceStore.append("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.attempts", ev);
+
+                    if (rescueSnippet != null && !rescueSnippet.isBlank()) {
+                        LinkedHashSet<String> merged = new LinkedHashSet<>();
+                        merged.add(rescueSnippet);
+                        if (staged != null) {
+                            merged.addAll(staged);
+                        }
+                        List<String> mergedFinal = new ArrayList<>(merged);
+                        if (mergedFinal.size() > topK) {
+                            mergedFinal = mergedFinal.subList(0, topK);
+                        }
+                        TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueExtraQuery",
+                                SafeRedactor.diagnosticValue(
+                                        "web.failsoft.starvationFallback.qualityGate.rescueExtraQuery", q2, 240));
+                        TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueInserted", true);
+                        return mergedFinal;
+                    }
+                } catch (Throwable e) {
+                    WebFailSoftFailureTrace.record(
+                            "web.failsoft.starvationFallback.qualityGate.rescueSearchWithTrace", e, q2);
+                    log.debug("[nova][web-failsoft] qualityGate searchWithTrace rescue failed failureReason={} errorType={}",
+                            NightmareBreaker.classify(e),
+                            SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
+                }
+            }
+        } catch (Throwable ignore) {
+            WebFailSoftTraceSuppressions.trace("qualityGate.searchWithTrace.outer", ignore);
+        }
+        return staged;
+    }
+
+    private void maybeWaitForShortBraveCooldownBeforeQualityGateRescue() {
+        try {
+            long maxWaitMs = Math.max(0L, props.getQualityGateRescueCooldownWaitMaxMs());
+            if (maxWaitMs <= 0L || backoffCoordinatorProvider == null) {
+                return;
+            }
+            RateLimitBackoffCoordinator backoff = backoffCoordinatorProvider.getIfAvailable();
+            if (backoff == null) {
+                return;
+            }
+            RateLimitBackoffCoordinator.Decision decision =
+                    backoff.shouldSkip(RateLimitBackoffCoordinator.PROVIDER_BRAVE);
+            if (decision == null || !decision.shouldSkip()) {
+                return;
+            }
+            long remainingMs = Math.max(0L, decision.remainingMs());
+            if (remainingMs <= 0L) {
+                return;
+            }
+            if (remainingMs > maxWaitMs) {
+                TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.skipped", true);
+                TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.skipReason",
+                        "cooldownTooLong");
+                TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.remainingMs",
+                        remainingMs);
+                TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.maxWaitMs",
+                        maxWaitMs);
+                return;
+            }
+
+            long waitMs = Math.min(maxWaitMs, remainingMs + Math.min(25L, Math.max(0L, maxWaitMs - remainingMs)));
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.attempted", true);
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.provider", "brave");
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.remainingMs", remainingMs);
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.waitMs", waitMs);
+            TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.reason",
+                    SafeRedactor.traceLabelOrFallback(decision.reason(), "backoff"));
+            try {
+                Thread.sleep(waitMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                TraceStore.put("web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.interrupted", true);
+            }
+        } catch (Throwable ignore) {
+            WebFailSoftTraceSuppressions.trace("qualityGate.rescueCooldownWait", ignore);
+        }
+    }
+
+    private boolean computeWebHardDown(List<String> raw, @Nullable GuardContext ctx) {
+        try {
+            boolean rawNonBlank = raw != null && !raw.isEmpty();
+            long skippedCount = TraceStore.getLong("web.await.skipped.count");
+            boolean minLiveBudgetUsed = Boolean.TRUE.equals(TraceStore.get("web.await.minLiveBudget.used"));
+            boolean timeoutAll = Boolean.TRUE.equals(TraceStore.get("web.await.timeout.all"));
+            boolean missingFutureAny = Boolean.TRUE.equals(TraceStore.get("web.await.missing_future.any"));
+            return (ctx != null && ctx.isWebRateLimited())
+                    || Boolean.TRUE.equals(TraceStore.get("web.hardDown"))
+                    || Boolean.TRUE.equals(TraceStore.get("orch.webRateLimited.effective"))
+                    || Boolean.TRUE.equals(TraceStore.get("orch.webRateLimited"))
+                    || (!rawNonBlank && skippedCount >= 2 && !minLiveBudgetUsed)
+                    || (!rawNonBlank && timeoutAll)
+                    || (!rawNonBlank && missingFutureAny);
+        } catch (Exception ignore) {
+            WebFailSoftTraceSuppressions.trace("webFailSoft.webHardDownTrace.searchWithTrace", ignore);
+            return false;
+        }
+    }
+
+    private static boolean isCheapSearchModeActive(@Nullable GuardContext ctx) {
+        try {
+            if (ctx != null && ctx.isCheapSearchMode()) {
+                return true;
+            }
+        } catch (Exception ignore) {
+            WebFailSoftTraceSuppressions.trace("cheapSearchMode.contextRead", ignore);
+        }
+        try {
+            if (truthyTraceFlag(TraceStore.get("search.mode.lightAuxBypass"))) {
+                return true;
+            }
+        } catch (Exception ignore) {
+            WebFailSoftTraceSuppressions.trace("cheapSearchMode.traceRead", ignore);
+        }
+        return false;
+    }
+
+    private static boolean truthyTraceFlag(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        String s = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        return "true".equals(s) || "1".equals(s) || "yes".equals(s) || "y".equals(s);
     }
 
     private List<String> applyStages(List<String> raw,
@@ -1018,6 +1276,11 @@ public class WebFailSoftSearchAspect {
 
         int targetCount = Math.max(1, topK);
         int desiredHosts = minCitations > 0 ? minCitations : 0;
+        // A single cue search cannot refill discarded same-host documents. Keep
+        // distinct accepted documents; explicit authority/risk rules retain diversity.
+        boolean preserveCueDocuments = !officialOnly && !highRisk
+                && truthyTraceFlag(TraceStore.get("conversate.web.singleCycle"))
+                && truthyTraceFlag(TraceStore.get("web.boundedRoute"));
 
         // Citeable count is more stable than out.size() because non-citeable stages
         // (e.g., PROFILEBOOST) can fill slots and mask citation starvation.
@@ -1096,7 +1359,7 @@ public class WebFailSoftSearchAspect {
                 String host = (sn.host() == null) ? "" : sn.host().toLowerCase(Locale.ROOT);
                 // While we are still under minCitations, enforce host diversity for credible
                 // citeable items only.
-                if (desiredHosts > 0 && countsForMinCitations && seenCiteableHosts.size() < desiredHosts) {
+                if (!preserveCueDocuments && desiredHosts > 0 && countsForMinCitations && seenCiteableHosts.size() < desiredHosts) {
                     if (!host.isBlank() && seenCiteableHosts.contains(host)) {
                         if (cand != null && !Boolean.TRUE.equals(cand.get("selected"))) {
                             cand.put("dropReason", "host_duplicate");
@@ -1142,8 +1405,10 @@ public class WebFailSoftSearchAspect {
                     }
                     if (nightmareBreaker != null) {
                         try {
-                            nightmareBreaker.recordSilentFailure(NightmareKeys.WEB_FAILSOFT_MISROUTE, canonicalQuery,
-                                    "devCommunityUnverifiedSelected");
+                            nightmareBreaker.signalSilentFailure(
+                                    NightmareKeys.WEB_FAILSOFT_MISROUTE,
+                                    "web.failsoft.domain-misroute",
+                                    "dev_community_unverified_selected");
                         } catch (Throwable ignore) { WebFailSoftTraceSuppressions.trace("domainMisroute.breaker", ignore); }
                     }
                 }
@@ -1872,8 +2137,10 @@ public class WebFailSoftSearchAspect {
             }
 
             try {
-                String cq = (aug == null || aug.canonical() == null) ? "" : aug.canonical();
-                nightmareBreaker.recordSilentFailure(NightmareKeys.WEB_FAILSOFT_STARVED, cq, "officialOnlyStarved");
+                nightmareBreaker.signalSilentFailure(
+                        NightmareKeys.WEB_FAILSOFT_STARVED,
+                        "web.failsoft.official-only-starved",
+                        "official_only_starved");
             } catch (Throwable ignore) {
                 WebFailSoftTraceSuppressions.trace("officialOnlyStarved.breaker", ignore);
             }

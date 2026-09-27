@@ -218,16 +218,17 @@ public final class AnchorTailQueryCompressor {
         if (anchorNarrower != null) {
             try {
                 AnchorNarrower.Anchor pickedAnchor = anchorNarrower.pick(s, List.of(), List.of());
-                String term = safeTrim(pickedAnchor.term());
+                String term = stripUnpairedBoundarySurrogates(safeTrim(pickedAnchor.term()));
                 if (!term.isBlank()) {
                     // If the anchor term is too long, prefer a shorter cheap-variant.
                     int maxAnchorLen = Math.min(48, Math.max(18, maxLen / 2));
                     if (term.length() > maxAnchorLen) {
-                        String best = chooseBestVariant(anchorNarrower.cheapVariants(term, pickedAnchor), maxAnchorLen);
+                        String best = stripUnpairedBoundarySurrogates(
+                                chooseBestVariant(anchorNarrower.cheapVariants(term, pickedAnchor), maxAnchorLen));
                         if (!best.isBlank()) {
-                            return best;
+                            return safePrefix(best, maxAnchorLen);
                         }
-                        return term.substring(0, maxAnchorLen);
+                        return safePrefix(term, maxAnchorLen);
                     }
                     return term;
                 }
@@ -254,7 +255,7 @@ public final class AnchorTailQueryCompressor {
             }
         }
         if (best.length() > 48) {
-            return best.substring(0, 48);
+            return safePrefix(best, 48);
         }
         return best;
     }
@@ -304,7 +305,7 @@ public final class AnchorTailQueryCompressor {
             return "";
         if (s.length() <= maxChars)
             return s.trim();
-        return s.substring(Math.max(0, s.length() - maxChars)).trim();
+        return s.substring(safeSuffixStart(s, maxChars)).trim();
     }
 
     private static String assemble(String anchor, String tail, int maxLen) {
@@ -380,17 +381,66 @@ public final class AnchorTailQueryCompressor {
         if (x.length() <= maxLen)
             return x;
         if (maxLen <= 1) {
-            return x.substring(x.length() - maxLen);
+            int start = safeSuffixStart(x, maxLen);
+            return start >= x.length() ? "…" : x.substring(start);
         }
         // Prefix ellipsis, keep end.
         int keep = maxLen - 1;
-        return "…" + x.substring(x.length() - keep);
+        return "…" + x.substring(safeSuffixStart(x, keep));
+    }
+
+    private static int safeSuffixStart(String value, int keep) {
+        return alignSuffixStart(value, value.length() - keep);
+    }
+
+    private static int alignSuffixStart(String value, int start) {
+        if (start > 0 && start < value.length()
+                && Character.isLowSurrogate(value.charAt(start))
+                && Character.isHighSurrogate(value.charAt(start - 1))) {
+            return start + 1;
+        }
+        return start;
+    }
+
+    private static String safePrefix(String value, int maxChars) {
+        if (value == null || maxChars <= 0) {
+            return "";
+        }
+        if (value.length() <= maxChars) {
+            return value;
+        }
+        int end = alignPrefixEnd(value, maxChars);
+        return value.substring(0, end);
+    }
+
+    private static String stripUnpairedBoundarySurrogates(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        int start = 0;
+        int end = value.length();
+        while (start < end && Character.isLowSurrogate(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && Character.isHighSurrogate(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(start, end);
+    }
+
+    private static int alignPrefixEnd(String value, int end) {
+        if (end > 0 && end < value.length()
+                && Character.isHighSurrogate(value.charAt(end - 1))
+                && Character.isLowSurrogate(value.charAt(end))) {
+            return end - 1;
+        }
+        return end;
     }
 
     private static LineHit scanFromEnd(String s, int maxScanChars, int maxLines) {
         if (s == null || s.isBlank())
             return null;
-        int scanStart = Math.max(0, s.length() - Math.max(1, maxScanChars));
+        int scanStart = alignSuffixStart(s, Math.max(0, s.length() - Math.max(1, maxScanChars)));
         int idx = s.length();
         int lines = 0;
         LineHit firstNonEmpty = null;
@@ -422,7 +472,7 @@ public final class AnchorTailQueryCompressor {
     private static LineHit scanFromStart(String s, int maxScanChars, int maxLines) {
         if (s == null || s.isBlank())
             return null;
-        int scanEnd = Math.min(s.length(), Math.max(1, maxScanChars));
+        int scanEnd = alignPrefixEnd(s, Math.min(s.length(), Math.max(1, maxScanChars)));
         int idx = 0;
         int lines = 0;
         LineHit firstNonEmpty = null;

@@ -602,7 +602,7 @@ public class RateLimitBackoffCoordinator {
             if (seconds <= 0L) {
                 return 0L;
             }
-            return Math.min(seconds * 1000L, 5 * 60_000L);
+            return Math.min(seconds, 5 * 60L) * 1000L;
         } catch (NumberFormatException e) {
             traceSuppressed("parseRetryAfterMs.delta", e);
             // fall through

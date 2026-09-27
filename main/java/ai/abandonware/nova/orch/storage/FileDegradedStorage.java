@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -53,15 +54,19 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
     private static final String DIR_PENDING_GLOB = "*.json";
     private static final String DIR_INFLIGHT_GLOB = "*.inflight";
     private static final String DIR_INFLIGHT_SUFFIX = ".inflight";
+    private static final ConcurrentHashMap<Path, StorageLocks> JSONL_LOCKS = new ConcurrentHashMap<>();
 
     private final ObjectMapper objectMapper;
-    private final ReentrantLock lock = new ReentrantLock();
+    private final ReentrantLock lock;
+    private final ReentrantLock jsonlIngressLock;
 
     private final StorageMode mode;
     private final Path basePath;
     private final Path jsonlPending;
     private final Path jsonlInflight;
     private final Path jsonlQuarantine;
+    private final Path jsonlIngress;
+    private final Path jsonlIngressDraining;
 
     private final boolean quarantineEnabled;
     private final int maxAttempts;
@@ -94,6 +99,12 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
             PendingMemoryEvent event) {
     }
 
+    private record StorageLocks(ReentrantLock operations, ReentrantLock ingress) {
+        private StorageLocks() {
+            this(new ReentrantLock(), new ReentrantLock());
+        }
+    }
+
     public FileDegradedStorage(NovaOrchestrationProperties props, ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
 
@@ -118,10 +129,14 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
         this.mode = resolveMode(configured, p.getFormat());
 
         if (mode == StorageMode.DIRECTORY) {
+            this.lock = new ReentrantLock();
+            this.jsonlIngressLock = new ReentrantLock();
             this.basePath = configured;
             this.jsonlPending = null;
             this.jsonlInflight = null;
             this.jsonlQuarantine = null;
+            this.jsonlIngress = null;
+            this.jsonlIngressDraining = null;
             this.quarantineDir = basePath.resolve(quarantineDirName);
             try {
                 Files.createDirectories(basePath);
@@ -132,10 +147,15 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
                 DegradedStorageTraceSuppressions.trace("constructor.createDirectoryBase", e);
             }
         } else {
+            StorageLocks storageLocks = JSONL_LOCKS.computeIfAbsent(configured, ignored -> new StorageLocks());
+            this.lock = storageLocks.operations();
+            this.jsonlIngressLock = storageLocks.ingress();
             this.basePath = configured.getParent() != null ? configured.getParent() : Paths.get(".").toAbsolutePath();
             this.jsonlPending = configured;
             this.jsonlInflight = configured.resolveSibling(configured.getFileName().toString() + ".inflight");
             this.jsonlQuarantine = configured.resolveSibling(configured.getFileName().toString() + ".quarantine");
+            this.jsonlIngress = configured.resolveSibling(configured.getFileName().toString() + ".incoming");
+            this.jsonlIngressDraining = configured.resolveSibling(configured.getFileName().toString() + ".incoming.draining");
             this.quarantineDir = basePath.resolve(quarantineDirName);
             try {
                 if (jsonlPending.getParent() != null) {
@@ -148,7 +168,7 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
     }
 
     private static StorageMode resolveMode(Path configured, String format) {
-        String f = (format == null ? "auto" : format).trim().toLowerCase();
+        String f = (format == null ? "auto" : format).trim().toLowerCase(Locale.ROOT);
         if (f.equals("dir") || f.equals("directory"))
             return StorageMode.DIRECTORY;
         if (f.equals("jsonl") || f.equals("file"))
@@ -175,26 +195,45 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
     public void putPending(PendingMemoryEvent event) {
         if (event == null)
             return;
+        long now = System.currentTimeMillis();
+        OutboxEnvelope env = new OutboxEnvelope(
+                newId(),
+                event.timestamp() != null ? event.timestamp().toEpochMilli() : now,
+                0,
+                null,
+                null,
+                event);
+
+        if (mode == StorageMode.DIRECTORY) {
+            if (!writeEnvelopeFile(env)) {
+                throw new IllegalStateException("degraded_storage_directory_write_failed");
+            }
+            if (enforceOnWrite) {
+                sweepAfterWriteIfIdle();
+            }
+            return;
+        }
+
+        if (enforceOnWrite) {
+            appendJsonlIngress(env);
+            sweepAfterWriteIfIdle();
+            return;
+        }
+
         lock.lock();
         try {
-            long now = System.currentTimeMillis();
-            OutboxEnvelope env = new OutboxEnvelope(
-                    newId(),
-                    event.timestamp() != null ? event.timestamp().toEpochMilli() : now,
-                    0,
-                    null,
-                    null,
-                    event);
+            appendJsonl(jsonlPending, env);
+        } finally {
+            lock.unlock();
+        }
+    }
 
-            if (mode == StorageMode.DIRECTORY) {
-                writeEnvelopeFile(env);
-            } else {
-                appendJsonl(jsonlPending, env);
-            }
-
-            if (enforceOnWrite) {
-                sweepInternal();
-            }
+    private void sweepAfterWriteIfIdle() {
+        if (!lock.tryLock()) {
+            return;
+        }
+        try {
+            sweepInternal();
         } finally {
             lock.unlock();
         }
@@ -268,12 +307,19 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
             if (mode == StorageMode.DIRECTORY) {
                 Path inflight = basePath.resolve(token);
                 Path pending = toPendingPath(inflight);
-                safeMove(inflight, pending);
+                if (safeMove(inflight, pending)) {
+                    releaseTotal.incrementAndGet();
+                }
             } else {
-                Optional<OutboxEnvelope> envOpt = removeAndReturnFromJsonlById(jsonlInflight, token);
-                envOpt.ifPresent(env -> appendJsonl(jsonlPending, env));
+                Optional<OutboxEnvelope> envOpt = findJsonlById(jsonlInflight, token);
+                if (envOpt.isPresent()) {
+                    boolean destinationReady = findJsonlById(jsonlPending, token).isPresent()
+                            || appendJsonl(jsonlPending, envOpt.get());
+                    if (destinationReady && removeFirstFromJsonlById(jsonlInflight, token)) {
+                        releaseTotal.incrementAndGet();
+                    }
+                }
             }
-            releaseTotal.incrementAndGet();
         } finally {
             lock.unlock();
         }
@@ -299,19 +345,22 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
                             truncate(error, 400),
                             env.event());
                     // If max retries exceeded, quarantine instead of re-queueing.
-                    if (shouldQuarantine(updated)) {
-                        quarantineTotal.incrementAndGet();
-                        writeEnvelopeFile(toQuarantinePath(inflight), updated);
-                    } else {
-                        writeEnvelopeFile(toPendingPath(inflight), updated);
+                    boolean quarantine = shouldQuarantine(updated);
+                    Path destination = quarantine
+                            ? toQuarantinePath(inflight)
+                            : toPendingPath(inflight);
+                    if (writeEnvelopeFile(destination, updated) && safeDelete(inflight)) {
+                        if (quarantine) {
+                            quarantineTotal.incrementAndGet();
+                        }
+                        nackTotal.incrementAndGet();
                     }
-                    safeDelete(inflight);
                 } else {
                     // If unreadable, just release it
                     release(token);
                 }
             } else {
-                Optional<OutboxEnvelope> envOpt = removeAndReturnFromJsonlById(jsonlInflight, token);
+                Optional<OutboxEnvelope> envOpt = findJsonlById(jsonlInflight, token);
                 if (envOpt.isPresent()) {
                     OutboxEnvelope env = envOpt.get();
                     OutboxEnvelope updated = new OutboxEnvelope(
@@ -322,15 +371,17 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
                             truncate(error, 400),
                             env.event());
                     // If max retries exceeded, quarantine instead of re-queueing.
-                    if (shouldQuarantine(updated)) {
-                        quarantineTotal.incrementAndGet();
-                        appendJsonl(jsonlQuarantine, updated);
-                    } else {
-                        appendJsonl(jsonlPending, updated);
+                    boolean quarantine = shouldQuarantine(updated);
+                    Path destination = quarantine ? jsonlQuarantine : jsonlPending;
+                    if (appendJsonl(destination, updated)
+                            && removeFirstFromJsonlById(jsonlInflight, token)) {
+                        if (quarantine) {
+                            quarantineTotal.incrementAndGet();
+                        }
+                        nackTotal.incrementAndGet();
                     }
                 }
             }
-            nackTotal.incrementAndGet();
         } finally {
             lock.unlock();
         }
@@ -343,6 +394,7 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
             if (mode == StorageMode.DIRECTORY) {
                 return statsDirectory();
             }
+            mergeJsonlIngress();
             return statsJsonl();
         } finally {
             lock.unlock();
@@ -354,6 +406,9 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
     public List<OutboxPeekItem> peek(String state, int limit, int maxSnippetChars) {
         lock.lock();
         try {
+            if (mode == StorageMode.JSONL) {
+                mergeJsonlIngress();
+            }
             return peekInternal(state, limit, maxSnippetChars);
         } finally {
             lock.unlock();
@@ -535,29 +590,37 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
 
     // -------------------- Directory mode --------------------
 
-    private void writeEnvelopeFile(OutboxEnvelope env) {
+    private boolean writeEnvelopeFile(OutboxEnvelope env) {
         try {
             Files.createDirectories(basePath);
             String fileName = "outbox_" + env.createdAtEpochMs() + "_" + env.id() + ".json";
             Path finalPath = basePath.resolve(fileName);
-            writeEnvelopeFile(finalPath, env);
+            return writeEnvelopeFile(finalPath, env);
         } catch (Exception e) {
             DegradedStorageTraceSuppressions.trace("writeEnvelopeFile.directory", e);
+            return false;
         }
     }
 
-    private void writeEnvelopeFile(Path finalPath, OutboxEnvelope env) {
+    private boolean writeEnvelopeFile(Path finalPath, OutboxEnvelope env) {
+        Path tmp = null;
         try {
             Files.createDirectories(finalPath.getParent());
-            Path tmp = finalPath.resolveSibling(finalPath.getFileName().toString() + ".tmp");
+            tmp = finalPath.resolveSibling(finalPath.getFileName().toString() + ".tmp");
             String json = objectMapper.writeValueAsString(env);
             Files.writeString(tmp, json, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.WRITE);
-            safeMove(tmp, finalPath);
+            if (safeMove(tmp, finalPath)) {
+                return true;
+            }
+            safeDelete(tmp);
+            return false;
         } catch (Exception e) {
             DegradedStorageTraceSuppressions.trace("writeEnvelopeFile.write", e);
+            safeDelete(tmp);
+            return false;
         }
     }
 
@@ -765,6 +828,57 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
 
     // -------------------- JSONL mode --------------------
 
+    private void appendJsonlIngress(OutboxEnvelope env) {
+        jsonlIngressLock.lock();
+        try {
+            appendJsonl(jsonlIngress, env);
+        } finally {
+            jsonlIngressLock.unlock();
+        }
+    }
+
+    /**
+     * Rotates at most two durable ingress batches into the main pending file.
+     * The short ingress lock covers only the atomic rotation, so request-side
+     * appends do not wait for JSON parsing or retention rewrites. A crash after
+     * appending a batch but before deleting it can duplicate records on recovery,
+     * which is preferable to losing an accepted degraded-memory event.
+     */
+    private void mergeJsonlIngress() {
+        for (int i = 0; i < 2; i++) {
+            if (!mergeOneJsonlIngressBatch()) {
+                return;
+            }
+        }
+    }
+
+    private boolean mergeOneJsonlIngressBatch() {
+        Path batch;
+        jsonlIngressLock.lock();
+        try {
+            if (Files.exists(jsonlIngressDraining)) {
+                batch = jsonlIngressDraining;
+            } else if (Files.exists(jsonlIngress)) {
+                if (!safeMove(jsonlIngress, jsonlIngressDraining)) {
+                    return false;
+                }
+                batch = jsonlIngressDraining;
+            } else {
+                return false;
+            }
+        } finally {
+            jsonlIngressLock.unlock();
+        }
+
+        List<OutboxEnvelope> ingress = readJsonlEnvelopes(batch);
+        for (OutboxEnvelope env : ingress) {
+            if (!tryAppendJsonl(jsonlPending, env)) {
+                return false;
+            }
+        }
+        return safeDelete(batch);
+    }
+
     private List<ClaimedPending> claimJsonl(int max) {
         // Read inflight ids to avoid duplicate claim
         Set<String> inflightIds = new HashSet<>();
@@ -776,6 +890,7 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
         List<OutboxEnvelope> pending = readJsonlEnvelopes(jsonlPending);
         long now = System.currentTimeMillis();
 
+        Set<String> seenThisClaim = new HashSet<>();
         List<OutboxEnvelope> toClaim = new ArrayList<>();
         List<OutboxEnvelope> keep = new ArrayList<>();
 
@@ -786,21 +901,29 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
                 droppedExpiredTotal.incrementAndGet();
                 continue;
             }
-            if (env.id != null && inflightIds.contains(env.id)) {
-                // drop duplicates while inflight exists
+            if (env.id != null
+                    && (inflightIds.contains(env.id) || seenThisClaim.contains(env.id))) {
+                // Preserve later redelivery while admitting an id at most once per claim batch.
+                keep.add(env);
                 continue;
             }
-            if (toClaim.size() < max) {
+            if (toClaim.size() >= max) {
+                keep.add(env);
+                continue;
+            }
+            if (env.id != null) {
+                seenThisClaim.add(env.id);
+            }
+            if (appendJsonl(jsonlInflight, env)) {
                 toClaim.add(env);
+                if (env.id != null) {
+                    inflightIds.add(env.id);
+                }
             } else {
                 keep.add(env);
             }
         }
 
-        // Order of operations: append to inflight first (prefer duplicates over loss)
-        for (OutboxEnvelope env : toClaim) {
-            appendJsonl(jsonlInflight, env);
-        }
         writeJsonl(jsonlPending, keep);
 
         List<ClaimedPending> claimed = new ArrayList<>();
@@ -890,9 +1013,9 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
         return out;
     }
 
-    private void writeJsonl(Path file, List<OutboxEnvelope> envs) {
+    private boolean writeJsonl(Path file, List<OutboxEnvelope> envs) {
         if (file == null)
-            return;
+            return false;
         try {
             if (file.getParent() != null)
                 Files.createDirectories(file.getParent());
@@ -908,15 +1031,20 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
                     w.newLine();
                 }
             }
-            safeMove(tmp, file);
+            return safeMove(tmp, file);
         } catch (IOException e) {
             DegradedStorageTraceSuppressions.trace("writeJsonl", e);
+            return false;
         }
     }
 
-    private void appendJsonl(Path file, OutboxEnvelope env) {
+    private boolean appendJsonl(Path file, OutboxEnvelope env) {
+        return tryAppendJsonl(file, env);
+    }
+
+    private boolean tryAppendJsonl(Path file, OutboxEnvelope env) {
         if (file == null || env == null || env.event == null)
-            return;
+            return false;
         try {
             if (file.getParent() != null)
                 Files.createDirectories(file.getParent());
@@ -925,8 +1053,10 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
                     StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
+            return true;
         } catch (IOException e) {
             DegradedStorageTraceSuppressions.trace("appendJsonl", e);
+            return false;
         }
     }
 
@@ -952,19 +1082,51 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
         }
     }
 
-    private void removeFromJsonlById(Path file, String id) {
+    private boolean removeFromJsonlById(Path file, String id) {
         if (file == null || id == null)
-            return;
+            return false;
         List<OutboxEnvelope> envs = readJsonlEnvelopes(file);
         if (envs.isEmpty())
-            return;
+            return false;
         List<OutboxEnvelope> keep = new ArrayList<>();
+        boolean found = false;
         for (OutboxEnvelope env : envs) {
-            if (env != null && id.equals(env.id))
+            if (env != null && id.equals(env.id)) {
+                found = true;
                 continue;
+            }
             keep.add(env);
         }
-        writeJsonl(file, keep);
+        return found && writeJsonl(file, keep);
+    }
+
+    private boolean removeFirstFromJsonlById(Path file, String id) {
+        if (file == null || id == null)
+            return false;
+        List<OutboxEnvelope> envs = readJsonlEnvelopes(file);
+        if (envs.isEmpty())
+            return false;
+        List<OutboxEnvelope> keep = new ArrayList<>();
+        boolean removed = false;
+        for (OutboxEnvelope env : envs) {
+            if (!removed && env != null && id.equals(env.id)) {
+                removed = true;
+                continue;
+            }
+            keep.add(env);
+        }
+        return removed && writeJsonl(file, keep);
+    }
+
+    private Optional<OutboxEnvelope> findJsonlById(Path file, String id) {
+        if (file == null || id == null)
+            return Optional.empty();
+        for (OutboxEnvelope env : readJsonlEnvelopes(file)) {
+            if (env != null && id.equals(env.id)) {
+                return Optional.of(env);
+            }
+        }
+        return Optional.empty();
     }
 
     private Optional<OutboxEnvelope> removeAndReturnFromJsonlById(Path file, String id) {
@@ -990,6 +1152,9 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
 
     private OutboxSweepResult sweepInternal() {
         long now = System.currentTimeMillis();
+        if (mode == StorageMode.JSONL) {
+            mergeJsonlIngress();
+        }
         long bytesBefore = totalBytesInternal();
 
         int removedExpired = 0;
@@ -1010,6 +1175,9 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
             removedByMaxBytes += enforceMaxBytesJsonl();
         }
 
+        if (mode == StorageMode.JSONL) {
+            mergeJsonlIngress();
+        }
         long bytesAfter = totalBytesInternal();
         lastSweepEpochMs.set(now);
         return new OutboxSweepResult(now, removedExpired, removedByMaxFiles, removedByMaxBytes, recoveredInflight,
@@ -1035,7 +1203,11 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
             }
             return bytes;
         }
-        return safeSize(jsonlPending) + safeSize(jsonlInflight) + safeSize(jsonlQuarantine);
+        return safeSize(jsonlPending)
+                + safeSize(jsonlInflight)
+                + safeSize(jsonlQuarantine)
+                + safeSize(jsonlIngress)
+                + safeSize(jsonlIngressDraining);
     }
 
     private boolean isExpired(OutboxEnvelope env, long nowEpochMs) {
@@ -1258,11 +1430,19 @@ public class FileDegradedStorage implements DegradedStorageWithAck {
         if (inflight.isEmpty())
             return 0;
 
+        int recovered = 0;
+        List<OutboxEnvelope> remainingInflight = new ArrayList<>();
         for (OutboxEnvelope env : inflight) {
-            appendJsonl(jsonlPending, env);
+            if (appendJsonl(jsonlPending, env)) {
+                recovered++;
+            } else {
+                remainingInflight.add(env);
+            }
         }
-        writeJsonl(jsonlInflight, List.of());
-        return inflight.size();
+        if (!writeJsonl(jsonlInflight, remainingInflight)) {
+            return 0;
+        }
+        return recovered;
     }
 
     private int removeExpiredJsonl(long now) {

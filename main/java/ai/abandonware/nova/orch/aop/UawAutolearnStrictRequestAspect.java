@@ -20,6 +20,7 @@ import org.springframework.core.env.Environment;
 
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 /**
  * 내부 자동학습(UAW) seed 프롬프트를 "증거/검증 우선" 경로로 강제합니다.
@@ -161,6 +162,9 @@ public class UawAutolearnStrictRequestAspect {
                         maxSources);
                 return result;
             } catch (Throwable t) {
+                if (mustPropagate(t)) {
+                    throw t;
+                }
                 if (isHardLlmFailure(t)) {
                     Throwable root = rootCause(t);
                     traceBlocked("hard-llm-failure:" + root.getClass().getSimpleName());
@@ -168,15 +172,16 @@ public class UawAutolearnStrictRequestAspect {
                             SafeRedactor.hashValue(messageOf(root)), messageLength(root));
                     return ChatResult.of("", "fallback:evidence:uaw-llm-unavailable", false, Set.of());
                 }
-                log.warn("[UAWStrict] strict path failed; falling back to ask(stripped): errorHash={} errorLength={}",
+                log.warn("[UAWStrict] strict path failed after workflow start; returning fail-closed result: errorHash={} errorLength={}",
                         SafeRedactor.hashValue(messageOf(t)), messageLength(t));
-                // SoT snapshot: clone args once, then proceed(args) exactly once.
-                if (args0 == null || args0.length < 1) {
-                    return pjp.proceed();
+                try {
+                    TraceStore.put("uaw.strict.failClosed", true);
+                    TraceStore.put("uaw.strict.failClosed.reason", "pipeline-failed");
+                } catch (Throwable ignore) {
+                    traceSuppressed("trace.pipelineFailure");
                 }
-                final Object[] args = args0.clone();
-                args[0] = stripped;
-                return pjp.proceed(args);
+                traceBlocked("pipeline-failed");
+                return ChatResult.of("", "fallback:evidence:uaw-pipeline-failed", false, Set.of());
             }
         } finally {
             // Restore prior guard context
@@ -252,6 +257,28 @@ public class UawAutolearnStrictRequestAspect {
                 || m.contains("connection refused")
                 || m.contains("connect timed out")
                 || m.contains("unknown host");
+    }
+
+    private static boolean mustPropagate(Throwable t) {
+        if (Thread.currentThread().isInterrupted()) {
+            return true;
+        }
+        Throwable current = t;
+        for (int i = 0; i < 12 && current != null; i++) {
+            if (current instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                return true;
+            }
+            if (current instanceof CancellationException || current instanceof Error) {
+                return true;
+            }
+            Throwable next = current.getCause();
+            if (next == null || next == current) {
+                break;
+            }
+            current = next;
+        }
+        return false;
     }
 
     private static Throwable rootCause(Throwable t) {

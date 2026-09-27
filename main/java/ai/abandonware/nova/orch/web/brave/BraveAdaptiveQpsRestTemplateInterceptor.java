@@ -621,6 +621,9 @@ private static long parseRetryAfterMs(String raw) {
                 if (sec <= 0L) {
                     return -1L;
                 }
+                if (sec > Long.MAX_VALUE / 1000L) {
+                    return Long.MAX_VALUE;
+                }
                 return sec * 1000L;
             } catch (NumberFormatException e) {
                 traceSuppressed("parseRetryAfterMs.delta", e);

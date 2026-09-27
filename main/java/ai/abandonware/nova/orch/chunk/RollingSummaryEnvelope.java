@@ -43,7 +43,7 @@ public record RollingSummaryEnvelope(String metaJson, String summary) {
         if (s == null) {
             return null;
         }
-        String out = s;
+        String out = s.stripLeading();
         if (!out.isEmpty() && out.charAt(0) == '\uFEFF') {
             out = out.substring(1);
         }

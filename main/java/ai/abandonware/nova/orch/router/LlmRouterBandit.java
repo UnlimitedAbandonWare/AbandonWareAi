@@ -2,19 +2,28 @@ package ai.abandonware.nova.orch.router;
 
 import ai.abandonware.nova.config.LlmRouterProperties;
 import ai.abandonware.nova.config.LlmRouterProperties.ModelConfig;
+import com.example.lms.infra.selection.SelectionCoordinate;
+import com.example.lms.infra.selection.SelectionDecisionLedger;
+import com.example.lms.infra.selection.SelectionEntropy;
+import com.example.lms.infra.selection.SelectionEntropyException;
+import com.example.lms.infra.selection.SelectionEntropyMode;
+import com.example.lms.infra.selection.SelectionEntropyReason;
 import com.example.lms.llm.gateway.LlmFailureClass;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.telemetry.MlaBreadcrumb;
 import com.example.lms.trace.SafeRedactor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -30,6 +39,11 @@ import java.util.concurrent.atomic.AtomicLong;
 public class LlmRouterBandit {
 
     private static final Logger log = LoggerFactory.getLogger(LlmRouterBandit.class);
+    private static final double UCB_TIE_EPSILON = 1.0e-12d;
+    private static final Comparator<Candidate> CANDIDATE_ORDER =
+            Comparator.comparing(LlmRouterBandit::normalizedModelKey)
+                    .thenComparing(LlmRouterBandit::normalizedProviderKey)
+                    .thenComparing(candidate -> normalizeKey(candidate.key()));
 
     public record Selected(String key, ModelConfig cfg) {
     }
@@ -43,7 +57,7 @@ public class LlmRouterBandit {
         }
     }
 
-    private static final class Arm {
+    static final class Arm {
         final AtomicLong pulls = new AtomicLong(0L);
         final AtomicLong successes = new AtomicLong(0L);
         final AtomicLong lastFailAt = new AtomicLong(0L);
@@ -68,7 +82,7 @@ public class LlmRouterBandit {
      * Picks an endpoint/model config for a requested logical model id.
      */
     public Selected pick(String requestedModelId) {
-        return pick(requestedModelId, RouteEligibilityFilter.always());
+        return pick(requestedModelId, RouteEligibilityFilter.always(), "route:primary", 0L);
     }
 
     /**
@@ -77,6 +91,22 @@ public class LlmRouterBandit {
      * out before validation.
      */
     public Selected pick(String requestedModelId, RouteEligibilityFilter eligibilityFilter) {
+        return pick(requestedModelId, eligibilityFilter, "route:primary", 0L);
+    }
+
+    public Selected pick(
+            String requestedModelId,
+            RouteEligibilityFilter eligibilityFilter,
+            String actorKey,
+            long attemptOrdinal) {
+        return pickResolved(requestedModelId, eligibilityFilter, actorKey, attemptOrdinal);
+    }
+
+    private Selected pickResolved(
+            String requestedModelId,
+            RouteEligibilityFilter eligibilityFilter,
+            String actorKey,
+            long attemptOrdinal) {
         if (props == null || !props.isEnabled()) {
             traceSkip("disabled");
             return null;
@@ -102,7 +132,11 @@ public class LlmRouterBandit {
             return null;
         }
 
-        return pickAuto(models, eligibilityFilter == null ? RouteEligibilityFilter.always() : eligibilityFilter);
+        return pickAuto(
+                models,
+                eligibilityFilter == null ? RouteEligibilityFilter.always() : eligibilityFilter,
+                actorKey,
+                attemptOrdinal);
     }
 
     /** Records success/failure for cooldown and bandit scoring. */
@@ -119,7 +153,8 @@ public class LlmRouterBandit {
         arm.pulls.incrementAndGet();
         if (success) {
             arm.successes.incrementAndGet();
-        } else if (failureClass != LlmFailureClass.CANCELLED_NEUTRAL) {
+        } else if (failureClass != LlmFailureClass.CANCELLED_NEUTRAL
+                && failureClass != LlmFailureClass.RESPONSE_MODEL_UNVERIFIED) {
             arm.lastFailAt.set(System.currentTimeMillis());
         }
         LlmFailureClass safeFailureClass = failureClass == null ? LlmFailureClass.UNKNOWN : failureClass;
@@ -137,7 +172,11 @@ public class LlmRouterBandit {
         }
     }
 
-    private Selected pickAuto(Map<String, ModelConfig> models, RouteEligibilityFilter eligibilityFilter) {
+    private Selected pickAuto(
+            Map<String, ModelConfig> models,
+            RouteEligibilityFilter eligibilityFilter,
+            String actorKey,
+            long attemptOrdinal) {
         try {
             final long now = System.currentTimeMillis();
             final long cooldownMs = Math.max(0L, props.getCooldownMs());
@@ -154,7 +193,7 @@ public class LlmRouterBandit {
                 if (key == null || key.isBlank() || cfg == null) {
                     continue;
                 }
-                if (!cfg.isEnabled() || cfg.getWeight() <= 0.0d) {
+                if (!cfg.isEnabled() || !hasValidWeight(cfg)) {
                     continue;
                 }
                 if (!eligibilityFilter.eligible(key, cfg)) {
@@ -167,6 +206,7 @@ public class LlmRouterBandit {
                 }
                 candidates.add(new Candidate(key, cfg, arm));
             }
+            candidates.sort(CANDIDATE_ORDER);
 
             // 2) If all are in cooldown, ignore cooldown and use weight>0.
             if (candidates.isEmpty()) {
@@ -179,7 +219,7 @@ public class LlmRouterBandit {
                     if (key == null || key.isBlank() || cfg == null) {
                         continue;
                     }
-                    if (!cfg.isEnabled() || cfg.getWeight() <= 0.0d) {
+                    if (!cfg.isEnabled() || !hasValidWeight(cfg)) {
                         continue;
                     }
                     if (!eligibilityFilter.eligible(key, cfg)) {
@@ -189,6 +229,7 @@ public class LlmRouterBandit {
                     Arm arm = arms.computeIfAbsent(key, k -> new Arm());
                     candidates.add(new Candidate(key, cfg, arm));
                 }
+                candidates.sort(CANDIDATE_ORDER);
             }
 
             if (candidates.isEmpty()) {
@@ -196,11 +237,21 @@ public class LlmRouterBandit {
                 return null;
             }
 
-            // 3) Exploration: any never-tried arm.
-            for (Candidate c : candidates) {
-                if (c.arm.pulls.get() == 0L) {
-                    return selected(c.key, c.cfg, "explore", 0.0d, "");
+            // 3) Exploration: the first canonical never-tried arm.
+            List<Candidate> untried = candidates.stream()
+                    .filter(candidate -> candidate.arm.pulls.get() == 0L)
+                    .toList();
+            if (!untried.isEmpty()) {
+                if (untried.size() > 1) {
+                    recordStableTie(
+                            "llm-router.cold-start-tie",
+                            actorKey,
+                            attemptOrdinal,
+                            untried,
+                            0);
                 }
+                Candidate first = untried.get(0);
+                return selected(first.key, first.cfg, "explore", 0.0d, "");
             }
 
             // 4) UCB1-ish score.
@@ -210,28 +261,42 @@ public class LlmRouterBandit {
             }
             double logTotal = Math.log(Math.max(1d, (double) totalPulls));
 
-            Candidate best = null;
-            double bestScore = Double.NEGATIVE_INFINITY;
-            long bestSampleCount = 0L;
-            double bestExplorationBonus = 0.0d;
-
+            List<ScoredCandidate> scored = new ArrayList<>();
             for (Candidate c : candidates) {
                 long n = Math.max(1L, c.arm.pulls.get());
                 double mean = c.arm.successes.get() / (double) n;
                 double bonus = Math.sqrt(2.0d * logTotal / (double) n);
                 double prior = clamp01(c.cfg.getWeight()) * 0.01d; // tiny tie-breaker
                 double score = mean + bonus + prior;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    best = c;
-                    bestSampleCount = n;
-                    bestExplorationBonus = bonus;
+                if (Double.isFinite(score)) {
+                    scored.add(new ScoredCandidate(c, score, n, bonus));
                 }
             }
 
-            if (best == null) {
-                return pickWeightedRandom(candidates);
+            if (scored.isEmpty()) {
+                return pickWeightedRandom(candidates, actorKey, attemptOrdinal);
+            }
+
+            double highestScore = scored.stream()
+                    .mapToDouble(ScoredCandidate::score)
+                    .max()
+                    .orElse(Double.NEGATIVE_INFINITY);
+            List<ScoredCandidate> exactTies = scored.stream()
+                    .filter(candidate -> Math.abs(candidate.score() - highestScore) <= UCB_TIE_EPSILON)
+                    .sorted(Comparator.comparing(ScoredCandidate::candidate, CANDIDATE_ORDER))
+                    .toList();
+            ScoredCandidate chosen = exactTies.get(0);
+            Candidate best = chosen.candidate();
+            double bestScore = chosen.score();
+            long bestSampleCount = chosen.sampleCount();
+            double bestExplorationBonus = chosen.explorationBonus();
+            if (exactTies.size() > 1) {
+                recordStableTie(
+                        "llm-router.ucb-tie",
+                        actorKey,
+                        attemptOrdinal,
+                        exactTies.stream().map(ScoredCandidate::candidate).toList(),
+                        0);
             }
 
             TraceStore.put("llm.router.arm", SafeRedactor.traceLabelOrFallback(best.key, "unknown"));
@@ -241,6 +306,15 @@ public class LlmRouterBandit {
             TraceStore.put("llm.router.arm.explorationBonus", bestExplorationBonus);
             TraceStore.put("llm.router.policy", "ucb1");
             return selected(best.key, best.cfg, "exploit", bestScore, "");
+        } catch (SelectionEntropyException ex) {
+            if (GuardContextHolder.getOrDefault().selectionEntropy().mode()
+                    == SelectionEntropyMode.REPLAY) {
+                throw ex;
+            }
+            traceSkip("pick_auto_error");
+            log.debug("[llmrouter] pickAuto fail-soft: errorHash={} errorLength={}",
+                    com.example.lms.trace.SafeRedactor.hashValue(messageOf(ex)), messageLength(ex));
+            return null;
         } catch (Exception ex) {
             traceSkip("pick_auto_error");
             log.debug("[llmrouter] pickAuto fail-soft: errorHash={} errorLength={}",
@@ -258,28 +332,136 @@ public class LlmRouterBandit {
         return msg == null ? 0 : msg.length();
     }
 
-    private Selected pickWeightedRandom(List<Candidate> candidates) {
+    Selected pickWeightedRandom(
+            List<Candidate> candidates,
+            String actorKey,
+            long attemptOrdinal) {
+        List<Candidate> canonicalCandidates = new ArrayList<>(candidates);
+        canonicalCandidates.sort(CANDIDATE_ORDER);
+        if (canonicalCandidates.isEmpty()) {
+            traceSkip("no_eligible_models");
+            return null;
+        }
+
+        GuardContext context = GuardContextHolder.getOrDefault();
+        SelectionEntropy entropy = context.selectionEntropy();
+        SelectionDecisionLedger ledger = context.selectionDecisionLedger();
+        SelectionCoordinate coordinate = new SelectionCoordinate(
+                "llm-router.weighted-exploration", actorKey, attemptOrdinal, 0L);
+        List<String> candidateKeys = canonicalCandidates.stream()
+                .map(LlmRouterBandit::ledgerKey)
+                .toList();
         double total = 0d;
-        for (Candidate c : candidates) {
+        for (Candidate c : canonicalCandidates) {
             total += Math.max(0d, c.cfg.getWeight());
         }
 
         if (total <= 0d) {
-            Candidate c = candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
+            ledger.record(
+                    SelectionDecisionLedger.Lane.ROUTER,
+                    coordinate,
+                    candidateKeys,
+                    0,
+                    "zero_weight_first_stable",
+                    false,
+                    false);
+            Candidate c = canonicalCandidates.get(0);
             return selected(c.key, c.cfg, "explore", 0.0d, "");
         }
-
-        double r = ThreadLocalRandom.current().nextDouble(total);
-        double acc = 0d;
-        for (Candidate c : candidates) {
-            acc += Math.max(0d, c.cfg.getWeight());
-            if (acc >= r) {
-                return selected(c.key, c.cfg, "explore", 0.0d, "");
-            }
+        if (!Double.isFinite(total)) {
+            throw new SelectionEntropyException(SelectionEntropyReason.DERIVATION_INVALID);
         }
 
-        Candidate last = candidates.get(candidates.size() - 1);
-        return selected(last.key, last.cfg, "explore", 0.0d, "");
+        double target = entropy.unitInterval(coordinate) * total;
+        int selectedIndex = weightedIndex(canonicalCandidates, target);
+        ledger.record(
+                SelectionDecisionLedger.Lane.ROUTER,
+                coordinate,
+                candidateKeys,
+                selectedIndex,
+                "",
+                true,
+                false);
+        Candidate chosen = canonicalCandidates.get(selectedIndex);
+        return selected(chosen.key, chosen.cfg, "explore", 0.0d, "");
+    }
+
+    List<Candidate> candidatesForTest() {
+        if (props == null || !props.isEnabled() || props.getModels() == null) {
+            return List.of();
+        }
+        List<Candidate> candidates = new ArrayList<>();
+        for (Map.Entry<String, ModelConfig> entry : props.getModels().entrySet()) {
+            if (entry == null) {
+                continue;
+            }
+            String key = entry.getKey();
+            ModelConfig cfg = entry.getValue();
+            if (key == null || key.isBlank() || cfg == null
+                    || !cfg.isEnabled() || !hasValidWeight(cfg)) {
+                continue;
+            }
+            candidates.add(new Candidate(key, cfg, arms.get(key)));
+        }
+        candidates.sort(CANDIDATE_ORDER);
+        return List.copyOf(candidates);
+    }
+
+    private static int weightedIndex(List<Candidate> candidates, double target) {
+        double acc = 0d;
+        for (int i = 0; i < candidates.size(); i++) {
+            Candidate c = candidates.get(i);
+            acc += Math.max(0d, c.cfg.getWeight());
+            if (acc >= target) {
+                return i;
+            }
+        }
+        return candidates.size() - 1;
+    }
+
+    private static void recordStableTie(
+            String decisionKey,
+            String actorKey,
+            long attemptOrdinal,
+            List<Candidate> candidates,
+            int selectedIndex) {
+        SelectionDecisionLedger ledger =
+                GuardContextHolder.getOrDefault().selectionDecisionLedger();
+        ledger.record(
+                SelectionDecisionLedger.Lane.ROUTER,
+                new SelectionCoordinate(decisionKey, actorKey, attemptOrdinal, 0L),
+                candidates.stream().map(LlmRouterBandit::ledgerKey).toList(),
+                selectedIndex,
+                "",
+                false,
+                true);
+    }
+
+    private static String ledgerKey(Candidate candidate) {
+        return normalizedModelKey(candidate) + '\0'
+                + normalizedProviderKey(candidate) + '\0'
+                + normalizeKey(candidate.key());
+    }
+
+    private static String normalizedModelKey(Candidate candidate) {
+        return normalizeKey(candidate == null || candidate.cfg() == null
+                ? null
+                : candidate.cfg().getName());
+    }
+
+    private static String normalizedProviderKey(Candidate candidate) {
+        return normalizeKey(candidate == null || candidate.cfg() == null
+                ? null
+                : candidate.cfg().getProvider());
+    }
+
+    private static String normalizeKey(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean hasValidWeight(ModelConfig cfg) {
+        double weight = cfg.getWeight();
+        return Double.isFinite(weight) && weight > 0.0d;
     }
 
     private static Selected selected(String key, ModelConfig cfg) {
@@ -346,6 +528,13 @@ public class LlmRouterBandit {
         return v;
     }
 
-    private record Candidate(String key, ModelConfig cfg, Arm arm) {
+    record Candidate(String key, ModelConfig cfg, Arm arm) {
+    }
+
+    private record ScoredCandidate(
+            Candidate candidate,
+            double score,
+            long sampleCount,
+            double explorationBonus) {
     }
 }

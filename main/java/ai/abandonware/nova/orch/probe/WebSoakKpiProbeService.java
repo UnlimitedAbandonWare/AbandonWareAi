@@ -338,10 +338,11 @@ public class WebSoakKpiProbeService {
         kpi.put("web.brave.skipped.reason", safeStr(TraceStore.get("web.brave.skipped.reason")));
         kpi.put("web.serpapi.skipped.reason", safeStr(TraceStore.get("web.serpapi.skipped.reason")));
         kpi.put("web.tavily.skipped.reason", safeStr(TraceStore.get("web.tavily.skipped.reason")));
-        putProviderTaxonomy(kpi, "web.naver");
-        putProviderTaxonomy(kpi, "web.brave");
-        putProviderTaxonomy(kpi, "web.serpapi");
-        putProviderTaxonomy(kpi, "web.tavily");
+        Map<String, Object> providerTrace = TraceStore.getAll();
+        putProviderTaxonomy(kpi, "web.naver", providerTrace);
+        putProviderTaxonomy(kpi, "web.brave", providerTrace);
+        putProviderTaxonomy(kpi, "web.serpapi", providerTrace);
+        putProviderTaxonomy(kpi, "web.tavily", providerTrace);
         Map<String, Object> provider = new LinkedHashMap<>();
         provider.put("brave", braveState);
         provider.put("naver", naverState);
@@ -452,21 +453,69 @@ public class WebSoakKpiProbeService {
         return ProviderStateNormalizer.state(explicit, skipped, cacheOnly);
     }
 
-    private static void putProviderTaxonomy(Map<String, Object> kpi, String prefix) {
-        kpi.put(prefix + ".providerDisabled", safeBoolean(TraceStore.get(prefix + ".providerDisabled")));
-        kpi.put(prefix + ".disabledReason", safeStr(TraceStore.get(prefix + ".disabledReason")));
-        kpi.put(prefix + ".failureReason", safeStr(TraceStore.get(prefix + ".failureReason")));
-        kpi.put(prefix + ".requestedCount", safeLong(TraceStore.get(prefix + ".requestedCount")));
-        kpi.put(prefix + ".returnedCount", safeLong(TraceStore.get(prefix + ".returnedCount")));
-        kpi.put(prefix + ".afterFilterCount", safeLong(TraceStore.get(prefix + ".afterFilterCount")));
-        kpi.put(prefix + ".providerEmpty", safeBoolean(TraceStore.get(prefix + ".providerEmpty")));
-        kpi.put(prefix + ".afterFilterStarved", safeBoolean(TraceStore.get(prefix + ".afterFilterStarved")));
-        kpi.put(prefix + ".timeout", safeBoolean(TraceStore.get(prefix + ".timeout")));
-        kpi.put(prefix + ".timeoutMs", safeLong(TraceStore.get(prefix + ".timeoutMs")));
-        kpi.put(prefix + ".rateLimited", safeBoolean(TraceStore.get(prefix + ".rateLimited")));
-        kpi.put(prefix + ".retryAfterMs", safeLong(TraceStore.get(prefix + ".retryAfterMs")));
-        kpi.put(prefix + ".cancelled", safeBoolean(TraceStore.get(prefix + ".cancelled")));
-        kpi.put(prefix + ".exceptionType", safeStr(TraceStore.get(prefix + ".exceptionType")));
+    private static void putProviderTaxonomy(
+            Map<String, Object> kpi,
+            String prefix,
+            Map<String, Object> trace) {
+        kpi.put(prefix + ".traceObserved", hasProviderTrace(trace, prefix));
+        kpi.put(prefix + ".providerDisabled", providerBoolean(trace, prefix + ".providerDisabled"));
+        kpi.put(prefix + ".disabledReason", providerString(trace, prefix + ".disabledReason"));
+        kpi.put(prefix + ".failureReason", providerString(trace, prefix + ".failureReason"));
+        kpi.put(prefix + ".requestedCount", providerLong(trace, prefix + ".requestedCount"));
+        kpi.put(prefix + ".returnedCount", providerLong(trace, prefix + ".returnedCount"));
+        kpi.put(prefix + ".afterFilterCount", providerLong(trace, prefix + ".afterFilterCount"));
+        kpi.put(prefix + ".providerEmpty", providerBoolean(trace, prefix + ".providerEmpty"));
+        kpi.put(prefix + ".afterFilterStarved", providerBoolean(trace, prefix + ".afterFilterStarved"));
+        kpi.put(prefix + ".timeout", providerBoolean(trace, prefix + ".timeout"));
+        kpi.put(prefix + ".timeoutMs", providerLong(trace, prefix + ".timeoutMs"));
+        kpi.put(prefix + ".rateLimited", providerBoolean(trace, prefix + ".rateLimited"));
+        kpi.put(prefix + ".retryAfterMs", providerLong(trace, prefix + ".retryAfterMs"));
+        kpi.put(prefix + ".cancelled", providerBoolean(trace, prefix + ".cancelled"));
+        kpi.put(prefix + ".exceptionType", providerString(trace, prefix + ".exceptionType"));
+    }
+
+    private static boolean hasProviderTrace(Map<String, Object> trace, String prefix) {
+        if (trace == null || prefix == null || prefix.isBlank()) {
+            return false;
+        }
+        String providerName = prefix.startsWith("web.") ? prefix.substring("web.".length()) : prefix;
+        if (trace.containsKey("provider." + providerName)) {
+            return true;
+        }
+        String namespace = prefix + ".";
+        for (String key : trace.keySet()) {
+            if (key != null && key.startsWith(namespace)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String providerString(Map<String, Object> trace, String key) {
+        Object value = trace == null ? null : trace.get(key);
+        if (value == null) {
+            return null;
+        }
+        String safeValue = safeStr(value);
+        return hasText(safeValue) ? safeValue : null;
+    }
+
+    private static Long providerLong(Map<String, Object> trace, String key) {
+        Object value = trace == null ? null : trace.get(key);
+        if (!(value instanceof Number)) {
+            return null;
+        }
+        try {
+            long parsed = new java.math.BigDecimal(value.toString()).longValueExact();
+            return parsed >= 0L ? parsed : null;
+        } catch (ArithmeticException | NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static Boolean providerBoolean(Map<String, Object> trace, String key) {
+        Object value = trace == null ? null : trace.get(key);
+        return value instanceof Boolean bool ? bool : null;
     }
 
     // =======================

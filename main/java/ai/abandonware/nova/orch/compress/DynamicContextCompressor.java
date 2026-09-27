@@ -45,6 +45,7 @@ public class DynamicContextCompressor {
 
     private static final Logger log = LoggerFactory.getLogger(DynamicContextCompressor.class);
     private static final String COMPOSER_VERSION = "ablation-spread-v2";
+    private static final double GOLDEN_RATIO_PHI = 0.618d;
 
     private final NovaOrchestrationProperties props;
     private final AnchorProbeHandler anchorProbeHandler;
@@ -61,7 +62,20 @@ public class DynamicContextCompressor {
     public record PromptContextComposition(
             List<Content> web,
             List<Content> rag,
-            CompositionDecision decision) {
+            CompositionDecision decision,
+            String contextRefinementSummary,
+            Map<String, Double> contextRefinementSignals) {
+
+        public PromptContextComposition(List<Content> web, List<Content> rag, CompositionDecision decision) {
+            this(web, rag, decision, "", Map.of());
+        }
+
+        public PromptContextComposition {
+            contextRefinementSummary = contextRefinementSummary == null ? "" : contextRefinementSummary.trim();
+            contextRefinementSignals = contextRefinementSignals == null
+                    ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(contextRefinementSignals));
+        }
     }
 
     public record CompositionDecision(
@@ -180,6 +194,24 @@ public class DynamicContextCompressor {
         }
     }
 
+    private record ContextRefinerDecision(
+            boolean enabled,
+            boolean activated,
+            String reason,
+            String disabledReason,
+            int candidateCount,
+            String selectedCandidate,
+            boolean providerDisabled,
+            boolean failSoft,
+            double contaminationScore,
+            double phi,
+            double boltzmannTemp,
+            Map<String, Double> signals) {
+    }
+
+    private record ContextRefinerGateDecision(boolean evidencePresent, boolean passed, String reason) {
+    }
+
     record ScoredContent(
             Content content,
             String bucket,
@@ -198,18 +230,20 @@ public class DynamicContextCompressor {
         int inputWebCount = sizeOf(webDocs);
         int inputRagCount = sizeOf(ragDocs);
         NovaOrchestrationProperties.RagCompressorProps cfg = props != null ? props.getRagCompressor() : null;
+        ContextRefinerDecision refinerDecision = contextRefinerDecision(cfg, TraceStore.getAll());
+        traceContextRefiner(refinerDecision);
         boolean enabled = cfg != null && cfg.isEnabled() && cfg.isAblationGuidedEnabled();
         if (!enabled) {
             CompositionDecision decision = decision(false, false, "disabled", 0.0d, "none", query,
                     inputWebCount, inputRagCount, inputWebCount, inputRagCount, Map.of(), false);
             tracePromptComposition(decision);
-            return new PromptContextComposition(webDocs, ragDocs, decision);
+            return promptComposition(webDocs, ragDocs, decision, refinerDecision);
         }
         if (inputWebCount + inputRagCount <= 0) {
             CompositionDecision decision = decision(true, false, "empty_input", 0.0d, "none", query,
                     inputWebCount, inputRagCount, inputWebCount, inputRagCount, Map.of(), false);
             tracePromptComposition(decision);
-            return new PromptContextComposition(webDocs, ragDocs, decision);
+            return promptComposition(webDocs, ragDocs, decision, refinerDecision);
         }
 
         try {
@@ -238,7 +272,7 @@ public class DynamicContextCompressor {
                 CompositionDecision decision = decision(true, false, "below_threshold", pressure, topFactor, query,
                         inputWebCount, inputRagCount, inputWebCount, inputRagCount, Map.of(), false);
                 tracePromptComposition(decision);
-                return new PromptContextComposition(webDocs, ragDocs, decision);
+                return promptComposition(webDocs, ragDocs, decision, refinerDecision);
             }
 
             String anchor = anchorFrom(query);
@@ -254,12 +288,12 @@ public class DynamicContextCompressor {
                     tracePromptComposition(decision);
                     tracePromptIneligibleProbe(cfg, inputWebCount + inputRagCount,
                             inputWebCount + inputRagCount, skippedPromptIneligible);
-                    return new PromptContextComposition(webDocs, ragDocs, decision);
+                    return promptComposition(webDocs, ragDocs, decision, refinerDecision);
                 }
                 CompositionDecision decision = decision(true, false, "no_valid_candidates", pressure, topFactor, query,
                         inputWebCount, inputRagCount, inputWebCount, inputRagCount, Map.of(), true);
                 tracePromptComposition(decision);
-                return new PromptContextComposition(webDocs, ragDocs, decision);
+                return promptComposition(webDocs, ragDocs, decision, refinerDecision);
             }
 
             DynamicGateResult dynamicGate = dynamicGateCandidates(scored, cfg);
@@ -270,7 +304,7 @@ public class DynamicContextCompressor {
                         pressure, topFactor, query, inputWebCount, inputRagCount, inputWebCount, inputRagCount,
                         Map.of("dynamicGateSuppressed", dynamicGate.suppressedCount()), true);
                 tracePromptComposition(decision);
-                return new PromptContextComposition(webDocs, ragDocs, decision);
+                return promptComposition(webDocs, ragDocs, decision, refinerDecision);
             }
 
             scored.sort(Comparator
@@ -311,7 +345,7 @@ public class DynamicContextCompressor {
                         query, inputWebCount, inputRagCount, inputWebCount, inputRagCount, Map.of(), true);
                 tracePromptComposition(decision);
                 anchorProbeHandler.trace(anchorProbe, query, total, 0);
-                return new PromptContextComposition(webDocs, ragDocs, decision);
+                return promptComposition(webDocs, ragDocs, decision, refinerDecision);
             }
 
             Map<String, Integer> dropCounts = new LinkedHashMap<>();
@@ -324,8 +358,8 @@ public class DynamicContextCompressor {
                     inputWebCount, inputRagCount, outWeb.size(), outRag.size(), dropCounts, false);
             tracePromptComposition(decision);
             anchorProbeHandler.trace(anchorProbe, query, total, selected.size());
-            return new PromptContextComposition(webDocs == null ? null : outWeb, ragDocs == null ? null : outRag,
-                    decision);
+            return promptComposition(webDocs == null ? null : outWeb, ragDocs == null ? null : outRag,
+                    decision, refinerDecision);
         } catch (Exception e) {
             CompositionDecision decision = decision(true, false, "exception_original_returned", 0.0d, "exception", query,
                     inputWebCount, inputRagCount, inputWebCount, inputRagCount, Map.of(), true);
@@ -333,7 +367,7 @@ public class DynamicContextCompressor {
             TraceStore.put("prompt.context.composer.exception", "prompt_context_composer_failed");
             log.debug("[DynamicContextCompressor] composeForPrompt fail-soft errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return new PromptContextComposition(webDocs, ragDocs, decision);
+            return promptComposition(webDocs, ragDocs, decision, refinerDecision);
         }
     }
 
@@ -881,6 +915,199 @@ public class DynamicContextCompressor {
         return Math.max(0.20d, Math.min(0.75d, t));
     }
 
+    private static ContextRefinerDecision contextRefinerDecision(
+            NovaOrchestrationProperties.RagCompressorProps cfg,
+            Map<String, Object> trace) {
+        boolean enabled = cfg != null && cfg.isContextRefinerEnabled();
+        Map<String, Double> signals = contextRefinerSignals(trace);
+        double contaminationScore = signals.getOrDefault("contextContamination", 0.0d);
+        double boltzmannTemp = boltzmannTemperature(trace);
+        if (!enabled) {
+            return new ContextRefinerDecision(false, false, "disabled", "", 0, "none",
+                    false, false, contaminationScore, GOLDEN_RATIO_PHI, boltzmannTemp, signals);
+        }
+        int candidateCount = contextRefinerCandidateCount(trace);
+        if (candidateCount <= 0) {
+            return new ContextRefinerDecision(true, false, "provider_disabled",
+                    contextRefinerDisabledReason(trace), 0, "none",
+                    true, true, contaminationScore, GOLDEN_RATIO_PHI, boltzmannTemp, signals);
+        }
+        boolean contaminated = contaminationScore >= 0.65d;
+        if (contaminated) {
+            return new ContextRefinerDecision(true, false, "contamination_risk", "",
+                    Math.min(candidateCount, 3), "none",
+                    false, true, contaminationScore, GOLDEN_RATIO_PHI, boltzmannTemp, signals);
+        }
+        ContextRefinerGateDecision gateDecision = contextRefinerGateDecision(trace);
+        if (!gateDecision.evidencePresent() || !gateDecision.passed()) {
+            return new ContextRefinerDecision(true, false, gateDecision.reason(), "",
+                    Math.min(candidateCount, 3), "none",
+                    false, true, contaminationScore, GOLDEN_RATIO_PHI, boltzmannTemp, signals);
+        }
+        return new ContextRefinerDecision(true, true, "selected", "",
+                Math.min(candidateCount, 3), "ensemble_trace_best",
+                false, false, contaminationScore, GOLDEN_RATIO_PHI, boltzmannTemp, signals);
+    }
+
+    private static String contextRefinerDisabledReason(Map<String, Object> trace) {
+        String raw = firstTraceLabel(trace,
+                "ensemble.refiner.disabledReason",
+                "ensemble.sampling.skipped",
+                "ensemble.bypass.reason",
+                "ensemble.judge.skipped",
+                "ensemble.judge.fail",
+                "openai.models.disabledReason",
+                "llm.disabledReason",
+                "model.disabledReason");
+        String reason = normalizeContextRefinerDisabledReason(raw);
+        return reason.isBlank() ? "model_unavailable" : reason;
+    }
+
+    private static String normalizeContextRefinerDisabledReason(String raw) {
+        String label = safeLabel(raw).toLowerCase(Locale.ROOT);
+        if (label.isBlank()) {
+            return "";
+        }
+        if ((label.contains("missing") && label.contains("key")) || label.contains("no_key")) {
+            return "missing_key";
+        }
+        if (label.contains("disabled")) {
+            return "provider_disabled";
+        }
+        if (label.contains("failed") || label.contains("fail")
+                || label.contains("blank") || label.contains("unavailable")
+                || label.contains("no_candidates")) {
+            return "model_unavailable";
+        }
+        return "provider_disabled";
+    }
+
+    private static ContextRefinerGateDecision contextRefinerGateDecision(Map<String, Object> trace) {
+        Boolean citationPassed = firstExplicitBoolean(trace,
+                "gate.citation.passed",
+                "citation.pass",
+                "citationPass",
+                "citation.gate.pass",
+                "rag.evidence.promotion.citationGateMinPassed",
+                "rag.evidence.promotion.citationGateSoftPassed");
+        Boolean finalGatePassed = contextRefinerFinalGatePassed(trace);
+        if (citationPassed == null || finalGatePassed == null) {
+            return new ContextRefinerGateDecision(false, false, "gate_evidence_missing");
+        }
+        if (!citationPassed) {
+            return new ContextRefinerGateDecision(true, false, "citation_gate_failed");
+        }
+        if (!finalGatePassed) {
+            return new ContextRefinerGateDecision(true, false, "final_gate_failed");
+        }
+        return new ContextRefinerGateDecision(true, true, "selected");
+    }
+
+    private static Boolean contextRefinerFinalGatePassed(Map<String, Object> trace) {
+        Boolean explicit = firstExplicitBoolean(trace,
+                "gate.sigmoid.passed",
+                "hypernova.finalGatePassed");
+        String result = firstTraceLabel(trace,
+                "gate.finalSigmoid.result",
+                "retrieval.finalSigmoidGate.result",
+                "finalSigmoidGate.result");
+        if (!result.isBlank()) {
+            return "PASS".equalsIgnoreCase(result);
+        }
+        return explicit;
+    }
+
+    private static Boolean firstExplicitBoolean(Map<String, Object> trace, String... keys) {
+        if (trace == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (key == null || !trace.containsKey(key)) {
+                continue;
+            }
+            Boolean value = explicitBoolean(trace.get(key));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String firstTraceLabel(Map<String, Object> trace, String... keys) {
+        if (trace == null || keys == null) {
+            return "";
+        }
+        for (String key : keys) {
+            if (key == null || !trace.containsKey(key)) {
+                continue;
+            }
+            String label = safeLabel(trace.get(key));
+            if (!label.isBlank()) {
+                return label;
+            }
+        }
+        return "";
+    }
+
+    private static int contextRefinerCandidateCount(Map<String, Object> trace) {
+        double count = maxDouble(trace,
+                "ensemble.refiner.candidateCount",
+                "ensemble.candidates.count",
+                "ensemble.judge.candidates.count");
+        return (int) Math.max(0L, Math.round(count));
+    }
+
+    private static double contextRefinerContaminationScore(Map<String, Object> trace) {
+        return clamp01(maxDouble(trace,
+                "contextContamination",
+                "context.contamination",
+                "learning.validation.contaminationScore",
+                "prompt.memory.compressor.contaminationScore"));
+    }
+
+    private static Map<String, Double> contextRefinerSignals(Map<String, Object> trace) {
+        Map<String, Double> out = new LinkedHashMap<>();
+        out.put("needleKeptRatio", clamp01(maxDouble(trace, "needle.keptRatio")));
+        out.put("tailSignal", clamp01(maxDouble(trace, "tailSignal", "hypernova.tailSignal",
+                "selfask.laneGate.tailSignal")));
+        out.put("contextContamination", contextRefinerContaminationScore(trace));
+        out.put("afterFilterStarvation", starvationFlag(trace)
+                ? 1.0d
+                : clamp01(maxDouble(trace, "afterFilterStarvation", "rag.eval.afterFilterStarvation")));
+        out.put("cfvmBoltzmannWeight", clamp01(maxDouble(trace, "cfvm.boltzmannWeight",
+                "cfvm.failureRecovery.boltzmannWeight", "failurePattern.memory.boltzmann.weight")));
+        out.put("hypernovaCvarPhi", clamp01(maxDouble(trace, "hypernova.cvarPhi")));
+        return Collections.unmodifiableMap(out);
+    }
+
+    private static PromptContextComposition promptComposition(
+            List<Content> webDocs,
+            List<Content> ragDocs,
+            CompositionDecision decision,
+            ContextRefinerDecision refinerDecision) {
+        return new PromptContextComposition(
+                webDocs,
+                ragDocs,
+                decision,
+                contextRefinementSummary(refinerDecision),
+                roundedSignalMap(refinerDecision == null ? null : refinerDecision.signals()));
+    }
+
+    private static String contextRefinementSummary(ContextRefinerDecision decision) {
+        if (decision == null || !decision.enabled()) {
+            return "";
+        }
+        return "reason=" + safeLabel(decision.reason())
+                + ",disabledReason=" + safeLabel(decision.disabledReason())
+                + ",candidates=" + Math.max(0, decision.candidateCount())
+                + ",selected=" + safeLabel(decision.selectedCandidate())
+                + ",providerDisabled=" + decision.providerDisabled()
+                + ",failSoft=" + decision.failSoft()
+                + ",contamination=" + round4(decision.contaminationScore())
+                + ",phi=" + round4(decision.phi())
+                + ",boltzmannTemp=" + round4(decision.boltzmannTemp());
+    }
+
     private static double promptOverflowRatio(List<Content> webDocs, List<Content> ragDocs, int targetChars) {
         int target = Math.max(1, targetChars);
         int chars = totalChars(webDocs) + totalChars(ragDocs);
@@ -1189,6 +1416,39 @@ public class DynamicContextCompressor {
         } catch (Throwable ignored) {
             traceSkipped("dynamicCompressor.promptContextEvent", ignored);
         }
+    }
+
+    private static void traceContextRefiner(ContextRefinerDecision decision) {
+        if (decision == null) {
+            return;
+        }
+        try {
+            TraceStore.put("prompt.context.refiner.enabled", decision.enabled());
+            TraceStore.put("prompt.context.refiner.activated", decision.activated());
+            TraceStore.put("prompt.context.refiner.reason", safeLabel(decision.reason()));
+            TraceStore.put("prompt.context.refiner.disabledReason", safeLabel(decision.disabledReason()));
+            TraceStore.put("prompt.context.refiner.candidateCount", Math.max(0, decision.candidateCount()));
+            TraceStore.put("prompt.context.refiner.selectedCandidate", safeLabel(decision.selectedCandidate()));
+            TraceStore.put("prompt.context.refiner.providerDisabled", decision.providerDisabled());
+            TraceStore.put("prompt.context.refiner.failSoft", decision.failSoft());
+            TraceStore.put("prompt.context.refiner.contaminationScore", round4(decision.contaminationScore()));
+            TraceStore.put("prompt.context.refiner.phi", round4(decision.phi()));
+            TraceStore.put("prompt.context.refiner.boltzmannTemp", round4(decision.boltzmannTemp()));
+            TraceStore.put("prompt.context.refiner.signals", roundedSignalMap(decision.signals()));
+        } catch (Throwable ignored) {
+            traceSkipped("dynamicCompressor.contextRefinerTrace", ignored);
+        }
+    }
+
+    private static Map<String, Double> roundedSignalMap(Map<String, Double> signals) {
+        if (signals == null || signals.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Double> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Double> entry : signals.entrySet()) {
+            out.put(safeLabel(entry.getKey()), round4(entry.getValue() == null ? 0.0d : entry.getValue()));
+        }
+        return Collections.unmodifiableMap(out);
     }
 
     private static void tracePromptIneligibleProbe(

@@ -763,6 +763,12 @@ public class WebSoakKpiProbeController {
 
     const rows = [];
     function add(k, v){ rows.push('<tr><th class="mono">' + esc(k) + '</th><td class="mono">' + esc(v) + '</td></tr>'); }
+    function providerMetric(p, metric){
+      const prefix = 'web.' + p;
+      const value = kpi[prefix + '.' + metric];
+      if (!truthy(kpi[prefix + '.traceObserved'])) return 'unknown';
+      return value === undefined || value === null || value === '' ? 'unknown' : value;
+    }
     add('stageCountsSelectedFromOut', JSON.stringify(kpi.stageCountsSelectedFromOut || ''));
     add('cacheOnly.merged.count', kpi['cacheOnly.merged.count'] || 0);
     add('tracePool.size', kpi['tracePool.size'] || 0);
@@ -775,54 +781,13 @@ public class WebSoakKpiProbeController {
     add('web.brave.skipped.reason', kpi['web.brave.skipped.reason'] || '');
     add('web.serpapi.skipped.reason', kpi['web.serpapi.skipped.reason'] || '');
     add('web.tavily.skipped.reason', kpi['web.tavily.skipped.reason'] || '');
-    add('web.naver.failureReason', kpi['web.naver.failureReason'] || '');
-    add('web.naver.requestedCount', kpi['web.naver.requestedCount'] || 0);
-    add('web.naver.returnedCount', kpi['web.naver.returnedCount'] || 0);
-    add('web.naver.afterFilterCount', kpi['web.naver.afterFilterCount'] || 0);
-    add('web.naver.providerEmpty', kpi['web.naver.providerEmpty'] || false);
-    add('web.naver.afterFilterStarved', kpi['web.naver.afterFilterStarved'] || false);
-    add('web.naver.timeout', kpi['web.naver.timeout'] || false);
-    add('web.naver.timeoutMs', kpi['web.naver.timeoutMs'] || 0);
-    add('web.naver.rateLimited', kpi['web.naver.rateLimited'] || false);
-    add('web.naver.retryAfterMs', kpi['web.naver.retryAfterMs'] || 0);
-    add('web.naver.cancelled', kpi['web.naver.cancelled'] || false);
-    add('web.naver.exceptionType', kpi['web.naver.exceptionType'] || '');
-    add('web.brave.failureReason', kpi['web.brave.failureReason'] || '');
-    add('web.brave.requestedCount', kpi['web.brave.requestedCount'] || 0);
-    add('web.brave.returnedCount', kpi['web.brave.returnedCount'] || 0);
-    add('web.brave.afterFilterCount', kpi['web.brave.afterFilterCount'] || 0);
-    add('web.brave.providerEmpty', kpi['web.brave.providerEmpty'] || false);
-    add('web.brave.afterFilterStarved', kpi['web.brave.afterFilterStarved'] || false);
-    add('web.brave.timeout', kpi['web.brave.timeout'] || false);
-    add('web.brave.timeoutMs', kpi['web.brave.timeoutMs'] || 0);
-    add('web.brave.rateLimited', kpi['web.brave.rateLimited'] || false);
-    add('web.brave.retryAfterMs', kpi['web.brave.retryAfterMs'] || 0);
-    add('web.brave.cancelled', kpi['web.brave.cancelled'] || false);
-    add('web.brave.exceptionType', kpi['web.brave.exceptionType'] || '');
-    add('web.serpapi.failureReason', kpi['web.serpapi.failureReason'] || '');
-    add('web.serpapi.requestedCount', kpi['web.serpapi.requestedCount'] || 0);
-    add('web.serpapi.returnedCount', kpi['web.serpapi.returnedCount'] || 0);
-    add('web.serpapi.afterFilterCount', kpi['web.serpapi.afterFilterCount'] || 0);
-    add('web.serpapi.providerEmpty', kpi['web.serpapi.providerEmpty'] || false);
-    add('web.serpapi.afterFilterStarved', kpi['web.serpapi.afterFilterStarved'] || false);
-    add('web.serpapi.timeout', kpi['web.serpapi.timeout'] || false);
-    add('web.serpapi.timeoutMs', kpi['web.serpapi.timeoutMs'] || 0);
-    add('web.serpapi.rateLimited', kpi['web.serpapi.rateLimited'] || false);
-    add('web.serpapi.retryAfterMs', kpi['web.serpapi.retryAfterMs'] || 0);
-    add('web.serpapi.cancelled', kpi['web.serpapi.cancelled'] || false);
-    add('web.serpapi.exceptionType', kpi['web.serpapi.exceptionType'] || '');
-    add('web.tavily.failureReason', kpi['web.tavily.failureReason'] || '');
-    add('web.tavily.requestedCount', kpi['web.tavily.requestedCount'] || 0);
-    add('web.tavily.returnedCount', kpi['web.tavily.returnedCount'] || 0);
-    add('web.tavily.afterFilterCount', kpi['web.tavily.afterFilterCount'] || 0);
-    add('web.tavily.providerEmpty', kpi['web.tavily.providerEmpty'] || false);
-    add('web.tavily.afterFilterStarved', kpi['web.tavily.afterFilterStarved'] || false);
-    add('web.tavily.timeout', kpi['web.tavily.timeout'] || false);
-    add('web.tavily.timeoutMs', kpi['web.tavily.timeoutMs'] || 0);
-    add('web.tavily.rateLimited', kpi['web.tavily.rateLimited'] || false);
-    add('web.tavily.retryAfterMs', kpi['web.tavily.retryAfterMs'] || 0);
-    add('web.tavily.cancelled', kpi['web.tavily.cancelled'] || false);
-    add('web.tavily.exceptionType', kpi['web.tavily.exceptionType'] || '');
+    ['naver','brave','serpapi','tavily'].forEach(function(p){
+      const prefix = 'web.' + p;
+      add(prefix + '.traceObserved', truthy(kpi[prefix + '.traceObserved']));
+      ['failureReason','requestedCount','returnedCount','afterFilterCount','providerEmpty',
+       'afterFilterStarved','timeout','timeoutMs','rateLimited','retryAfterMs','cancelled','exceptionType']
+        .forEach(function(metric){ add(prefix + '.' + metric, providerMetric(p, metric)); });
+    });
     add('vectorFallback.used', kpi['vectorFallback.used'] || false);
     add('vectorFallback.reason', kpi['vectorFallback.reason'] || '');
     add('vectorFallback.effectiveTopK', kpi['vectorFallback.effectiveTopK'] || 0);

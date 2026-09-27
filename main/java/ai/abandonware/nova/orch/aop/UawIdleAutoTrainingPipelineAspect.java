@@ -290,14 +290,15 @@ public class UawIdleAutoTrainingPipelineAspect {
                     log.error("[UAWPipeline] hard LLM failure; skip. root={}", summarize(rootCause(t)));
                     return ChatResult.of("", "fallback:evidence:uaw-llm-unavailable", false, Set.of());
                 }
-                log.warn("[UAWPipeline] pipeline failed; falling back to ask(stripped). root={}", summarize(rootCause(t)));
-                // SoT snapshot: clone args once, then proceed(args) exactly once.
-                if (args0 == null || args0.length < 1) {
-                    return pjp.proceed();
+                log.warn("[UAWPipeline] pipeline failed after workflow start; returning fail-closed result. root={}",
+                        summarize(rootCause(t)));
+                try {
+                    TraceStore.put("uaw.pipeline.failClosed", true);
+                    TraceStore.put("uaw.pipeline.failClosed.reason", "pipeline-failed");
+                } catch (Throwable ignore) {
+                    traceSuppressed("trace.pipelineFailure");
                 }
-                final Object[] args = args0.clone();
-                args[0] = q;
-                return pjp.proceed(args);
+                return ChatResult.of("", "fallback:evidence:uaw-pipeline-failed", false, Set.of());
             }
         } finally {
             try {

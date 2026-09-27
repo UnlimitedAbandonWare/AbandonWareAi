@@ -106,7 +106,7 @@ public final class MlaOtelBridge {
         putLong(attrs, "rag.selected_count", map.get("selectedCount"));
         putLong(attrs, "rag.promoted_count", map.get("promotedCount"));
         putLong(attrs, "rag.stage_ms", map.get("stageMs"));
-        putLong(attrs, "rag.source_diversity", map.get("sourceDiversity"));
+        putDouble(attrs, "rag.source_diversity", map.get("sourceDiversity"));
     }
 
     private static String spanName(Map<String, Object> event) {
@@ -223,7 +223,14 @@ public final class MlaOtelBridge {
         }
         try {
             String s = String.valueOf(value).trim();
-            return s.isBlank() ? null : Double.parseDouble(s);
+            if (s.isBlank()) {
+                return null;
+            }
+            double numeric = Double.parseDouble(s);
+            if (!Double.isFinite(numeric)) {
+                throw new NumberFormatException("non-finite number");
+            }
+            return numeric;
         } catch (NumberFormatException e) {
             traceSuppressed("doubleValue", e);
             return null;

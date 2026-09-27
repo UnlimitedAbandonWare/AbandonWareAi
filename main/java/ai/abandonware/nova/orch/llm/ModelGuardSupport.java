@@ -3,6 +3,7 @@ package ai.abandonware.nova.orch.llm;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.net.URI;
 
 import com.example.lms.llm.ModelCapabilities;
 import com.example.lms.trace.SafeRedactor;
@@ -39,7 +40,8 @@ public final class ModelGuardSupport {
                 continue;
             }
             String pp = p.trim().toLowerCase(Locale.ROOT);
-            if (normalizedCanon.equals(pp) || normalizedCanon.startsWith(pp + "-")) {
+            // API exclusivity does not extend to unverified variants or snapshots.
+            if (normalizedCanon.equals(pp)) {
                 return true;
             }
         }
@@ -50,10 +52,15 @@ public final class ModelGuardSupport {
         if (baseUrl == null) {
             return false;
         }
-        String lc = baseUrl.toLowerCase();
-        // Accept both https://api.openai.com and potential enterprise base hosts
-        // containing openai.com
-        return lc.contains("api.openai.com") || (lc.contains("openai.com") && lc.contains("/v1"));
+        try {
+            URI uri = URI.create(baseUrl.trim());
+            return "https".equalsIgnoreCase(uri.getScheme())
+                    && "api.openai.com".equalsIgnoreCase(uri.getHost())
+                    && uri.getRawUserInfo() == null
+                    && (uri.getPort() == -1 || uri.getPort() == 443);
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
     }
 
     public static String buildExpectedFailureMessage(String requestedModel, String endpoint, String mode) {

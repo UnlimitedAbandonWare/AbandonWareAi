@@ -2,7 +2,11 @@ package ai.abandonware.nova.orch.llm;
 
 import java.util.List;
 import java.util.Set;
+import java.util.Objects;
 
+import com.example.lms.llm.ModelRuntimeHealthTracker;
+import com.example.lms.llm.NamedChatModel;
+import com.example.lms.llm.gateway.LlmGatewayException;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -16,25 +20,62 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 
 /**
- * A ChatModel that always returns a precomputed assistant message.
+ * A local expected-failure message or an explicit terminal route rejection.
  *
  * <p>Used to keep UX non-blank in "expected failure" scenarios.</p>
  */
-public final class ExpectedFailureChatModel implements ChatModel, StreamingChatModel {
+public final class ExpectedFailureChatModel implements NamedChatModel, StreamingChatModel {
 
     private final String message;
     private final String nameForDebug;
+    private final ModelRuntimeHealthTracker.ExpectedFailureAttemptEvidence attemptEvidence;
+    private final LlmGatewayException terminalFailure;
 
     public ExpectedFailureChatModel(String message, String nameForDebug) {
+        this(message, nameForDebug, null);
+    }
+
+    public ExpectedFailureChatModel(
+            String message,
+            String nameForDebug,
+            ModelRuntimeHealthTracker.ExpectedFailureAttemptEvidence attemptEvidence) {
+        this(message, nameForDebug, attemptEvidence, null);
+    }
+
+    private ExpectedFailureChatModel(
+            String message,
+            String nameForDebug,
+            ModelRuntimeHealthTracker.ExpectedFailureAttemptEvidence attemptEvidence,
+            LlmGatewayException terminalFailure) {
         this.message = (message == null) ? "" : message;
         this.nameForDebug = (nameForDebug == null) ? "" : nameForDebug;
+        this.attemptEvidence = attemptEvidence;
+        this.terminalFailure = terminalFailure;
+    }
+
+    public static ExpectedFailureChatModel forRouteFailure(String nameForDebug, LlmGatewayException failure) {
+        return new ExpectedFailureChatModel("", nameForDebug, null, Objects.requireNonNull(failure));
     }
 
     @Override
     public ChatResponse chat(List<ChatMessage> messages) {
+        if (terminalFailure != null) {
+            throw terminalFailure;
+        }
+        if (attemptEvidence != null) {
+            attemptEvidence.record(messages, message);
+        }
         return ChatResponse.builder()
                 .aiMessage(AiMessage.from(message))
                 .build();
+    }
+
+    @Override
+    public ChatResponse doChat(ChatRequest request) {
+        if (terminalFailure != null) {
+            throw terminalFailure;
+        }
+        return chat(request.messages());
     }
 
     @Override
@@ -73,12 +114,22 @@ public final class ExpectedFailureChatModel implements ChatModel, StreamingChatM
     }
 
     @Override
+    public String resolvedModelName() {
+        // 라우팅/브레이커 식별은 디버그 이름(빈/경로 ID)으로 분리한다.
+        return nameForDebug;
+    }
+
+    @Override
     public String toString() {
         return "ExpectedFailureChatModel(" + nameForDebug + ")";
     }
 
     private void completeStreaming(StreamingChatResponseHandler handler) {
         if (handler == null) {
+            return;
+        }
+        if (terminalFailure != null) {
+            handler.onError(terminalFailure);
             return;
         }
         ChatResponse response = chat(List.of());

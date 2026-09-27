@@ -131,6 +131,12 @@ public class SettingsControllerSecretMaskAspect {
                 || k.contains("secret")
                 || k.contains("token")
                 || k.contains("password")
+                || k.contains("access_key")
+                || k.contains("access-key")
+                || k.contains("accesskey")
+                || k.contains("private_key")
+                || k.contains("private-key")
+                || k.contains("privatekey")
                 || k.contains("bearer")
                 || k.contains("gemini")
                 || k.contains("openai")
@@ -154,7 +160,33 @@ public class SettingsControllerSecretMaskAspect {
                 || t.startsWith("sk-")
                 || lower.startsWith("sb_secret_")
                 || lower.startsWith("sb_publishable_")
-                || t.startsWith("Bearer ");
+                || t.startsWith("Bearer ")
+                || hasUriUserInfo(lower)
+                || (lower.contains("-----begin ") && lower.contains("private key-----"));
+    }
+
+    private static boolean hasUriUserInfo(String value) {
+        int schemeEnd = value.indexOf("://");
+        if (schemeEnd <= 0) {
+            return false;
+        }
+        int authorityStart = schemeEnd + 3;
+        int authorityEnd = value.length();
+        int slash = value.indexOf('/', authorityStart);
+        int query = value.indexOf('?', authorityStart);
+        int fragment = value.indexOf('#', authorityStart);
+        if (slash >= 0) {
+            authorityEnd = Math.min(authorityEnd, slash);
+        }
+        if (query >= 0) {
+            authorityEnd = Math.min(authorityEnd, query);
+        }
+        if (fragment >= 0) {
+            authorityEnd = Math.min(authorityEnd, fragment);
+        }
+        int colon = value.indexOf(':', authorityStart);
+        int at = value.indexOf('@', authorityStart);
+        return colon > authorityStart && colon < at && at < authorityEnd;
     }
 
     private static String maskValue(String v) {

@@ -10,10 +10,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -278,16 +282,22 @@ public class FailurePatternMemoryService {
         if (!Files.exists(memoryPath)) {
             return List.of();
         }
-        List<String> lines;
-        try {
-            lines = Files.readAllLines(memoryPath, StandardCharsets.UTF_8);
+        ArrayDeque<String> tail = new ArrayDeque<>(MAX_MEMORY_LINES);
+        try (FileChannel channel = FileChannel.open(memoryPath, java.nio.file.StandardOpenOption.READ);
+             BufferedReader reader = memoryTailReader(channel)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (tail.size() == MAX_MEMORY_LINES) {
+                    tail.removeFirst();
+                }
+                tail.addLast(line);
+            }
         } catch (IOException ex) {
             FailurePatternTrace.traceSkipped("failurePatternMemory.readRows", ex);
             return List.of();
         }
-        int start = Math.max(0, lines.size() - MAX_MEMORY_LINES);
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (String line : lines.subList(start, lines.size())) {
+        List<Map<String, Object>> rows = new ArrayList<>(tail.size());
+        for (String line : tail) {
             if (line == null || line.isBlank()) {
                 continue;
             }
@@ -298,6 +308,42 @@ public class FailurePatternMemoryService {
             }
         }
         return rows;
+    }
+
+    private static BufferedReader memoryTailReader(FileChannel channel) throws IOException {
+        long end = channel.size();
+        long position = end;
+        long start = 0;
+        int nextByte = -1;
+        int lineBoundaries = 0;
+        ByteBuffer block = ByteBuffer.allocate(8_192);
+        // Scan physical line boundaries, including blanks, before decoding UTF-8.
+        // Ignore the terminal separator; CRLF is one boundary even across blocks.
+        scan:
+        while (position > 0) {
+            int length = (int) Math.min(block.capacity(), position);
+            position -= length;
+            channel.position(position);
+            block.clear().limit(length);
+            while (block.hasRemaining()) {
+                if (channel.read(block) <= 0) {
+                    throw new IOException("memory_tail_read_incomplete");
+                }
+            }
+            for (int i = length - 1; i >= 0; i--) {
+                int value = block.get(i) & 0xff;
+                long after = position + i + 1;
+                boolean boundary = value == '\n' || (value == '\r' && nextByte != '\n');
+                if (boundary && after < end && ++lineBoundaries == MAX_MEMORY_LINES) {
+                    start = after;
+                    break scan;
+                }
+                nextByte = value;
+            }
+        }
+        channel.position(start);
+        // The selected suffix retains strict decoding; discarded prefixes are not decoded.
+        return new BufferedReader(Channels.newReader(channel, StandardCharsets.UTF_8.newDecoder(), -1));
     }
 
     private static int score(String kind, String source, String failureClass, String hotspot,

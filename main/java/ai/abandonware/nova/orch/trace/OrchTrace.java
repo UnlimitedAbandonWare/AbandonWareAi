@@ -104,6 +104,7 @@ public final class OrchTrace {
         ev.put("traceId", hashOrEmpty(traceId));
         ev.put("sessionId", hashOrEmpty(sid));
         ev.put("requestId", hashOrEmpty(requestId));
+        ev.putAll(TraceStore.searchCorrelation(TraceStore.context()));
         ev.put("input", sanitizeMap("input", input));
         ev.put("output", sanitizeMap("output", output));
         Map<String, Object> safeFailure = sanitizeMap("failure", failure);
@@ -196,6 +197,7 @@ public final class OrchTrace {
                     || key.equals("planId")
                     || key.equals("mode");
             case "output" -> key.equals("returnedCount")
+                    || key.equals("naverRetainedCount")
                     || key.equals("afterFilterCount")
                     || key.equals("selectedCount")
                     || key.equals("promotedCount")

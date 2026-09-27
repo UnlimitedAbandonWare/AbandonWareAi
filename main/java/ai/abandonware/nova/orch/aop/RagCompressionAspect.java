@@ -64,7 +64,8 @@ public class RagCompressionAspect {
         this.overdriveNarrower = overdriveNarrower;
     }
 
-    @Around("execution(java.util.List<dev.langchain4j.rag.content.Content> com.example.lms.service.rag..*.retrieve(..))")
+    @Around("execution(java.util.List<dev.langchain4j.rag.content.Content> com.example.lms.service.rag..*.retrieve(..))"
+            + " || execution(java.util.List<dev.langchain4j.rag.content.Content> com.example.lms.service.rag.HybridRetriever.retrieveAll(java.util.List, int, java.lang.Object, java.util.Map))")
     public Object aroundRetrieve(ProceedingJoinPoint pjp) throws Throwable {
         Object out = pjp.proceed();
         if (!(out instanceof List<?> rawList)) {
