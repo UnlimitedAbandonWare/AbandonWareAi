@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Adaptive Verifier Escalation"
+  short_description: "Calibrate worker failures and bounded verifier escalation"
+  default_prompt: "Use $demo1-adaptive-verifier-escalation to detect a stalled worker, run one bounded probe, and calibrate any verifier escalation."

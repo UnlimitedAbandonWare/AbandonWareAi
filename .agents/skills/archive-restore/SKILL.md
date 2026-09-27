@@ -1,6 +1,6 @@
 ---
 name: archive.restore
-description: Use when restoring files from an archive root through the demo-1 MCP control tower with mode=restore, glob, target_dir, audit_log, verify_log, pre-review, post-restore checksum, and redacted audit rows.
+description: Use when restoring files from an archive root through the demo-1 MCP control tower
 ---
 
 # Archive Restore

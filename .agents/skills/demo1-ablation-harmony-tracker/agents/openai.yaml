@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Ablation Harmony Tracker"
+  short_description: "Route ablation harmony audits into directives"
+  default_prompt: "Use $demo1-ablation-harmony-tracker to turn source-backed ablation findings into a Safe Patch directive."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 - Agent Change Plane"
+  short_description: "ChangeIntent board over the source-edit lease: propose, admit (delegates to begin), renew, one release request per conflict fingerprint - never force-release"
+  default_prompt: "Use $demo1-agent-change-plane before parallel-session source writes: scripts/agent_change_plane.py propose -> admit -> renew -> seal/end; blocked targets get one request-release per fingerprint, disjoint paths proceed."

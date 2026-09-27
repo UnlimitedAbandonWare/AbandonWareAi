@@ -1,6 +1,6 @@
 ---
 name: context-purity-vector-memory
-description: Normalize cleanup metrics, remove generated legacy duplicate contamination, and preserve only canonical Dynamic RAG Orchestration Platform memory for vector DB ingestion.
+description: Normalize cleanup metrics, remove generated legacy duplicate contamination
 license: project-internal
 metadata:
   version: "1.0.0"

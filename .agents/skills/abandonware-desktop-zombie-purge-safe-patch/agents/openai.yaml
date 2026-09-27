@@ -1,0 +1,6 @@
+interface:
+  display_name: "AbandonWare Desktop Zombie Purge"
+  short_description: "Safe Desktop audits for zombie-code cleanup and PatchDrop proof."
+  default_prompt: "Use $abandonware-desktop-zombie-purge-safe-patch to audit zombie purge candidates before editing the Desktop canonical root."
+policy:
+  allow_implicit_invocation: true

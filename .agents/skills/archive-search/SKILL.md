@@ -1,6 +1,6 @@
 ---
 name: archive.search
-description: Use when searching BackupsXS/index.jsonl through the demo-1 MCP control tower with q, filters, top_k, two-pass expansion, and evidence_needed on zero results.
+description: Use when searching BackupsXS/index.jsonl through the demo-1 MCP control tower
 ---
 
 # Archive Search
