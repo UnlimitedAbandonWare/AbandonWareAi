@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -84,6 +85,53 @@ class FileIngestionServiceOfficeTest {
         assertNotNull(text);
         assertTrue(text.length() < 51_000);
         assertTrue(text.endsWith("[TRUNCATED]"));
+    }
+
+    @Test
+    void textExtractionTruncationDoesNotSplitSupplementaryCharacters() {
+        String marker = "\n[TRUNCATED]";
+        String emoji = "\uD83D\uDE00";
+        String splitBoundary = service.extractText(
+                "split.txt",
+                "text/plain",
+                ("A".repeat(49_999) + emoji + "Z").getBytes(StandardCharsets.UTF_8));
+        String completePairBoundary = service.extractText(
+                "complete.txt",
+                "text/plain",
+                ("A".repeat(49_998) + emoji + "Z").getBytes(StandardCharsets.UTF_8));
+        String bmpBoundary = service.extractText(
+                "bmp.txt",
+                "text/plain",
+                ("A".repeat(50_000) + "Z").getBytes(StandardCharsets.UTF_8));
+        String exactBoundary = service.extractText(
+                "exact.txt",
+                "text/plain",
+                "A".repeat(50_000).getBytes(StandardCharsets.UTF_8));
+        String shortSupplementary = service.extractText(
+                "short.txt",
+                "text/plain",
+                ("start" + emoji + "end").getBytes(StandardCharsets.UTF_8));
+
+        assertNotNull(splitBoundary);
+        assertNotNull(completePairBoundary);
+        assertNotNull(bmpBoundary);
+        int splitMarkerIndex = splitBoundary.indexOf(marker);
+        int completeMarkerIndex = completePairBoundary.indexOf(marker);
+        int bmpMarkerIndex = bmpBoundary.indexOf(marker);
+
+        assertAll(
+                () -> assertEquals(49_999, splitMarkerIndex),
+                () -> assertFalse(Character.isHighSurrogate(splitBoundary.charAt(splitMarkerIndex - 1))),
+                () -> assertEquals(splitBoundary, new String(
+                        splitBoundary.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)),
+                () -> assertEquals(50_000, completeMarkerIndex),
+                () -> assertEquals(emoji, completePairBoundary.substring(49_998, 50_000)),
+                () -> assertEquals(completePairBoundary, new String(
+                        completePairBoundary.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)),
+                () -> assertEquals(50_000, bmpMarkerIndex),
+                () -> assertEquals("A".repeat(50_000), bmpBoundary.substring(0, bmpMarkerIndex)),
+                () -> assertEquals("A".repeat(50_000), exactBoundary),
+                () -> assertEquals("start" + emoji + "end", shortSupplementary));
     }
 
     @Test
