@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 MacSrc Defect Intake"
+  short_description: "Normalize one concrete MacSrc defect"
+  default_prompt: "Use $demo1-macsrc-defect-intake to prepare one evidence-bound PatchIntent without modifying application source."

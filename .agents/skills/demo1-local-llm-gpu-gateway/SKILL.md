@@ -1,6 +1,6 @@
 ---
 name: demo1-local-llm-gpu-gateway
-description: Work on demo-1 local LLM, embedding, and GPU routing: Ollama/vLLM/OpenAI-compatible adapters, ProviderGuard and KeyResolver policy, local-first model routing, dual GPU 3090/3060 or 11434/11435 endpoint checks, LangChain4j OpenAiChatModel protocol adaptation, Matryoshka embedding slicing, qwen/gemma local defaults, local process health checks, and fail-soft model fallback.
+description: "Use when working on demo-1 local LLM, embedding"
 ---
 
 # Demo1 Local LLM GPU Gateway

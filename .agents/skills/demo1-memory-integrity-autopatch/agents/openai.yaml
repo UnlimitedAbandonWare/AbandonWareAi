@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Memory Integrity Autopatch"
+  short_description: "Probe memory integrity and gate Desktop autopatching"
+  default_prompt: "Use $demo1-memory-integrity-autopatch to audit memory integrity and safely run eligible Desktop patches."

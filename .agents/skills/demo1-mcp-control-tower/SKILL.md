@@ -1,158 +1,140 @@
 ---
 name: demo1-mcp-control-tower
-description: Use when coordinating Desktop, Mac mini, and Notebook agents through the demo-1 MCP-style external toolbox, including desktop_control_loop, producer_kit_export, source_scan, patch_plan, patch_render, archive_search, archive_restore, boot_verify, build_error_mine, or run_pipeline.
+description: Use when coordinating external Codex tasks, Desktop, Notebook
 ---
 
 # Demo1 MCP Control Tower
 
-## Purpose
+Route external Codex tasks and multi-node work through the available app tools
+and the existing repo-local MCP-style toolbox. The Korean entry page is
+[외부 스킬 · 장비 제어 안내](../../../EXTERNAL_SKILLS.md).
 
-Use this skill to route multi-node safe-patch work through the repo-local MCP-style toolbox without direct SMB source edits.
+## Core Contract
 
-Role split:
+- Desktop owns canonical source and final verification.
+- Mac mini and Notebook PatchDrop producers use separate worktrees or clones
+  and provide supporting producer evidence only.
+- An explicitly authorized Notebook direct-source request routes to
+  `demo1-macsrc-smb-direct-patch` on verified canonical `Y:\` under root
+  `AGENTS.md`; this hub supplies no direct-write authorization of its own.
+- Desktop final apply plus Gradle or boot proof stay authoritative.
+- Missing producer proof is not a Desktop-only artifact failure.
 
-- Desktop: canonical source owner and final verifier for `C:\AbandonWare\demo-1\demo-1\src`.
-- Mac mini: read-only investigator and PatchDrop producer from a separate worktree/local clone.
-- Notebook: supporting probe, documentation, and diff-review node.
+## Reference Routing
 
-## Tool Manifest
+| Task | Read only the relevant reference |
+| --- | --- |
+| Choose external skills, app tools, research, Browser/Computer, Sites or analytics | [external-skills.md](references/external-skills.md) |
+| Check a host, coordinate Codex tasks, hand off Notebook/Mac mini work | [node-playbook.md](references/node-playbook.md) |
+| Read current shared API keys/settings, refresh the Desktop snapshot, or verify Notebook recognition | [project-resource-context.md](../../../docs/project-resource-context.md) |
+| Exact toolbox schemas, command cookbook and PatchDrop verification | [control-tower-reference.md](references/control-tower-reference.md) |
+| Automatic tool preparation for a Notebook directive patch request | [Desktop intake tool readiness](../demo1-desktop-canonical-goal-intake/references/tool-readiness.md) |
 
-Read `main/resources/mcp/awx-control-tower-tools.json` for the fixed JSON schemas. Invoke tools through:
+Read `main/resources/mcp/awx-control-tower-tools.json` for fixed JSON schemas.
+Invoke tools through `python .\scripts\awx_mcp_toolbox.py --input-json - tool`
+when stdin JSON avoids quoting drift.
 
-```powershell
-@{ nodeRole = "macmini"; q = "search terms" } |
-  ConvertTo-Json -Depth 20 -Compress |
-  python .\scripts\awx_mcp_toolbox.py archive_search
-```
+Read `references/control-tower-reference.md` only when you need exact command
+examples, archive rules, producer bundle rules, the full tool map, or
+verification command variants.
 
-For clients that can speak line-delimited JSON-RPC over stdio, expose the same
-manifest through:
+Managed setup: `scripts/awx_mcp_node_setup.py`; use the commands in
+[the node playbook](references/node-playbook.md). Generated configs set `cwd`
+to host-local AWX state and pass the source root explicitly to
+`awx_host_runtime.py`. Producer source remains an independent worktree or clone;
+explicit shared-read access grants no source mutation authority. The static
+`main/resources/mcp/awx-control-tower-mcp-client.sample.json` is a legacy sample.
 
-```powershell
-python .\scripts\awx_mcp_stdio_server.py
-```
+## Select A Control Surface
 
-Secret-free client config sample:
+For shared API/DB/tool context, read the resource reference above. The user-selected
+direct snapshot is `.secrets/providers.json`. Desktop refresh uses
+`python -B scripts/awx_project_keys.py refresh --apply` within an authorized refresh
+task; existing entries and recovery are retained. In a Notebook PowerShell, load
+`. ./scripts/use_project_keys.ps1`, then run `python -B scripts/awx_project_keys.py check`
+in the same shell before launching the requested consumer. Never print/export
+values into agent context. Report name/count recognition separately from provider
+generation, automatic SMB security, and the peer's actual acknowledgement.
 
-```text
-main/resources/mcp/awx-control-tower-mcp-client.sample.json
-```
+1. Preserve the requested outcome, target host/project/task, exact path scope,
+   mutation authority and required acceptance evidence. Refresh task-relevant
+   live tool availability; a tag or installed skill is not a connected host.
+2. For app tasks, use `list_projects` and `list_threads`, then the returned IDs
+   with `read_thread` or `wait_threads`. Create, message or hand off a task only
+   when the user's request authorizes that operation. A subagent is a bounded
+   worker in this task, not a Notebook or Mac mini connection.
+3. For repo tool work, select one primary route below. For a requested full-load,
+   discover the complete current tool catalog and prepare the applicable schemas,
+   skills, and owned runtime session through the Desktop intake reference above.
+   Load external skills from the current session catalog as their task boundary
+   becomes relevant; do not copy versioned plugin caches into repo skill folders.
+4. Keep availability separate: file present, tool callable, target connected,
+   operation authorized, operation verified. Missing evidence stays
+   `evidence_needed`; delivery alone never proves the task's required meaning.
+5. Use `token-efficient-agents` and `glm-offload` for bounded delegated reads.
+   Honor the current user/project transport HOLD without repeated GLM probes;
+   keep writes and final judgment in the parent. Never infer availability from
+   a key-presence check alone.
 
-Mac mini and Notebook producers must set that config's `cwd` to a producer-local
-worktree or clone, never to the Desktop canonical root.
+## Safe Flow Tokens
 
-Producer nodes can render a role-local config with a source-isolation guard:
+Flow contract: Broad probe -> Focused probe -> Minimal diff -> Desktop
+verification -> Failure classification -> Retry.
 
-```bash
-python scripts/awx_mcp_node_setup.py --node-role macmini --source-root . --canonical-root C:/AbandonWare/demo-1/demo-1/src --output .codex/awx-control-tower.mcp.json --audit-log .codex/awx-control-tower.audit.jsonl
-```
+1. Establish Desktop truth with `source_scan` or a no-write
+   `desktop_control_loop`.
+2. Export producer kits only after an explicit multi-node producer assignment.
+3. Use focused source reads, `archive_search`, or current failure evidence.
+4. Use `patch_plan` and `patch_render` for the smallest PatchDrop candidate.
+5. Intake/audit copied proof with external evidence tools.
+6. Apply only through PatchDrop janitor gates, then run Desktop verification.
 
-## Standard Flow
+Failure classification uses `build_error_mine` and tool `failReason` fields.
+Retry once per unchanged failure class. If the class does not change, require
+new evidence before more tool calls.
 
-Safe Patch flow contract:
+## Boundaries
 
-1. Desktop broad loop: run `desktop_control_loop` when assigning distributed work; it combines `source_scan`, optional dispatch refresh, and `external_evidence_audit` while keeping Desktop final proof as `evidence_needed`.
-2. Producer bootstrap: run `producer_kit_export` when producer worktrees may not already contain the MCP scripts, manifest, skills, and prompts; install the exported kit into producer-local worktrees only.
-3. Broad probe: run `source_scan` and inspect PatchDrop/source isolation when a narrower one-tool probe is enough.
-4. Focused probe: use `archive_search`, focused source reads, or current failure evidence to narrow the target.
-5. Minimal diff: use `patch_plan` and `patch_render` to produce only the smallest PatchDrop candidate.
-6. Desktop verification: final apply and Gradle/boot proof stay on the Desktop canonical root.
-7. Failure classification: use `build_error_mine` and tool `failReason` fields without raw log dumps.
-8. Retry: retry only once per unchanged failure class, then require new evidence or a different class.
-
-1. `source_scan`: broad probe of active roots, PatchDrop state, env-name references, and secret-pattern hit count.
-2. `archive_search`: search `index_path`, `ARCHIVE_INDEX`, `NAS_ARCHIVE_ROOT/index.jsonl`, then `BackupsXS/index.jsonl` with `q`, `filters`, and `top_k`; require at least two passes and emit `evidence_needed` if still empty.
-3. `patch_plan`: convert evidence into a direct/2-way/N-way Safe Patch plan.
-4. `patch_render`: produce the PatchDrop v3 sidecar contract and scan any candidate patch for secret/filemode blockers.
-5. Desktop: `desktop_control_loop` is the default assignment command; set `write_dispatch=true` to refresh dispatch JSON, role command files, and Desktop intake script under PatchDrop `dispatch/`, then read `nextActions`.
-6. Desktop: `producer_kit_export` writes `__patch_drop__/producer-kit/<topic>-producer-kit/` with checksummed MCP runner files, schemas, skills, prompts, and install helpers.
-7. Desktop: `desktop_dispatch_packet` is still available when only dispatch rendering is needed.
-8. `producer_command_plan`: render exact node setup, single-node smoke, and PatchDrop handoff commands from a producer-local worktree, including `desktopEvidencePath` and env-name-only hints.
-9. Desktop only: promote/apply through `__patch_drop__` janitor gates.
-10. `boot_verify`: return role-local verification commands; Desktop final proof remains `evidence_needed` until run on the canonical root.
-11. `build_error_mine`: classify build logs without raw log dumps.
-12. Desktop: run `external_evidence_intake` to copy valid PatchDrop proof into `data/agent-handoff/mcp-control-tower`, then run `external_evidence_audit` to validate Mac mini/Notebook host proof without raw logs. If proof is missing, use the returned `nextActions` and `optionalNextActions` for the exact producer command files, Desktop intake script, setup runner, MCP client config, and archive-index hints.
-13. Retry only once per unchanged failure class.
-
-## Archive Rules
-
-- `archive_search` reads only `index.jsonl` rows and returns path/title/hash evidence, not full archived content.
-- `archive_restore` must receive `mode=restore`, `glob`, `target_dir`, and `audit_log`; pass `verify_log` when a producer or Desktop needs append-only checksum proof.
-- Mac mini and Notebook `archive_restore` calls must target local temp/worktree paths; if `canonical_root` is provided and `target_dir` is under it, the tool must return `restore_target_blocked` / `smb-conflict-risk`.
-- Restore returns explicit `preReview.performed`, `preReview.candidateCount`, and restored-row `checksumVerified=true` evidence, writes append-only audit records with only `requestId`, `sessionId`, `nodeRole`, `toolName`, `inputHash`, `outputCount`, `elapsedMs`, `decision`, and `failReason`, and can write `verify_log` rows containing pre-review plus checksum evidence without restored file contents.
-
-## Producer Bundle Rules
-
-- `external_evidence_audit` rejects producer `.patch` sidecars that contain Git file mode headers with `filemode-blocked`, path traversal / absolute / UNC targets with `unsafe-path`, or forbidden targets such as `pages/api/**`, `.env*`, `apikey.*`, keystores, and shared cache/build directories with `forbidden-path:*`; Desktop janitor still owns any explicit override decision during final apply.
-
-## Redaction
-
-Never log real key values, tokens, cookies, private env dumps, raw full prompts, personal data, or large base64. `NAVER_KEYS`, `NAVER_CLIENT_ID`, and `NAVER_CLIENT_SECRET` may appear only as environment-variable names.
+- No new SMB service, shared-source edit loop, or background broker.
+- No Mac mini or Notebook PatchDrop producer writes to Desktop canonical root;
+  the explicit Notebook direct route remains owned by its existing guard.
+- Dispatch packet and producer kit writes are opt-in; keep Desktop-only checks
+  read-only by default.
+- No raw build logs or secrets; use `build_error_mine`, `failReason`, and
+  env-name-only evidence.
 
 ## Verification
 
-Use the toolbox regression first:
+For control-tower behavior changes, use `Verification Commands` in the
+reference file. For skill-only postprocessing, validate the skill and family
+report through `demo1-skill-family-postprocessor`.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\awx_mcp_toolbox_tests.ps1
-```
 
-Producer nodes can run the cross-platform smoke from their own worktree/local clone:
+## Personal Codex subscription review
 
-```bash
-python scripts/awx_mcp_node_smoke.py --root . --canonical-root C:/AbandonWare/demo-1/demo-1/src --node-role macmini
-```
+Use `codex_review_change` only when a concrete independent counterexample or
+design check remains after the current worker and existing agents. Supply a
+review reason and bounded excerpts; relative paths are labels, never file-read
+instructions. `status` consumes no generation; `review` consumes the same
+ChatGPT subscription once and accepts no arbitrary model/provider/command.
+For short bounded reviews, prefer `reviewProfile=economy`: the pinned
+`gpt-5.3-codex-spark` uses the Pro preview's separate usage limit. Check its
+current availability first. `reviewProfile=quality` (the compatible default)
+retains `gpt-5.5` for deeper review. Neither profile falls back to another model.
+The pinned official CLI App Server uses an empty environment, unchanged official
+model metadata and delegation disabled. The normal host policy instructions remain.
+Status-only requests, trivial explanations and repeated confirmation need zero
+review calls. A substantive request such as "review a missed counterexample"
+selects one call only when those conditions hold. Source changes remain owned
+by the parent. Require a matching terminal, valid findings, evidence-ID closure
+and cleanup; worker success does not establish remote provider/wire proof or a
+specific Pro model entitlement. Unknown usage stays null and unobserved remote
+lineage stays HOLD.
 
-After local edits, producer nodes can run the smoke-to-bundle handoff:
-
-```bash
-python scripts/awx_mcp_producer_handoff.py --source-root . --canonical-root C:/AbandonWare/demo-1/demo-1/src --patchdrop-root /path/to/PatchDrop --producer-script ./__patch_drop__/producer_bundle.py --node-role macmini --topic <topic> --pathspec <relative/path> --audit-log .codex/awx-control-tower.audit.jsonl
-```
-
-Desktop can audit the local control-tower contract without treating external host proof as complete:
-
-```powershell
-python .\scripts\awx_mcp_completion_audit.py --root .
-```
-
-Desktop can run the one-command control loop before assigning or rechecking producer work:
-
-```powershell
-@{ nodeRole = "desktop"; topic = "<topic>"; patchdrop_root = ".\__patch_drop__"; write_dispatch = $true; write_producer_kit = $true; producer_roots = @{ macmini = "<macmini-worktree>"; notebook = "<notebook-worktree>" }; pathspec = @("<relative/path>") } |
-  ConvertTo-Json -Depth 20 -Compress |
-  python .\scripts\awx_mcp_toolbox.py desktop_control_loop
-```
-
-Desktop can export a producer install kit into PatchDrop:
-
-```powershell
-@{ nodeRole = "desktop"; topic = "<topic>"; patchdrop_root = ".\__patch_drop__" } |
-  ConvertTo-Json -Depth 20 -Compress |
-  python .\scripts\awx_mcp_toolbox.py producer_kit_export
-```
-
-Desktop can validate copied Mac mini/Notebook smoke evidence:
-
-```powershell
-@{ nodeRole = "desktop"; evidence_dir = "data\agent-handoff\mcp-control-tower"; required_roles = @("macmini","notebook") } |
-  ConvertTo-Json -Depth 20 -Compress |
-  python .\scripts\awx_mcp_toolbox.py external_evidence_audit
-```
-
-Desktop can render a two-node dispatch packet before assigning producer work:
-
-```powershell
-@{ nodeRole = "desktop"; topic = "<topic>"; patchdrop_root = ".\__patch_drop__"; producer_roots = @{ macmini = "<macmini-worktree>"; notebook = "<notebook-worktree>" }; pathspec = @("<relative/path>") } |
-  ConvertTo-Json -Depth 20 -Compress |
-  python .\scripts\awx_mcp_toolbox.py desktop_dispatch_packet
-```
-
-To emit copyable PatchDrop dispatch files:
-
-```powershell
-@{ nodeRole = "desktop"; topic = "<topic>"; patchdrop_root = ".\__patch_drop__"; write_dispatch = $true; producer_roots = @{ macmini = "<macmini-worktree>"; notebook = "<notebook-worktree>" }; pathspec = @("<relative/path>") } |
-  ConvertTo-Json -Depth 20 -Compress |
-  python .\scripts\awx_mcp_toolbox.py desktop_dispatch_packet
-```
-
-For broader Desktop proof, continue with janitor and Gradle gates from `patchdrop-safe-patch-orchestrator`.
+The deadline also bounds a child that stops reading stdin; stop its owned
+process before joining the input writer. Keep timeout/cancellation reasons when
+the terminated pipe closes. Do not re-register an already configured server to
+check availability: inspect its entry and use status. The official `mcp add`
+command rewrites the MCP table. For future registration, compare before/after
+objects in memory and retain only hashes and redacted structural differences;
+never persist raw configuration/auth values or reconstruct missing history by guess.

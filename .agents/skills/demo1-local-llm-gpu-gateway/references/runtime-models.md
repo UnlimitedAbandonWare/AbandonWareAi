@@ -1,13 +1,17 @@
-# Local LLM And Embedding Runtime Map
+﻿# Local LLM And Embedding Runtime Map
+
+> **MODEL LOCK (2026-09-17):** Do **not** use dead tags `qwen3:8b`, `qwen3:30b`, `qwen3-coder:*`, `gemma3:*`, `qwen2.5:7b-instruct` as defaults. Live SoT: `docs/API_ROUTING_SPEC.md` + `configs/api-routing.yaml` + `ollama ls`.
 
 ## Memory-Backed Baseline To Revalidate
 
-- Main/default chat model has been stabilized around `gemma4:26b`.
-- Fast/MoE/helper model has been stabilized around `qwen3:8b`.
-- Embedding model has been stabilized around `qwen3-embedding:latest`.
-- Prior evidence preferred port `11434`; do not assume `11435` without a fresh live check.
+- Main/default chat (RTX 3090 / 11434): `gemma4:26b` (alt: `gemma4:31b`, `smtek/Qwen3.8-27B:Q3_K_XL`).
+- Fast/helper / Display+RAG light lane (RTX 3060 / 11435): **`qwen3.5:9b`** (NOT `qwen3:8b` — not installed).
+- Judge/critic/coder (3090): `qwen3.8:27b`.
+- Vision: `qwen3-vl:8b`.
+- Embedding (RAG): `qwen3-embedding:4b` or `qwen3-embedding:latest` (alts: `nomic-embed-text`, `bge-m3`).
+- Prefer 11435 for 3060 fast/embed; probe `/api/version` before assuming 11434.
 
-These are memory-derived baselines. Verify live state before editing config.
+These baselines must match live `ollama ls` before editing config. If a tag is missing, map via alias — never invent a pull of deprecated names for Meta Display or RAG light paths.
 
 ## Key Files
 
@@ -30,15 +34,14 @@ These are memory-derived baselines. Verify live state before editing config.
   - `main/resources/application-llm.yaml`
   - `main/resources/application-local-llm.yml`
   - `main/resources/application*.yml`
-  - `app/src/main/resources/configs/models.manifest.yaml`
+  - `configs/api-routing.yaml` (live SoT; `models.manifest.yaml` is DEPRECATED-AS-SOT)
 
 ## Safe Probes
 
 ```powershell
 ollama list
-Invoke-RestMethod -Method Get http://127.0.0.1:11434/api/tags
-Invoke-RestMethod -Method Post http://127.0.0.1:11434/api/chat -ContentType 'application/json' -Body '{"model":"qwen3:8b","messages":[{"role":"user","content":"ping"}],"stream":false}'
+Invoke-RestMethod -Method Get http://127.0.0.1:11435/api/tags
+Invoke-RestMethod -Method Post http://127.0.0.1:11435/api/chat -ContentType 'application/json' -Body '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"ping"}],"stream":false}'
 ```
 
 Do not include external API keys in probes. If a local OpenAI-compatible endpoint is used, keep it loopback-only unless the user explicitly provides an internal server address.
-

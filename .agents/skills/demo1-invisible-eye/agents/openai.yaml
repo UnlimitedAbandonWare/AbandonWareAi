@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 Invisible Eye · Desktop"
+  short_description: "내부 실행 조건과 모순을 추적해 숨은 메커니즘을 검증하는 분석 스킬"
+  default_prompt: "Use $demo1-invisible-eye to investigate this software behavior: 내부 경계와 조건의 평가 시점까지 추적하고, 경쟁 가설을 구별할 관찰·반증 조건·최소 검사 하나를 제시해 주세요."
+
+policy:
+  allow_implicit_invocation: true
