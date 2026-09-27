@@ -52,7 +52,7 @@ public class RedisJobQueueTest {
         ArgumentCaptor<String> jobIdCap = ArgumentCaptor.forClass(String.class);
         when(listOps.leftPush(listKeyCap.capture(), jobIdCap.capture())).thenReturn(1L);
 
-        String flow = "kakao/ask";
+        String flow = "channel/ask";
         String jobId = q.enqueue(new JobRequest(flow, Map.of("a","b"), "req-1", "sess-1"));
         assertNotNull(jobId);
         assertEquals(jobId, jobIdCap.getValue());

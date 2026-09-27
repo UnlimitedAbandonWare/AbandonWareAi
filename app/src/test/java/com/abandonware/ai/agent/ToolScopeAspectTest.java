@@ -23,8 +23,8 @@ public class ToolScopeAspectTest {
     @Test
     void consentCardRendererLoads() {
         ConsentCardRenderer r = new ConsentCardRenderer();
-        String json = r.renderBasic("templates/kakao_consent_card.basic.json", "s", "r",
-                java.util.List.of("kakao.push"), 3600);
+        String json = r.renderBasic("templates/channel_consent_card.basic.json", "s", "r",
+                java.util.List.of("message.send"), 3600);
         assertTrue(json.contains("basicCard"));
     }
 }
