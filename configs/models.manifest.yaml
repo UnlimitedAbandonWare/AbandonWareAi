@@ -1,3 +1,4 @@
+# Alias targets refreshed 2026-09-17 to match live `ollama ls` (see docs/API_ROUTING_SPEC.md).
 version: "2025-09-30"
 
 # Bindings used by the router / bridge
