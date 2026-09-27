@@ -56,7 +56,7 @@ class Zero100BranchSchedulerTest {
 
         Zero100BranchScheduler.Schedule schedule = Zero100BranchScheduler.schedule(slice(1, 20), ctx);
 
-        assertEquals(32, schedule.queryBurstMax());
+        assertEquals(12, schedule.queryBurstMax());
         assertEquals(1.1875d, schedule.laneWeights().get("BQ"));
         assertEquals(0.0525d, schedule.laneWeights().get("ER"));
         assertEquals(0.05d, schedule.laneWeights().get("RC"));

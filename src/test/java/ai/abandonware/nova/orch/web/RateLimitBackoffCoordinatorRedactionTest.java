@@ -123,6 +123,15 @@ class RateLimitBackoffCoordinatorRedactionTest {
     }
 
     @Test
+    void retryAfterDeltaSecondsCapsBeforeMultiplicationOverflow() {
+        long parsedMillis = RateLimitBackoffCoordinator.parseRetryAfterMs(
+                Long.toString(Long.MAX_VALUE),
+                0L);
+
+        assertEquals(5 * 60_000L, parsedMillis);
+    }
+
+    @Test
     void longParserOnlyCatchesNumberFormatException() throws Exception {
         String source = Files.readString(Path.of(
                 "main/java/ai/abandonware/nova/orch/web/RateLimitBackoffCoordinator.java"))
@@ -147,5 +156,92 @@ class RateLimitBackoffCoordinatorRedactionTest {
         assertTrue(source.contains("traceSuppressed(\"getDouble\", e);"));
         assertTrue(source.contains("MDC.put(\"web.failsoft.rateLimitBackoff.suppressed.stage\", stage);"));
         assertFalse(source.contains("e.getMessage()"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "authored,2500,10000,2500", "short,200,10000,200",
+            "masked_authored,2500,200,200", "masked_short,200,200,200"})
+    void shippedZero100BackoffCapChangesActualCooldownAdmission(
+            String control, long rawCap, long staticCap, long expectedDelay) throws Throwable {
+        TraceStore.clear();
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper(
+                new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans/zero100.v1.yaml"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        String key = "search.zero100.backoffHardCapMs";
+        assertEquals(2500L, original.path("params").path(key).asLong());
+        var modified = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) modified.path("params")).put(key, rawCap);
+        var restored = modified.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("params"))
+                .set(key, original.path("params").path(key));
+        assertEquals(original, restored, "only the raw backoff cap changes within each static-cap pair");
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if ("classpath:plans/zero100.v1.yaml".equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return "zero100.v1.yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier(original.equals(modified)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        var ctx = new com.example.lms.service.guard.GuardContext();
+        applier.applyToGuardContext(applier.load("zero100.v1"), ctx);
+        assertEquals(rawCap, ctx.planLong(key, -1L));
+        var props = new ai.abandonware.nova.config.Zero100EngineProperties();
+        props.setEngineEnabled(true);
+        var registry = new ai.abandonware.nova.orch.zero100.Zero100SessionRegistry(props);
+        var env = new MockEnvironment()
+                .withProperty("nova.orch.web.failsoft.ratelimit-backoff.min-ms", "200")
+                .withProperty("nova.orch.web.failsoft.ratelimit-backoff.max-ms", "10000")
+                .withProperty("nova.orch.web.failsoft.ratelimit-backoff.hard-cap-ms", Long.toString(staticCap))
+                .withProperty("nova.orch.web.failsoft.ratelimit-backoff.jitter-ratio", "0");
+        var aspect = new ai.abandonware.nova.orch.aop.Zero100SessionAspect(props, registry, env);
+        var coordinator = new RateLimitBackoffCoordinator(env);
+        String provider = RateLimitBackoffCoordinator.PROVIDER_NAVER;
+        var pjp = org.mockito.Mockito.mock(org.aspectj.lang.ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(pjp.getArgs()).thenReturn(new Object[]{"bounded backoff fixture"});
+        org.mockito.Mockito.when(pjp.proceed()).thenAnswer(invocation -> {
+            assertEquals(Boolean.TRUE, TraceStore.get("zero100.enabled"));
+            assertEquals("CALIBRATE", TraceStore.get("zero100.phase"));
+            assertEquals(rawCap, TraceStore.get("zero100.backoff.hardCapMs"));
+            var before = coordinator.shouldSkip(provider);
+            assertFalse(before.shouldSkip());
+            assertEquals(0L, before.remainingMs());
+            long startedMs = System.currentTimeMillis();
+            coordinator.recordRateLimited(provider, 5000L, "rate_limit");
+            var decision = coordinator.shouldSkip(provider);
+            long finishedMs = System.currentTimeMillis();
+            long observationWindowMs = finishedMs - startedMs;
+            assertTrue(observationWindowMs >= 0L && observationWindowMs < 100L,
+                    "observe immediate admission before the shortest cooldown can expire");
+            assertTrue(decision.shouldSkip());
+            assertTrue(decision.remainingMs() >= expectedDelay - observationWindowMs
+                    && decision.remainingMs() <= expectedDelay, "actual remaining cooldown is bounded by the measured window");
+            String prefix = "web.failsoft.rateLimitBackoff.naver.last.";
+            assertEquals(expectedDelay, TraceStore.get(prefix + "capMs"));
+            assertEquals(expectedDelay, TraceStore.get(prefix + "delayMs"));
+            assertEquals(0L, TraceStore.get(prefix + "jitterMs"));
+            assertEquals(1, TraceStore.get(prefix + "streak"));
+            assertFalse(coordinator.shouldSkip(RateLimitBackoffCoordinator.PROVIDER_BRAVE).shouldSkip(),
+                    "a fresh provider must retain independent admission");
+            System.out.printf("TBL07_BACKOFF control=%s rawCap=%d staticCap=%d chosenDelay=%d remainingMs=%d observationWindowMs=%d beforeSkip=false afterSkip=%s otherProviderSkip=false externalRequests=0%n",
+                    control, rawCap, staticCap, expectedDelay, decision.remainingMs(), observationWindowMs, decision.shouldSkip());
+            return decision;
+        });
+        com.example.lms.service.guard.GuardContextHolder.set(ctx);
+        try {
+            var result = (RateLimitBackoffCoordinator.Decision) aspect.aroundChatEntry(pjp);
+            assertTrue(result.shouldSkip());
+            org.mockito.Mockito.verify(pjp, org.mockito.Mockito.times(1)).proceed();
+        } finally {
+            com.example.lms.service.guard.GuardContextHolder.clear();
+            TraceStore.clear();
+        }
     }
 }

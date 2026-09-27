@@ -65,6 +65,20 @@ class MlaOtelBridgeTest {
     }
 
     @Test
+    void attributesPreserveFractionalSourceDiversity() {
+        Map<String, Object> event = Map.of(
+                "output", Map.of(
+                        "returnedCount", 2,
+                        "sourceDiversity", 0.5d));
+
+        Map<String, Object> attrs = MlaOtelBridge.attributes(event);
+
+        assertThat(attrs).containsEntry("rag.returned_count", 2L);
+        assertThat(attrs.get("rag.source_diversity")).isInstanceOf(Double.class);
+        assertThat(((Number) attrs.get("rag.source_diversity")).doubleValue()).isEqualTo(0.5d);
+    }
+
+    @Test
     void attributesDoNotExposeRawSensitiveLabels() {
         String fakeSecret = "sk-" + "A".repeat(24);
         String rawLabel = "ownertoken " + fakeSecret;
@@ -122,6 +136,20 @@ class MlaOtelBridgeTest {
 
         assertThat(nonFiniteDoubleAttrs).doesNotContainKey("rag.ablation.drop");
         assertThat(TraceStore.get("mla.otel.suppressed.errorType")).isEqualTo("invalid_number");
+    }
+
+    @Test
+    void overflowStringDoubleAttributeIsSuppressedWithoutRawValue() {
+        Map<String, Object> event = Map.of(
+                "control", Map.of("ablationDrop", "1.0e309"));
+
+        Map<String, Object> attrs = MlaOtelBridge.attributes(event);
+
+        assertThat(attrs).doesNotContainKey("rag.ablation.drop");
+        assertThat(TraceStore.get("mla.otel.suppressed.count")).isEqualTo(1L);
+        assertThat(TraceStore.get("mla.otel.suppressed.stage")).isEqualTo("doubleValue");
+        assertThat(TraceStore.get("mla.otel.suppressed.errorType")).isEqualTo("invalid_number");
+        assertThat(String.valueOf(TraceStore.getAll())).doesNotContain("1.0e309");
     }
 
     @Test

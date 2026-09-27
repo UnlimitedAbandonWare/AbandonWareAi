@@ -120,60 +120,40 @@ class WebSoakKpiProbeControllerTest {
         assertTrue(source.contains("add('web.brave.skipped.reason', kpi['web.brave.skipped.reason'] || '');"));
         assertTrue(source.contains("add('web.serpapi.skipped.reason', kpi['web.serpapi.skipped.reason'] || '');"));
         assertTrue(source.contains("add('web.tavily.skipped.reason', kpi['web.tavily.skipped.reason'] || '');"));
-        assertTrue(source.contains("add('web.naver.failureReason', kpi['web.naver.failureReason'] || '');"));
-        assertTrue(source.contains("add('web.naver.requestedCount', kpi['web.naver.requestedCount'] || 0);"));
-        assertTrue(source.contains("add('web.naver.returnedCount', kpi['web.naver.returnedCount'] || 0);"));
-        assertTrue(source.contains("add('web.naver.afterFilterCount', kpi['web.naver.afterFilterCount'] || 0);"));
-        assertTrue(source.contains("add('web.naver.providerEmpty', kpi['web.naver.providerEmpty'] || false);"));
-        assertTrue(source.contains("add('web.naver.afterFilterStarved', kpi['web.naver.afterFilterStarved'] || false);"));
-        assertTrue(source.contains("add('web.naver.timeout', kpi['web.naver.timeout'] || false);"));
-        assertTrue(source.contains("add('web.naver.timeoutMs', kpi['web.naver.timeoutMs'] || 0);"));
-        assertTrue(source.contains("add('web.naver.rateLimited', kpi['web.naver.rateLimited'] || false);"));
-        assertTrue(source.contains("add('web.naver.retryAfterMs', kpi['web.naver.retryAfterMs'] || 0);"));
-        assertTrue(source.contains("add('web.naver.cancelled', kpi['web.naver.cancelled'] || false);"));
-        assertTrue(source.contains("add('web.naver.exceptionType', kpi['web.naver.exceptionType'] || '');"));
-        assertTrue(source.contains("add('web.brave.failureReason', kpi['web.brave.failureReason'] || '');"));
-        assertTrue(source.contains("add('web.brave.requestedCount', kpi['web.brave.requestedCount'] || 0);"));
-        assertTrue(source.contains("add('web.brave.returnedCount', kpi['web.brave.returnedCount'] || 0);"));
-        assertTrue(source.contains("add('web.brave.afterFilterCount', kpi['web.brave.afterFilterCount'] || 0);"));
-        assertTrue(source.contains("add('web.brave.providerEmpty', kpi['web.brave.providerEmpty'] || false);"));
-        assertTrue(source.contains("add('web.brave.afterFilterStarved', kpi['web.brave.afterFilterStarved'] || false);"));
-        assertTrue(source.contains("add('web.brave.timeout', kpi['web.brave.timeout'] || false);"));
-        assertTrue(source.contains("add('web.brave.timeoutMs', kpi['web.brave.timeoutMs'] || 0);"));
-        assertTrue(source.contains("add('web.brave.rateLimited', kpi['web.brave.rateLimited'] || false);"));
-        assertTrue(source.contains("add('web.brave.retryAfterMs', kpi['web.brave.retryAfterMs'] || 0);"));
-        assertTrue(source.contains("add('web.brave.cancelled', kpi['web.brave.cancelled'] || false);"));
-        assertTrue(source.contains("add('web.brave.exceptionType', kpi['web.brave.exceptionType'] || '');"));
-        assertTrue(source.contains("add('web.serpapi.failureReason', kpi['web.serpapi.failureReason'] || '');"));
-        assertTrue(source.contains("add('web.serpapi.requestedCount', kpi['web.serpapi.requestedCount'] || 0);"));
-        assertTrue(source.contains("add('web.serpapi.returnedCount', kpi['web.serpapi.returnedCount'] || 0);"));
-        assertTrue(source.contains("add('web.serpapi.afterFilterCount', kpi['web.serpapi.afterFilterCount'] || 0);"));
-        assertTrue(source.contains("add('web.serpapi.providerEmpty', kpi['web.serpapi.providerEmpty'] || false);"));
-        assertTrue(source.contains("add('web.serpapi.afterFilterStarved', kpi['web.serpapi.afterFilterStarved'] || false);"));
-        assertTrue(source.contains("add('web.serpapi.timeout', kpi['web.serpapi.timeout'] || false);"));
-        assertTrue(source.contains("add('web.serpapi.timeoutMs', kpi['web.serpapi.timeoutMs'] || 0);"));
-        assertTrue(source.contains("add('web.serpapi.rateLimited', kpi['web.serpapi.rateLimited'] || false);"));
-        assertTrue(source.contains("add('web.serpapi.retryAfterMs', kpi['web.serpapi.retryAfterMs'] || 0);"));
-        assertTrue(source.contains("add('web.serpapi.cancelled', kpi['web.serpapi.cancelled'] || false);"));
-        assertTrue(source.contains("add('web.serpapi.exceptionType', kpi['web.serpapi.exceptionType'] || '');"));
-        assertTrue(source.contains("add('web.tavily.failureReason', kpi['web.tavily.failureReason'] || '');"));
-        assertTrue(source.contains("add('web.tavily.requestedCount', kpi['web.tavily.requestedCount'] || 0);"));
-        assertTrue(source.contains("add('web.tavily.returnedCount', kpi['web.tavily.returnedCount'] || 0);"));
-        assertTrue(source.contains("add('web.tavily.afterFilterCount', kpi['web.tavily.afterFilterCount'] || 0);"));
-        assertTrue(source.contains("add('web.tavily.providerEmpty', kpi['web.tavily.providerEmpty'] || false);"));
-        assertTrue(source.contains("add('web.tavily.afterFilterStarved', kpi['web.tavily.afterFilterStarved'] || false);"));
-        assertTrue(source.contains("add('web.tavily.timeout', kpi['web.tavily.timeout'] || false);"));
-        assertTrue(source.contains("add('web.tavily.timeoutMs', kpi['web.tavily.timeoutMs'] || 0);"));
-        assertTrue(source.contains("add('web.tavily.rateLimited', kpi['web.tavily.rateLimited'] || false);"));
-        assertTrue(source.contains("add('web.tavily.retryAfterMs', kpi['web.tavily.retryAfterMs'] || 0);"));
-        assertTrue(source.contains("add('web.tavily.cancelled', kpi['web.tavily.cancelled'] || false);"));
-        assertTrue(source.contains("add('web.tavily.exceptionType', kpi['web.tavily.exceptionType'] || '');"));
+        assertTrue(source.contains("['naver','brave','serpapi','tavily'].forEach(function(p){"));
+        assertTrue(source.contains(
+                "['failureReason','requestedCount','returnedCount','afterFilterCount','providerEmpty',"));
+        assertTrue(source.contains(
+                "'afterFilterStarved','timeout','timeoutMs','rateLimited','retryAfterMs','cancelled','exceptionType']"));
+        assertTrue(source.contains(
+                "add(prefix + '.traceObserved', truthy(kpi[prefix + '.traceObserved']));"));
+        assertTrue(source.contains(
+                ".forEach(function(metric){ add(prefix + '.' + metric, providerMetric(p, metric)); });"));
         assertTrue(source.contains("add('vectorFallback.used', kpi['vectorFallback.used'] || false);"));
         assertTrue(source.contains("add('vectorFallback.reason', kpi['vectorFallback.reason'] || '');"));
         assertTrue(source.contains("add('vectorFallback.effectiveTopK', kpi['vectorFallback.effectiveTopK'] || 0);"));
         assertTrue(source.contains("'web.failsoft.rateLimitBackoff.' + p + '.last.kind'"));
         assertTrue(source.contains("'web.failsoft.rateLimitBackoff.' + p + '.last.delayMs'"));
         assertTrue(source.contains("['naver','brave','serpapi','tavily'].forEach"));
+    }
+
+    @Test
+    void uiTableDistinguishesUnobservedProviderTaxonomyFromObservedZeros() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/ai/abandonware/nova/orch/probe/WebSoakKpiProbeController.java"),
+                StandardCharsets.UTF_8);
+
+        assertTrue(source.contains("function providerMetric(p, metric)"));
+        assertTrue(source.contains("if (!truthy(kpi[prefix + '.traceObserved'])) return 'unknown';"));
+        assertTrue(source.contains(
+                "return value === undefined || value === null || value === '' ? 'unknown' : value;"));
+        assertTrue(source.contains(
+                "add(prefix + '.traceObserved', truthy(kpi[prefix + '.traceObserved']));"));
+        assertFalse(source.contains("evidenceObserved"));
+        assertTrue(source.contains(
+                ".forEach(function(metric){ add(prefix + '.' + metric, providerMetric(p, metric)); });"));
+        assertFalse(source.contains("add('web.naver.returnedCount', kpi['web.naver.returnedCount'] || 0);"));
+        assertFalse(source.contains("add('web.tavily.timeout', kpi['web.tavily.timeout'] || false);"));
     }
 
     @Test

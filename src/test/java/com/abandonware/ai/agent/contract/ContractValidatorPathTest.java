@@ -39,7 +39,10 @@ class ContractValidatorPathTest {
                         "db_evidence_scan",
                         "failure.pattern.scan",
                         "failure.pattern.recall",
-                        "failure.pattern.record")
+                        "failure.pattern.record",
+                        "causal.probe.evaluate",
+                        "counter.evidence.retrieve",
+                        "evidence.coherence.verify")
                 .forEach(id -> registry.register(new StubTool(id)));
 
         ToolManifestCatalog catalog = new ToolManifestCatalog();
@@ -52,8 +55,8 @@ class ContractValidatorPathTest {
         assertEquals(0, report.get("issueCount"));
         assertTrue(((Number) report.get("warningCount")).intValue() > 0);
         assertTrue(String.valueOf(report.get("manifestIds")).contains("web.search"));
-        assertEquals(13, TraceStore.get("toolManifest.registeredCount"));
-        assertEquals(20, TraceStore.get("toolManifest.manifestCount"));
+        assertEquals(16, TraceStore.get("toolManifest.registeredCount"));
+        assertEquals(23, TraceStore.get("toolManifest.manifestCount"));
         assertEquals(0, TraceStore.get("toolManifest.missingInManifestCount"));
         assertTrue(String.valueOf(TraceStore.get("toolManifest.snapshotAt")).length() > 10);
     }
@@ -100,7 +103,10 @@ class ContractValidatorPathTest {
                         "db_evidence_scan",
                         "failure.pattern.scan",
                         "failure.pattern.recall",
-                        "failure.pattern.record")
+                        "failure.pattern.record",
+                        "causal.probe.evaluate",
+                        "counter.evidence.retrieve",
+                        "evidence.coherence.verify")
                 .forEach(id -> registry.register(new StubTool(id)));
         return registry;
     }

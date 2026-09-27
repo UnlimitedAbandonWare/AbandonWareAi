@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 class DynamicContextCompressorTest {
 
@@ -884,6 +885,183 @@ class DynamicContextCompressorTest {
     }
 
     @Test
+    void contextRefinerDefaultOffLeavesRequiredDisabledTraceContract() {
+        List<Content> web = List.of(content("https://web.example/a", "keepanchor evidence"));
+
+        DynamicContextCompressor.PromptContextComposition out =
+                compressor.composeForPrompt("secret keepanchor query", web, null);
+
+        assertSame(web, out.web());
+        assertEquals(false, TraceStore.get("prompt.context.refiner.enabled"));
+        assertEquals(false, TraceStore.get("prompt.context.refiner.activated"));
+        assertEquals("disabled", TraceStore.get("prompt.context.refiner.reason"));
+        assertEquals(0, TraceStore.get("prompt.context.refiner.candidateCount"));
+        assertEquals("none", TraceStore.get("prompt.context.refiner.selectedCandidate"));
+        assertEquals(false, TraceStore.get("prompt.context.refiner.providerDisabled"));
+        assertEquals(false, TraceStore.get("prompt.context.refiner.failSoft"));
+        assertEquals(0.618d, ((Number) TraceStore.get("prompt.context.refiner.phi")).doubleValue(), 0.0001d);
+        assertEquals(0.75d, ((Number) TraceStore.get("prompt.context.refiner.boltzmannTemp")).doubleValue(), 0.0001d);
+        assertFalse(TraceStore.getAll().toString().contains("secret keepanchor query"));
+    }
+
+    @Test
+    void contextRefinerEnabledWithoutProviderRecordsProviderDisabledFailSoftTrace() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        enableContextRefiner(props.getRagCompressor());
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        TraceStore.put("needle.keptRatio", 0.15d);
+        TraceStore.put("prompt.memory.compressor.contaminationScore", 0.44d);
+        TraceStore.put("cfvm.boltzmannWeight", 0.73d);
+        TraceStore.put("hypernova.cvarPhi", 0.618d);
+        TraceStore.put("ensemble.sampling.skipped", "disabled");
+        List<Content> web = List.of(content("https://web.example/a", "keepanchor cited evidence"));
+
+        DynamicContextCompressor.PromptContextComposition out =
+                local.composeForPrompt("secret keepanchor query", web, null);
+
+        assertSame(web, out.web());
+        assertEquals(true, TraceStore.get("prompt.context.refiner.enabled"));
+        assertEquals(false, TraceStore.get("prompt.context.refiner.activated"));
+        assertEquals("provider_disabled", TraceStore.get("prompt.context.refiner.reason"));
+        assertEquals(0, TraceStore.get("prompt.context.refiner.candidateCount"));
+        assertEquals("none", TraceStore.get("prompt.context.refiner.selectedCandidate"));
+        assertEquals(true, TraceStore.get("prompt.context.refiner.providerDisabled"));
+        assertEquals(true, TraceStore.get("prompt.context.refiner.failSoft"));
+        assertEquals("provider_disabled", TraceStore.get("prompt.context.refiner.disabledReason"));
+        assertEquals(0.44d,
+                ((Number) TraceStore.get("prompt.context.refiner.contaminationScore")).doubleValue(), 0.0001d);
+        assertEquals(0.618d, ((Number) TraceStore.get("prompt.context.refiner.phi")).doubleValue(), 0.0001d);
+        assertEquals(0.75d, ((Number) TraceStore.get("prompt.context.refiner.boltzmannTemp")).doubleValue(), 0.0001d);
+        assertFalse(TraceStore.getAll().toString().contains("secret keepanchor query"));
+    }
+
+    @Test
+    void contextRefinerClassifiesFailedEnsembleAsModelUnavailableWithoutOutboundRetry() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setAblationGuidedEnabled(false);
+        enableContextRefiner(props.getRagCompressor());
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        TraceStore.put("ensemble.bypass.reason", "ensemble_final_answer_failed");
+        TraceStore.put("ensemble.judge.fail", "ensemble_judge_failed");
+        List<Content> web = List.of(content("https://web.example/a", "keepanchor cited evidence"));
+
+        DynamicContextCompressor.PromptContextComposition out =
+                local.composeForPrompt("secret keepanchor query", web, null);
+
+        assertSame(web, out.web());
+        assertEquals(false, TraceStore.get("prompt.context.refiner.activated"));
+        assertEquals("provider_disabled", TraceStore.get("prompt.context.refiner.reason"));
+        assertEquals(true, TraceStore.get("prompt.context.refiner.providerDisabled"));
+        assertEquals(true, TraceStore.get("prompt.context.refiner.failSoft"));
+        assertEquals("model_unavailable", TraceStore.get("prompt.context.refiner.disabledReason"));
+        assertTrue(out.contextRefinementSummary().contains("disabledReason=model_unavailable"),
+                out.contextRefinementSummary());
+        assertFalse(TraceStore.getAll().toString().contains("secret keepanchor query"));
+    }
+
+    @Test
+    void contextRefinerCompositionCarriesRedactedSummaryAndClampedSignals() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setAblationGuidedEnabled(false);
+        enableContextRefiner(props.getRagCompressor());
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        TraceStore.put("needle.keptRatio", 0.15d);
+        TraceStore.put("tailSignal", 2.50d);
+        TraceStore.put("prompt.memory.compressor.contaminationScore", 0.44d);
+        TraceStore.put("starvationFallback.used", true);
+        TraceStore.put("cfvm.boltzmannWeight", 0.73d);
+        TraceStore.put("hypernova.cvarPhi", 0.618d);
+        TraceStore.put("ensemble.candidates.count", 3);
+        TraceStore.put("gate.citation.passed", true);
+        TraceStore.put("gate.finalSigmoid.result", "PASS");
+        List<Content> web = List.of(content("https://web.example/a", "keepanchor cited evidence"));
+
+        DynamicContextCompressor.PromptContextComposition out =
+                local.composeForPrompt("secret keepanchor query", web, null);
+
+        assertSame(web, out.web());
+        assertEquals("selected", TraceStore.get("prompt.context.refiner.reason"));
+        assertEquals(3, TraceStore.get("prompt.context.refiner.candidateCount"));
+        assertEquals("ensemble_trace_best", TraceStore.get("prompt.context.refiner.selectedCandidate"));
+        assertTrue(out.contextRefinementSummary().contains("reason=selected"), out.contextRefinementSummary());
+        assertTrue(out.contextRefinementSummary().contains("selected=ensemble_trace_best"), out.contextRefinementSummary());
+        assertFalse(out.contextRefinementSummary().contains("secret keepanchor query"), out.contextRefinementSummary());
+        assertEquals(0.15d, out.contextRefinementSignals().get("needleKeptRatio"), 0.0001d);
+        assertEquals(1.0d, out.contextRefinementSignals().get("tailSignal"), 0.0001d);
+        assertEquals(0.44d, out.contextRefinementSignals().get("contextContamination"), 0.0001d);
+        assertEquals(1.0d, out.contextRefinementSignals().get("afterFilterStarvation"), 0.0001d);
+        assertEquals(0.73d, out.contextRefinementSignals().get("cfvmBoltzmannWeight"), 0.0001d);
+        assertEquals(0.618d, out.contextRefinementSignals().get("hypernovaCvarPhi"), 0.0001d);
+        assertFalse(TraceStore.getAll().toString().contains("secret keepanchor query"));
+    }
+
+    @Test
+    void contextRefinerRequiresCitationAndFinalGatePassBeforeSelection() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setAblationGuidedEnabled(false);
+        enableContextRefiner(props.getRagCompressor());
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        TraceStore.put("ensemble.candidates.count", 3);
+        TraceStore.put("gate.citation.passed", false);
+        TraceStore.put("gate.finalSigmoid.result", "PASS");
+        List<Content> web = List.of(content("https://web.example/a", "keepanchor cited evidence"));
+
+        DynamicContextCompressor.PromptContextComposition out =
+                local.composeForPrompt("secret keepanchor query", web, null);
+
+        assertSame(web, out.web());
+        assertEquals(false, TraceStore.get("prompt.context.refiner.activated"));
+        assertEquals("citation_gate_failed", TraceStore.get("prompt.context.refiner.reason"));
+        assertEquals("none", TraceStore.get("prompt.context.refiner.selectedCandidate"));
+        assertEquals(true, TraceStore.get("prompt.context.refiner.failSoft"));
+        assertTrue(out.contextRefinementSummary().contains("reason=citation_gate_failed"), out.contextRefinementSummary());
+        assertFalse(TraceStore.getAll().toString().contains("secret keepanchor query"));
+    }
+
+    @Test
+    void contextRefinerRequiresFinalSigmoidPassBeforeSelection() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setAblationGuidedEnabled(false);
+        enableContextRefiner(props.getRagCompressor());
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        TraceStore.put("ensemble.candidates.count", 3);
+        TraceStore.put("gate.citation.passed", true);
+        TraceStore.put("gate.finalSigmoid.result", "BLOCK");
+        List<Content> web = List.of(content("https://web.example/a", "keepanchor cited evidence"));
+
+        DynamicContextCompressor.PromptContextComposition out =
+                local.composeForPrompt("secret keepanchor query", web, null);
+
+        assertSame(web, out.web());
+        assertEquals(false, TraceStore.get("prompt.context.refiner.activated"));
+        assertEquals("final_gate_failed", TraceStore.get("prompt.context.refiner.reason"));
+        assertEquals("none", TraceStore.get("prompt.context.refiner.selectedCandidate"));
+        assertEquals(true, TraceStore.get("prompt.context.refiner.failSoft"));
+        assertTrue(out.contextRefinementSummary().contains("reason=final_gate_failed"), out.contextRefinementSummary());
+        assertFalse(TraceStore.getAll().toString().contains("secret keepanchor query"));
+    }
+
+    @Test
+    void contextRefinerFailsSoftWhenGateEvidenceIsMissing() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setAblationGuidedEnabled(false);
+        enableContextRefiner(props.getRagCompressor());
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        TraceStore.put("ensemble.candidates.count", 3);
+        List<Content> web = List.of(content("https://web.example/a", "keepanchor cited evidence"));
+
+        DynamicContextCompressor.PromptContextComposition out =
+                local.composeForPrompt("secret keepanchor query", web, null);
+
+        assertSame(web, out.web());
+        assertEquals(false, TraceStore.get("prompt.context.refiner.activated"));
+        assertEquals("gate_evidence_missing", TraceStore.get("prompt.context.refiner.reason"));
+        assertEquals("none", TraceStore.get("prompt.context.refiner.selectedCandidate"));
+        assertEquals(true, TraceStore.get("prompt.context.refiner.failSoft"));
+        assertFalse(TraceStore.getAll().toString().contains("secret keepanchor query"));
+    }
+
+    @Test
     void memoryCompressionDropsInternalArtifactsAndKeepsAnchorContext() {
         NovaOrchestrationProperties props = new NovaOrchestrationProperties();
         props.getRagCompressor().setMemoryMaxLines(3);
@@ -983,5 +1161,13 @@ class DynamicContextCompressorTest {
         cfg.setMaxCharsPerContent(180);
         cfg.setAnchorWindowChars(80);
         return new DynamicContextCompressor(props);
+    }
+
+    private static void enableContextRefiner(NovaOrchestrationProperties.RagCompressorProps cfg) {
+        try {
+            cfg.getClass().getMethod("setContextRefinerEnabled", boolean.class).invoke(cfg, true);
+        } catch (ReflectiveOperationException e) {
+            fail("context refiner toggle missing: " + e.getClass().getSimpleName());
+        }
     }
 }

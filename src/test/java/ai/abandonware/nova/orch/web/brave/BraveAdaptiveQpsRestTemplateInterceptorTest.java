@@ -69,4 +69,16 @@ class BraveAdaptiveQpsRestTemplateInterceptorTest {
                 new java.time.format.DateTimeParseException("bad retry-after", "not-a-date", 0)));
         assertEquals("IllegalStateException", method.invoke(null, "response.status", new IllegalStateException("bad")));
     }
+
+    @Test
+    void retryAfterDeltaSecondsOverflowSaturatesBeforeCooldownCap() throws Exception {
+        Method method = BraveAdaptiveQpsRestTemplateInterceptor.class.getDeclaredMethod(
+                "parseRetryAfterMs",
+                String.class);
+        method.setAccessible(true);
+
+        long parsedMillis = (long) method.invoke(null, Long.toString(Long.MAX_VALUE));
+
+        assertEquals(Long.MAX_VALUE, parsedMillis);
+    }
 }

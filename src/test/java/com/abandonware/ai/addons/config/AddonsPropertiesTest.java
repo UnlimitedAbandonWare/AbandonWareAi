@@ -8,6 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AddonsPropertiesTest {
 
     @Test
+    void defaultRequestBudgetPreservesCompatibilityDeadline() {
+        AddonsProperties props = new AddonsProperties();
+
+        assertEquals(1_500L, props.getBudget().getDefaultMs());
+    }
+
+    @Test
     void numericSettersClampToRuntimeSafeBounds() {
         AddonsProperties props = new AddonsProperties();
 

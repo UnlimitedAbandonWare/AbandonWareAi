@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class IdentityInterceptorTest {
     @BeforeEach
@@ -59,6 +60,37 @@ class IdentityInterceptorTest {
         assertEquals("gid.parse", TraceStore.get("agent.identity.suppressed.stage"));
         assertEquals("IllegalArgumentException", TraceStore.get("agent.identity.suppressed.errorClass"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains(unsafeGid));
+    }
+
+    @Test
+    void preHandleDoesNotTrustRawForwardedHttpsForCookieSecurity() throws Exception {
+        ContextBridge bridge = new ContextBridge();
+        IdentityInterceptor interceptor = new IdentityInterceptor(bridge);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Forwarded-Proto", "https");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        interceptor.preHandle(request, response, new Object());
+
+        var setCookies = response.getHeaders("Set-Cookie");
+        assertEquals(1, setCookies.size());
+        String header = setCookies.iterator().next();
+        assertFalse(header.contains("; Secure"));
+        assertTrue(header.contains("; HttpOnly"));
+        assertTrue(header.contains("; SameSite=Lax"));
+    }
+
+    @Test
+    void preHandleMarksGidCookieSecureFromContainerSecurityState() throws Exception {
+        ContextBridge bridge = new ContextBridge();
+        IdentityInterceptor interceptor = new IdentityInterceptor(bridge);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setSecure(true);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        interceptor.preHandle(request, response, new Object());
+
+        assertTrue(response.getHeader("Set-Cookie").contains("; Secure"));
     }
 
     private static String cookieValue(String setCookie) {

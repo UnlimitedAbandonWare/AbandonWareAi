@@ -152,6 +152,235 @@ class Zero100SessionAspectTest {
         assertEquals(List.of(), rawThrowableLogLines);
     }
 
+    @Test
+    @org.junit.jupiter.api.Timeout(10)
+    void zero100TimeoutReturnsBeforeWorkerMutatesSharedRequestTrace() throws Throwable {
+        var worker = (java.util.concurrent.ThreadPoolExecutor)
+                java.util.concurrent.Executors.newFixedThreadPool(1);
+        worker.prestartAllCoreThreads();
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var finished = new java.util.concurrent.CountDownLatch(1);
+        var workerStartedAt = new java.util.concurrent.atomic.AtomicLong();
+        var workerFinishedAt = new java.util.concurrent.atomic.AtomicLong();
+        var interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        var sameTrace = new java.util.concurrent.atomic.AtomicBoolean();
+        var sameGuard = new java.util.concurrent.atomic.AtomicBoolean();
+        var mdcPropagated = new java.util.concurrent.atomic.AtomicBoolean();
+        TraceStore.put("zero100.enabled", true);
+        Map<String, Object> callerTrace = TraceStore.context();
+        GuardContext callerGuard = new GuardContext();
+        GuardContextHolder.set(callerGuard);
+        org.slf4j.MDC.put("test.r03.marker", "synthetic");
+        try {
+            Zero100EngineProperties props = new Zero100EngineProperties();
+            props.setEngineEnabled(true);
+            props.setWebCallTimeboxMs(200L);
+            var beanFactory = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+            beanFactory.registerSingleton("r03OwnedExecutor", worker);
+            Zero100WebTimeboxAspect aspect = new Zero100WebTimeboxAspect(props,
+                    new Zero100SessionRegistry(props),
+                    beanFactory.getBeanProvider(java.util.concurrent.ExecutorService.class));
+            ProceedingJoinPoint pjp = org.mockito.Mockito.mock(ProceedingJoinPoint.class);
+            org.mockito.Mockito.when(pjp.proceed()).thenAnswer(invocation -> {
+                sameTrace.set(TraceStore.context() == callerTrace);
+                sameGuard.set(GuardContextHolder.get() == callerGuard);
+                mdcPropagated.set("synthetic".equals(org.slf4j.MDC.get("test.r03.marker")));
+                workerStartedAt.set(System.nanoTime());
+                started.countDown();
+                try {
+                    assertTrue(release.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                    TraceStore.put("test.r03.lateWorker.count", 1L);
+                    GuardContextHolder.get().putPlanOverride("test.r03.lateWorker.count", 1L);
+                    return List.of("synthetic-late-result");
+                } catch (InterruptedException unexpected) {
+                    interrupted.set(true);
+                    throw unexpected;
+                } finally {
+                    workerFinishedAt.set(System.nanoTime());
+                    finished.countDown();
+                }
+            });
+            long callStartedAt = System.nanoTime();
+            Object returned = aspect.aroundHybridSearch(pjp);
+            long returnedAt = System.nanoTime();
+            assertTrue(started.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(workerStartedAt.get() < returnedAt);
+            assertEquals(List.of(), returned);
+            assertEquals(1L, release.getCount());
+            assertFalse(finished.await(100, java.util.concurrent.TimeUnit.MILLISECONDS));
+            assertFalse(interrupted.get());
+            assertEquals(Boolean.TRUE, TraceStore.get("zero100.webTimebox.hit"));
+            assertEquals(200L, ((Number) TraceStore.get("zero100.webTimebox.ms")).longValue());
+            assertEquals(1L, ((Number) TraceStore.get("zero100.webTimebox.timeout.count")).longValue());
+            assertNull(TraceStore.get("test.r03.lateWorker.count"));
+            assertEquals(0L, callerGuard.planLong("test.r03.lateWorker.count", 0L));
+            Map<String, Object> snapshotAtFallback = Map.copyOf(TraceStore.getAll());
+            release.countDown();
+            assertTrue(finished.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(workerFinishedAt.get() > returnedAt);
+            assertEquals(1L, TraceStore.get("test.r03.lateWorker.count"));
+            assertEquals(1L, callerGuard.planLong("test.r03.lateWorker.count", 0L));
+            assertFalse(snapshotAtFallback.containsKey("test.r03.lateWorker.count"));
+            assertTrue(sameTrace.get());
+            assertTrue(sameGuard.get());
+            assertTrue(mdcPropagated.get());
+            assertFalse(interrupted.get());
+            assertTrue(worker.submit(() -> TraceStore.getAll().isEmpty()
+                    && GuardContextHolder.get() == null
+                    && org.slf4j.MDC.get("test.r03.marker") == null).get(2,
+                            java.util.concurrent.TimeUnit.SECONDS));
+            org.mockito.Mockito.verify(pjp, org.mockito.Mockito.times(1)).proceed();
+            worker.shutdown();
+            assertTrue(worker.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS));
+            System.out.printf("R03_TIMEOUT fallbackMs=%d workerExitMs=%d lateTrace=1 lateGuard=1 "
+                            + "snapshotLate=0 interrupted=false sameContext=true workerCleared=true terminated=true%n",
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(returnedAt - callStartedAt),
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(workerFinishedAt.get() - callStartedAt));
+        } finally {
+            release.countDown();
+            worker.shutdown();
+            if (!worker.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                worker.shutdownNow();
+                assertTrue(worker.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            TraceStore.clear();
+            GuardContextHolder.clear();
+            org.slf4j.MDC.clear();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "limited_authored,true,650,650,false", "limited_short,true,50,50,true",
+            "normal_authored,false,650,2500,false", "normal_short,false,50,2500,false"})
+    @org.junit.jupiter.api.Timeout(10)
+    void shippedRateLimitedWebTimeboxChangesActualWaitWithAnOwnedWorker(
+            String control, boolean limited, long rawTightMs, long expectedMs, boolean timedOut) throws Throwable {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper(
+                new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+        var original = mapper.readTree(Files.readString(Path.of("main/resources/plans/zero100.v1.yaml"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        String key = "search.zero100.webTimeboxMsWhenRateLimited";
+        assertEquals(650L, original.path("params").path(key).asLong());
+        var modified = original.deepCopy();
+        if (rawTightMs != 650L) ((com.fasterxml.jackson.databind.node.ObjectNode) modified.path("params")).put(key, rawTightMs);
+        var restored = modified.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) restored.path("params"))
+                .set(key, original.path("params").path(key));
+        assertEquals(original, restored, "only the raw tight timebox changes within each marker pair");
+        assertEquals(2500L, modified.path("params").path("search.zero100.webTimeboxMs").asLong());
+        byte[] bytes = mapper.writeValueAsBytes(modified);
+        var resources = new org.springframework.core.io.DefaultResourceLoader() {
+            @Override public org.springframework.core.io.Resource getResource(String location) {
+                if ("classpath:plans/zero100.v1.yaml".equals(location)) {
+                    return new org.springframework.core.io.ByteArrayResource(bytes) {
+                        @Override public String getFilename() { return "zero100.v1.yaml"; }
+                    };
+                }
+                return super.getResource(location);
+            }
+        };
+        var applier = new com.example.lms.plan.PlanHintApplier(original.equals(modified)
+                ? new org.springframework.core.io.DefaultResourceLoader() : resources);
+        var ctx = new GuardContext();
+        applier.applyToGuardContext(applier.load("zero100.v1"), ctx);
+        assertEquals(rawTightMs, ctx.planLong(key, -1L));
+        assertEquals(2500L, ctx.planLong("search.zero100.webTimeboxMs", -1L));
+        var props = new Zero100EngineProperties();
+        props.setEngineEnabled(true);
+        var registry = new Zero100SessionRegistry(props);
+        var sessionAspect = new Zero100SessionAspect(props, registry, new MockEnvironment());
+        var worker = (java.util.concurrent.ThreadPoolExecutor) java.util.concurrent.Executors.newFixedThreadPool(1);
+        worker.prestartAllCoreThreads();
+        var caller = java.util.concurrent.Executors.newSingleThreadExecutor();
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var finished = new java.util.concurrent.CountDownLatch(1);
+        var interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        var elapsedMs = new java.util.concurrent.atomic.AtomicLong();
+        var trace = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        var beans = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+        beans.registerSingleton("tbl07OwnedSearchExecutor", worker);
+        var webAspect = new Zero100WebTimeboxAspect(props, registry,
+                beans.getBeanProvider(java.util.concurrent.ExecutorService.class));
+        ProceedingJoinPoint body = org.mockito.Mockito.mock(ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(body.proceed()).thenAnswer(invocation -> {
+            started.countDown();
+            try {
+                assertTrue(release.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                return List.of("bounded-timebox-result");
+            } catch (InterruptedException unexpected) {
+                interrupted.set(true);
+                throw unexpected;
+            } finally {
+                finished.countDown();
+            }
+        });
+        ProceedingJoinPoint entry = org.mockito.Mockito.mock(ProceedingJoinPoint.class);
+        org.mockito.Mockito.when(entry.getArgs()).thenReturn(new Object[]{"bounded timebox fixture"});
+        org.mockito.Mockito.when(entry.proceed()).thenAnswer(invocation -> {
+            assertEquals(Boolean.TRUE, TraceStore.get("zero100.enabled"));
+            assertEquals("CALIBRATE", TraceStore.get("zero100.phase"));
+            return webAspect.aroundHybridSearch(body);
+        });
+        try {
+            var request = caller.submit(() -> {
+                TraceStore.clear();
+                GuardContextHolder.set(ctx);
+                if (limited) TraceStore.put("web.serpapi.skipped.reason", "rate_limit");
+                long began = System.nanoTime();
+                try {
+                    return sessionAspect.aroundChatEntry(entry);
+                } catch (Throwable failure) {
+                    throw new AssertionError(failure);
+                } finally {
+                    elapsedMs.set(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began));
+                    trace.set(new java.util.HashMap<>(TraceStore.getAll()));
+                    GuardContextHolder.clear();
+                    TraceStore.clear();
+                }
+            });
+            assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS), "the actual advised body starts");
+            Object result;
+            if (timedOut) {
+                result = request.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(List.of(), result);
+                assertEquals(1L, finished.getCount(), "caller fallback precedes the held worker's completion");
+                assertTrue(elapsedMs.get() >= 40L, "the caller actually waits for the short timebox");
+            } else {
+                org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.TimeoutException.class,
+                        () -> request.get(150, java.util.concurrent.TimeUnit.MILLISECONDS));
+                assertEquals(1L, finished.getCount());
+                release.countDown();
+                result = request.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(List.of("bounded-timebox-result"), result);
+                assertTrue(elapsedMs.get() >= 100L);
+            }
+            assertEquals(timedOut, trace.get().get("zero100.webTimebox.hit"));
+            assertEquals(expectedMs, trace.get().get("zero100.webTimebox.ms"));
+            assertFalse(interrupted.get());
+            release.countDown();
+            assertTrue(finished.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(worker.submit(() -> TraceStore.getAll().isEmpty() && GuardContextHolder.get() == null
+                    && (org.slf4j.MDC.getCopyOfContextMap() == null || org.slf4j.MDC.getCopyOfContextMap().isEmpty()))
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS));
+            org.mockito.Mockito.verify(body, org.mockito.Mockito.times(1)).proceed();
+            org.mockito.Mockito.verify(entry, org.mockito.Mockito.times(1)).proceed();
+            System.out.printf("TBL07_TIGHT control=%s limited=%s rawTightMs=%d effectiveMs=%d elapsedMs=%d timedOut=%s workerHeldAtFallback=%s interrupted=false workerContextCleared=true bodyCalls=1 externalRequests=0%n",
+                    control, limited, rawTightMs, expectedMs, elapsedMs.get(), timedOut, timedOut);
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            worker.shutdown();
+            assertTrue(caller.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS));
+            if (!worker.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                worker.shutdownNow();
+                assertTrue(worker.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS));
+            }
+        }
+    }
+
     private static final class FakePjp implements ProceedingJoinPoint {
         private final Object result;
         private final Object[] args;

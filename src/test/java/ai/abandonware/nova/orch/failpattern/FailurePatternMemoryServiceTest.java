@@ -175,6 +175,31 @@ class FailurePatternMemoryServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void recallTailKeepsOnlyTheBoundedNewestRowsWithoutReadAllLines() throws Exception {
+        Path memory = tempDir.resolve("failure-pattern-memory.jsonl");
+        StringBuilder rows = new StringBuilder();
+        for (int i = 0; i < 1_050; i++) {
+            rows.append("{\"row\":").append(i).append("}\n");
+        }
+        Files.writeString(memory, rows);
+        FailurePatternMemoryService service = service(memory);
+        Method readRows = FailurePatternMemoryService.class.getDeclaredMethod("readRows");
+        readRows.setAccessible(true);
+
+        List<Map<String, Object>> retained =
+                (List<Map<String, Object>>) readRows.invoke(service);
+        String source = Files.readString(Path.of(
+                "main/java/ai/abandonware/nova/orch/failpattern/FailurePatternMemoryService.java"));
+
+        assertEquals(1_000, retained.size());
+        assertEquals(50, retained.get(0).get("row"));
+        assertEquals(1_049, retained.get(retained.size() - 1).get("row"));
+        assertFalse(source.contains("Files.readAllLines(memoryPath"));
+        assertTrue(source.contains("ArrayDeque<String> tail"));
+    }
+
+    @Test
     void recallRanksMatchingPatchJudgments() throws Exception {
         Path memory = tempDir.resolve("failure-pattern-memory.jsonl");
         FailurePatternMemoryService service = service(memory);

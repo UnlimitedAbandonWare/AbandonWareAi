@@ -5,12 +5,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class IvfFlatIndexTest {
@@ -69,5 +73,48 @@ class IvfFlatIndexTest {
 
         assertFalse(hits.isEmpty());
         assertTrue(Double.isFinite(hits.get(0).score()));
+    }
+
+    @Test
+    void searchRejectsNegativeVectorDimensionAsIOException() throws Exception {
+        IvfFlatIndex.save(tempDir, new float[0][], new AnnMeta());
+        byte[] malformedHeader = ByteBuffer.allocate(8)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(-1)
+                .putInt(1)
+                .array();
+        Files.write(tempDir.resolve("vectors.f32"), malformedHeader);
+
+        IvfFlatIndex index = new IvfFlatIndex(tempDir);
+
+        assertThrows(IOException.class,
+                () -> index.search(new float[]{1.0f}, 1, 1));
+    }
+
+    @Test
+    void searchRejectsTruncatedVectorHeaderAsIOException() throws Exception {
+        IvfFlatIndex.save(tempDir, new float[0][], new AnnMeta());
+        Files.write(tempDir.resolve("vectors.f32"), new byte[]{1, 2, 3, 4});
+
+        IvfFlatIndex index = new IvfFlatIndex(tempDir);
+
+        assertThrows(IOException.class,
+                () -> index.search(new float[]{1.0f}, 1, 1));
+    }
+
+    @Test
+    void searchRejectsPayloadShorterThanDeclaredShapeAsIOException() throws Exception {
+        IvfFlatIndex.save(tempDir, new float[0][], new AnnMeta());
+        byte[] headerWithoutPayload = ByteBuffer.allocate(8)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(2)
+                .putInt(1)
+                .array();
+        Files.write(tempDir.resolve("vectors.f32"), headerWithoutPayload);
+
+        IvfFlatIndex index = new IvfFlatIndex(tempDir);
+
+        assertThrows(IOException.class,
+                () -> index.search(new float[]{1.0f, 0.0f}, 1, 1));
     }
 }

@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -170,6 +171,76 @@ class WebSoakKpiProbeServiceTest {
         Map<?, ?> kpi = assertInstanceOf(Map.class, sample.get("kpi"));
         assertEquals(0L, ((Number) kpi.get("outCount")).longValue());
         assertEquals(Boolean.FALSE, kpi.get("rescueMerge.used"));
+    }
+
+    @Test
+    void runSamplesMarkOnlyProviderWithTraceNamespaceAsObserved() {
+        HybridWebSearchProvider hybrid = mock(HybridWebSearchProvider.class);
+        when(hybrid.search(anyString(), anyInt())).thenAnswer(invocation -> {
+            TraceStore.put("web.naver.returnedCount", 0);
+            TraceStore.put("web.naver.providerEmpty", false);
+            return List.of();
+        });
+
+        WebSoakKpiProbeService service = new WebSoakKpiProbeService(
+                hybrid,
+                new MockEnvironment(),
+                objectMapper);
+        WebSoakKpiProbeController.Request request = new WebSoakKpiProbeController.Request();
+        request.setIterations(1);
+        request.setQueries(List.of("provider observation contract"));
+
+        WebSoakKpiProbeService.Report report = service.run(request);
+
+        Map<String, Object> sample = objectMapper.convertValue(
+                report.getSamples().get(0),
+                new TypeReference<>() {
+                });
+        Map<?, ?> kpi = assertInstanceOf(Map.class, sample.get("kpi"));
+        assertEquals(Boolean.TRUE, kpi.get("web.naver.traceObserved"));
+        assertEquals(Boolean.FALSE, kpi.get("web.brave.traceObserved"));
+        assertEquals(Boolean.FALSE, kpi.get("web.serpapi.traceObserved"));
+        assertEquals(Boolean.FALSE, kpi.get("web.tavily.traceObserved"));
+        assertFalse(kpi.containsKey("web.naver.evidenceObserved"));
+        assertEquals(0L, ((Number) kpi.get("web.naver.returnedCount")).longValue());
+        assertEquals(Boolean.FALSE, kpi.get("web.naver.providerEmpty"));
+        assertNull(kpi.get("web.naver.requestedCount"));
+        assertNull(kpi.get("web.brave.returnedCount"));
+        assertNull(kpi.get("web.brave.providerEmpty"));
+    }
+
+    @Test
+    void runSamplesKeepMalformedProviderTaxonomyUnobservedAtMetricLevel() throws Exception {
+        String rawValue = "private taxonomy value ownerToken=secret";
+        HybridWebSearchProvider hybrid = mock(HybridWebSearchProvider.class);
+        when(hybrid.search(anyString(), anyInt())).thenAnswer(invocation -> {
+            TraceStore.put("web.naver.requestedCount", Double.NaN);
+            TraceStore.put("web.naver.providerEmpty", rawValue);
+            TraceStore.put("web.naver.failureReason", rawValue);
+            return List.of();
+        });
+
+        WebSoakKpiProbeService service = new WebSoakKpiProbeService(
+                hybrid,
+                new MockEnvironment(),
+                objectMapper);
+        WebSoakKpiProbeController.Request request = new WebSoakKpiProbeController.Request();
+        request.setIterations(1);
+        request.setQueries(List.of("malformed provider taxonomy contract"));
+
+        WebSoakKpiProbeService.Report report = service.run(request);
+
+        Map<String, Object> sample = objectMapper.convertValue(
+                report.getSamples().get(0),
+                new TypeReference<>() {
+                });
+        Map<?, ?> kpi = assertInstanceOf(Map.class, sample.get("kpi"));
+        assertEquals(Boolean.TRUE, kpi.get("web.naver.traceObserved"));
+        assertNull(kpi.get("web.naver.requestedCount"));
+        assertNull(kpi.get("web.naver.providerEmpty"));
+        String serialized = objectMapper.writeValueAsString(report);
+        assertFalse(serialized.contains(rawValue));
+        assertFalse(serialized.contains("ownerToken=secret"));
     }
 
     @Test
