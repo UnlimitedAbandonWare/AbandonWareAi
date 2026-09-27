@@ -205,7 +205,12 @@ def secret_free(data, source_path=""):
         # sentinel, not a credential. Never exempt arbitrary comments or values.
         example = "#   api-" + "key: dummy    # [PATCH]"
         text = "\n".join("# <local-dummy-example>" if line == example else line
-                         for line in text.split("\n"))
+                         for line in text.splitlines())
+    if source_path.endswith(".properties"):
+        # Empty Java-properties values contain no secret; stop the detector's
+        # whitespace matcher from consuming the following comment or setting.
+        text = re.sub(r"(?m)^([A-Za-z_][A-Za-z0-9_.-]*)[ \t]*=[ \t]*\r?$",
+                      r"\1=<unresolved-setting>", text)
     text = nonliteral_ui_expressions(text, source_path)
     if source_path.endswith(".java"):
         # The existing local Ollama binding has a public noncredential fallback.
