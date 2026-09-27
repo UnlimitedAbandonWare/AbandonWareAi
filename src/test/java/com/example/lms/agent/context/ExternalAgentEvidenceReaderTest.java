@@ -83,6 +83,28 @@ class ExternalAgentEvidenceReaderTest {
         }
     }
 
+    @Test
+    void invalidGoalNextGeneratedAtLeavesRedactedTraceBreadcrumb(@TempDir Path tempDir) throws Exception {
+        Path goalNext = tempDir.resolve("goal-next-auto.summary.json");
+        Files.writeString(goalNext, """
+                {
+                  "ok": true,
+                  "decision": "continue",
+                  "generatedAt": "ownerToken=private-token"
+                }
+                """);
+
+        Map<String, Object> goalRow = ExternalAgentEvidenceReader.goalNextAuto(goalNext.toString());
+
+        assertEquals(0, goalRow.get("ageMinutes"));
+        assertEquals(Boolean.FALSE, goalRow.get("stale"));
+        assertEquals(Boolean.TRUE, TraceStore.get("externalEvidence.reader.suppressed.goal_next_auto_generated_at"));
+        assertEquals("DateTimeParseException",
+                TraceStore.get("externalEvidence.reader.suppressed.goal_next_auto_generated_at.errorType"));
+        assertFalse(TraceStore.getAll().toString().contains("ownerToken"));
+        assertFalse(TraceStore.getAll().toString().contains("private-token"));
+    }
+
     private static final class ThrowingTraceMap extends HashMap<String, Object> {
         @Override
         public Object put(String key, Object value) {

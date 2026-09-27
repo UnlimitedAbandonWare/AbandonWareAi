@@ -7,8 +7,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -107,6 +109,41 @@ class AgentDbContextPromptInjectorTest {
         assertEquals("db_context_snapshot_unavailable", TraceStore.get("agent.dbContext.prompt.reason"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("DataAccessResourceFailureException"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("redacted-test-token"));
+    }
+
+    @Test
+    void enrichBuilderPreservesSupplementaryCharactersAtSummaryLimit() {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        AgentDbContextProvider.AgentDbSnapshot snapshot = new AgentDbContextProvider.AgentDbSnapshot();
+        snapshot.memory = new AgentDbContextProvider.MemorySnapshot();
+        snapshot.memory.statusCounts.put("ACTIVE", 1L);
+        when(provider.snapshot()).thenReturn(snapshot);
+
+        String emoji = "\uD83D\uDE00";
+        String splitBoundary = enrichSummary(provider, "A".repeat(899) + emoji + "Z");
+        String completePairBoundary = enrichSummary(provider, "A".repeat(898) + emoji + "Z");
+        String bmpBoundary = enrichSummary(provider, "A".repeat(900) + "Z");
+        String exactBoundary = enrichSummary(provider, "A".repeat(900));
+        String shortSupplementary = enrichSummary(provider, "start" + emoji + "end");
+
+        assertAll(
+                () -> assertEquals(899, splitBoundary.length()),
+                () -> assertFalse(Character.isHighSurrogate(
+                        splitBoundary.charAt(splitBoundary.length() - 1))),
+                () -> assertEquals(splitBoundary, new String(
+                        splitBoundary.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)),
+                () -> assertEquals("A".repeat(898) + emoji, completePairBoundary),
+                () -> assertEquals("A".repeat(900), bmpBoundary),
+                () -> assertEquals("A".repeat(900), exactBoundary),
+                () -> assertTrue(shortSupplementary.startsWith("start" + emoji + "end\n")),
+                () -> assertEquals(shortSupplementary, new String(
+                        shortSupplementary.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)));
+    }
+
+    private static String enrichSummary(AgentDbContextProvider provider, String existing) {
+        PromptContext.Builder builder = PromptContext.builder().learningContextSummary(existing);
+        new AgentDbContextPromptInjector(provider).enrichBuilder(builder);
+        return builder.build().learningContextSummary();
     }
 
     private static Map<String, Object> aliasRow(String component, int aliasCount) {

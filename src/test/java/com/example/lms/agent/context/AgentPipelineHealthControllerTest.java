@@ -5,7 +5,9 @@ import com.example.lms.debug.DebugEventLevel;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.DebugProbeType;
 import com.example.lms.debug.ai.DebugAiMetricsService;
+import com.example.lms.debug.ai.ChatUsageLedger;
 import com.example.lms.search.TraceStore;
+import com.example.lms.trace.SafeRedactor;
 import com.example.lms.trace.TraceSnapshotStore;
 import com.example.lms.transform.QueryTransformer;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
@@ -163,6 +165,175 @@ class AgentPipelineHealthControllerTest {
         assertEquals("needleoutcomerewarder.recordoutcome", causal.get("where"));
         assertTrue(String.valueOf(causal.get("detail")).contains("dominant=after_filter_starvation"));
         assertFalse(health.toString().contains("private raw query must not leak"));
+    }
+
+    @Test
+    void pipelineHealthMergesSessionScopedProbeRoundSnapshotsWithoutRawValues() {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        TraceStore.put("sessionId", "hash:session-1");
+
+        TraceSnapshotStore snapshotStore = mock(TraceSnapshotStore.class);
+        Map<String, Object> startTrace = Map.ofEntries(
+                Map.entry("orch.probeRound.roundRef", "hash:aaaaaaaaaaaa"),
+                Map.entry("orch.probeRound.phase", "NORMALIZATION_REQUIRED"),
+                Map.entry("orch.probeRound.hypothesis", "after_filter_starvation"),
+                Map.entry("orch.probeRound.patchCandidate", "source_patch_candidate"),
+                Map.entry("orch.probeRound.causalConfidence", 0.74d),
+                Map.entry("orch.probeRound.counterEvidenceCount", 3),
+                Map.entry("orch.probeRound.retrievalConfidence", 0.82d),
+                Map.entry("orch.probeRound.verificationGatePassed", false),
+                Map.entry("rawQuery", "private start claim"));
+        Map<String, Object> resumeTrace = Map.ofEntries(
+                Map.entry("orch.probeRound.roundRef", "hash:aaaaaaaaaaaa"),
+                Map.entry("orch.probeRound.phase", "VERIFIED"),
+                Map.entry("orch.probeRound.coherenceStatus", "consistent"),
+                Map.entry("orch.probeRound.releaseStatus", "approve"),
+                Map.entry("orch.probeRound.confidenceRange", "high_to_high"),
+                Map.entry("orch.probeRound.verifiedEvidenceCount", 3),
+                Map.entry("orch.probeRound.verificationGatePassed", true),
+                Map.entry("rawEvidence", "private verifier evidence"));
+        Map<String, Object> foreignTrace = Map.of(
+                "orch.probeRound.phase", "VERIFIED",
+                "orch.probeRound.hypothesis", "foreign_private_hypothesis");
+        TraceSnapshotStore.TraceSnapshot resume = probeSnapshot(
+                "snap-resume", "hash:session-1", "/internal/agent/probe-round:resume", resumeTrace);
+        TraceSnapshotStore.TraceSnapshot start = probeSnapshot(
+                "snap-start", "hash:session-1", "/internal/agent/probe-round:start", startTrace);
+        TraceSnapshotStore.TraceSnapshot foreign = probeSnapshot(
+                "snap-foreign", "hash:session-2", "/internal/agent/probe-round:resume", foreignTrace);
+        when(snapshotStore.listSummaries(20)).thenReturn(List.of(
+                Map.of("id", "snap-foreign"), Map.of("id", "snap-resume"), Map.of("id", "snap-start")));
+        when(snapshotStore.listSummaries(50)).thenReturn(List.of(
+                Map.of("id", "snap-foreign"), Map.of("id", "snap-resume"), Map.of("id", "snap-start")));
+        when(snapshotStore.get("snap-foreign")).thenReturn(Optional.of(foreign));
+        when(snapshotStore.get("snap-resume")).thenReturn(Optional.of(resume));
+        when(snapshotStore.get("snap-start")).thenReturn(Optional.of(start));
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "traceSnapshotStore", snapshotStore);
+
+        Map<String, Object> health = controller.pipelineHealth();
+        Map<String, Object> probeRound = lane(health, "causalProbe");
+
+        assertEquals("OK", probeRound.get("status"));
+        assertEquals("VERIFIED", probeRound.get("phase"));
+        assertEquals("after_filter_starvation", probeRound.get("dominantFailure"));
+        assertEquals("source_patch_candidate", probeRound.get("patchCandidate"));
+        assertEquals(0.74d, probeRound.get("confidence"));
+        assertEquals(3, probeRound.get("counterEvidenceCount"));
+        assertEquals(0.82d, probeRound.get("retrievalConfidence"));
+        assertEquals("consistent", probeRound.get("coherenceStatus"));
+        assertEquals("approve", probeRound.get("releaseStatus"));
+        assertEquals("high_to_high", probeRound.get("confidenceRange"));
+        assertEquals(Boolean.TRUE, probeRound.get("verificationGatePassed"));
+        assertEquals("trace:probeRound", probeRound.get("source"));
+        assertFalse(health.toString().contains("private start claim"));
+        assertFalse(health.toString().contains("private verifier evidence"));
+        assertFalse(health.toString().contains("foreign_private_hypothesis"));
+    }
+
+    @Test
+    void pipelineHealthDoesNotBorrowStartEvidenceFromAnOlderRoundInTheSameSession() {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        TraceStore.put("sessionId", "hash:session-1");
+
+        TraceSnapshotStore snapshotStore = mock(TraceSnapshotStore.class);
+        Map<String, Object> newestResumeTrace = Map.ofEntries(
+                Map.entry("orch.probeRound.roundRef", "hash:aaaaaaaaaaaa"),
+                Map.entry("orch.probeRound.phase", "VERIFIED"),
+                Map.entry("orch.probeRound.coherenceStatus", "consistent"),
+                Map.entry("orch.probeRound.releaseStatus", "approve"),
+                Map.entry("orch.probeRound.confidenceRange", "medium_to_high"),
+                Map.entry("orch.probeRound.verifiedEvidenceCount", 2),
+                Map.entry("orch.probeRound.verificationGatePassed", true));
+        Map<String, Object> olderStartTrace = Map.ofEntries(
+                Map.entry("orch.probeRound.roundRef", "hash:bbbbbbbbbbbb"),
+                Map.entry("orch.probeRound.phase", "NORMALIZATION_REQUIRED"),
+                Map.entry("orch.probeRound.hypothesis", "stale_round_hypothesis"),
+                Map.entry("orch.probeRound.patchCandidate", "stale_round_patch"),
+                Map.entry("orch.probeRound.causalConfidence", 0.99d),
+                Map.entry("orch.probeRound.counterEvidenceCount", 9),
+                Map.entry("orch.probeRound.retrievalConfidence", 0.98d),
+                Map.entry("rawQuery", "private stale round claim"));
+        TraceSnapshotStore.TraceSnapshot newestResume = probeSnapshot(
+                "snap-new-resume", "hash:session-1", "/internal/agent/probe-round:resume", newestResumeTrace);
+        TraceSnapshotStore.TraceSnapshot olderStart = probeSnapshot(
+                "snap-old-start", "hash:session-1", "/internal/agent/probe-round:start", olderStartTrace);
+        List<Map<String, Object>> summaries = List.of(
+                Map.of("id", "snap-new-resume"), Map.of("id", "snap-old-start"));
+        when(snapshotStore.listSummaries(20)).thenReturn(summaries);
+        when(snapshotStore.listSummaries(50)).thenReturn(summaries);
+        when(snapshotStore.get("snap-new-resume")).thenReturn(Optional.of(newestResume));
+        when(snapshotStore.get("snap-old-start")).thenReturn(Optional.of(olderStart));
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "traceSnapshotStore", snapshotStore);
+
+        Map<String, Object> health = controller.pipelineHealth();
+        Map<String, Object> probeRound = lane(health, "causalProbe");
+
+        assertEquals("VERIFIED", probeRound.get("phase"));
+        assertEquals("none", probeRound.get("dominantFailure"));
+        assertEquals("none", probeRound.get("patchCandidate"));
+        assertEquals(0.0d, probeRound.get("confidence"));
+        assertEquals(0, probeRound.get("counterEvidenceCount"));
+        assertEquals(0.0d, probeRound.get("retrievalConfidence"));
+        assertEquals("medium_to_high", probeRound.get("confidenceRange"));
+        assertFalse(health.toString().contains("stale_round_hypothesis"));
+        assertFalse(health.toString().contains("stale_round_patch"));
+        assertFalse(health.toString().contains("private stale round claim"));
+    }
+
+    @Test
+    void pipelineHealthStopsAtNewestUncorrelatedProbeRoundInsteadOfResurrectingOlderRound() {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        TraceStore.put("sessionId", "hash:session-1");
+
+        TraceSnapshotStore snapshotStore = mock(TraceSnapshotStore.class);
+        Map<String, Object> newestRefLessTrace = Map.ofEntries(
+                Map.entry("orch.probeRound.phase", "CAUSAL_ONLY"),
+                Map.entry("orch.probeRound.reason", "operator_authority_not_issued"),
+                Map.entry("orch.probeRound.verificationGatePassed", false));
+        Map<String, Object> olderVerifiedTrace = Map.ofEntries(
+                Map.entry("orch.probeRound.roundRef", "hash:cccccccccccc"),
+                Map.entry("orch.probeRound.phase", "VERIFIED"),
+                Map.entry("orch.probeRound.hypothesis", "resurrected_old_hypothesis"),
+                Map.entry("orch.probeRound.patchCandidate", "resurrected_old_patch"),
+                Map.entry("orch.probeRound.coherenceStatus", "consistent"),
+                Map.entry("orch.probeRound.releaseStatus", "approve"),
+                Map.entry("orch.probeRound.verificationGatePassed", true));
+        TraceSnapshotStore.TraceSnapshot newestRefLess = probeSnapshot(
+                "snap-new-ref-less", "hash:session-1", "/internal/agent/probe-round:start", newestRefLessTrace);
+        TraceSnapshotStore.TraceSnapshot olderVerified = probeSnapshot(
+                "snap-old-verified", "hash:session-1", "/internal/agent/probe-round:resume", olderVerifiedTrace);
+        List<Map<String, Object>> summaries = List.of(
+                Map.of("id", "snap-new-ref-less"), Map.of("id", "snap-old-verified"));
+        when(snapshotStore.listSummaries(20)).thenReturn(summaries);
+        when(snapshotStore.listSummaries(50)).thenReturn(summaries);
+        when(snapshotStore.get("snap-new-ref-less")).thenReturn(Optional.of(newestRefLess));
+        when(snapshotStore.get("snap-old-verified")).thenReturn(Optional.of(olderVerified));
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "traceSnapshotStore", snapshotStore);
+
+        Map<String, Object> health = controller.pipelineHealth();
+        Map<String, Object> probeRound = lane(health, "causalProbe");
+
+        assertEquals("CAUSAL_ONLY", probeRound.get("phase"));
+        assertEquals("none", probeRound.get("dominantFailure"));
+        assertEquals("none", probeRound.get("patchCandidate"));
+        assertEquals(Boolean.FALSE, probeRound.get("verificationGatePassed"));
+        assertFalse(health.toString().contains("resurrected_old_hypothesis"));
+        assertFalse(health.toString().contains("resurrected_old_patch"));
     }
 
     @Test
@@ -390,7 +561,8 @@ class AgentPipelineHealthControllerTest {
         AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
         ReflectionTestUtils.setField(controller, "patchDropRoot", patchDrop.toString());
 
-        Map<String, Object> patchdrop = externalEvidence(controller.pipelineHealth(), "patchdrop");
+        Map<String, Object> health = controller.pipelineHealth();
+        Map<String, Object> patchdrop = externalEvidence(health, "patchdrop");
         assertEquals("WARN", patchdrop.get("status"));
         assertEquals(Boolean.TRUE, patchdrop.get("readOnly"));
         assertEquals(Boolean.FALSE, patchdrop.get("mutationAllowed"));
@@ -413,8 +585,13 @@ class AgentPipelineHealthControllerTest {
         assertEquals(Boolean.TRUE, patchdrop.get("pendingProducerSourceIsolationOk"));
         assertEquals("patchdrop_apply_candidate_pending", patchdrop.get("evidenceNeeded"));
         assertEquals("run_patchdrop_janitor_inventory", patchdrop.get("nextAction"));
-        assertFalse(controller.pipelineHealth().toString().contains("diff --git"));
-        assertFalse(controller.pipelineHealth().toString().contains("secret-canonical-root"));
+        Map<String, Object> external = overview(health, "externalEvidence");
+        assertEquals("WARN", external.get("status"));
+        Map<String, Object> blocker = overview(health, "debugBlocker");
+        assertEquals("WARN", blocker.get("status"));
+        assertEquals("service=patchdrop action=run_patchdrop_janitor_inventory", blocker.get("detail"));
+        assertFalse(health.toString().contains("diff --git"));
+        assertFalse(health.toString().contains("secret-canonical-root"));
     }
 
     @Test
@@ -704,8 +881,9 @@ class AgentPipelineHealthControllerTest {
         assertEquals(1, debugEventHealth.get("fingerprintCount"));
         assertEquals("warn", debugEventHealth.get("latestLevel"));
         assertEquals("model_guard", debugEventHealth.get("latestProbe"));
-        assertTrue(String.valueOf(debugEventHealth.get("latestFingerprintHash")).startsWith("hash:"));
-        assertEquals("model.guard.timeout".length(), debugEventHealth.get("latestFingerprintLength"));
+        String storedFingerprint = SafeRedactor.hashValue("model.guard.timeout");
+        assertEquals(SafeRedactor.hashValue(storedFingerprint), debugEventHealth.get("latestFingerprintHash"));
+        assertEquals(storedFingerprint.length(), debugEventHealth.get("latestFingerprintLength"));
         assertEquals(1, debugEventHealth.get("maxWindowCount"));
         assertEquals(0, debugEventHealth.get("totalSuppressed"));
         String rendered = debugEventHealth.toString();
@@ -826,8 +1004,15 @@ class AgentPipelineHealthControllerTest {
                 Map.of("failureClass", "rate-limit", "secret", "sk-local-private"),
                 null);
 
+        ChatUsageLedger chatUsageLedger = new ChatUsageLedger();
+        ChatUsageLedger.ModelAttempt usageAttempt = chatUsageLedger.beginModelInvocation(
+                ChatUsageLedger.ModelPurpose.PRIMARY,
+                ChatUsageLedger.ConfiguredCap.omitted(null, null, ChatUsageLedger.CapSource.ROUTER_MODEL));
+        usageAttempt.responseReceived(null);
+        DebugAiMetricsService metricsService = new DebugAiMetricsService(debugEventStore);
+        ReflectionTestUtils.setField(metricsService, "chatUsageLedger", chatUsageLedger);
         AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
-        ReflectionTestUtils.setField(controller, "debugAiMetricsService", new DebugAiMetricsService(debugEventStore));
+        ReflectionTestUtils.setField(controller, "debugAiMetricsService", metricsService);
 
         Map<String, Object> debugAiMetrics = map(controller.pipelineHealth().get("debugAiMetrics"));
 
@@ -840,6 +1025,9 @@ class AgentPipelineHealthControllerTest {
         assertEquals("web_search", debugAiMetrics.get("topTile"));
         assertEquals("warn", debugAiMetrics.get("topTileStatus"));
         assertEquals("rate-limit", debugAiMetrics.get("topFailureClass"));
+        assertEquals("awx.chat-usage.v1", map(debugAiMetrics.get("chatUsage")).get("schemaVersion"));
+        assertEquals(1L, ((Number) map(map(debugAiMetrics.get("chatUsage")).get("modelInvocations"))
+                .get("attempts")).longValue());
         assertTrue(((Number) debugAiMetrics.get("tileCount")).intValue() >= 1);
         assertFalse(debugAiMetrics.toString().contains("private-token"));
         assertFalse(debugAiMetrics.toString().contains("raw query"));
@@ -947,6 +1135,7 @@ class AgentPipelineHealthControllerTest {
         TraceStore.put("chat.emptyAnswerGuard.fallback", "composer_blank");
         TraceStore.put("chat.emptyAnswerGuard.evidenceDocs", 2);
         TraceStore.put("orch.evidenceList.traceInjected", true);
+        TraceStore.put("externalEvidence.requestedLanes", List.of("supabase"));
         TraceStore.put("queryTransformer.bypassed", true);
         TraceStore.put("causalProbe.evidenceReady", true);
         TraceStore.put("causalProbe.triggerReason", "axis_agreement");
@@ -969,7 +1158,7 @@ class AgentPipelineHealthControllerTest {
         Map<String, Object> rollup = overview(health, "debugRollup");
         assertEquals("WARN", rollup.get("status"));
         assertEquals("pending_backlog", rollup.get("reason"));
-        assertEquals("core=WARN model=WARN answer=WARN search=WARN external=WARN ui=WARN", rollup.get("detail"));
+        assertEquals("core=WARN model=WARN answer=WARN search=WARN external=WARN ui=SUPPORTING_EVIDENCE_MISSING", rollup.get("detail"));
         assertEquals("pipeline-health", rollup.get("source"));
 
         Map<String, Object> core = overview(health, "coreRuntime");
@@ -1019,6 +1208,33 @@ class AgentPipelineHealthControllerTest {
         assertFalse(rendered.contains("private-default-model-name"));
         assertFalse(rendered.contains("brave-secret-raw-value"));
         assertFalse(rendered.contains("supabase-token-raw"));
+    }
+
+    @Test
+    void invalidCausalProbeConfidenceLeavesRedactedTraceBreadcrumb(@TempDir Path tempDir) {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        TraceStore.put("causalProbe.evidenceReady", true);
+        TraceStore.put("causalProbe.triggerReason", "axis_agreement");
+        TraceStore.put("causalProbe.dominantFailure", "loader_starvation");
+        TraceStore.put("causalProbe.action", "recovery_mode");
+        TraceStore.put("causalProbe.confidence", "ownerToken=private-token");
+        TraceStore.put("causalProbe.axisCount", 2);
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "browserSmokePath", tempDir.resolve("missing-browser-smoke.json").toString());
+
+        Map<String, Object> health = controller.pipelineHealth();
+        Map<String, Object> causalProbe = lane(health, "causalProbe");
+
+        assertEquals(0.0d, causalProbe.get("confidence"));
+        assertEquals(Boolean.TRUE, TraceStore.get("agent.pipelineHealth.suppressed.bounded_double_parse"));
+        assertEquals("NumberFormatException",
+                TraceStore.get("agent.pipelineHealth.suppressed.bounded_double_parse.errorType"));
+        assertFalse(health.toString().contains("ownerToken"));
+        assertFalse(health.toString().contains("private-token"));
     }
 
     @Test
@@ -1085,6 +1301,46 @@ class AgentPipelineHealthControllerTest {
         assertTrue(externalDetail.contains("computer=ok"));
         assertTrue(externalDetail.contains("noether=noether_status_missing"));
         assertFalse(health.toString().contains("do-not-render-this-title"));
+    }
+
+    @Test
+    void pipelineHealthTreatsGeneratedComputerSmokeWithoutExplicitTtlAsStale(@TempDir Path tempDir) throws Exception {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        Path smoke = tempDir.resolve("computer-use-smoke.json");
+        Files.writeString(smoke, """
+                {
+                  "ok": true,
+                  "decision": "ok",
+                  "reachable": true,
+                  "guiOnly": true,
+                  "noTerminalAutomation": true,
+                  "supportingOnly": true,
+                  "stale": false,
+                  "generatedAt": "2026-06-25T05:46:48.261Z",
+                  "appCount": 42,
+                  "targetableWindowCount": 299,
+                  "storesAppNames": false,
+                  "storesRawAppNames": false,
+                  "storesWindowTitles": false,
+                  "secretHits": 0,
+                  "rawSecretPatternHits": 0
+                }
+                """, StandardCharsets.UTF_8);
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "computerUseSmokePath", smoke.toString());
+
+        Map<String, Object> computer = externalEvidence(controller.pipelineHealth(), "computer-use");
+
+        assertEquals("WARN", computer.get("status"));
+        assertEquals(Boolean.TRUE, computer.get("stale"));
+        assertTrue(((Number) computer.get("ageMinutes")).longValue() >= 60);
+        assertEquals(60, computer.get("staleAfterMinutes"));
+        assertEquals("computer_use_smoke_stale", computer.get("evidenceNeeded"));
+        assertEquals("run_computer_use_lightweight_smoke", computer.get("nextAction"));
     }
 
     @Test
@@ -1249,7 +1505,7 @@ class AgentPipelineHealthControllerTest {
         Map<String, Object> external = overview(controller.pipelineHealth(), "externalEvidence");
 
         assertEquals("WARN", external.get("status"));
-        assertEquals("project_ref_missing", external.get("reason"));
+        assertEquals("patchdrop_root_missing", external.get("reason"));
         assertEquals(
                 "services=6 warn=5 supabase=project_ref_missing computer=ok browser=localhost_unreachable patchdrop=patchdrop_root_missing goalNext=goal_next_auto_summary_missing noether=noether_status_missing",
                 external.get("detail"));
@@ -1309,6 +1565,241 @@ class AgentPipelineHealthControllerTest {
         assertEquals("localhost_unreachable", browser.get("errorClass"));
         assertFalse(controller.pipelineHealth().toString().contains("private-debug-path"));
         assertFalse(controller.pipelineHealth().toString().contains("browser-proof.png"));
+    }
+
+    @Test
+    void pipelineHealthTreatsGeneratedBrowserSmokeWithoutExplicitTtlAsStale(@TempDir Path tempDir) throws Exception {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        Path smoke = tempDir.resolve("browser-ui-smoke.json");
+        Files.writeString(smoke, """
+                {
+                  "ok": true,
+                  "reachable": true,
+                  "localhost": true,
+                  "screenshotCaptured": true,
+                  "targetContentVisible": true,
+                  "browserSurface": "iab",
+                  "generatedAt": "2026-06-25T06:01:02.003Z",
+                  "stale": false,
+                  "secretHits": 0,
+                  "rawSecretPatternHits": 0
+                }
+                """, StandardCharsets.UTF_8);
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "browserSmokePath", smoke.toString());
+
+        Map<String, Object> browser = externalEvidence(controller.pipelineHealth(), "browser");
+
+        assertEquals("WARN", browser.get("status"));
+        assertEquals(Boolean.TRUE, browser.get("stale"));
+        assertTrue(((Number) browser.get("ageMinutes")).longValue() >= 60);
+        assertEquals(60, browser.get("staleAfterMinutes"));
+        assertEquals("browser_ui_smoke_stale", browser.get("evidenceNeeded"));
+        assertEquals("run_browser_local_ui_smoke", browser.get("nextAction"));
+    }
+
+    @Test
+    void pipelineHealthAcceptsPublicDomainBrowserEvidenceWithoutRawUrls(@TempDir Path tempDir) throws Exception {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        Path smoke = tempDir.resolve("browser-ui-smoke.json");
+        Files.writeString(smoke, """
+                {
+                  "ok": true,
+                  "reachable": true,
+                  "localhost": false,
+                  "publicDomain": true,
+                  "targetUrl": "https://abandonwareai.kro.kr/private-debug-path",
+                  "screenshotCaptured": true,
+                  "statusClass": "ui_visible",
+                  "targetContentVisible": true,
+                  "browserSurface": "iab",
+                  "secretHits": 0,
+                  "rawSecretPatternHits": 0
+                }
+                """, StandardCharsets.UTF_8);
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "browserSmokePath", smoke.toString());
+
+        Map<String, Object> health = controller.pipelineHealth();
+        Map<String, Object> browser = externalEvidence(health, "browser");
+        assertEquals("OK", browser.get("status"));
+        assertEquals(Boolean.FALSE, browser.get("localhost"));
+        assertEquals(Boolean.TRUE, browser.get("publicDomain"));
+        assertEquals(Boolean.TRUE, browser.get("targetAccepted"));
+        assertEquals("abandonwareai.kro.kr", browser.get("targetHost"));
+        assertEquals("public-domain-ui-proof", browser.get("evidenceScope"));
+        assertEquals("browser_public_domain_ui_smoke_current", browser.get("nextAction"));
+        assertFalse(health.toString().contains("https://abandonwareai.kro.kr/private-debug-path"));
+        assertFalse(health.toString().contains("private-debug-path"));
+        Map<String, Object> uiDebug = overview(health, "uiDebug");
+        assertEquals("public-domain-ui-proof", uiDebug.get("source"));
+    }
+
+    @Test
+    void pipelineHealthRequestsPublicDomainBrowserSmokeWhenConfiguredSmokeIsMissing(@TempDir Path tempDir) {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "browserSmokePath", tempDir.resolve("missing-browser-smoke.json").toString());
+        ReflectionTestUtils.setField(controller, "appPublicBaseUrl", "https://abandonwareai.kro.kr");
+
+        Map<String, Object> health = controller.pipelineHealth();
+        Map<String, Object> browser = externalEvidence(health, "browser");
+        assertEquals("WARN", browser.get("status"));
+        assertEquals(Boolean.FALSE, browser.get("reachable"));
+        assertEquals(Boolean.FALSE, browser.get("localhost"));
+        assertEquals(Boolean.TRUE, browser.get("publicDomain"));
+        assertEquals(Boolean.TRUE, browser.get("targetAccepted"));
+        assertEquals("abandonwareai.kro.kr", browser.get("targetHost"));
+        assertEquals("public-domain-ui-proof", browser.get("evidenceScope"));
+        assertEquals("browser_ui_smoke_missing", browser.get("evidenceNeeded"));
+        assertEquals("run_browser_public_domain_ui_smoke", browser.get("nextAction"));
+        assertFalse(health.toString().contains("https://abandonwareai.kro.kr"));
+    }
+
+    @Test
+    void pipelineHealthKeepsOptionalExternalEvidenceSupportingWhenDesktopProofIsReady(@TempDir Path tempDir) throws Exception {
+        AgentDbContextProvider provider = mock(AgentDbContextProvider.class);
+        when(provider.memorySnapshot()).thenReturn(memory(Map.of("ACTIVE", 1L)));
+        when(provider.strategySnapshot()).thenReturn(strategy(List.of()));
+        when(provider.ledgerSnapshot()).thenReturn(ledger(List.of(), List.of()));
+        Path computer = tempDir.resolve("computer-use-smoke.json");
+        Files.writeString(computer, """
+                {
+                  "ok": true,
+                  "decision": "ok",
+                  "reachable": true,
+                  "guiOnly": true,
+                  "noTerminalAutomation": true,
+                  "supportingOnly": true,
+                  "appCount": 4,
+                  "targetableWindowCount": 7,
+                  "storesAppNames": false,
+                  "storesRawAppNames": false,
+                  "storesWindowTitles": false,
+                  "secretHits": 0,
+                  "rawSecretPatternHits": 0
+                }
+                """, StandardCharsets.UTF_8);
+        Path goalNext = tempDir.resolve("goal-next-auto.summary.json");
+        Files.writeString(goalNext, """
+                {
+                  "ok": true,
+                  "decision": "continue",
+                  "firstAction": "none",
+                  "firstActionSource": "desktop_control_loop",
+                  "generatedAt": "2026-06-25T07:00:00.000Z",
+                  "externalInputGate": {
+                    "localPatchJustified": false
+                  },
+                  "desktopControlLoop": {
+                    "localReady": true,
+                    "completionReady": true,
+                    "externalEvidenceComplete": false
+                  },
+                  "sourceHealthExit": 0,
+                  "completionAuditExit": 0,
+                  "supabaseSmoke": {
+                    "projectScopeStatus": "project_ref_present",
+                    "mcpDecision": "ready"
+                  },
+                  "supabaseApply": {
+                    "evidenceNeededCount": 0
+                  },
+                  "externalApply": {
+                    "evidenceNeededCount": 0
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+        Path noether = tempDir.resolve("noether-subagent-status.json");
+        Files.writeString(noether, """
+                {
+                  "ok": true,
+                  "responded": true,
+                  "waiting": false,
+                  "lastMessageKind": "response_seen",
+                  "secretHits": 0
+                }
+                """, StandardCharsets.UTF_8);
+        Path patchDrop = tempDir.resolve("patchdrop");
+        Files.createDirectories(patchDrop.resolve("notebook"));
+        Files.writeString(patchDrop.resolve("notebook").resolve("producer-topic-notebook-v3.patch"),
+                "diff --git a/b b/b\n", StandardCharsets.UTF_8);
+        Files.writeString(patchDrop.resolve("notebook").resolve("producer-topic-notebook-v3.manifest.json"),
+                """
+                        {
+                          "slug": "producer-topic",
+                          "node": "notebook",
+                          "status": "ACTIVE",
+                          "activePatch": "producer-topic-notebook-v3.patch"
+                        }
+                        """, StandardCharsets.UTF_8);
+        Files.writeString(patchDrop.resolve("notebook").resolve("report-only-notebook-v3.manifest.json"),
+                "{}", StandardCharsets.UTF_8);
+
+        AgentPipelineHealthController controller = new AgentPipelineHealthController(provider);
+        ReflectionTestUtils.setField(controller, "computerUseSmokePath", computer.toString());
+        ReflectionTestUtils.setField(controller, "browserSmokePath", tempDir.resolve("missing-browser-smoke.json").toString());
+        ReflectionTestUtils.setField(controller, "goalNextAutoSummaryPath", goalNext.toString());
+        ReflectionTestUtils.setField(controller, "noetherStatusPath", noether.toString());
+        ReflectionTestUtils.setField(controller, "patchDropRoot", patchDrop.toString());
+        ReflectionTestUtils.setField(controller, "supabaseProjectRef", "");
+        ReflectionTestUtils.setField(controller, "supabaseAccessToken", "");
+        ReflectionTestUtils.setField(controller, "appPublicBaseUrl", "http://localhost:8080");
+
+        Map<String, Object> health = controller.pipelineHealth();
+
+        Map<String, Object> external = overview(health, "externalEvidence");
+        assertEquals("OK", external.get("status"));
+        assertEquals("ready", external.get("reason"));
+        assertTrue(String.valueOf(external.get("detail")).contains("browser=browser_ui_smoke_missing"));
+
+        Map<String, Object> blocker = overview(health, "debugBlocker");
+        assertEquals("OK", blocker.get("status"));
+        assertEquals("ready", blocker.get("reason"));
+        assertEquals("service=none action=none", blocker.get("detail"));
+
+        Map<String, Object> rollup = overview(health, "debugRollup");
+        assertTrue(String.valueOf(rollup.get("detail")).contains("external=OK"));
+        assertTrue(String.valueOf(rollup.get("detail")).contains("ui=SUPPORTING_EVIDENCE_MISSING"));
+
+        Map<String, Object> uiDebug = overview(health, "uiDebug");
+        assertEquals("WARN", uiDebug.get("status"));
+        assertEquals("browser_ui_smoke_missing", uiDebug.get("reason"));
+        assertEquals("local-ui-proof", uiDebug.get("source"));
+
+        Map<String, Object> supabase = externalEvidence(health, "supabase");
+        assertEquals("WARN", supabase.get("status"));
+        assertEquals("project_ref_missing", supabase.get("evidenceNeeded"));
+
+        Map<String, Object> patchdrop = externalEvidence(health, "patchdrop");
+        assertEquals("WARN", patchdrop.get("status"));
+        assertEquals(1, patchdrop.get("nestedProducerPatchCount"));
+        assertEquals(1, patchdrop.get("reportOnlyPendingCount"));
+        assertEquals("patchdrop_report_only_pending", patchdrop.get("evidenceNeeded"));
+
+        TraceStore.put("externalEvidence.mode", "external_evidence");
+        TraceStore.put("externalEvidence.source", "chat_request_tags");
+        TraceStore.put("externalEvidence.executionThread", false);
+        TraceStore.put("externalEvidence.requestedLanes", List.of("supabase"));
+
+        Map<String, Object> requestedHealth = controller.pipelineHealth();
+        Map<String, Object> requestedSupabase = externalEvidence(requestedHealth, "supabase");
+        assertEquals("external_evidence", requestedSupabase.get("lanePolicy"));
+        assertEquals("WARN", overview(requestedHealth, "externalEvidence").get("status"));
+        assertEquals("service=supabase action=set_supabase_project_ref",
+                overview(requestedHealth, "debugBlocker").get("detail"));
     }
 
     @Test
@@ -1399,6 +1890,7 @@ class AgentPipelineHealthControllerTest {
                     "parsed": true,
                     "ok": false,
                     "decision": "evidence_needed",
+                    "evidenceNeeded": "public-listener-unreachable",
                     "reachable": true,
                     "localhost": true,
                     "screenshotCaptured": true,
@@ -1486,6 +1978,7 @@ class AgentPipelineHealthControllerTest {
         assertEquals(Boolean.TRUE, goalNext.get("browserUseTargetContentVisible"));
         assertEquals("ui_visible", goalNext.get("browserUseStatusClass"));
         assertEquals("iab", goalNext.get("browserUseSurface"));
+        assertEquals("public-listener-unreachable", goalNext.get("browserUseEvidenceNeeded"));
         assertEquals("rerun_browser_local_ui_smoke", goalNext.get("browserUseNextAction"));
         assertEquals(18, goalNext.get("repeatCount"));
         assertEquals(2, goalNext.get("supabaseSmokeExit"));
@@ -1633,6 +2126,18 @@ class AgentPipelineHealthControllerTest {
         snapshot.hotspotDistribution.addAll(hotspots);
         snapshot.recentFailures.addAll(failures);
         return snapshot;
+    }
+
+    private static TraceSnapshotStore.TraceSnapshot probeSnapshot(
+            String id,
+            String sessionHash,
+            String path,
+            Map<String, Object> trace) {
+        return new TraceSnapshotStore.TraceSnapshot(
+                id, 1L, "2026-07-15T00:00:00Z",
+                sessionHash, sessionHash, null, null,
+                "http_request", "POST", path, 200, null,
+                true, trace.size(), Map.of(), trace, Map.of(), null, false);
     }
 
     @SuppressWarnings("unchecked")

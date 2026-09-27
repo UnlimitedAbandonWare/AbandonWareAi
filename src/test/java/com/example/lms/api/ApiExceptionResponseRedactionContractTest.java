@@ -153,7 +153,9 @@ class ApiExceptionResponseRedactionContractTest {
                 org.mockito.Mockito.mock(com.example.lms.service.MemoryReinforcementService.class);
         org.mockito.Mockito.doThrow(new RuntimeException("feedback write failed at " + rawPath))
                 .when(memoryService)
-                .applyFeedback(
+                .applyFeedbackToRatedAssistant(
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyLong(),
                         org.mockito.ArgumentMatchers.anyString(),
                         org.mockito.ArgumentMatchers.anyString(),
                         org.mockito.ArgumentMatchers.anyBoolean(),
@@ -166,6 +168,10 @@ class ApiExceptionResponseRedactionContractTest {
         com.example.lms.domain.ChatSession session =
                 new com.example.lms.domain.ChatSession("owned", "owner-key", "ANON");
         session.setId(7L);
+        com.example.lms.domain.ChatMessage ratedMessage =
+                new com.example.lms.domain.ChatMessage(session, "assistant", "assistant message");
+        ratedMessage.setId(71L);
+        session.setMessages(java.util.List.of(ratedMessage));
         org.mockito.Mockito.when(historyService.getSessionWithMessages(7L)).thenReturn(session);
         org.mockito.Mockito.when(ownerKeyResolver.ownerKey()).thenReturn("owner-key");
         FeedbackController controller = new FeedbackController(memoryService, historyService, ownerKeyResolver);

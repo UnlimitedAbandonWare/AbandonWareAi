@@ -1,7 +1,9 @@
 package com.abandonware.ai.agent.tool;
 
 import ai.abandonware.nova.orch.failpattern.FailurePatternMemoryService;
+import com.abandonware.ai.agent.consent.BasicConsentService;
 import com.abandonware.ai.agent.consent.ConsentService;
+import com.abandonware.ai.agent.consent.ConsentToken;
 import com.abandonware.ai.agent.contract.ToolManifestCatalog;
 import com.abandonware.ai.agent.contract.ToolManifestEntry;
 import com.abandonware.ai.agent.contract.ToolManifestSnapshot;
@@ -12,6 +14,7 @@ import com.abandonware.ai.agent.tool.request.ToolRequest;
 import com.abandonware.ai.agent.tool.response.ToolResponse;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.search.TraceStore;
+import com.example.lms.trace.TraceContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,9 +25,11 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -40,6 +45,7 @@ class AgentToolInvokerSecurityTest {
     @AfterEach
     void clearTrace() {
         TraceStore.clear();
+        TraceContext.cleanupCurrentThread();
     }
 
     @Test
@@ -50,6 +56,80 @@ class AgentToolInvokerSecurityTest {
                 () -> invoker.invoke("ops.snapshot", Map.of(), new ToolContext("s1", null), false));
 
         assertTrue(ex.code().contains("missing_consent_service"));
+    }
+
+    @Test
+    void adminInvocationReportsAuthorizationBudgetAndResultValidationProvenance() {
+        AgentToolInvoker invoker = invoker(new InternalReadTool("ops.snapshot", Map.of("status", "ok")));
+
+        try (TraceContext ignored = TraceContext.attach("s1", "admin-provenance")
+                .startWithBudget(Duration.ofSeconds(5))) {
+            Map<String, Object> result = invoker.invoke(
+                    "ops.snapshot", Map.of(), new ToolContext("s1", null), true);
+
+            assertEquals("ALLOW", result.get("policyDecision"));
+            assertEquals("ADMIN_TOKEN", result.get("authorizationSource"));
+            assertEquals(Boolean.FALSE, result.get("userConsentGranted"));
+            assertEquals(Boolean.TRUE, result.get("budgetBounded"));
+            assertEquals("PASSED", result.get("resultValidation"));
+            assertEquals(Boolean.TRUE, TraceStore.get("tool.invoke.adminAuthorized"));
+            assertEquals("ADMIN_TOKEN", TraceStore.get("tool.invoke.authorizationSource"));
+            assertEquals(Boolean.FALSE, TraceStore.get("tool.invoke.userConsentGranted"));
+            assertEquals(Boolean.TRUE, TraceStore.get("tool.invoke.hasConsent"));
+        }
+    }
+
+    @Test
+    void sessionConsentGrantIsReportedSeparatelyFromAdminAuthorization() {
+        BasicConsentService service = new BasicConsentService();
+        service.issue("s1", Set.of(ToolScope.INTERNAL_READ), 60L);
+        ObjectProvider<ConsentService> consent = mock(ObjectProvider.class);
+        when(consent.getIfAvailable()).thenReturn(service);
+        AgentToolInvoker invoker = invoker(
+                new InternalReadTool("ops.snapshot", Map.of("status", "ok")),
+                new ToolManifestCatalog(),
+                consent);
+
+        Map<String, Object> result = invoker.invoke(
+                "ops.snapshot",
+                Map.of(),
+                new ToolContext("s1", new ConsentToken("s1")),
+                false);
+
+        assertEquals("ALLOW", result.get("policyDecision"));
+        assertEquals("CONSENT_GRANT", result.get("authorizationSource"));
+        assertEquals(Boolean.TRUE, result.get("userConsentGranted"));
+        assertEquals(Boolean.FALSE, result.get("budgetBounded"));
+        assertEquals("CONSENT_GRANT", TraceStore.get("tool.invoke.authorizationSource"));
+        assertEquals(Boolean.TRUE, TraceStore.get("tool.invoke.userConsentGranted"));
+        assertEquals(Boolean.FALSE, TraceStore.get("tool.invoke.adminAuthorized"));
+    }
+
+    @Test
+    void ownerTokenManifestRequirementKeepsAdminAuthorizationProvenance() {
+        ToolManifestEntry entry = new ToolManifestEntry(
+                "ops.owner",
+                true,
+                "owner-only tool",
+                "read_only",
+                List.of(),
+                true,
+                true,
+                65536,
+                false,
+                "",
+                "",
+                Map.of());
+        AgentToolInvoker invoker = invoker(
+                new PlainTool("ops.owner", Map.of("status", "ok")),
+                catalogWith(entry));
+
+        Map<String, Object> result = invoker.invoke(
+                "ops.owner", Map.of(), new ToolContext("s1", null), true);
+
+        assertEquals("ADMIN_TOKEN", result.get("authorizationSource"));
+        assertEquals(Boolean.FALSE, result.get("userConsentGranted"));
+        assertEquals("ADMIN_TOKEN", TraceStore.get("tool.invoke.authorizationSource"));
     }
 
     @Test
@@ -297,6 +377,52 @@ class AgentToolInvokerSecurityTest {
     }
 
     @Test
+    void nullToolResponseFailsClosedInsteadOfRecordingFalseSuccess() {
+        AgentToolInvoker invoker = invoker(new NullResponseTool("ops.snapshot"));
+
+        ToolInvocationException ex = assertThrows(ToolInvocationException.class,
+                () -> invoker.invoke("ops.snapshot", Map.of(), new ToolContext("s1", null), true));
+
+        assertEquals("tool_result_invalid", ex.code());
+        assertEquals("FAIL", TraceStore.get("tool.invoke.status"));
+        assertEquals("tool_result_invalid", TraceStore.get("tool.invoke.failReason"));
+        assertTrue(String.valueOf(TraceStore.get("tool.invoke.failMsgHash")).startsWith("hash:"));
+    }
+
+    @Test
+    void resultArrivingAfterAttachedDeadlineFailsClosed() {
+        AgentToolInvoker invoker = invoker(new SlowTool("ops.snapshot", 750L));
+
+        try (TraceContext ignored = TraceContext.attach("s1", "tool-budget")
+                .startWithBudget(Duration.ofMillis(500L))) {
+            ToolInvocationException ex = assertThrows(
+                    ToolInvocationException.class,
+                    () -> invoker.invoke("ops.snapshot", Map.of(), new ToolContext("s1", null), true));
+
+            assertEquals("tool_budget_exhausted", ex.code());
+            assertEquals("FAIL", TraceStore.get("tool.invoke.status"));
+        }
+    }
+
+    @Test
+    void sideEffectResultAfterDeadlineIsMarkedNonRetryableInsteadOfReturningFalse408() {
+        AgentToolInvoker invoker = invoker(
+                new SlowTool("side.effect", 750L),
+                catalogWith(manifestEntry("side.effect", true, "")));
+
+        try (TraceContext ignored = TraceContext.attach("s1", "side-effect-budget")
+                .startWithBudget(Duration.ofMillis(500L))) {
+            Map<String, Object> result = invoker.invoke(
+                    "side.effect", Map.of(), new ToolContext("s1", null), true);
+
+            assertEquals(true, result.get("budgetExceeded"));
+            assertEquals(false, result.get("retryRecommended"));
+            assertEquals(Boolean.TRUE, TraceStore.get("tool.invoke.budgetExceeded"));
+            assertEquals("OK", TraceStore.get("tool.invoke.status"));
+        }
+    }
+
+    @Test
     void oversizedResponseIsStoredAsArtifactReference() {
         Map<String, Object> payload = new LinkedHashMap<>();
         for (int i = 0; i < 120; i++) {
@@ -363,10 +489,16 @@ class AgentToolInvokerSecurityTest {
 
     @SuppressWarnings("unchecked")
     private static AgentToolInvoker invoker(AgentTool tool, ToolManifestCatalog catalog) {
-        ToolRegistry registry = new ToolRegistry();
-        registry.register(tool);
         ObjectProvider<ConsentService> consent = mock(ObjectProvider.class);
         when(consent.getIfAvailable()).thenReturn(null);
+        return invoker(tool, catalog, consent);
+    }
+
+    private static AgentToolInvoker invoker(AgentTool tool,
+                                            ToolManifestCatalog catalog,
+                                            ObjectProvider<ConsentService> consent) {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(tool);
         ObjectProvider<DebugEventStore> debug = mock(ObjectProvider.class);
         when(debug.getIfAvailable()).thenReturn(null);
         ToolPolicyEnforcer policy = enabledPolicy();
@@ -456,6 +588,31 @@ class AgentToolInvokerSecurityTest {
         @Override
         public ToolResponse execute(ToolRequest request) {
             throw new IllegalStateException("ownerToken=fake-token");
+        }
+    }
+
+    private record NullResponseTool(String id) implements AgentTool {
+        @Override
+        public String description() {
+            return "invalid-result";
+        }
+
+        @Override
+        public ToolResponse execute(ToolRequest request) {
+            return null;
+        }
+    }
+
+    private record SlowTool(String id, long delayMs) implements AgentTool {
+        @Override
+        public String description() {
+            return "slow";
+        }
+
+        @Override
+        public ToolResponse execute(ToolRequest request) throws InterruptedException {
+            Thread.sleep(delayMs);
+            return ToolResponse.ok().put("status", "late");
         }
     }
 }
