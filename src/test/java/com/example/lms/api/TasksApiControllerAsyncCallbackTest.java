@@ -133,6 +133,7 @@ class TasksApiControllerAsyncCallbackTest {
         assertEquals(0, jobService.executeCalls);
         assertNull(notifier.payload);
         assertEquals(Boolean.TRUE, TraceStore.get("api.tasks.async.jobEnqueueFailed"));
+        assertEquals(1L, TraceStore.get("api.tasks.async.jobEnqueueFailed.count"));
         assertEquals("job_enqueue_failed", TraceStore.get("api.tasks.async.skipped.reason"));
         assertEquals(5, TraceStore.get("api.tasks.async.messageLength"));
         assertEquals(com.example.lms.trace.SafeRedactor.hashValue("42"),

@@ -39,10 +39,13 @@ class NineArtPlateGateRolloutTest {
                 0.80d, 0.35d, 0.30d,
                 0.42d));
 
-        assertTrue(plate.id().startsWith("AP1_AUTH_WEB_M"));
+        assertEquals("AP1_AUTH_WEB", plate.id());
         assertEquals("AP1_AUTH_WEB", TraceStore.get("artplate.selector.base"));
-        assertTrue(String.valueOf(TraceStore.get("artplate.selector.selected")).startsWith("AP1_AUTH_WEB_M"));
-        assertEquals(50, TraceStore.get("artplate.rollout.percent"));
+        assertEquals("AP1_AUTH_WEB", TraceStore.get("artplate.selector.selected"));
+        assertEquals(0, TraceStore.get("artplate.rollout.percent"));
+        assertEquals("heuristic", TraceStore.get("artplate.selector.scoreKind"));
+        assertEquals(15, TraceStore.get("artplate.scorecard.heuristicMass"));
+        assertEquals(0, TraceStore.get("artplate.scorecard.samples"));
     }
 
     @Test
@@ -57,8 +60,8 @@ class NineArtPlateGateRolloutTest {
                 0.70d));
 
         assertEquals("AP7_SAFE_FALLBACK", plate.id());
-        assertEquals("scorecard_below_rollout_floor", TraceStore.get("artplate.rollout.reason"));
-        assertEquals("scorecard_below_rollout_floor", TraceStore.get("artplate.selector.rollout.reason"));
+        assertEquals("evidence_gate_failed", TraceStore.get("artplate.rollout.reason"));
+        assertEquals("evidence_gate_failed", TraceStore.get("artplate.selector.rollout.reason"));
     }
 
     @Test
@@ -74,7 +77,7 @@ class NineArtPlateGateRolloutTest {
 
         assertEquals("AP3_VEC_DENSE", plate.id());
         assertEquals("AP3_VEC_DENSE", TraceStore.get("artplate.selector.selected"));
-        assertEquals("scorecard_below_rollout_floor", TraceStore.get("artplate.selector.rollout.reason"));
+        assertEquals("evidence_gate_failed", TraceStore.get("artplate.selector.rollout.reason"));
     }
 
     @Test
@@ -92,7 +95,7 @@ class NineArtPlateGateRolloutTest {
         assertEquals("AP9_COST_SAVER", TraceStore.get("artplate.selector.base"));
         assertTrue(String.valueOf(TraceStore.get("artplate.selector.candidate")).startsWith("AP1_AUTH_WEB_M"));
         assertEquals("AP9_COST_SAVER", TraceStore.get("artplate.selector.selected"));
-        assertEquals(Boolean.TRUE, TraceStore.get("artplate.selector.rollout.promote"));
+        assertEquals(Boolean.FALSE, TraceStore.get("artplate.selector.rollout.promote"));
         assertEquals(Boolean.FALSE, TraceStore.get("artplate.routing.routed"));
     }
 

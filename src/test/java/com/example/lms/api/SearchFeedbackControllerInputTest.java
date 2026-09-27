@@ -25,6 +25,7 @@ class SearchFeedbackControllerInputTest {
 
         assertEquals(400, response.getStatusCode().value());
         assertEquals(Boolean.TRUE, TraceStore.get("api.searchFeedback.rejected"));
+        assertEquals(1L, TraceStore.get("api.searchFeedback.rejected.count"));
         assertEquals("missing_payload", TraceStore.get("api.searchFeedback.skipped.reason"));
         verifyNoInteractions(registry);
     }

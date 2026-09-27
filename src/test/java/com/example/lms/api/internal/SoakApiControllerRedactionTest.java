@@ -18,9 +18,40 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class SoakApiControllerRedactionTest {
+
+    @Test
+    void runCapsOversizedTopKBeforeServiceInvocation() {
+        SoakTestService soakService = mock(SoakTestService.class);
+
+        controller(soakService).run(Integer.MAX_VALUE, "all");
+
+        verify(soakService).run(100, "all");
+    }
+
+    @Test
+    void quickCapsOversizedTopKBeforeServiceInvocation() {
+        SoakTestService soakService = mock(SoakTestService.class);
+
+        controller(soakService).quick(Integer.MAX_VALUE, "all");
+
+        verify(soakService).runQuick(100, "all");
+    }
+
+    @Test
+    void bothEntryPointsRaiseNonpositiveTopKToOne() {
+        SoakTestService soakService = mock(SoakTestService.class);
+        SoakApiController controller = controller(soakService);
+
+        controller.run(0, "all");
+        controller.quick(-1, "all");
+
+        verify(soakService).run(1, "all");
+        verify(soakService).runQuick(1, "all");
+    }
 
     @Test
     void rgbEndpointReturnsRedactedReport() throws Exception {
@@ -60,5 +91,11 @@ class SoakApiControllerRedactionTest {
         String source = Files.readString(Path.of("main/java/com/example/lms/api/internal/SoakApiController.java"));
 
         assertTrue(source.contains("traceSuppressed(\"soak.rgb\", e);"));
+    }
+
+    private static SoakApiController controller(SoakTestService soakService) {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<TrainingJobRunner> provider = mock(ObjectProvider.class);
+        return new SoakApiController(soakService, provider);
     }
 }

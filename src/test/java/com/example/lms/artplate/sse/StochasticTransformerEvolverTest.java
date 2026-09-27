@@ -88,6 +88,8 @@ class StochasticTransformerEvolverTest {
         assertSame(base, result.mutatedSpec());
         assertEquals("fallback_to_deterministic", TraceStore.get("sse.source"));
         assertEquals("max_reset_exceeded", TraceStore.get("sse.bypassReason"));
+        assertEquals(3, TraceStore.get("sse.resetCount"));
+        assertEquals(Boolean.FALSE, TraceStore.get("sse.guard.accepted"));
     }
 
     @Test
@@ -112,6 +114,24 @@ class StochasticTransformerEvolverTest {
         assertEquals("sse_block", TraceStore.get("sse.source"));
         assertEquals(Boolean.TRUE, TraceStore.get("sse.highReward"));
         assertEquals(Boolean.FALSE, TraceStore.get("sse.lowPenalty"));
+        assertEquals(0, TraceStore.get("sse.resetCount"));
+        assertEquals(Boolean.TRUE, TraceStore.get("sse.guard.accepted"));
+    }
+
+    @Test
+    void artPlateSseGuardRejectsForbiddenSurfaceMutationBeforeAdoption() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/artplate/ArtPlateEvolver.java"),
+                StandardCharsets.UTF_8);
+
+        assertTrue(source.contains("guard_rejected_candidate"));
+        assertTrue(source.contains("sameSurface(base, mutated)"));
+        assertTrue(source.contains("Objects.equals(base.domainAllow(), mutated.domainAllow())"));
+        assertTrue(source.contains("Objects.equals(base.modelCandidates(), mutated.modelCandidates())"));
+        assertTrue(source.contains("base.includeHistory() == mutated.includeHistory()"));
+        assertTrue(source.contains("within(mutated.webTopK(), 1, 16)"));
+        assertTrue(source.contains("within(mutated.vecTopK(), 1, 32)"));
+        assertTrue(source.contains("within(mutated.webBudgetMs(), 300, 5000)"));
     }
 
     @Test

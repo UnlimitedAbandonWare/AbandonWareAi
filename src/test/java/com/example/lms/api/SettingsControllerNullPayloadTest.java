@@ -1,6 +1,6 @@
 package com.example.lms.api;
 
-import com.example.lms.repository.ConfigurationSettingRepository;
+import com.example.lms.service.SettingsService;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -13,9 +13,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
 class SettingsControllerNullPayloadTest {
 
     @Test
-    void saveAllSettingsRejectsNullPayloadWithoutTouchingRepository() {
-        ConfigurationSettingRepository repository = mock(ConfigurationSettingRepository.class);
-        SettingsController controller = new SettingsController(repository);
+    void saveAllSettingsRejectsNullPayloadWithoutTouchingService() {
+        SettingsService settingsService = mock(SettingsService.class);
+        SettingsController controller = new SettingsController(settingsService);
 
         var response = controller.saveAllSettings(null);
 
@@ -23,6 +23,6 @@ class SettingsControllerNullPayloadTest {
         Map<String, String> body = response.getBody();
         assertNotNull(body);
         assertEquals("settings body is required", body.get("message"));
-        verifyNoInteractions(repository);
+        verifyNoInteractions(settingsService);
     }
 }

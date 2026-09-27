@@ -113,12 +113,41 @@ class ArtPlateEvolverScoreCardTest {
     }
 
     @Test
-    void strongScoreCardPromotesCandidateToFiftyPercentRollout() {
+    void highHeuristicMassWithoutMeasuredOutcomeCannotPromote() {
         ArtPlateEvolver evolver = new ArtPlateEvolver();
         ArtPlateSpec candidate = new ArtPlateRegistry().get("AP1_AUTH_WEB").orElseThrow();
 
         ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate,
                 new ArtPlateEvolver.ScoreCard(0.92d, 0.80d, 0.74d, 0.90d, 0.04d, 0.02d, 25));
+
+        assertFalse(decision.promote());
+        assertEquals(0, decision.rolloutPercent());
+        assertEquals(25, TraceStore.get("artplate.scorecard.heuristicMass"));
+        assertEquals(0, TraceStore.get("artplate.scorecard.samples"));
+    }
+
+    @Test
+    void measuredSamplesWithoutVerifiedGainCannotPromote() {
+        ArtPlateEvolver evolver = new ArtPlateEvolver();
+        ArtPlateSpec candidate = new ArtPlateRegistry().get("AP1_AUTH_WEB").orElseThrow();
+
+        ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate,
+                ArtPlateEvolver.ScoreCard.measured(0.92d, 0.80d, 0.74d, 0.90d,
+                        0.04d, 0.02d, 25, 0.0d));
+
+        assertFalse(decision.promote());
+        assertEquals(0, decision.rolloutPercent());
+        assertEquals("verified_gain_missing", decision.reason());
+        assertEquals(Boolean.FALSE, TraceStore.get("artplate.scorecard.gainVerified"));
+    }
+
+    @Test
+    void strongScoreCardPromotesCandidateToFiftyPercentRollout() {
+        ArtPlateEvolver evolver = new ArtPlateEvolver();
+        ArtPlateSpec candidate = new ArtPlateRegistry().get("AP1_AUTH_WEB").orElseThrow();
+
+        ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate,
+                ArtPlateEvolver.ScoreCard.measured(0.92d, 0.80d, 0.74d, 0.90d, 0.04d, 0.02d, 25, 0.12d));
 
         assertTrue(decision.promote());
         assertEquals(50, decision.rolloutPercent());
@@ -136,7 +165,7 @@ class ArtPlateEvolverScoreCardTest {
         ArtPlateSpec candidate = new ArtPlateRegistry().get("AP3_VEC_DENSE").orElseThrow();
 
         ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate,
-                new ArtPlateEvolver.ScoreCard(0.70d, 0.62d, 0.62d, 0.68d, 0.08d, 0.03d, 12));
+                ArtPlateEvolver.ScoreCard.measured(0.70d, 0.62d, 0.62d, 0.68d, 0.08d, 0.03d, 12, 0.08d));
 
         assertTrue(decision.promote());
         assertEquals(15, decision.rolloutPercent());
@@ -149,12 +178,28 @@ class ArtPlateEvolverScoreCardTest {
         ArtPlateSpec candidate = new ArtPlateRegistry().get("AP9_COST_SAVER").orElseThrow();
 
         ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate,
-                new ArtPlateEvolver.ScoreCard(0.30d, 0.35d, 0.20d, 0.40d, 0.30d, 0.20d, 4));
+                ArtPlateEvolver.ScoreCard.measured(0.30d, 0.35d, 0.20d, 0.40d, 0.30d, 0.20d, 4, 0.05d));
 
         assertFalse(decision.promote());
         assertEquals(0, decision.rolloutPercent());
-        assertEquals("scorecard_below_rollout_floor", decision.reason());
-        assertEquals("scorecard_below_rollout_floor", TraceStore.get("artplate.rollout.reason"));
+        assertEquals("authority_gate_failed", decision.reason());
+        assertEquals("authority_gate_failed", TraceStore.get("artplate.rollout.reason"));
+        assertEquals(Boolean.FALSE, TraceStore.get("artplate.rollout.guard.accepted"));
+        assertEquals("authority_gate_failed", TraceStore.get("artplate.rollout.guard.reason"));
+    }
+
+    @Test
+    void neutralScoreCardCannotCanaryWithoutEvidenceAuthorityGate() {
+        ArtPlateEvolver evolver = new ArtPlateEvolver();
+        ArtPlateSpec candidate = new ArtPlateRegistry().get("AP9_COST_SAVER").orElseThrow();
+
+        ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate, ArtPlateEvolver.ScoreCard.neutral());
+
+        assertFalse(decision.promote());
+        assertEquals(0, decision.rolloutPercent());
+        assertEquals("evidence_gate_failed", decision.reason());
+        assertEquals(Boolean.FALSE, TraceStore.get("artplate.rollout.guard.accepted"));
+        assertEquals("evidence_gate_failed", TraceStore.get("artplate.rollout.guard.reason"));
     }
 
     @Test
@@ -197,13 +242,14 @@ class ArtPlateEvolverScoreCardTest {
                 0.2d,
                 0.3d);
 
-        ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate, ArtPlateEvolver.ScoreCard.neutral());
+        ArtPlateEvolver.RolloutDecision decision = evolver.abTest(candidate, ArtPlateEvolver.ScoreCard.measured(
+                0.92d, 0.80d, 0.74d, 0.90d, 0.04d, 0.02d, 25, 0.12d));
 
         Object tracedCandidate = TraceStore.get("artplate.rollout.candidate");
         assertTrue(decision.promote());
-        assertEquals(5, decision.rolloutPercent());
-        assertEquals("scorecard_canary_5", decision.reason());
-        assertEquals(5, TraceStore.get("artplate.rollout.percent"));
+        assertEquals(50, decision.rolloutPercent());
+        assertEquals("scorecard_promote_50", decision.reason());
+        assertEquals(50, TraceStore.get("artplate.rollout.percent"));
         assertNotNull(tracedCandidate);
         assertTrue(String.valueOf(tracedCandidate).startsWith("hash:"));
         assertFalse(String.valueOf(tracedCandidate).contains("ownerToken"));
@@ -240,8 +286,8 @@ class ArtPlateEvolverScoreCardTest {
                 0.2d,
                 0.3d);
 
-        evolver.abTest(candidate, new ArtPlateEvolver.ScoreCard(
-                0.92d, 0.80d, 0.74d, 0.90d, 0.04d, 0.02d, 25));
+        evolver.abTest(candidate, ArtPlateEvolver.ScoreCard.measured(
+                0.92d, 0.80d, 0.74d, 0.90d, 0.04d, 0.02d, 25, 0.12d));
 
         ArgumentCaptor<ArtPlateEvolutionLog> saved = ArgumentCaptor.forClass(ArtPlateEvolutionLog.class);
         verify(repository).save(saved.capture());
@@ -266,7 +312,8 @@ class ArtPlateEvolverScoreCardTest {
         ArtPlateEvolver evolver = new ArtPlateEvolver(provider);
         ArtPlateSpec candidate = new ArtPlateRegistry().get("AP1_AUTH_WEB").orElseThrow();
 
-        evolver.abTest(candidate, ArtPlateEvolver.ScoreCard.neutral());
+        evolver.abTest(candidate, ArtPlateEvolver.ScoreCard.measured(
+                0.92d, 0.80d, 0.74d, 0.90d, 0.04d, 0.02d, 25, 0.12d));
 
         assertEquals(Boolean.FALSE, TraceStore.get("artplate.evolution.persisted"));
         assertEquals("repository_error", TraceStore.get("artplate.evolution.persist.reason"));

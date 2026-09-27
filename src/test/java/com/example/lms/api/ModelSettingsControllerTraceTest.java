@@ -32,6 +32,7 @@ class ModelSettingsControllerTraceTest {
 
         assertEquals(400, response.getStatusCode().value());
         assertEquals(Boolean.TRUE, TraceStore.get("api.modelSettings.rejected"));
+        assertEquals(1L, TraceStore.get("api.modelSettings.rejected.count"));
         assertEquals("model_setting_rejected", TraceStore.get("api.modelSettings.skipped.reason"));
         assertEquals(com.example.lms.trace.SafeRedactor.hashValue(rawModel),
                 TraceStore.get("api.modelSettings.modelHash"));

@@ -1,16 +1,22 @@
 package com.example.lms.api;
 
+import com.example.lms.integrations.n8n.N8nIdempotencyRegistry;
 import com.example.lms.jobs.JobService;
+import com.example.lms.lifecycle.JsonlLifecycleReceiptStore;
 import com.example.lms.search.TraceStore;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -19,6 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class N8nWebhookControllerRedactionTest {
+
+    @TempDir
+    Path tempDir;
 
     @AfterEach
     void clearTraceStore() {
@@ -75,6 +84,7 @@ class N8nWebhookControllerRedactionTest {
         assertEquals("INVALID_SIGNATURE", body.get("error"));
         assertFalse(String.valueOf(body).contains("job-1"));
         assertEquals(Boolean.TRUE, TraceStore.get("api.n8nWebhook.status.signatureRejected"));
+        assertEquals(1L, TraceStore.get("api.n8nWebhook.status.signatureRejected.count"));
         assertEquals("invalid_signature", TraceStore.get("api.n8nWebhook.status.skipped.reason"));
         assertEquals(com.example.lms.trace.SafeRedactor.hashValue("job-1"),
                 TraceStore.get("api.n8nWebhook.status.jobIdHash"));
@@ -98,10 +108,48 @@ class N8nWebhookControllerRedactionTest {
         assertFalse(String.valueOf(responseBody).contains("hello"));
         assertFalse(String.valueOf(responseBody).contains("world"));
         assertEquals(Boolean.TRUE, TraceStore.get("api.n8nWebhook.accept.jobEnqueueFailed"));
+        assertEquals(1L, TraceStore.get("api.n8nWebhook.accept.jobEnqueueFailed.count"));
         assertEquals("job_enqueue_failed", TraceStore.get("api.n8nWebhook.accept.skipped.reason"));
         assertEquals(body.length, TraceStore.get("api.n8nWebhook.accept.bodyLength"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("hello"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("world"));
+    }
+
+    @Test
+    void durableRestartReplayReturnsAcceptedUnknownReceiptWithoutJobId() throws Exception {
+        String secret = "webhook-secret";
+        String privateKey = "private-idempotency-key-sentinel";
+        byte[] body = "{\"private\":\"webhook-body-sentinel\"}".getBytes(StandardCharsets.UTF_8);
+        Path receipts = tempDir.resolve("n8n-controller-lifecycle.jsonl");
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        CountingJobService jobs = new CountingJobService();
+        N8nWebhookController first = new N8nWebhookController(
+                secret,
+                jobs,
+                new N8nIdempotencyRegistry(new JsonlLifecycleReceiptStore(receipts, objectMapper)));
+
+        ResponseEntity<?> accepted = first.accept(
+                request(body),
+                signature(body, secret),
+                privateKey);
+        N8nWebhookController restarted = new N8nWebhookController(
+                secret,
+                jobs,
+                new N8nIdempotencyRegistry(new JsonlLifecycleReceiptStore(receipts, objectMapper)));
+        ResponseEntity<?> replay = restarted.accept(
+                request(body),
+                signature(body, secret),
+                privateKey);
+
+        assertEquals(202, accepted.getStatusCode().value());
+        assertEquals(202, replay.getStatusCode().value());
+        Map<?, ?> replayBody = (Map<?, ?>) replay.getBody();
+        assertEquals("accepted_unknown", replayBody.get("status"));
+        assertTrue(String.valueOf(replayBody.get("receiptHash")).matches("[0-9a-f]{64}"));
+        assertFalse(replayBody.containsKey("jobId"));
+        assertFalse(String.valueOf(replayBody).contains(privateKey));
+        assertFalse(String.valueOf(replayBody).contains("webhook-body-sentinel"));
+        assertEquals(1, jobs.enqueueCalls.get());
     }
 
     @Test
@@ -118,6 +166,7 @@ class N8nWebhookControllerRedactionTest {
         assertEquals("INVALID_SIGNATURE", responseBody.get("error"));
         assertFalse(String.valueOf(responseBody).contains("n8n-body-token"));
         assertEquals(Boolean.TRUE, TraceStore.get("api.n8nWebhook.accept.signatureRejected"));
+        assertEquals(1L, TraceStore.get("api.n8nWebhook.accept.signatureRejected.count"));
         assertEquals("invalid_signature", TraceStore.get("api.n8nWebhook.accept.skipped.reason"));
         assertEquals(body.length, TraceStore.get("api.n8nWebhook.accept.bodyLength"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("n8n-body-token"));
@@ -141,6 +190,30 @@ class N8nWebhookControllerRedactionTest {
         public String status(String jobId) {
             return status;
         }
+    }
+
+    private static final class CountingJobService implements JobService {
+        private final AtomicInteger enqueueCalls = new AtomicInteger();
+
+        @Override
+        public String enqueue(String payload) {
+            return "job-" + enqueueCalls.incrementAndGet();
+        }
+
+        @Override
+        public <T> void executeAsync(String jobId, Supplier<T> work, Consumer<T> onSuccess) {
+        }
+
+        @Override
+        public String status(String jobId) {
+            return "UNKNOWN";
+        }
+    }
+
+    private static MockHttpServletRequest request(byte[] body) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setContent(body);
+        return request;
     }
 
     private static String signature(byte[] body, String secret) throws Exception {
