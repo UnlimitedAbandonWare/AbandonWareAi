@@ -20,8 +20,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * In-memory ring buffer for request/task trace snapshots.
@@ -44,6 +46,8 @@ import java.util.Locale;
 public class TraceSnapshotStore {
 
     private static final Logger LOG = LoggerFactory.getLogger("TRACE_SNAPSHOT");
+    private static final Pattern ENSEMBLE_HASH_VALUE = Pattern.compile("hash:[0-9a-f]{12}");
+    private static final int MAX_CAPTURE_BUDGET_ENTRIES = 8_192;
 
     @Value("${trace.snapshot.enabled:true}")
     private boolean enabled;
@@ -130,10 +134,13 @@ public class TraceSnapshotStore {
     private final ObjectProvider<com.example.lms.service.trace.TraceHtmlBuilder> htmlBuilderProvider;
 
     /** Per-trace capture budget (helps prevent over-capture for loops/background tasks). */
-    private final java.util.concurrent.ConcurrentHashMap<String, CaptureBudget> budgets = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Object budgetLock = new Object();
+    private final LinkedHashMap<String, CaptureBudget> budgets = new LinkedHashMap<>(16, 0.75f, true);
 
     private final Object lock = new Object();
     private final Deque<TraceSnapshot> ring = new ArrayDeque<>();
+    private long capturedSnapshotCount;
+    private long evictedSnapshotCount;
 
     public TraceSnapshotStore(ObjectProvider<com.example.lms.service.trace.TraceHtmlBuilder> htmlBuilderProvider) {
         this.htmlBuilderProvider = htmlBuilderProvider;
@@ -227,11 +234,12 @@ public class TraceSnapshotStore {
             boolean dbgSearch = isDbgSearch(rawMdc, rawTrace);
             boolean hasMl = hasPrefix(rawTrace, "ml.");
             boolean hasOrch = hasPrefix(rawTrace, "orch.");
+            boolean hasTraceMemory = hasPrefix(rawTrace, "traceMemory.");
             boolean hasException = error != null;
             boolean statusTrigger = status != null && status >= httpStatusMin;
 
             // Decide whether to capture this snapshot.
-            if (!shouldCapture(reason, dbgSearch, hasMl, hasOrch, hasException, statusTrigger)) {
+            if (!shouldCapture(reason, dbgSearch, hasMl, hasOrch, hasTraceMemory, hasException, statusTrigger)) {
                 traceCaptureSkipped(reason, "capture_policy_not_triggered");
                 return null;
             }
@@ -286,8 +294,14 @@ public class TraceSnapshotStore {
                                 || trimmedOverride.startsWith("<details data-trace-redacted=\"1\" class=\"search-trace "))
                                 && "splitPanel".equals(firstString(rawTrace == null ? null : rawTrace.get("ui.traceHtml.kind")))
                                 && intValue(rawTrace == null ? null : rawTrace.get("ui.traceHtml.length")) == htmlOverride.length();
+                boolean generatedHarmonyMetadataHtml = isGeneratedHarmonyMetadataHtml(trimmedOverride, rawTrace, htmlOverride);
+                boolean generatedTraceMemoryMetadataHtml = isGeneratedTraceMemoryMetadataHtml(trimmedOverride, rawTrace, htmlOverride);
                 String overrideHtml = trustedGeneratedHtml
                         ? htmlOverride
+                        : generatedHarmonyMetadataHtml
+                        ? buildHarmonyMetadataHtml(rawTrace)
+                        : generatedTraceMemoryMetadataHtml
+                        ? buildTraceMemoryMetadataHtml(rawTrace)
                         : "<pre class=\"mono\">"
                                 + htmlEscape(String.valueOf(SafeRedactor.diagnosticValue("query", htmlOverride, 2000)))
                                 + "</pre>";
@@ -331,8 +345,10 @@ public class TraceSnapshotStore {
 
             synchronized (lock) {
                 ring.addFirst(snap);
+                capturedSnapshotCount++;
                 while (ring.size() > Math.max(1, maxSize)) {
                     ring.removeLast();
+                    evictedSnapshotCount++;
                 }
             }
 
@@ -402,6 +418,22 @@ public class TraceSnapshotStore {
                 out.add(summary(s));
                 if (++i >= lim) break;
             }
+        }
+        return out;
+    }
+
+    /** Count-only process-local retention facts; never includes snapshot identifiers or payloads. */
+    public Map<String, Object> retentionStats() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        synchronized (lock) {
+            out.put("storageMode", "memory_only");
+            out.put("captureEnabled", enabled);
+            out.put("restartDurable", false);
+            out.put("counterScope", "process_lifetime");
+            out.put("capacity", (long) Math.max(1, maxSize));
+            out.put("retainedSnapshotCount", (long) ring.size());
+            out.put("capturedSnapshotCount", Math.max(0L, capturedSnapshotCount));
+            out.put("evictedSnapshotCount", Math.max(0L, evictedSnapshotCount));
         }
         return out;
     }
@@ -511,13 +543,14 @@ public class TraceSnapshotStore {
         Map<String, Object> out = new LinkedHashMap<>();
         for (String key : List.of(
                 "v", "seq", "ts", "traceId", "sessionId", "requestId",
+                "retrievalExecutionId", "searchExecutionId", "providerAttemptId",
                 "kind", "phase", "stage", "step", "component", "status")) {
             out.put(key, eventValue(key, src.get(key)));
         }
         out.put("input", nestedEventMap(src.get("input"), "input",
                 List.of("queryHash", "queryLen", "requestedTopK", "planId", "mode")));
         out.put("output", nestedEventMap(src.get("output"), "output",
-                List.of("returnedCount", "afterFilterCount", "selectedCount", "stageMs", "sourceDiversity")));
+                List.of("returnedCount", "afterFilterCount", "selectedCount", "stageMs", "sourceDiversity", "naverRetainedCount")));
         out.put("failure", nestedEventMap(src.get("failure"), "failure",
                 List.of("reasonCode", "failureClass", "exceptionType")));
         out.put("control", nestedEventMap(src.get("control"), "control",
@@ -558,30 +591,10 @@ public class TraceSnapshotStore {
         if (value == null) {
             return null;
         }
-        if (isEventLabelKey(key)) {
+        if (SafeRedactor.isStandardEventLabelKey(key)) {
             return SafeRedactor.traceLabelOrFallback(value, "unknown");
         }
         return SafeRedactor.diagnosticValue("orch.events.v1." + key, value, maxValueLen);
-    }
-
-    private static boolean isEventLabelKey(String key) {
-        if (key == null || key.isBlank()) {
-            return false;
-        }
-        String k = key.toLowerCase(Locale.ROOT);
-        return k.equals("kind")
-                || k.equals("phase")
-                || k.equals("stage")
-                || k.equals("step")
-                || k.equals("component")
-                || k.equals("status")
-                || k.endsWith(".mode")
-                || k.endsWith(".planid")
-                || k.endsWith(".reasoncode")
-                || k.endsWith(".failureclass")
-                || k.endsWith(".exceptiontype")
-                || k.endsWith(".action")
-                || k.endsWith(".breadcrumbid");
     }
 
     private List<Map<String, Object>> buildTimeline(List<Map<String, Object>> events) {
@@ -716,27 +729,418 @@ public class TraceSnapshotStore {
             return Map.of();
         }
         Map<String, Object> out = new LinkedHashMap<>();
-        int count = 0;
+        for (String key : priorityTraceKeys()) {
+            if (raw.containsKey(key)) {
+                putSanitizedTraceEntry(out, key, raw.get(key));
+            }
+        }
+        for (Map.Entry<String, Object> e : raw.entrySet()) {
+            if (e != null && isEnsembleObservabilityTraceKey(e.getKey())) {
+                putSanitizedTraceEntry(out, e.getKey(), e.getValue());
+            }
+        }
+        int count = out.size();
         for (Map.Entry<String, Object> e : raw.entrySet()) {
             if (e == null) continue;
             String k = e.getKey();
             if (k == null || k.isBlank()) continue;
-            Object v = e.getValue();
             String outKey = safeTraceKey(k);
-            if ("orch.events.v1".equals(k)) {
-                out.put(outKey, extractStandardEvents(v));
-            } else if (isTopKKey(k) && v instanceof List<?> list) {
-                out.put(outKey, sanitizeTopKList(k, list));
-            } else {
-                out.put(outKey, SafeRedactor.diagnosticValue(k, v, maxValueLen));
+            if (out.containsKey(outKey)) {
+                continue;
             }
+            putSanitizedTraceEntry(out, k, e.getValue());
             if (++count >= Math.max(50, maxEntries)) break;
         }
         return out;
     }
 
+    private void putSanitizedTraceEntry(Map<String, Object> out, String key, Object value) {
+        if ("llm.request.lifecycleDropped".equals(key) && value instanceof Number counter) {
+            out.put(key, Math.max(0L, counter.longValue()));
+            return;
+        }
+        if (key != null && key.startsWith(SelectionEntropyTraceSupport.PREFIX)) {
+            Object safe = SelectionEntropyTraceSupport.sanitizeExactValue(key, value);
+            if (safe != null) {
+                out.put(safeTraceKey(key), safe);
+            }
+            return;
+        }
+        String outKey = safeTraceKey(key);
+        if (isTraceMemoryLabelTraceKey(key)) {
+            out.put(outKey, SafeRedactor.traceLabelOrFallback(value, "unknown"));
+        } else if (isTraceMemoryStateTraceKey(key)) {
+            out.put(outKey, sanitizeTraceMemoryStateValue(value));
+        } else if (isMlaBreadcrumbSafeScalar(key, value)) {
+            out.put(outKey, value);
+        } else if (isEnsembleObservabilityTraceKey(key)) {
+            out.put(outKey, sanitizeEnsembleObservabilityTraceValue(key, value));
+        } else if (isProbeRoundSafeScalarTraceKey(key)) {
+            out.put(outKey, sanitizeProbeRoundSafeScalarValue(key, value));
+        } else if (isAgentVisibleScalarTraceKey(key)) {
+            out.put(outKey, sanitizeAgentVisibleScalarValue(value));
+        } else if ("llm.request.lifecycle".equals(key)) {
+            out.put(outKey, sanitizeRequestLifecycle(value));
+        } else if ("orch.events.v1".equals(key)) {
+            out.put(outKey, extractStandardEvents(value));
+        } else if (isTopKKey(key) && value instanceof List<?> list) {
+            out.put(outKey, sanitizeTopKList(key, list));
+        } else {
+            out.put(outKey, SafeRedactor.diagnosticValue(key, value, maxValueLen));
+        }
+    }
+
+    private static List<Map<String, Object>> sanitizeRequestLifecycle(Object value) {
+        if (!(value instanceof List<?> rows)) return List.of();
+        List<Map<String, Object>> result = new ArrayList<>();
+        Set<String> events = Set.of("application_call_intent", "http_client_started", "http_client_completed",
+                "http_client_failed", "http_client_cancelled", "cancel_accepted", "call_blocked");
+        Set<String> boundaries = Set.of("application", "application_cancellation",
+                "spring_client_request_commit", "http_client_execute");
+        for (Object item : rows) {
+            if (result.size() >= 128) break;
+            if (!(item instanceof Map<?, ?> row) || !(row.get("event") instanceof String event)
+                    || !(row.get("boundary") instanceof String boundary)
+                    || !events.contains(event) || !boundaries.contains(boundary)) continue;
+            Map<String, Object> safe = new LinkedHashMap<>();
+            safe.put("event", row.get("event"));
+            safe.put("boundary", row.get("boundary"));
+            for (String key : List.of("requestHash", "requestExecutionHash", "runHash")) {
+                Object hash = row.get(key);
+                if (hash instanceof String text && (ENSEMBLE_HASH_VALUE.matcher(text).matches()
+                        || "hash:unknown".equals(text))) safe.put(key, text);
+            }
+            for (String key : List.of("logicalCallOrdinal", "attemptSequence", "eventSequence", "observedAtEpochMs", "elapsedMs")) {
+                Object number = row.get(key);
+                if ((number instanceof Integer || number instanceof Long) && ((Number) number).longValue() >= 0)
+                    safe.put(key, number);
+            }
+            if (row.get("afterCancel") instanceof Boolean flag) safe.put("afterCancel", flag);
+            // These client-owned events never attest a provider receipt, including untrusted trace overrides.
+            safe.put("providerReceiptObserved", false);
+            result.add(Map.copyOf(safe));
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean isEnsembleObservabilityTraceKey(String key) {
+        return isEnsembleJudgeUsageTraceKey(key)
+                || isEnsembleNodeHashTraceKey(key)
+                || isEnsembleModelCallElapsedTraceKey(key);
+    }
+
+    private static boolean isEnsembleJudgeUsageTraceKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return switch (key) {
+            case "ensemble.judge.tokenUsageObserved",
+                    "ensemble.judge.inputTokens",
+                    "ensemble.judge.outputTokens",
+                    "ensemble.judge.totalTokens",
+                    "ensemble.judge.tokenUsageReason",
+                    "debug.triadic.judge.tokenUsageObserved",
+                    "debug.triadic.judge.inputTokens",
+                    "debug.triadic.judge.outputTokens",
+                    "debug.triadic.judge.totalTokens",
+                    "debug.triadic.judge.tokenUsageReason" -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean isEnsembleNodeHashTraceKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return switch (key) {
+            case "ensemble.node.support.requestHash",
+                    "ensemble.node.support.traceHash",
+                    "ensemble.node.support.promptHash",
+                    "ensemble.node.support.optionsHash",
+                    "ensemble.node.support_alternative.requestHash",
+                    "ensemble.node.support_alternative.traceHash",
+                    "ensemble.node.support_alternative.promptHash",
+                    "ensemble.node.support_alternative.optionsHash",
+                    "ensemble.node.falsify.requestHash",
+                    "ensemble.node.falsify.traceHash",
+                    "ensemble.node.falsify.promptHash",
+                    "ensemble.node.falsify.optionsHash",
+                    "ensemble.node.cooperative.requestHash",
+                    "ensemble.node.cooperative.traceHash",
+                    "ensemble.node.cooperative.promptHash",
+                    "ensemble.node.cooperative.optionsHash",
+                    "ensemble.node.base_rate.requestHash",
+                    "ensemble.node.base_rate.traceHash",
+                    "ensemble.node.base_rate.promptHash",
+                    "ensemble.node.base_rate.optionsHash",
+                    "ensemble.node.opportunistic.requestHash",
+                    "ensemble.node.opportunistic.traceHash",
+                    "ensemble.node.opportunistic.promptHash",
+                    "ensemble.node.opportunistic.optionsHash" -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean isEnsembleModelCallElapsedTraceKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return switch (key) {
+            case "ensemble.node.support.modelCallElapsedMs",
+                    "ensemble.node.support_alternative.modelCallElapsedMs",
+                    "ensemble.node.falsify.modelCallElapsedMs",
+                    "ensemble.node.cooperative.modelCallElapsedMs",
+                    "ensemble.node.base_rate.modelCallElapsedMs",
+                    "ensemble.node.opportunistic.modelCallElapsedMs",
+                    "ensemble.judge.modelCallElapsedMs",
+                    "debug.triadic.judge.modelCallElapsedMs" -> true;
+            default -> false;
+        };
+    }
+
+    private Object sanitizeEnsembleObservabilityTraceValue(String key, Object value) {
+        if (isEnsembleNodeHashTraceKey(key)) {
+            return value instanceof String hash && ENSEMBLE_HASH_VALUE.matcher(hash).matches()
+                    ? hash
+                    : "(redacted)";
+        }
+        if (isEnsembleModelCallElapsedTraceKey(key)) {
+            return value instanceof Long elapsedMs && elapsedMs >= 0L
+                    ? elapsedMs
+                    : "(redacted)";
+        }
+        return sanitizeEnsembleJudgeUsageTraceValue(key, value);
+    }
+
+    private Object sanitizeEnsembleJudgeUsageTraceValue(String key, Object value) {
+        if (key.endsWith(".tokenUsageObserved")) {
+            return value instanceof Boolean
+                    ? value
+                    : SafeRedactor.diagnosticValue(key, value, maxValueLen);
+        }
+        if (key.endsWith(".tokenUsageReason")) {
+            return "provider_usage_unavailable".equals(value)
+                    ? value
+                    : SafeRedactor.diagnosticValue(key, value, maxValueLen);
+        }
+        return value instanceof Integer count && count >= 0
+                ? count
+                : SafeRedactor.diagnosticValue(key, value, maxValueLen);
+    }
+
+    private static List<String> priorityTraceKeys() {
+        return List.of(
+                "llm.request.lifecycle",
+                "llm.request.lifecycleDropped",
+                "llm.request.clientStartCoverage",
+                SelectionEntropyTraceSupport.SCHEMA,
+                SelectionEntropyTraceSupport.MODE,
+                SelectionEntropyTraceSupport.ALGORITHM_VERSION,
+                SelectionEntropyTraceSupport.REPLAY_ACCEPTED,
+                SelectionEntropyTraceSupport.COHERENCE_STATUS,
+                SelectionEntropyTraceSupport.SEED_FINGERPRINT,
+                SelectionEntropyTraceSupport.DECISION_DIGEST,
+                SelectionEntropyTraceSupport.DECISION_COUNT,
+                SelectionEntropyTraceSupport.DRAW_COUNT,
+                SelectionEntropyTraceSupport.STABLE_TIE_BREAK_COUNT,
+                SelectionEntropyTraceSupport.CANDIDATE_DRIFT_COUNT,
+                SelectionEntropyTraceSupport.ROUTER_DRAW_COUNT,
+                SelectionEntropyTraceSupport.STRATEGY_DRAW_COUNT,
+                SelectionEntropyTraceSupport.ENSEMBLE_DRAW_COUNT,
+                SelectionEntropyTraceSupport.COMPLETION_ORDER_DETERMINISTIC,
+                SelectionEntropyTraceSupport.REASON_CODE,
+                "orch.probeRound.observed",
+                "orch.probeRound.roundRef",
+                "orch.probeRound.phase",
+                "orch.probeRound.reason",
+                "orch.probeRound.hypothesis",
+                "orch.probeRound.patchCandidate",
+                "orch.probeRound.causalConfidence",
+                "orch.probeRound.counterEvidenceCount",
+                "orch.probeRound.retrievalConfidence",
+                "orch.probeRound.coherenceStatus",
+                "orch.probeRound.releaseStatus",
+                "orch.probeRound.confidenceRange",
+                "orch.probeRound.verifiedEvidenceCount",
+                "orch.probeRound.verificationGatePassed",
+                "ablation.penalties",
+                "retrievalOrder.lastSetBy",
+                "routing.executionPlan.primaryMode",
+                "hypernova.dppApplied",
+                "hypernova.twpmP",
+                "hypernova.sourceScoreScaleMismatchCount",
+                "extremeZ.cancelShieldWrapped",
+                "cfvm.boltzmannTemp",
+                "cfvm.tempSource",
+                "cfvm.rawTile.enabled",
+                "moe.evolverPlateRegistered",
+                "extremeZ.timeBudgetConsumedMs",
+                "hypernova.whitening.provider",
+                "cihRag.breadcrumb.queryRedacted",
+                "cihRag.mlaBreadcrumbCount",
+                "web.query.rewrite.querySeedHash12",
+                "web.query.rewrite.variantSetHash12",
+                "web.query.rewrite.verificationLaneCount",
+                "web.query.rewrite.explorationLaneCount",
+                "web.query.rewrite.laneLabels",
+                "web.query.rewrite.laneSummary",
+                "web.query.rewrite.variantLaneTemperatureHints",
+                "web.rewritePlan.seedHash12",
+                "web.rewritePlan.variantHash12",
+                "web.rewritePlan.verificationCount",
+                "web.rewritePlan.explorationCount",
+                "web.rewritePlan.laneSummary",
+                "web.rewritePlan.variantLaneTemperatureHints",
+                "queryTransformer.subQueries.superTokens.enabled",
+                "queryTransformer.subQueries.superTokens.branchCount",
+                "queryTransformer.subQueries.superTokens.tokenCount",
+                "queryTransformer.subQueries.superTokens.subModelCount",
+                "queryTransformer.subQueries.superTokens.subModelAssignmentCount",
+                "queryTransformer.subQueries.superTokens.branchTitleHashCount",
+                "queryTransformer.subQueries.superTokens.branchTitleHashes",
+                "queryTransformer.subQueries.superTokens.branchTitleMetadataCount",
+                "queryTransformer.subQueries.superTokens.branchQueryMetadataCount",
+                "queryTransformer.subQueries.superTokens.branchQueryHashes",
+                "queryTransformer.subQueries.superTokens.branchQueryCoverageComplete",
+                "queryTransformer.subQueries.superTokens.titlePresent",
+                "queryTransformer.subQueries.superTokens.titleHash12",
+                "queryTransformer.subQueries.superTokens.titleTokenCount",
+                "queryTransformer.subQueries.superTokens.axisCount",
+                "queryTransformer.subQueries.superTokens.axes",
+                "queryTransformer.subQueries.superTokens.coverageComplete",
+                "trace.id",
+                "llm.call.timeout",
+                "llm.call.timeout.cancelMayInterruptIfRunning",
+                "llm.call.timeout.cancelAccepted",
+                "llm.call.timeout.futureCancelledState",
+                "llm.call.timeout.workerTerminationEvidence");
+    }
+
     private static String safeTraceKey(String key) {
         return SafeRedactor.traceLabelOrFallback(key, "field");
+    }
+
+    private static boolean isTraceMemoryLabelTraceKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return key.equals("traceMemory.checkpoint.stage")
+                || key.equals("traceMemory.checkpoint.source")
+                || key.equals("traceMemory.checkpoint.phase")
+                || key.equals("traceMemory.virtualCheckpoint.latestKey")
+                || key.equals("traceMemory.virtualCheckpoint.latestStage")
+                || key.equals("traceMemory.virtualCheckpoint.latestPhase")
+                || key.equals("traceMemory.trigger.reason")
+                || key.equals("traceMemory.recovery.failureClass")
+                || key.equals("traceMemory.recovery.action")
+                || key.equals("traceMemory.recovery.route")
+                || key.equals("traceMemory.recovery.routeDecision")
+                || key.equals("traceMemory.suspectPayload.stage")
+                || key.equals("traceMemory.suspectPayload.route")
+                || key.equals("traceMemory.errorBreak.risk");
+    }
+
+    private static boolean isTraceMemoryStateTraceKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return key.equals("traceMemory.triggered")
+                || key.equals("traceMemory.recovery.quarantine")
+                || key.equals("traceMemory.recovery.failSoft")
+                || key.equals("traceMemory.recovery.retry")
+                || key.equals("traceMemory.suspectPayload.isolated")
+                || key.equals("traceMemory.cfvm.offered")
+                || key.equals("traceMemory.delta.changed");
+    }
+
+    private static Object sanitizeTraceMemoryStateValue(Object value) {
+        if (value instanceof Boolean || value instanceof Number) {
+            return value;
+        }
+        return SafeRedactor.traceLabelOrFallback(value, "unknown");
+    }
+
+    private static boolean isMlaBreadcrumbSafeScalar(String key, Object value) {
+        return ("cihRag.breadcrumb.queryRedacted".equals(key) && value instanceof Boolean)
+                || ("cihRag.mlaBreadcrumbCount".equals(key) && value instanceof Number);
+    }
+
+    private static boolean isProbeRoundSafeScalarTraceKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return switch (key) {
+            case "orch.probeRound.observed",
+                    "orch.probeRound.roundRef",
+                    "orch.probeRound.phase",
+                    "orch.probeRound.reason",
+                    "orch.probeRound.hypothesis",
+                    "orch.probeRound.patchCandidate",
+                    "orch.probeRound.causalConfidence",
+                    "orch.probeRound.counterEvidenceCount",
+                    "orch.probeRound.retrievalConfidence",
+                    "orch.probeRound.coherenceStatus",
+                    "orch.probeRound.releaseStatus",
+                    "orch.probeRound.confidenceRange",
+                    "orch.probeRound.verifiedEvidenceCount",
+                    "orch.probeRound.verificationGatePassed" -> true;
+            default -> false;
+        };
+    }
+
+    private static Object sanitizeProbeRoundSafeScalarValue(String key, Object value) {
+        return switch (key) {
+            case "orch.probeRound.observed", "orch.probeRound.verificationGatePassed" ->
+                    value instanceof Boolean ? value : "unknown";
+            case "orch.probeRound.causalConfidence",
+                    "orch.probeRound.counterEvidenceCount",
+                    "orch.probeRound.retrievalConfidence",
+                    "orch.probeRound.verifiedEvidenceCount" ->
+                    value instanceof Number number && Double.isFinite(number.doubleValue()) ? value : "unknown";
+            case "orch.probeRound.roundRef" -> {
+                String ref = value == null ? "" : String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+                yield ref.matches("hash:[0-9a-f]{12}") ? ref : "unknown";
+            }
+            default -> {
+                String label = value == null ? "" : String.valueOf(value).trim();
+                yield label.matches("[A-Za-z0-9_-]{1,64}") ? label : "unknown";
+            }
+        };
+    }
+
+    private static boolean isAgentVisibleScalarTraceKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return isAgentVisibleExternalTraceKey(key)
+                || isAgentVisibleLocalLlmTraceKey(key)
+                || key.equals("llm.call.timeout.workerTerminationEvidence");
+    }
+
+    private static boolean isAgentVisibleExternalTraceKey(String key) {
+        return key.startsWith("prompt.agentDebugEvidence.external.")
+                && (key.endsWith(".status")
+                || key.endsWith(".evidenceNeeded")
+                || key.endsWith(".nextAction"));
+    }
+
+    private static boolean isAgentVisibleLocalLlmTraceKey(String key) {
+        return key.startsWith("prompt.agentDebugEvidence.localLlm.operatorAction.")
+                && (key.endsWith(".triggered")
+                || key.endsWith(".triggerReason")
+                || key.endsWith(".failureClass")
+                || key.endsWith(".nextAction")
+                || key.endsWith(".actionScore")
+                || key.endsWith(".scoreDelta")
+                || key.endsWith(".negativeSignalCount"));
+    }
+
+    private static Object sanitizeAgentVisibleScalarValue(Object value) {
+        if (value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        String safe = SafeRedactor.safeMessage(value == null ? null : String.valueOf(value), 120);
+        return (safe == null || safe.isBlank()) ? "unknown" : safe;
     }
 
     private static boolean isTopKKey(String key) {
@@ -954,6 +1358,189 @@ public class TraceSnapshotStore {
             TraceStore.put("trace.snapshot.suppressed.intValue.errorType", "invalid_number");
             return 0;
         }
+    }
+
+    private static boolean isGeneratedHarmonyMetadataHtml(
+            String trimmedOverride,
+            Map<String, Object> rawTrace,
+            String htmlOverride
+    ) {
+        if (trimmedOverride == null || rawTrace == null || htmlOverride == null) {
+            return false;
+        }
+        return trimmedOverride.startsWith("<section data-trace=\"chat-harmony\" data-kind=\"metadata-only\">")
+                && "chatHarmonyMetadataOnly".equals(firstString(rawTrace.get("ui.traceHtml.kind")))
+                && truthy(rawTrace.get("ui.traceHtml.synthetic"))
+                && truthy(rawTrace.get("chat.harmony.postprocess.agentVisible"))
+                && intValue(rawTrace.get("ui.traceHtml.length")) == htmlOverride.length();
+    }
+
+    private static String buildHarmonyMetadataHtml(Map<String, Object> trace) {
+        StringBuilder sb = new StringBuilder(512);
+        sb.append("<section data-trace=\"chat-harmony\" data-kind=\"metadata-only\">");
+        sb.append("<h3>Chat Harmony Trace</h3>");
+        sb.append("<dl>");
+        harmonyItem(sb, "Decision", harmonyMetaValue(trace, "chat.harmony.postprocess.decision"));
+        harmonyItem(sb, "Reason", harmonyMetaValue(trace, "chat.harmony.postprocess.reason"));
+        harmonyItem(sb, "Weighted score", harmonyMetaValue(trace, "chat.harmony.postprocess.weightedScore"));
+        harmonyItem(sb, "Evidence count", harmonyMetaValue(trace, "chat.harmony.postprocess.evidenceCount"));
+        harmonyItem(sb, "Next debug action", harmonyMetaValue(trace, "debug.ai.metrics.nextAction"));
+        harmonyItem(sb, "Next debug reason", harmonyMetaValue(trace, "debug.ai.metrics.nextReason"));
+        sb.append("</dl>");
+        appendAgentVisibleLocalLlmOperatorAction(sb, trace);
+        appendAgentVisibleExternalEvidence(sb, trace);
+        sb.append("</section>");
+        return sb.toString();
+    }
+
+    private static boolean isGeneratedTraceMemoryMetadataHtml(
+            String trimmedOverride,
+            Map<String, Object> rawTrace,
+            String htmlOverride
+    ) {
+        if (trimmedOverride == null || rawTrace == null || htmlOverride == null) {
+            return false;
+        }
+        return trimmedOverride.startsWith("<section data-trace=\"trace-memory\" data-kind=\"metadata-only\">")
+                && "traceMemoryMetadataOnly".equals(firstString(rawTrace.get("ui.traceHtml.kind")))
+                && truthy(rawTrace.get("ui.traceHtml.synthetic"))
+                && hasPrefix(rawTrace, "traceMemory.")
+                && intValue(rawTrace.get("ui.traceHtml.length")) == htmlOverride.length();
+    }
+
+    private static String buildTraceMemoryMetadataHtml(Map<String, Object> trace) {
+        StringBuilder sb = new StringBuilder(768);
+        sb.append("<section data-trace=\"trace-memory\" data-kind=\"metadata-only\">");
+        sb.append("<h3>Trace Memory Checkpoint</h3>");
+        sb.append("<dl>");
+        traceMemoryItem(sb, "Checkpoint stage", traceMemoryMetaValue(trace, "traceMemory.checkpoint.stage"));
+        traceMemoryItem(sb, "Checkpoint phase", traceMemoryMetaValue(trace, "traceMemory.checkpoint.phase"));
+        traceMemoryItem(sb, "Checkpoint history", traceMemoryMetaValue(trace, "traceMemory.checkpoint.historySize"));
+        traceMemoryItem(sb, "Virtual checkpoint", traceMemoryMetaValue(trace, "traceMemory.virtualCheckpoint.latestKey"));
+        traceMemoryItem(sb, "Virtual checkpoint stage", traceMemoryMetaValue(trace, "traceMemory.virtualCheckpoint.latestStage"));
+        traceMemoryItem(sb, "Virtual checkpoint phase", traceMemoryMetaValue(trace, "traceMemory.virtualCheckpoint.latestPhase"));
+        traceMemoryItem(sb, "Triggered", traceMemoryMetaValue(trace, "traceMemory.triggered"));
+        traceMemoryItem(sb, "Reason", traceMemoryMetaValue(trace, "traceMemory.trigger.reason"));
+        traceMemoryItem(sb, "Failure class", traceMemoryMetaValue(trace, "traceMemory.recovery.failureClass"));
+        traceMemoryItem(sb, "Recovery action", traceMemoryMetaValue(trace, "traceMemory.recovery.action"));
+        traceMemoryItem(sb, "Recovery route", traceMemoryMetaValue(trace, "traceMemory.recovery.route"));
+        traceMemoryItem(sb, "Quarantine", traceMemoryMetaValue(trace, "traceMemory.recovery.quarantine"));
+        traceMemoryItem(sb, "Suspect isolated", traceMemoryMetaValue(trace, "traceMemory.suspectPayload.isolated"));
+        traceMemoryItem(sb, "Error break risk", traceMemoryMetaValue(trace, "traceMemory.errorBreak.risk"));
+        traceMemoryItem(sb, "CFVM offered", traceMemoryMetaValue(trace, "traceMemory.cfvm.offered"));
+        traceMemoryItem(sb, "Provider suppressed", traceMemoryMetaValue(trace, "traceMemory.provider.suppressed"));
+        String providerSuppressedStage = traceMemoryMetaValue(trace, "traceMemory.provider.suppressed.stage");
+        traceMemoryItem(sb, "Provider suppressed stage", providerSuppressedStage);
+        if (!"unknown".equals(providerSuppressedStage)) {
+            traceMemoryItem(sb, "Provider suppressed error type", traceMemoryMetaValue(trace,
+                    "traceMemory.provider.suppressed." + providerSuppressedStage + ".errorType"));
+            traceMemoryItem(sb, "Provider suppressed error hash", traceMemoryMetaValue(trace,
+                    "traceMemory.provider.suppressed." + providerSuppressedStage + ".errorHash"));
+        }
+        traceMemoryItem(sb, "Supabase shadow count", traceMemoryMetaValue(trace, "traceMemory.rawSnapshot.supabaseShadowCount"));
+        traceMemoryItem(sb, "Delta changed", traceMemoryMetaValue(trace, "traceMemory.delta.changed"));
+        traceMemoryItem(sb, "Delta changed count", traceMemoryMetaValue(trace, "traceMemory.delta.changedCount"));
+        traceMemoryItem(sb, "Dropped breadcrumbs", traceMemoryMetaValue(trace, "traceMemory.delta.droppedBreadcrumbCount"));
+        sb.append("</dl>");
+        sb.append("</section>");
+        return sb.toString();
+    }
+
+    private static void traceMemoryItem(StringBuilder sb, String label, String value) {
+        sb.append("<dt>").append(htmlEscape(label)).append("</dt><dd>")
+                .append(htmlEscape(value)).append("</dd>");
+    }
+
+    private static String traceMemoryMetaValue(Map<String, Object> trace, String key) {
+        Object value = trace == null ? null : trace.get(key);
+        if (value == null) {
+            return "unknown";
+        }
+        String safe = SafeRedactor.traceLabelOrFallback(String.valueOf(value), "unknown");
+        if (safe == null || safe.isBlank()) {
+            return "unknown";
+        }
+        return safe.length() <= 120 ? safe : safe.substring(0, 120);
+    }
+
+    private static void appendAgentVisibleLocalLlmOperatorAction(StringBuilder sb, Map<String, Object> trace) {
+        if (trace == null || trace.isEmpty()) {
+            return;
+        }
+        StringBuilder rows = new StringBuilder(384);
+        for (String key : List.of(
+                "prompt.agentDebugEvidence.localLlm.operatorAction.triggered",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.triggerReason",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.failureClass",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.nextAction",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.actionScore",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.scoreDelta",
+                "prompt.agentDebugEvidence.localLlm.operatorAction.negativeSignalCount")) {
+            if (trace.containsKey(key)) {
+                harmonyItem(rows, key, externalEvidenceValue(trace.get(key)));
+            }
+        }
+        if (rows.length() == 0) {
+            return;
+        }
+        sb.append("<h4>Local LLM Operator Action</h4><dl>");
+        sb.append(rows);
+        sb.append("</dl>");
+    }
+
+    private static void appendAgentVisibleExternalEvidence(StringBuilder sb, Map<String, Object> trace) {
+        if (trace == null || trace.isEmpty()) {
+            return;
+        }
+        StringBuilder rows = new StringBuilder(384);
+        for (String key : List.of(
+                "prompt.agentDebugEvidence.external.browser.status",
+                "prompt.agentDebugEvidence.external.browser.evidenceNeeded",
+                "prompt.agentDebugEvidence.external.browser.nextAction",
+                "prompt.agentDebugEvidence.external.computerUse.status",
+                "prompt.agentDebugEvidence.external.computerUse.evidenceNeeded",
+                "prompt.agentDebugEvidence.external.computerUse.nextAction",
+                "prompt.agentDebugEvidence.external.supabase.status",
+                "prompt.agentDebugEvidence.external.supabase.evidenceNeeded",
+                "prompt.agentDebugEvidence.external.supabase.nextAction")) {
+            if (trace.containsKey(key)) {
+                harmonyItem(rows, key, externalEvidenceValue(trace.get(key)));
+            }
+        }
+        if (rows.length() == 0) {
+            return;
+        }
+        sb.append("<h4>External Evidence</h4><dl>");
+        sb.append(rows);
+        sb.append("</dl>");
+    }
+
+    private static String externalEvidenceValue(Object value) {
+        if (value == null) {
+            return "unknown";
+        }
+        String safe = SafeRedactor.safeMessage(String.valueOf(value), 120);
+        if (safe == null || safe.isBlank()) {
+            return "unknown";
+        }
+        return safe;
+    }
+
+    private static void harmonyItem(StringBuilder sb, String label, String value) {
+        sb.append("<dt>").append(htmlEscape(label)).append("</dt><dd>")
+                .append(htmlEscape(value)).append("</dd>");
+    }
+
+    private static String harmonyMetaValue(Map<String, Object> trace, String key) {
+        Object value = trace == null ? null : trace.get(key);
+        if (value == null) {
+            return "unknown";
+        }
+        String safe = SafeRedactor.traceLabelOrFallback(String.valueOf(value), "unknown");
+        if (safe == null || safe.isBlank()) {
+            return "unknown";
+        }
+        return safe.length() <= 80 ? safe : safe.substring(0, 80);
     }
 
     private String wrapHtmlIfNeeded(
@@ -1207,6 +1794,7 @@ public class TraceSnapshotStore {
             boolean dbgSearch,
             boolean hasMl,
             boolean hasOrch,
+            boolean hasTraceMemory,
             boolean hasException,
             boolean statusTrigger
     ) {
@@ -1224,6 +1812,7 @@ public class TraceSnapshotStore {
         if (dbgSearch && captureHttpOnDebug) should = true;
         if (hasMl && captureHttpOnMl) should = true;
         if (hasOrch && captureHttpOnOrch) should = true;
+        if (hasTraceMemory) should = true;
         return should;
     }
 
@@ -1232,16 +1821,20 @@ public class TraceSnapshotStore {
         if (maxPerTrace <= 0 && minIntervalMs <= 0) return true;
 
         String key = (traceId == null || traceId.isBlank()) ? "(no-trace)" : traceId;
-        try {
-            if (budgets.size() > 8192) {
-                budgets.clear();
+        synchronized (budgetLock) {
+            CaptureBudget b = budgets.get(key);
+            if (b == null) {
+                while (budgets.size() >= MAX_CAPTURE_BUDGET_ENTRIES) {
+                    var eldest = budgets.entrySet().iterator();
+                    if (!eldest.hasNext()) {
+                        break;
+                    }
+                    eldest.next();
+                    eldest.remove();
+                }
+                b = new CaptureBudget(nowMs);
+                budgets.put(key, b);
             }
-        } catch (Throwable ignore) {
-            logSuppressed("captureBudget.evict", ignore);
-        }
-
-        CaptureBudget b = budgets.computeIfAbsent(key, __ -> new CaptureBudget(nowMs));
-        synchronized (b) {
             if (budgetWindowMs > 0 && nowMs - b.firstAtMs > budgetWindowMs) {
                 b.firstAtMs = nowMs;
                 b.lastAtMs = nowMs;

@@ -302,6 +302,65 @@ public final class QueryTransformerSubQueryFallback {
         TraceStore.put("queryTransformer.subQueries.superTokens.axes", axes);
         TraceStore.put("queryTransformer.subQueries.superTokens.coverageComplete",
                 branchCount > 0 && branchCount == subModelIds.size() && branchCount == axes.size());
+        traceRequestedQueryRewriteProfile(branchCount);
+    }
+
+    private static void traceRequestedQueryRewriteProfile(int branchCount) {
+        Object profile = TraceStore.get("web.query.rewrite.requestedTemperatureProfile");
+        Object validationTemperature = TraceStore.get("web.query.rewrite.requestedValidationTemperature");
+        Object explorationTemperature = TraceStore.get("web.query.rewrite.requestedExplorationTemperature");
+        Object explorationRate = TraceStore.get("web.query.rewrite.requestedExplorationRate");
+        if (profile == null && validationTemperature == null && explorationTemperature == null && explorationRate == null) {
+            if (branchCount <= 0) {
+                return;
+            }
+            profile = "balanced";
+            validationTemperature = 0.15d;
+            explorationTemperature = 0.55d;
+            explorationRate = 0.35d;
+        }
+
+        String safeProfile = SafeRedactor.traceLabelOrFallback(profile, "unknown");
+        TraceStore.putIfAbsent("web.query.rewrite.temperatureProfile", safeProfile);
+        putDoubleIfPresent("web.query.rewrite.validationTemperature", validationTemperature);
+        putDoubleIfPresent("web.query.rewrite.explorationTemperature", explorationTemperature);
+        putDoubleIfPresent("web.query.rewrite.explorationRate", explorationRate);
+
+        int verificationLaneCount = branchCount > 0 ? 1 : 0;
+        int explorationLaneCount = Math.max(0, branchCount - verificationLaneCount);
+        TraceStore.putIfAbsent("web.query.rewrite.verificationLaneCount", verificationLaneCount);
+        TraceStore.putIfAbsent("web.query.rewrite.explorationLaneCount", explorationLaneCount);
+        List<String> laneLabels = new ArrayList<>();
+        if (verificationLaneCount > 0) {
+            laneLabels.add("verification");
+        }
+        for (int i = 0; i < explorationLaneCount; i++) {
+            laneLabels.add("exploration");
+        }
+        TraceStore.putIfAbsent("web.query.rewrite.laneLabels", laneLabels);
+        TraceStore.putIfAbsent("web.query.rewrite.laneSummary",
+                "verification:" + verificationLaneCount + " exploration:" + explorationLaneCount + " profile:" + safeProfile);
+    }
+
+    private static void putDoubleIfPresent(String key, Object value) {
+        if (value instanceof Number n) {
+            double d = n.doubleValue();
+            if (Double.isFinite(d)) {
+                TraceStore.putIfAbsent(key, d);
+            }
+            return;
+        }
+        if (value == null) {
+            return;
+        }
+        try {
+            double d = Double.parseDouble(String.valueOf(value).trim());
+            if (Double.isFinite(d)) {
+                TraceStore.putIfAbsent(key, d);
+            }
+        } catch (NumberFormatException ignore) {
+            TraceStore.put("queryTransformer.subQueries.superTokens.profileTraceSuppressed", "invalid_number");
+        }
     }
 
     private static List<String> branchTitleHashes(String titleSeed, int branchCount) {

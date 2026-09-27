@@ -71,7 +71,7 @@ final class QueryTransformerFailureSupport {
 
         String msg = root.getMessage();
         if (msg != null) {
-            String lower = msg.toLowerCase();
+            String lower = msg.toLowerCase(java.util.Locale.ROOT);
             if (lower.contains("model is required")
                     || lower.contains("must provide a model")
                     || (lower.contains("model parameter") && lower.contains("required"))

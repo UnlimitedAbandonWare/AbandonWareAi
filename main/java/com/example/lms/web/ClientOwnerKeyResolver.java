@@ -18,14 +18,23 @@ public class ClientOwnerKeyResolver {
     private static final System.Logger LOG = System.getLogger(ClientOwnerKeyResolver.class.getName());
     private static final String NO_REQUEST_OWNER_KEY = "system:no-request";
 
-    private HttpServletRequest request;
+    private final HttpServletRequest request;
+    private final TrustedProxyPolicy trustedProxyPolicy;
 
     public ClientOwnerKeyResolver() {
+        this(null, new TrustedProxyPolicy(""));
+    }
+
+    public ClientOwnerKeyResolver(HttpServletRequest request) {
+        this(request, new TrustedProxyPolicy(""));
     }
 
     @Autowired(required = false)
-    public ClientOwnerKeyResolver(HttpServletRequest request) {
+    public ClientOwnerKeyResolver(HttpServletRequest request, TrustedProxyPolicy trustedProxyPolicy) {
         this.request = request;
+        this.trustedProxyPolicy = trustedProxyPolicy == null
+                ? new TrustedProxyPolicy("")
+                : trustedProxyPolicy;
     }
 
     /** Compute or retrieve stable ownerKey for current request. */
@@ -35,24 +44,40 @@ public class ClientOwnerKeyResolver {
             return NO_REQUEST_OWNER_KEY;
         }
 
-        // 1) ownerKey cookie. Public X-Owner-Key headers are not trusted because
+        // 1) Filter-issued request identity. This keeps the first cookie-less
+        // request on the same owner identity that will be persisted in the response.
+        Object requestOwner = currentRequest.getAttribute(
+                OwnerKeyBootstrapFilter.OWNER_KEY_REQUEST_ATTRIBUTE);
+        String requestOwnerKey = requestOwner instanceof String value
+                ? OwnerKeyBootstrapFilter.usableOwnerKey(value)
+                : null;
+        if (requestOwnerKey != null) return requestOwnerKey;
+
+        // 2) ownerKey cookie. Public X-Owner-Key headers are not trusted because
         // browsers and external clients can spoof them.
         String cookieVal = OwnerKeyBootstrapFilter.usableOwnerKey(readCookie(currentRequest, OwnerKeyBootstrapFilter.OWNER_KEY));
         if (cookieVal != null) return cookieVal;
 
-        // 2) gid cookie (compatibility path)
+        // 3) gid cookie (compatibility path)
         String gid = usableGid(readCookie(currentRequest, "gid"));
         if (gid != null) return "gid:" + gid;
 
-        // 3) Fallback: IP + UA hash (do not store raw PII)
+        // 4) Fallback: IP + UA hash (do not store raw PII)
         String ip = firstForwardedIpOrRemoteAddr(currentRequest);
         String ua = Optional.ofNullable(currentRequest.getHeader("User-Agent")).orElse("");
-        if (ua.length() > 120) ua = ua.substring(0, 120);
+        if (ua.length() > 120) {
+            int end = 120;
+            if (Character.isHighSurrogate(ua.charAt(end - 1))
+                    && Character.isLowSurrogate(ua.charAt(end))) {
+                end--;
+            }
+            ua = ua.substring(0, end);
+        }
         String raw = (ip == null ? "" : ip) + "|" + ua;
         String digest = sha256(raw);
         if (digest != null) return "ipua:" + digest;
 
-        // 4) Random
+        // 5) Random
         return UUID.randomUUID().toString();
     }
 
@@ -68,13 +93,28 @@ public class ClientOwnerKeyResolver {
         return null;
     }
 
+    /** Shared rate-limit identity uses the same trusted-proxy boundary as ownership. */
+    public String clientIpHash(HttpServletRequest currentRequest) {
+        return sha256(Optional.ofNullable(firstForwardedIpOrRemoteAddr(currentRequest)).orElse("unknown"));
+    }
+
     private String firstForwardedIpOrRemoteAddr(HttpServletRequest request) {
-        String xff = trimToNull(request.getHeader("X-Forwarded-For"));
-        if (xff != null) {
-            int idx = xff.indexOf(',');
-            return (idx > 0 ? xff.substring(0, idx) : xff).trim();
+        String remoteAddr = trimToNull(request.getRemoteAddr());
+        if (!trustedProxyPolicy.trusts(remoteAddr)) {
+            return remoteAddr;
         }
-        return trimToNull(request.getRemoteAddr());
+        String forwardedFor = trimToNull(request.getHeader("X-Forwarded-For"));
+        if (forwardedFor != null) {
+            int separator = forwardedFor.indexOf(',');
+            String first = separator >= 0
+                    ? forwardedFor.substring(0, separator)
+                    : forwardedFor;
+            String validated = TrustedProxyPolicy.validatedAddress(first);
+            if (validated != null) {
+                return validated;
+            }
+        }
+        return remoteAddr;
     }
 
     private static String trimToNull(String s) {

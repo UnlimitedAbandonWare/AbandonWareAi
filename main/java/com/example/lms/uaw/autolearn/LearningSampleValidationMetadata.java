@@ -24,7 +24,8 @@ public record LearningSampleValidationMetadata(
         Thresholds thresholds,
         Runtime runtime,
         Anomalies anomalies,
-        Feedback feedback) {
+        Feedback feedback,
+        NeedleRoi needleRoi) {
 
     public LearningSampleValidationMetadata(
             String questionType,
@@ -56,7 +57,8 @@ public record LearningSampleValidationMetadata(
                 Thresholds.defaults(),
                 Runtime.defaults(),
                 Anomalies.none(),
-                Feedback.none());
+                Feedback.none(),
+                NeedleRoi.none());
     }
 
     public LearningSampleValidationMetadata(
@@ -93,7 +95,87 @@ public record LearningSampleValidationMetadata(
                 thresholds,
                 runtime,
                 anomalies,
-                feedback);
+                feedback,
+                NeedleRoi.none());
+    }
+
+    public LearningSampleValidationMetadata(
+            String questionType,
+            List<String> selfAskLanes,
+            double selfAskLaneCoverage,
+            double refutabilityScore,
+            double riskScore,
+            double causalNeedScore,
+            Requery requery,
+            double contaminationScore,
+            double legacyContextScore,
+            double sampleScore,
+            List<String> rejectReasons,
+            List<String> evaluationCriteria,
+            Thresholds thresholds,
+            Runtime runtime,
+            Anomalies anomalies,
+            Feedback feedback,
+            NeedleRoi needleRoi) {
+        this(questionType,
+                selfAskLanes,
+                selfAskLaneCoverage,
+                refutabilityScore,
+                riskScore,
+                causalNeedScore,
+                0.0d,
+                "unknown",
+                requery,
+                contaminationScore,
+                legacyContextScore,
+                sampleScore,
+                rejectReasons,
+                evaluationCriteria,
+                thresholds,
+                runtime,
+                anomalies,
+                feedback,
+                needleRoi);
+    }
+
+    public LearningSampleValidationMetadata(
+            String questionType,
+            List<String> selfAskLanes,
+            double selfAskLaneCoverage,
+            double refutabilityScore,
+            double riskScore,
+            double causalNeedScore,
+            double contradictionScore,
+            String contradictionCause,
+            Requery requery,
+            double contaminationScore,
+            double legacyContextScore,
+            double sampleScore,
+            List<String> rejectReasons,
+            List<String> evaluationCriteria,
+            Thresholds thresholds,
+            Runtime runtime,
+            Anomalies anomalies,
+            Feedback feedback) {
+        this(questionType,
+                selfAskLanes,
+                selfAskLaneCoverage,
+                refutabilityScore,
+                riskScore,
+                causalNeedScore,
+                contradictionScore,
+                contradictionCause,
+                requery,
+                contaminationScore,
+                legacyContextScore,
+                sampleScore,
+                rejectReasons,
+                evaluationCriteria,
+                thresholds,
+                runtime,
+                anomalies,
+                feedback,
+                NeedleRoi.none());
     }
 
     public LearningSampleValidationMetadata {
@@ -115,10 +197,12 @@ public record LearningSampleValidationMetadata(
         runtime = runtime == null ? Runtime.defaults() : runtime;
         anomalies = anomalies == null ? Anomalies.none() : anomalies;
         feedback = feedback == null ? Feedback.none() : feedback;
+        needleRoi = needleRoi == null ? NeedleRoi.none() : needleRoi;
     }
 
     public boolean accepted() {
-        return rejectReasons.isEmpty();
+        return rejectReasons.isEmpty()
+                && (!needleRoi.needleSignalCandidate() || needleRoi.promoted());
     }
 
     public double contextContaminationScore() {
@@ -130,7 +214,7 @@ public record LearningSampleValidationMetadata(
                 refutabilityScore, riskScore, causalNeedScore, contradictionScore, contradictionCause,
                 requery, contaminationScore,
                 legacyContextScore, sampleScore, rejectReasons, evaluationCriteria, thresholds,
-                nextRuntime, anomalies, feedback);
+                nextRuntime, anomalies, feedback, needleRoi);
     }
 
     public LearningSampleValidationMetadata withAnomalies(Anomalies nextAnomalies) {
@@ -138,7 +222,7 @@ public record LearningSampleValidationMetadata(
                 refutabilityScore, riskScore, causalNeedScore, contradictionScore, contradictionCause,
                 requery, contaminationScore,
                 legacyContextScore, sampleScore, rejectReasons, evaluationCriteria, thresholds,
-                runtime, nextAnomalies, feedback);
+                runtime, nextAnomalies, feedback, needleRoi);
     }
 
     public LearningSampleValidationMetadata withFeedback(Feedback nextFeedback) {
@@ -146,7 +230,15 @@ public record LearningSampleValidationMetadata(
                 refutabilityScore, riskScore, causalNeedScore, contradictionScore, contradictionCause,
                 requery, contaminationScore,
                 legacyContextScore, sampleScore, rejectReasons, evaluationCriteria, thresholds,
-                runtime, anomalies, nextFeedback);
+                runtime, anomalies, nextFeedback, needleRoi);
+    }
+
+    public LearningSampleValidationMetadata withNeedleRoi(NeedleRoi nextNeedleRoi) {
+        return new LearningSampleValidationMetadata(questionType, selfAskLanes, selfAskLaneCoverage,
+                refutabilityScore, riskScore, causalNeedScore, contradictionScore, contradictionCause,
+                requery, contaminationScore,
+                legacyContextScore, sampleScore, rejectReasons, evaluationCriteria, thresholds,
+                runtime, anomalies, feedback, nextNeedleRoi);
     }
 
     public static LearningSampleValidationMetadata empty() {
@@ -168,7 +260,8 @@ public record LearningSampleValidationMetadata(
                 Thresholds.defaults(),
                 Runtime.defaults(),
                 Anomalies.none(),
-                Feedback.none());
+                Feedback.none(),
+                NeedleRoi.none());
     }
 
     public record Requery(boolean required, boolean confirmed) {
@@ -244,6 +337,24 @@ public record LearningSampleValidationMetadata(
         }
     }
 
+    public record NeedleRoi(
+            boolean needleSignalCandidate,
+            double signalValueScore,
+            boolean promoted,
+            String rejectReason) {
+        public NeedleRoi {
+            signalValueScore = clamp01(signalValueScore);
+            if (!needleSignalCandidate) {
+                promoted = false;
+            }
+            rejectReason = normalizeRoiReason(rejectReason, promoted ? "accepted" : "not_candidate");
+        }
+
+        public static NeedleRoi none() {
+            return new NeedleRoi(false, 0.0d, false, "not_candidate");
+        }
+    }
+
     static double clamp01(double value) {
         if (!Double.isFinite(value)) {
             return 0.0d;
@@ -301,5 +412,17 @@ public record LearningSampleValidationMetadata(
             return "unknown";
         }
         return "other";
+    }
+
+    private static String normalizeRoiReason(String value, String fallback) {
+        String v = normalize(value, fallback).toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[^a-z0-9_.:-]+", "_");
+        if (v.isBlank()) {
+            return fallback;
+        }
+        if (v.length() > 64) {
+            return v.substring(0, 64);
+        }
+        return v;
     }
 }

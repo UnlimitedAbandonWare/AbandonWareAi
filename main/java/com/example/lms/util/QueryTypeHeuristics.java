@@ -16,7 +16,7 @@ public final class QueryTypeHeuristics {
     private QueryTypeHeuristics() {
     }
 
-    private static final Pattern TOKEN_SPLIT = Pattern.compile("\\s+|[\\u3000-\\u303F\\p{Punct}]");
+    private static final Pattern TOKEN_SPLIT = Pattern.compile("\\s+|[\\u3000-\\u303F\\p{Punct}\\p{P}]");
     private static final Pattern HAS_HANGUL_OR_LETTER = Pattern.compile(".*[\\p{IsHangul}\\p{L}].*");
     private static final Pattern DIGITS_ONLY = Pattern.compile("\\d+");
 

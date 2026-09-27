@@ -6,12 +6,17 @@ import com.example.lms.debug.PromptMasker;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.AbstractMap;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Thin wrapper around {@link PromptMasker} to centralise secret redaction
@@ -24,6 +29,65 @@ public final class SafeRedactor {
     private static final System.Logger LOG = System.getLogger(SafeRedactor.class.getName());
     private static final int MAX_ITEMS = 80;
     private static final int MAX_DEPTH = 6;
+    // Exact producer keys and types only: a name containing "prompt"/"token"
+    // never grants access to raw content or credentials.
+    private static final Set<String> DIAGNOSTIC_FLAGS = Set.of(
+            "prompt.historyRendered", "prompt.lastAssistantRendered",
+            "prompt.contextInjected.history", "prompt.contextInjected.lastAssistant",
+            "prompt.contextInjected.memory", "prompt.contextInjected.delivered",
+            "prompt.memoryPresent", "prompt.events.memoryPresent",
+            "llm.gateway.openai.tokenParamRetry");
+    private static final Set<String> DIAGNOSTIC_COUNTS = Set.of(
+            "prompt.webCount", "prompt.ragCount", "prompt.localDocsCount",
+            "prompt.citableEvidenceCount", "prompt.memoryLen",
+            "prompt.contextInjected.historyChars", "prompt.ctx.len", "prompt.instr.len",
+            "prompt.events.seq", "prompt.events.webCount", "prompt.events.ragCount",
+            "prompt.events.vectorCount", "prompt.events.localDocsCount",
+            "llm.call.approxInputTokens", "llm.ollamaNative.maxTokens",
+            "memory.session.tokenEstimate");
+    private static final Set<String> STANDARD_EVENT_LABEL_KEYS = Set.of(
+            "kind", "phase", "stage", "step", "component", "status",
+            "input.mode", "input.planId", "failure.reasonCode",
+            "failure.failureClass", "failure.exceptionType", "control.action",
+            "control.reasonCode", "control.breadcrumbId");
+
+    public static boolean isTypedDiagnostic(String key, Object value) {
+        if (DIAGNOSTIC_FLAGS.contains(key == null ? "" : key)) {
+            return value instanceof Boolean;
+        }
+        return DIAGNOSTIC_COUNTS.contains(key == null ? "" : key)
+                && (value instanceof Byte || value instanceof Short
+                    || value instanceof Integer || value instanceof Long)
+                && ((Number) value).longValue() >= 0;
+    }
+
+    public static boolean isStandardEventLabelKey(String key) {
+        return STANDARD_EVENT_LABEL_KEYS.contains(key == null ? "" : key);
+    }
+
+    // Only summaries produced here retain their identity on a second pass.
+    // A caller-supplied map with {present,len,hash12} is still untrusted input.
+    private static final class DiagnosticSummary extends AbstractMap<String, Object> {
+        private final Map<String, Object> fields;
+
+        private DiagnosticSummary(Map<String, Object> fields) {
+            this.fields = Collections.unmodifiableMap(new LinkedHashMap<>(fields));
+        }
+
+        @Override
+        public Set<Entry<String, Object>> entrySet() {
+            return fields.entrySet();
+        }
+    }
+    private static final Set<String> RETRIEVAL_ORDER_AUTHORITIES = Set.of(
+            "DEFAULT", "PLAN_DSL", "CFVM_FAILURE_PATTERN", "CFVM", "MoE");
+    private static final Set<String> EXECUTION_PRIMARY_MODES = Set.of(
+            "NORMAL", "EXTREMEZ", "OVERDRIVE", "HYPERNOVA");
+    private static final Set<String> CFVM_TEMP_SOURCES = Set.of(
+            "CfvmKallocLearningProperties",
+            "manual_override",
+            "runtime_buffer_snapshot",
+            "snapshot_restore");
 
     private SafeRedactor() {}
 
@@ -132,16 +196,22 @@ public final class SafeRedactor {
                 || k.contains(".apikey")
                 || k.equals("clientsecret")
                 || k.contains(".clientsecret")
+                || k.endsWith("clientsecret")
                 || k.equals("servicerolekey")
                 || k.contains(".servicerolekey")
+                || k.endsWith("servicerolekey")
                 || k.equals("openaikey")
                 || k.contains(".openaikey")
+                || k.endsWith("openaikey")
                 || k.equals("accesstoken")
                 || k.contains(".accesstoken")
+                || k.endsWith("accesstoken")
                 || k.equals("refreshtoken")
                 || k.contains(".refreshtoken")
+                || k.endsWith("refreshtoken")
                 || k.equals("bearertoken")
-                || k.contains(".bearertoken");
+                || k.contains(".bearertoken")
+                || k.endsWith("bearertoken");
     }
 
     public static String traceLabelOrFallback(Object value, String fallback) {
@@ -159,13 +229,26 @@ public final class SafeRedactor {
         if (value == null) return null;
         if (depth > MAX_DEPTH) return "(depth-limit)";
 
+        if (value instanceof DiagnosticSummary || isTypedDiagnostic(key, value)) {
+            return value;
+        }
+        if (key != null && key.startsWith("orch.events.v1.")
+                && isStandardEventLabelKey(key.substring("orch.events.v1.".length()))
+                && value instanceof String) {
+            return traceLabelOrFallback(value, "unknown");
+        }
         String normalizedKey = normalizeKey(key);
         if (value instanceof String s) {
             return diagnosticString(normalizedKey, s, maxStringLen);
         }
         if (value instanceof Number || value instanceof Boolean) {
-            if (isSecretKey(normalizedKey)) return "(redacted)";
-            if (isIdentifierKey(normalizedKey) || isRawContentKey(normalizedKey)) {
+            if (isSecretKey(normalizedKey) && !isQueryTransformerSuperTokenDiagnosticKey(normalizedKey)) {
+                return "(redacted)";
+            }
+            if (isIdentifierKey(normalizedKey)
+                    || (isRawContentKey(normalizedKey)
+                    && !isQueryRewriteDiagnosticKey(normalizedKey)
+                    && !isQueryTransformerSuperTokenDiagnosticKey(normalizedKey))) {
                 return scalarSummary(String.valueOf(value), false);
             }
             return value;
@@ -214,7 +297,13 @@ public final class SafeRedactor {
 
     private static Object diagnosticString(String normalizedKey, String raw, int maxStringLen) {
         if (raw == null) return null;
-        if (isSecretKey(normalizedKey)) {
+        if (raw.matches("hash:[0-9a-f]{12}")) {
+            return raw;
+        }
+        if (isEvidenceObservedAtKey(normalizedKey) && isIsoInstant(raw)) {
+            return raw;
+        }
+        if (isSecretKey(normalizedKey) && !isQueryTransformerSuperTokenDiagnosticKey(normalizedKey)) {
             return "(redacted)";
         }
         if (isIdentifierKey(normalizedKey)) {
@@ -223,8 +312,17 @@ public final class SafeRedactor {
         if (isUrlKey(normalizedKey)) {
             return urlSummary(raw);
         }
+        if (isQueryRewriteDiagnosticKey(normalizedKey)) {
+            return limit(PromptMasker.mask(raw).replace('\n', ' ').replace('\r', ' ').trim(), maxStringLen);
+        }
+        if (isQueryTransformerSuperTokenDiagnosticKey(normalizedKey)) {
+            return limit(PromptMasker.mask(raw).replace('\n', ' ').replace('\r', ' ').trim(), maxStringLen);
+        }
         if (isRawContentKey(normalizedKey)) {
             return scalarSummary(raw, true);
+        }
+        if (isHarmonyAuthorityKey(normalizedKey)) {
+            return sanitizeHarmonyAuthorityValue(normalizedKey, raw);
         }
         if (isReasonKey(normalizedKey)) {
             return traceLabelOrFallback(raw, "unknown");
@@ -237,6 +335,23 @@ public final class SafeRedactor {
             return limit(masked.replace('\n', ' ').replace('\r', ' ').trim(), maxStringLen);
         }
         return scalarSummary(raw, true);
+    }
+
+    private static boolean isEvidenceObservedAtKey(String normalizedKey) {
+        return normalizedKey != null
+                && (normalizedKey.equals("observedat") || normalizedKey.endsWith(".observedat"));
+    }
+
+    private static boolean isIsoInstant(String value) {
+        if (value == null || value.length() > 40) {
+            return false;
+        }
+        try {
+            Instant.parse(value);
+            return true;
+        } catch (DateTimeParseException ignored) {
+            return false;
+        }
     }
 
     private static Map<String, Object> scalarSummary(String raw, boolean includePreviewSafety) {
@@ -253,16 +368,11 @@ public final class SafeRedactor {
         if (!includePreviewSafety && trimmed.isEmpty()) {
             out.put("empty", true);
         }
-        return out;
+        return new DiagnosticSummary(out);
     }
 
     private static Map<String, Object> urlSummary(String raw) {
-        Map<String, Object> out = scalarSummary(raw, true);
-        String host = extractHost(raw);
-        if (host != null && !host.isBlank()) {
-            out.put("host", host);
-        }
-        return out;
+        return scalarSummary(raw, true);
     }
 
     private static String extractHost(String value) {
@@ -346,6 +456,58 @@ public final class SafeRedactor {
                 || k.contains("payload");
     }
 
+    private static boolean isQueryRewriteDiagnosticKey(String k) {
+        if (k == null || !k.startsWith("web.query.rewrite.")) {
+            return false;
+        }
+        return k.endsWith(".queryseedhash12")
+                || k.endsWith(".variantsethash12")
+                || k.endsWith(".verificationlanecount")
+                || k.endsWith(".explorationlanecount")
+                || k.endsWith(".lanelabels")
+                || k.endsWith(".lanesummary")
+                || k.endsWith(".variantlanetemperaturehints")
+                || k.endsWith(".temperatureprofile")
+                || k.endsWith(".validationtemperature")
+                || k.endsWith(".explorationtemperature")
+                || k.endsWith(".explorationrate")
+                || k.endsWith(".requestedexplorationrate")
+                || k.endsWith(".requestedexplorationtemperature")
+                || k.endsWith(".requestedtemperatureprofile");
+    }
+
+    private static boolean isQueryTransformerSuperTokenDiagnosticKey(String k) {
+        if (k == null || !k.startsWith("querytransformer.subqueries.supertokens.")) {
+            return false;
+        }
+        return k.endsWith(".enabled")
+                || k.endsWith(".reason")
+                || k.endsWith(".branchcount")
+                || k.endsWith(".tokencount")
+                || k.endsWith(".submodelcount")
+                || k.endsWith(".submodelids")
+                || k.endsWith(".submodelassignmentcount")
+                || k.endsWith(".branchtitlecount")
+                || k.endsWith(".branchtitlehashcount")
+                || k.endsWith(".branchtitlehashes")
+                || k.endsWith(".branchtitlemetadatacount")
+                || k.endsWith(".branchtitlelengths")
+                || k.endsWith(".branchtitletermcounts")
+                || k.endsWith(".branchquerymetadatacount")
+                || k.endsWith(".branchqueryhashes")
+                || k.endsWith(".branchquerylengths")
+                || k.endsWith(".branchquerytermcounts")
+                || k.endsWith(".branchquerycoveragecomplete")
+                || k.endsWith(".titlepresent")
+                || k.endsWith(".titlehash12")
+                || k.endsWith(".titletokencount")
+                || k.endsWith(".titlelength")
+                || k.endsWith(".branchtitlecoveragecomplete")
+                || k.endsWith(".axiscount")
+                || k.endsWith(".axes")
+                || k.endsWith(".coveragecomplete");
+    }
+
     private static boolean isPathKey(String k) {
         return k.equals("path")
                 || k.endsWith(".path")
@@ -420,6 +582,27 @@ public final class SafeRedactor {
                 || k.equals("langgraph.invoke.trigger")
                 || k.endsWith(".langgraph.invoke.trigger")
                 || k.contains("hash");
+    }
+
+    private static boolean isHarmonyAuthorityKey(String key) {
+        return key.equals("retrievalorder.lastsetby")
+                || key.equals("routing.executionplan.primarymode")
+                || key.equals("cfvm.tempsource")
+                || key.equals("hypernova.whitening.provider");
+    }
+
+    private static Object sanitizeHarmonyAuthorityValue(String key, String raw) {
+        String value = raw == null ? "" : raw.trim();
+        boolean allowed = switch (key) {
+            case "retrievalorder.lastsetby" -> RETRIEVAL_ORDER_AUTHORITIES.contains(value);
+            case "routing.executionplan.primarymode" -> EXECUTION_PRIMARY_MODES.contains(value);
+            case "cfvm.tempsource" -> CFVM_TEMP_SOURCES.contains(value);
+            case "hypernova.whitening.provider" -> value.length() <= 64
+                    && value.matches("[a-z0-9][a-z0-9_.:-]{0,63}")
+                    && value.equals(traceLabel(value));
+            default -> false;
+        };
+        return allowed ? value : scalarSummary(raw, true);
     }
 
     private static String limit(String s, int max) {

@@ -1,6 +1,5 @@
 package com.example.lms.vector;
 
-import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.store.embedding.EmbeddingMatch;
@@ -46,11 +45,27 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
     /** Simple wrapper of a named EmbeddingStore. */
     public record NamedStore(String id, EmbeddingStore<TextSegment> store) {}
 
+    enum FederatedStoreWriteStatus {
+        SUCCEEDED,
+        DEADLINE_EXCEEDED,
+        WORKER_UNFINISHED,
+        FAILED
+    }
+
+    record FederatedWriteResult(Map<String, FederatedStoreWriteStatus> outcomes,
+                                int succeededCount) {
+        FederatedWriteResult {
+            outcomes = Collections.unmodifiableMap(new LinkedHashMap<>(outcomes));
+            succeededCount = Math.max(0, succeededCount);
+        }
+    }
+
     private final List<NamedStore> stores;
     private final TopicRoutingSettings routing;
     private final long searchTimeoutMs;
     private final int maxParallelism;
     private final ExecutorService pool;
+    private final Map<NamedStore, Semaphore> storeAdmissions;
 
     // Use a context-aware pool so MDC/GuardContext survives on pooled workers.
     // (Even if the vector store itself doesn't rely on GuardContext today, downstream
@@ -83,6 +98,7 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
         this.searchTimeoutMs = Math.max(50L, searchTimeoutMs);
         this.maxParallelism = Math.max(1, maxParallelism);
         this.pool = newPool(this.maxParallelism);
+        this.storeAdmissions = newStoreAdmissions(this.stores);
     }
 
     FederatedEmbeddingStore(List<NamedStore> stores,
@@ -94,6 +110,7 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
         this.searchTimeoutMs = Math.max(50L, searchTimeoutMs);
         this.maxParallelism = Math.max(1, maxParallelism);
         this.pool = newPool(this.maxParallelism);
+        this.storeAdmissions = newStoreAdmissions(this.stores);
     }
     @PostConstruct
     void logInitialization() {
@@ -135,7 +152,7 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
     @Override
     public String add(dev.langchain4j.data.embedding.Embedding embedding) {
         String id = UUID.randomUUID().toString();
-        addAll(List.of(embedding), List.of(TextSegment.from("", Metadata.from(Collections.emptyMap()))));
+        add(id, embedding, null);
         return id;
     }
 
@@ -147,7 +164,7 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
     @Override
     public String add(dev.langchain4j.data.embedding.Embedding embedding, TextSegment embedded) {
         String id = UUID.randomUUID().toString();
-        addAll(List.of(id), List.of(embedding), List.of(embedded));
+        add(id, embedding, embedded);
         return id;
     }
 
@@ -172,49 +189,146 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
     }
 
     private void add(String id, dev.langchain4j.data.embedding.Embedding embedding, TextSegment segment) {
-        addAll(List.of(id), List.of(embedding), List.of(segment));
+        addAll(List.of(id), List.of(embedding), Collections.singletonList(segment));
     }
     @Override
     public void addAll(List<String> ids, List<dev.langchain4j.data.embedding.Embedding> embeddings, List<TextSegment> segments) {
+        FederatedWriteResult result = writeAllWithinDeadline(ids, embeddings, segments, searchTimeoutMs);
+        if (result.succeededCount() == 0) {
+            List<String> failed = result.outcomes().entrySet().stream()
+                    .filter(entry -> entry.getValue() != FederatedStoreWriteStatus.SUCCEEDED)
+                    .map(entry -> entry.getKey() + ":" + entry.getValue().name())
+                    .toList();
+            throw new IllegalStateException("Federated addAll failed on all stores: " + String.join(",", failed));
+        }
+    }
+
+    FederatedWriteResult writeAllWithinDeadline(
+            List<String> ids,
+            List<dev.langchain4j.data.embedding.Embedding> embeddings,
+            List<TextSegment> segments,
+            long timeoutMs) {
         if (stores == null || stores.isEmpty()) {
             throw new IllegalStateException("FederatedEmbeddingStore has no upstream stores (stores=empty)");
         }
 
-        int ok = 0;
-        java.util.List<String> failed = new java.util.ArrayList<>();
+        List<String> admittedIds = stableList(ids);
+        List<dev.langchain4j.data.embedding.Embedding> admittedEmbeddings = stableList(embeddings);
+        List<TextSegment> admittedSegments = stableList(segments);
+        long deadlineNanos = deadlineAfterMillis(timeoutMs);
+        ExecutorCompletionService<WriteWorkerResult> completions = new ExecutorCompletionService<>(pool);
+        List<WriteTask> tasks = new ArrayList<>();
+        Map<Future<WriteWorkerResult>, WriteTask> tasksByFuture = new IdentityHashMap<>();
+        Map<String, FederatedStoreWriteStatus> outcomes = new LinkedHashMap<>();
+        int unfinishedCount = 0;
 
         for (NamedStore ns : stores) {
+            String safeId = safeStoreId(ns.id());
+            if (remainingNanos(deadlineNanos) <= 0L) {
+                outcomes.put(safeId, FederatedStoreWriteStatus.DEADLINE_EXCEEDED);
+                continue;
+            }
+            WorkerLease lease = tryAcquireWorkerLease(ns);
+            if (lease == null) {
+                outcomes.put(safeId, FederatedStoreWriteStatus.WORKER_UNFINISHED);
+                unfinishedCount++;
+                continue;
+            }
             try {
-                ns.store().addAll(ids, embeddings, segments);
-                ok++;
-            } catch (dev.langchain4j.exception.UnsupportedFeatureException uf) {
-                log.debug("Federated addAll unsupported ids path store={}", safeStoreId(ns.id()));
-                // Fallback: stores that don't support addAll(ids,...)
-                try {
-                    if (segments != null) {
-                        ns.store().addAll(embeddings, segments);
-                    } else {
-                        ns.store().addAll(embeddings);
+                Future<WriteWorkerResult> future = completions.submit(() -> {
+                    if (!lease.begin()) {
+                        return new WriteWorkerResult(FederatedStoreWriteStatus.FAILED, System.nanoTime());
                     }
-                    ok++;
-                    log.warn("Federated addAll degraded on store {}: addAll(ids,..) unsupported -> fallback used",
-                            safeStoreId(ns.id()));
-                } catch (Exception e2) {
-                    failed.add(safeStoreId(ns.id()) + ":" + e2.getClass().getSimpleName());
-                    log.warn("Federated addAll failed on store {} (fallback also failed). errorHash={} errorLength={}",
-                            safeStoreId(ns.id()), SafeRedactor.hashValue(messageOf(e2)), messageLength(e2));
-                }
-            } catch (Exception e) {
-                failed.add(safeStoreId(ns.id()) + ":" + e.getClass().getSimpleName());
-                log.warn("Federated addAll failed on store {}. errorHash={} errorLength={}",
-                        safeStoreId(ns.id()), SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+                    try {
+                        FederatedStoreWriteStatus status = writeToStore(
+                                ns, admittedIds, admittedEmbeddings, admittedSegments);
+                        return new WriteWorkerResult(status, System.nanoTime());
+                    } finally {
+                        lease.finish();
+                    }
+                });
+                WriteTask task = new WriteTask(ns.id(), lease, future);
+                tasks.add(task);
+                tasksByFuture.put(future, task);
+            } catch (RejectedExecutionException rejected) {
+                lease.cancelBeforeStart();
+                outcomes.put(safeId, FederatedStoreWriteStatus.FAILED);
             }
         }
 
-        // Prevent silent drops: if nobody accepted the write, propagate to the caller.
-        if (ok == 0) {
-            throw new IllegalStateException("Federated addAll failed on all stores: " + String.join(",", failed));
+        Set<Future<WriteWorkerResult>> collected = Collections.newSetFromMap(new IdentityHashMap<>());
+        boolean callerInterrupted = false;
+        while (collected.size() < tasks.size()) {
+            long remaining = remainingNanos(deadlineNanos);
+            if (remaining <= 0L) {
+                break;
+            }
+            Future<WriteWorkerResult> completedFuture;
+            try {
+                completedFuture = completions.poll(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                callerInterrupted = true;
+                break;
+            }
+            if (completedFuture == null) {
+                break;
+            }
+            collected.add(completedFuture);
+            WriteTask task = tasksByFuture.get(completedFuture);
+            try {
+                WriteWorkerResult completed = completedFuture.get();
+                outcomes.put(safeStoreId(task.storeId()),
+                        completed.completedNanos() - deadlineNanos <= 0L
+                                ? completed.status()
+                                : FederatedStoreWriteStatus.DEADLINE_EXCEEDED);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                callerInterrupted = true;
+                break;
+            } catch (CancellationException cancelled) {
+                outcomes.put(safeStoreId(task.storeId()), FederatedStoreWriteStatus.DEADLINE_EXCEEDED);
+            } catch (ExecutionException failed) {
+                outcomes.put(safeStoreId(task.storeId()), FederatedStoreWriteStatus.FAILED);
+            }
         }
+
+        for (WriteTask task : tasks) {
+            if (collected.contains(task.future())) {
+                continue;
+            }
+            if (task.future().isDone() && !task.future().isCancelled()) {
+                try {
+                    WriteWorkerResult completed = task.future().get();
+                    if (completed.completedNanos() - deadlineNanos <= 0L) {
+                        outcomes.put(safeStoreId(task.storeId()), completed.status());
+                        continue;
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    callerInterrupted = true;
+                } catch (ExecutionException | CancellationException ignored) {
+                    logSuppressed("write.collect", ignored);
+                }
+            }
+            boolean workerUnfinished = cancelWithoutInterrupt(task.lease(), task.future());
+            outcomes.put(safeStoreId(task.storeId()), FederatedStoreWriteStatus.DEADLINE_EXCEEDED);
+            if (workerUnfinished) {
+                unfinishedCount++;
+            }
+        }
+
+        int succeededCount = (int) outcomes.values().stream()
+                .filter(status -> status == FederatedStoreWriteStatus.SUCCEEDED)
+                .count();
+        trace("vector.federated.write.outcomes", outcomes.toString());
+        trace("vector.federated.write.succeededCount", succeededCount);
+        trace("vector.federated.write.unfinishedCount", unfinishedCount);
+        trace("vector.federated.write.unfinishedReason", unfinishedCount > 0 ? "worker_unfinished" : "none");
+        if (callerInterrupted) {
+            trace("vector.federated.write.interrupted", true);
+        }
+        return new FederatedWriteResult(outcomes, succeededCount);
     }
 
     @Override
@@ -241,10 +355,27 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
         }
         int k = Math.max(1, req.maxResults());
         Map<String, Integer> split = allocateK(weights, k, routing.minPerStore());
-        List<SearchTask> futures = new ArrayList<>();
+        long deadlineNanos = deadlineAfterMillis(searchTimeoutMs);
+        ExecutorCompletionService<SearchWorkerResult> completions = new ExecutorCompletionService<>(pool);
+        List<SearchTask> tasks = new ArrayList<>();
+        Map<Future<SearchWorkerResult>, SearchTask> tasksByFuture = new IdentityHashMap<>();
+        List<EmbeddingMatch<TextSegment>> merged = new ArrayList<>();
+        List<String> diagnostics = new ArrayList<>();
+        int unfinishedCount = 0;
+
         for (NamedStore ns : stores) {
             int ki = split.getOrDefault(ns.id(), 0);
             if (ki <= 0) continue;
+            if (remainingNanos(deadlineNanos) <= 0L) {
+                diagnostics.add(safeStoreId(ns.id()) + ":deadline_exceeded:k=" + ki);
+                continue;
+            }
+            WorkerLease lease = tryAcquireWorkerLease(ns);
+            if (lease == null) {
+                unfinishedCount++;
+                diagnostics.add(safeStoreId(ns.id()) + ":worker_unfinished:k=" + ki);
+                continue;
+            }
             EmbeddingSearchRequest subReq = EmbeddingSearchRequest.builder()
                     .queryEmbedding(req.queryEmbedding())
                     .maxResults(ki)
@@ -252,45 +383,119 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
                     .filter(req.filter())
                     .build();
             long started = System.nanoTime();
-            Future<EmbeddingSearchResult<TextSegment>> future = pool.submit(() -> {
-                try {
-                    return ns.store().search(subReq);
-                } catch (Exception e) {
-                    log.warn("Federated search fail-soft on store {}. errorHash={} errorLength={}",
-                            safeStoreId(ns.id()), SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-                    return new EmbeddingSearchResult<>(Collections.emptyList());
-                }
-            });
-            futures.add(new SearchTask(ns.id(), ki, started, future));
-        }
-        List<EmbeddingMatch<TextSegment>> merged = new ArrayList<>();
-        List<String> diagnostics = new ArrayList<>();
-        for (SearchTask task : futures) {
             try {
-                EmbeddingSearchResult<TextSegment> r = task.future().get(searchTimeoutMs, TimeUnit.MILLISECONDS);
-                long tookMs = elapsedMs(task.startedNanos());
-                int returned = (r == null || r.matches() == null) ? 0 : r.matches().size();
-                diagnostics.add(safeStoreId(task.storeId()) + ":ok:k=" + task.requestedK() + ":returned=" + returned + ":tookMs=" + tookMs);
-                if (r != null && r.matches() != null) {
-                    merged.addAll(r.matches());
+                Future<SearchWorkerResult> future = completions.submit(() -> {
+                    if (!lease.begin()) {
+                        return new SearchWorkerResult(
+                                new EmbeddingSearchResult<>(Collections.emptyList()),
+                                System.nanoTime());
+                    }
+                    try {
+                        EmbeddingSearchResult<TextSegment> result;
+                        try {
+                            result = ns.store().search(subReq);
+                        } catch (Exception e) {
+                            log.warn("Federated search fail-soft on store {}. errorHash={} errorLength={}",
+                                    safeStoreId(ns.id()), SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+                            result = new EmbeddingSearchResult<>(Collections.emptyList());
+                        }
+                        return new SearchWorkerResult(result, System.nanoTime());
+                    } finally {
+                        lease.finish();
+                    }
+                });
+                SearchTask task = new SearchTask(ns.id(), ki, started, lease, future);
+                tasks.add(task);
+                tasksByFuture.put(future, task);
+            } catch (RejectedExecutionException rejected) {
+                lease.cancelBeforeStart();
+                diagnostics.add(safeStoreId(ns.id()) + ":error:executor_rejected");
+                log.warn("[AWX2AF2][vector][store-error] store={} requestedK={} errorType={}",
+                        safeStoreId(ns.id()), ki, "executor_rejected");
+            }
+        }
+
+        Set<Future<SearchWorkerResult>> collected = Collections.newSetFromMap(new IdentityHashMap<>());
+        boolean callerInterrupted = false;
+        long completionCutoffNanos = deadlineNanos;
+        while (collected.size() < tasks.size()) {
+            long remaining = remainingNanos(deadlineNanos);
+            if (remaining <= 0L) {
+                break;
+            }
+            Future<SearchWorkerResult> completedFuture;
+            try {
+                completedFuture = completions.poll(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException interrupted) {
+                completionCutoffNanos = System.nanoTime();
+                Thread.currentThread().interrupt();
+                callerInterrupted = true;
+                break;
+            }
+            if (completedFuture == null) {
+                break;
+            }
+            collected.add(completedFuture);
+            SearchTask task = tasksByFuture.get(completedFuture);
+            try {
+                SearchWorkerResult completed = completedFuture.get();
+                if (completed.completedNanos() - deadlineNanos <= 0L) {
+                    appendSearchResult(task, completed.result(), merged, diagnostics);
                 }
-            } catch (TimeoutException te) {
-                task.future().cancel(false);
+            } catch (InterruptedException interrupted) {
+                completionCutoffNanos = System.nanoTime();
+                Thread.currentThread().interrupt();
+                callerInterrupted = true;
+                break;
+            } catch (CancellationException cancelled) {
+                diagnostics.add(safeStoreId(task.storeId()) + ":deadline_exceeded:k=" + task.requestedK());
+            } catch (ExecutionException failed) {
+                diagnostics.add(safeStoreId(task.storeId()) + ":error:worker_failed");
+                log.warn("[AWX2AF2][vector][store-error] store={} requestedK={} errorType={}",
+                        safeStoreId(task.storeId()), task.requestedK(), "worker_failed");
+            }
+        }
+
+        for (SearchTask task : tasks) {
+            if (collected.contains(task.future())) {
+                continue;
+            }
+            if (task.future().isDone() && !task.future().isCancelled()) {
+                try {
+                    SearchWorkerResult completed = task.future().get();
+                    if (completed.completedNanos() - completionCutoffNanos <= 0L) {
+                        appendSearchResult(task, completed.result(), merged, diagnostics);
+                        continue;
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    callerInterrupted = true;
+                } catch (ExecutionException | CancellationException ignored) {
+                    logSuppressed("search.collect", ignored);
+                }
+            }
+            boolean workerUnfinished = cancelWithoutInterrupt(task.lease(), task.future());
+            if (workerUnfinished) {
+                unfinishedCount++;
+                diagnostics.add(safeStoreId(task.storeId()) + ":worker_unfinished:k=" + task.requestedK());
+            } else {
+                diagnostics.add(safeStoreId(task.storeId()) + ":deadline_exceeded:k=" + task.requestedK());
+            }
+            if (!callerInterrupted) {
                 recordTimeoutCancellation(task.storeId(), task.requestedK());
-                diagnostics.add(safeStoreId(task.storeId()) + ":timeout:k=" + task.requestedK() + ":timeoutMs=" + searchTimeoutMs);
                 log.warn("[AWX2AF2][vector][timeout] store={} requestedK={} timeoutMs={}",
                         safeStoreId(task.storeId()), task.requestedK(), searchTimeoutMs);
-            } catch (Exception ignored) {
-                diagnostics.add(safeStoreId(task.storeId()) + ":error:" + ignored.getClass().getSimpleName());
-                log.warn("[AWX2AF2][vector][store-error] store={} requestedK={} errorType={}",
-                        safeStoreId(task.storeId()), task.requestedK(),
-                        SafeRedactor.traceLabelOrFallback(ignored.getClass().getSimpleName(), "unknown"));
             }
+        }
+        if (callerInterrupted) {
+            diagnostics.add("interrupted:cancelMode=no_interrupt");
         }
         trace("vector.federated.topic", topicTrace);
         trace("vector.federated.split", safeSplit(split).toString());
         trace("vector.federated.diagnostics", diagnostics.toString());
         trace("vector.federated.timeoutMs", searchTimeoutMs);
+        trace("vector.federated.search.unfinishedCount", unfinishedCount);
+        trace("vector.federated.search.unfinishedReason", unfinishedCount > 0 ? "worker_unfinished" : "none");
         if (merged.isEmpty()) {
             // MERGE_HOOK:PROJ_AGENT::FEDERATED_ROUTE_LABEL
             // Normalised log line used by GPU/RAG diagnostics; keep shape stable.
@@ -337,10 +542,145 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
         }
     }
 
+    private static Map<NamedStore, Semaphore> newStoreAdmissions(List<NamedStore> stores) {
+        Map<NamedStore, Semaphore> admissions = new ConcurrentHashMap<>();
+        if (stores != null) {
+            for (NamedStore store : stores) {
+                admissions.putIfAbsent(store, new Semaphore(1, true));
+            }
+        }
+        return Collections.unmodifiableMap(admissions);
+    }
+
+    private WorkerLease tryAcquireWorkerLease(NamedStore store) {
+        Semaphore admission = storeAdmissions.get(store);
+        if (admission == null || !admission.tryAcquire()) {
+            return null;
+        }
+        return new WorkerLease(admission);
+    }
+
+    private static long deadlineAfterMillis(long timeoutMs) {
+        long maxMs = TimeUnit.NANOSECONDS.toMillis(Long.MAX_VALUE / 4L);
+        long boundedMs = Math.max(1L, Math.min(timeoutMs, maxMs));
+        return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(boundedMs);
+    }
+
+    private static long remainingNanos(long deadlineNanos) {
+        return Math.max(0L, deadlineNanos - System.nanoTime());
+    }
+
+    private static <T> List<T> stableList(List<T> values) {
+        if (values == null) {
+            return null;
+        }
+        return Collections.unmodifiableList(new ArrayList<>(values));
+    }
+
+    private static boolean cancelWithoutInterrupt(WorkerLease lease, Future<?> future) {
+        boolean cancelledBeforeStart = lease.cancelBeforeStart();
+        try {
+            future.cancel(false);
+        } catch (RuntimeException ignored) {
+            logSuppressed("future.cancel", ignored);
+        }
+        return !cancelledBeforeStart && lease.isRunning();
+    }
+
+    private void appendSearchResult(SearchTask task,
+                                    EmbeddingSearchResult<TextSegment> result,
+                                    List<EmbeddingMatch<TextSegment>> merged,
+                                    List<String> diagnostics) {
+        long tookMs = elapsedMs(task.startedNanos());
+        int returned = (result == null || result.matches() == null) ? 0 : result.matches().size();
+        diagnostics.add(safeStoreId(task.storeId()) + ":ok:k=" + task.requestedK()
+                + ":returned=" + returned + ":tookMs=" + tookMs);
+        if (result != null && result.matches() != null) {
+            merged.addAll(result.matches());
+        }
+    }
+
+    private FederatedStoreWriteStatus writeToStore(
+            NamedStore ns,
+            List<String> ids,
+            List<dev.langchain4j.data.embedding.Embedding> embeddings,
+            List<TextSegment> segments) {
+        try {
+            ns.store().addAll(ids, embeddings, segments);
+            return FederatedStoreWriteStatus.SUCCEEDED;
+        } catch (dev.langchain4j.exception.UnsupportedFeatureException uf) {
+            log.debug("Federated addAll unsupported ids path store={}", safeStoreId(ns.id()));
+            // Anonymous writes cannot satisfy the caller-owned ID contract.
+            return FederatedStoreWriteStatus.FAILED;
+        } catch (Exception e) {
+            log.warn("Federated addAll failed on store {}. errorHash={} errorLength={}",
+                    safeStoreId(ns.id()), SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+            return FederatedStoreWriteStatus.FAILED;
+        }
+    }
+
     private record SearchTask(String storeId,
                               int requestedK,
                               long startedNanos,
-                              Future<EmbeddingSearchResult<TextSegment>> future) {
+                              WorkerLease lease,
+                              Future<SearchWorkerResult> future) {
+    }
+
+    private record SearchWorkerResult(EmbeddingSearchResult<TextSegment> result,
+                                      long completedNanos) {
+    }
+
+    private record WriteTask(String storeId,
+                             WorkerLease lease,
+                             Future<WriteWorkerResult> future) {
+    }
+
+    private record WriteWorkerResult(FederatedStoreWriteStatus status,
+                                     long completedNanos) {
+    }
+
+    private static final class WorkerLease {
+        private enum State {
+            PENDING,
+            RUNNING,
+            FINISHED,
+            CANCELLED_BEFORE_START
+        }
+
+        private final Semaphore admission;
+        private State state = State.PENDING;
+
+        private WorkerLease(Semaphore admission) {
+            this.admission = admission;
+        }
+
+        private synchronized boolean begin() {
+            if (state != State.PENDING) {
+                return false;
+            }
+            state = State.RUNNING;
+            return true;
+        }
+
+        private synchronized void finish() {
+            if (state == State.RUNNING) {
+                state = State.FINISHED;
+                admission.release();
+            }
+        }
+
+        private synchronized boolean cancelBeforeStart() {
+            if (state != State.PENDING) {
+                return false;
+            }
+            state = State.CANCELLED_BEFORE_START;
+            admission.release();
+            return true;
+        }
+
+        private synchronized boolean isRunning() {
+            return state == State.RUNNING;
+        }
     }
 
     private Map<String, Double> weightsMatchingStores(Map<String, Double> configuredWeights) {

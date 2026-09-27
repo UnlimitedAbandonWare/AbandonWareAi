@@ -44,6 +44,11 @@ import org.slf4j.Logger;
 public class PageController {
     private static final Logger log = LoggerFactory.getLogger(PageController.class);
 
+    @Value("${demo.interview.enabled:false}")
+    private boolean interviewDemo;
+    @Value("${public.request-budget.max-time-budget-ms:240000}")
+    private long chatRequestBudgetMs = 240_000L;
+
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;
     private final ModelSettingsService   modelSettingsService;
@@ -81,7 +86,7 @@ public class PageController {
 	    @Value("${app.ai.openai-chat-models:}")
 	    private String openAiChatModels;
 
-	    @Value("${app.ai.local-chat-models:${llm.local-chat-models:gemma4:26b,qwen3:30b,qwen3-coder:30b,gemma3:27b,qwen3-vl:8b,qwen3:8b,qwen2.5:7b-instruct,qwen2.5:7b,gemma3:4b}}")
+	    @Value("${app.ai.local-chat-models:${llm.local-chat-models:gemma4:26b,smtek/Qwen3.8-27B:Q3_K_XL,qwen3-vl:8b,qwen3.5:9b,gemma4:12b}}")
 	    private String localChatModels;
 
     /* ========================= ??ㅻ쾹???β돦裕뉐퐲?(Private Helper) ========================= */
@@ -116,6 +121,11 @@ public class PageController {
 
 	    private boolean isLocalModelPromotable(String modelId) {
 	        if (!ModelCapabilities.isLocalChatModelId(modelId)) {
+	            return false;
+	        }
+	        if (modelRuntimeHealthTracker != null
+	                && modelRuntimeHealthTracker.snapshot("local", modelId).isPresent()
+	                && !modelRuntimeHealthTracker.isPromotable("local", modelId)) {
 	            return false;
 	        }
 	        if (ConfiguredLocalChatModels.contains(
@@ -277,28 +287,65 @@ public class PageController {
 	        }
 	    }
 
-    @GetMapping("/")
+    @GetMapping({"/", "/index.html"})
     public String home() {
+        if (interviewDemo) return "forward:/assets/interview/index.html";
         return "redirect:/chat";
     }
 
     @GetMapping("/index")
     public String dashboard(Model model, Authentication auth) {
+        if (interviewDemo) return "forward:/assets/interview/index.html";
         if (auth != null && auth.isAuthenticated()) {
             model.addAttribute("username", auth.getName());
         }
         return "index";
     }
 
+    @GetMapping("/login")
+    public String login(Model model,
+                        @RequestParam(value = "error", required = false) String error,
+                        @RequestParam(value = "logout", required = false) String logout) {
+        if (error != null) {
+            model.addAttribute("loginStatus", "invalid_credentials");
+        } else if (logout != null) {
+            model.addAttribute("loginStatus", "signed_out");
+        } else {
+            model.addAttribute("loginStatus", "sign_in_required");
+        }
+        return "login";
+    }
+
     /* ========================= ???堉? 嶺????UI ??瑜곷턄嶺뚯솘? ========================= */
 
-    @GetMapping({"/chat", "/chat-ui"})
     public String chatUi(Model model, Authentication auth) {
+        return chatUi(model, auth, null);
+    }
+
+    @GetMapping({"/chat", "/chat-ui", "/chat-ui.html"})
+    public String chatUi(Model model, Authentication auth,
+                         @RequestParam(value = "surface", required = false) String surface) {
+        if (interviewDemo) return "forward:/assets/interview/index.html";
         prepareModelData(model);
         if (auth != null && auth.isAuthenticated()) {
             model.addAttribute("username", auth.getName());
         }
+        model.addAttribute("chatDiagnosticsEnabled", isAdmin(auth));
+        model.addAttribute("chatSurface", normalizeChatSurface(surface));
+        model.addAttribute("chatRequestBudgetMs", chatRequestBudgetMs);
         return "chat-ui";
+    }
+
+    private static boolean isAdmin(Authentication auth) {
+        if (auth == null || !auth.isAuthenticated()) {
+            return false;
+        }
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+    }
+
+    private static String normalizeChatSurface(String surface) {
+        return "compact".equalsIgnoreCase(trimToEmpty(surface)) ? "compact" : "web";
     }
 
     /* ========================= ????????嶺뚮ㅄ維?????깆젧 ??瑜곷턄嶺뚯솘? ========================= */
@@ -325,7 +372,7 @@ public class PageController {
                     e.getClass().getSimpleName(),
                     SafeRedactor.hashValue(messageOf(e)),
                     messageLength(e));
-            redirectAttributes.addFlashAttribute("errorMessage", "嶺뚮ㅄ維??????繞?????쭜??嶺뚮쪇沅?뇡????댁쾼?띠럾? ?꾩룇裕뉑틦???곕????덈펲.");
+            redirectAttributes.addFlashAttribute("errorMessage", "모델 저장 중 예상치 못한 오류가 발생했습니다.");
         }
         return "redirect:/model-settings";
     }

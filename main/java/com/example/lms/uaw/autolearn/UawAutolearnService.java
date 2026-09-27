@@ -2,6 +2,8 @@ package com.example.lms.uaw.autolearn;
 
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.gptsearch.dto.SearchMode;
+import com.example.lms.orchestration.control.RagControlLearningGate;
+import com.example.lms.orchestration.control.RagControlRuntimeAdapter;
 import com.example.lms.service.ChatResult;
 import com.example.lms.service.ChatService;
 import com.example.lms.service.MemoryReinforcementService;
@@ -52,10 +54,42 @@ public class UawAutolearnService {
     private final ObjectProvider<MemoryReinforcementService> memoryReinforcementService;
     private final ObjectProvider<CfvmKAllocationTuner> cfvmKAllocationTuner;
     private final ObjectProvider<OpenCodeFreeQuotaGuard> externalQuotaGuard;
+    private final ObjectProvider<RagControlLearningGate> ragControlLearningGate;
     private final Environment env;
 
     private final KnowledgeGapLogger gapLogger;
     private final ObjectProvider<CuriosityTriggerService> curiosity;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public UawAutolearnService(ChatService chatService,
+            UawAutolearnProperties props,
+            UawSeedSampler seedSampler,
+            UawDatasetWriter datasetWriter,
+            LearningSampleValidationMetadataBuilder validationMetadataBuilder,
+            ObjectProvider<UawLearningAgentHandoffWriter> handoffWriter,
+            UawAutolearnQualityTracker qualityTracker,
+            ObjectProvider<MemoryReinforcementService> memoryReinforcementService,
+            ObjectProvider<CfvmKAllocationTuner> cfvmKAllocationTuner,
+            ObjectProvider<OpenCodeFreeQuotaGuard> externalQuotaGuard,
+            Environment env,
+            KnowledgeGapLogger gapLogger,
+            ObjectProvider<CuriosityTriggerService> curiosity,
+            ObjectProvider<RagControlLearningGate> ragControlLearningGate) {
+        this.chatService = chatService;
+        this.props = props;
+        this.seedSampler = seedSampler;
+        this.datasetWriter = datasetWriter;
+        this.validationMetadataBuilder = validationMetadataBuilder;
+        this.handoffWriter = handoffWriter;
+        this.qualityTracker = qualityTracker == null ? new UawAutolearnQualityTracker(props, null, null) : qualityTracker;
+        this.memoryReinforcementService = memoryReinforcementService;
+        this.cfvmKAllocationTuner = cfvmKAllocationTuner;
+        this.externalQuotaGuard = externalQuotaGuard;
+        this.ragControlLearningGate = ragControlLearningGate;
+        this.env = env;
+        this.gapLogger = gapLogger;
+        this.curiosity = curiosity;
+    }
 
     public UawAutolearnService(ChatService chatService,
             UawAutolearnProperties props,
@@ -70,25 +104,29 @@ public class UawAutolearnService {
             Environment env,
             KnowledgeGapLogger gapLogger,
             ObjectProvider<CuriosityTriggerService> curiosity) {
-        this.chatService = chatService;
-        this.props = props;
-        this.seedSampler = seedSampler;
-        this.datasetWriter = datasetWriter;
-        this.validationMetadataBuilder = validationMetadataBuilder;
-        this.handoffWriter = handoffWriter;
-        this.qualityTracker = qualityTracker == null ? new UawAutolearnQualityTracker(props, null, null) : qualityTracker;
-        this.memoryReinforcementService = memoryReinforcementService;
-        this.cfvmKAllocationTuner = cfvmKAllocationTuner;
-        this.externalQuotaGuard = externalQuotaGuard;
-        this.env = env;
-        this.gapLogger = gapLogger;
-        this.curiosity = curiosity;
+        this(chatService,
+                props,
+                seedSampler,
+                datasetWriter,
+                validationMetadataBuilder,
+                handoffWriter,
+                qualityTracker,
+                memoryReinforcementService,
+                cfvmKAllocationTuner,
+                externalQuotaGuard,
+                env,
+                gapLogger,
+                curiosity,
+                null);
     }
 
     public AutoLearnCycleResult runCycle(File datasetFile,
             String sessionId,
             PreemptionToken token,
             long deadlineNanos) {
+        // Cycle boundary marker: elapsed time and completion status are
+        // recorded once per cycle in traceCycleSummary below.
+        long cycleStartedNs = System.nanoTime();
         int attempted = 0;
         int accepted = 0;
         int zeroEvidenceAccepted = 0;
@@ -112,6 +150,7 @@ public class UawAutolearnService {
             attempted++;
 
             ChatResult r;
+            RagControlRuntimeAdapter.RuntimeInput presentationInput = null;
             GuardContext previousGuardContext = null;
             OpenCodeFreeQuotaGuard.Lease externalQuotaLease = null;
             String requestedModel = "";
@@ -172,6 +211,8 @@ public class UawAutolearnService {
                 recordHandoffSkippedSample(sessionId, q, "", "", 0, null, "ERROR", "chat_service_exception");
                 continue;
             } finally {
+                presentationInput = RagControlRuntimeAdapter.currentPresentationInput();
+                RagControlRuntimeAdapter.capturePresentationInput(null);
                 restoreGuardContext(previousGuardContext);
             }
 
@@ -274,6 +315,19 @@ public class UawAutolearnService {
                     disabledReason);
             boolean providerDisabled = !disabledReason.isBlank();
             validation = qualityTracker.project(validation, providerDisabled, finalGate);
+            if (validation != null
+                    && shouldHoldLearningWrites(
+                            r, evidenceCount, afterFilterCount, validation, presentationInput)) {
+                mark(phaseFailures, "rag_control_hold");
+                TraceStore.put("uaw.autolearn.ragControl.hold", true);
+                recordHandoffHeldSample(
+                        sessionId,
+                        q,
+                        r.content(),
+                        r.modelUsed(),
+                        evidenceCount);
+                continue;
+            }
             validation = feedbackCfvmPostValidation(validation);
             UawDatasetWriter.TrainingMetadata metadata = new UawDatasetWriter.TrainingMetadata(
                     "uaw_autolearn",
@@ -332,7 +386,7 @@ public class UawAutolearnService {
                 cycle.topProblem(),
                 cycle.trainDecision(),
                 phaseFailures);
-        traceCycleSummary(result);
+        traceCycleSummary(result, cycleStartedNs, aborted, sessionId);
         recordHandoffCycle(sessionId, datasetPath, result, cycle);
         return result;
     }
@@ -559,6 +613,18 @@ public class UawAutolearnService {
     }
 
     private static void resetTrainingTrace() {
+        RagControlRuntimeAdapter.capturePresentationInput(null);
+        TraceStore.put("uaw.autolearn.ragControl.present", null);
+        TraceStore.put("uaw.autolearn.ragControl.hold", null);
+        TraceStore.put("uaw.autolearn.ragControl.failureClass", null);
+        TraceStore.put("uaw.autolearn.ragControl.errorType", null);
+        TraceStore.put("ragControl.learning.boundary", null);
+        TraceStore.put("ragControl.learning.action", null);
+        TraceStore.put("ragControl.learning.rolloutMode", null);
+        TraceStore.put("ragControl.learning.holdWrites", null);
+        TraceStore.put("ragControl.learning.shadowOnly", null);
+        TraceStore.put("ragControl.learning.failureClass", null);
+        TraceStore.put("ragControl.learning.errorType", null);
         TraceStore.put("selfask.3way.api.disabledReason", null);
         TraceStore.put("selfask.3way.api.provider", null);
         TraceStore.put("selfask.3way.events", null);
@@ -657,16 +723,31 @@ public class UawAutolearnService {
                 phaseFailures);
     }
 
-    private static void traceCycleSummary(AutoLearnCycleResult result) {
+    private static void traceCycleSummary(AutoLearnCycleResult result,
+                                      long cycleStartedNs,
+                                      boolean aborted,
+                                      String sessionId) {
         try {
             if (result == null) {
                 return;
             }
+            long elapsedMs = Math.max(0L, (System.nanoTime() - cycleStartedNs) / 1_000_000L);
+            String status = aborted ? "aborted" : "completed";
             TraceStore.put("learning.loop.errorCount", result.errorCount());
             TraceStore.put("learning.loop.errorRate", result.errorRate());
             TraceStore.put("learning.loop.dominantFailure", result.dominantFailure());
             TraceStore.put("learning.loop.diagnosis", result.diagnosis());
             TraceStore.put("learning.loop.phaseFailures", result.phaseFailures());
+            // Cycle boundary fields: one record per runCycle call so a stalled
+            // or failed cycle is locatable without per-sample noise.
+            TraceStore.put("learning.loop.cycle.status", status);
+            TraceStore.put("learning.loop.cycle.elapsedMs", elapsedMs);
+            if (sessionId != null && !sessionId.isBlank()) {
+                TraceStore.put("learning.loop.cycle.sessionIdHash12",
+                        com.example.lms.trace.SafeRedactor.hash12(sessionId));
+            }
+            com.example.lms.search.RequestTrace.emit("uaw.autolearn", "cycle",
+                    "status=" + status + ";elapsedMs=" + elapsedMs);
         } catch (Exception ignore) {
             traceSuppressed("cycleSummary.trace");
         }
@@ -729,6 +810,42 @@ public class UawAutolearnService {
             TraceStore.put("uaw.agent.handoff.status", "sample_write_failed");
             TraceStore.put("uaw.agent.handoff.error", com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getMessage(), ""));
         }
+    }
+
+    private void recordHandoffHeldSample(String sessionId,
+                                         String question,
+                                         String answer,
+                                         String modelUsed,
+                                         int evidenceCount) {
+        try {
+            UawLearningAgentHandoffWriter writer = handoffWriter == null ? null : handoffWriter.getIfAvailable();
+            if (writer == null) {
+                TraceStore.put("uaw.handoffWriter.absent", true);
+                return;
+            }
+            String datasetName = props == null || props.getDataset() == null
+                    ? "uaw-train"
+                    : props.getDataset().getName();
+            writer.recordHeldSample(
+                    handoffHash((question == null ? "" : question)
+                            + '\0' + (answer == null ? "" : answer)
+                            + '\0' + (modelUsed == null ? "" : modelUsed)),
+                    handoffHash(sessionId),
+                    handoffHash(datasetName),
+                    handoffHash(question),
+                    handoffHash(answer),
+                    handoffHash(modelUsed),
+                    evidenceCount);
+        } catch (Exception e) {
+            TraceStore.put("uaw.agent.handoff.status", "sample_write_failed");
+            TraceStore.put("uaw.agent.handoff.error",
+                    com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getMessage(), ""));
+        }
+    }
+
+    private static String handoffHash(String value) {
+        String hash = com.example.lms.trace.SafeRedactor.hashValue(value);
+        return hash == null ? "" : hash;
     }
 
     private void recordHandoffCycle(String sessionId,
@@ -861,6 +978,54 @@ public class UawAutolearnService {
 
     private static String safeReason(String reason) {
         return com.example.lms.trace.SafeRedactor.traceLabelOrFallback(reason, "");
+    }
+
+    private boolean shouldHoldLearningWrites(
+            ChatResult result,
+            int evidenceCount,
+            int afterFilterCount,
+            LearningSampleValidationMetadata validation,
+            RagControlRuntimeAdapter.RuntimeInput presentationInput) {
+        boolean hardGuardHeld = presentationInput != null
+                && presentationInput.ragRequested()
+                && presentationInput.hardGuardHeld();
+        boolean finalBoundaryReached = presentationInput != null
+                && presentationInput.ragRequested()
+                && presentationInput.finalBoundaryReached();
+        try {
+            RagControlLearningGate gate = ragControlLearningGate == null
+                    ? null
+                    : ragControlLearningGate.getIfAvailable();
+            if (gate == null) {
+                TraceStore.put("uaw.autolearn.ragControl.present", false);
+                TraceStore.put("uaw.autolearn.ragControl.hold", true);
+                TraceStore.put("uaw.autolearn.ragControl.failureClass", "learning_gate_unavailable");
+                return true;
+            }
+            TraceStore.put("uaw.autolearn.ragControl.present", true);
+            TraceStore.put("uaw.autolearn.ragControl.failureClass", null);
+            RagControlLearningGate.Decision decision = gate.evaluate(
+                    RagControlLearningGate.Boundary.UAW_PRE_WRITE,
+                    new RagControlRuntimeAdapter.RuntimeInput(
+                            true,
+                            Math.max(0, evidenceCount),
+                            Math.max(0, afterFilterCount),
+                            result == null || result.content() == null || result.content().isBlank(),
+                            validation != null,
+                            validation != null && validation.accepted(),
+                            hardGuardHeld,
+                            finalBoundaryReached));
+            TraceStore.put("uaw.autolearn.ragControl.hold", decision.holdWrites());
+            return decision.holdWrites();
+        } catch (RuntimeException controlFailure) {
+            TraceStore.put("uaw.autolearn.ragControl.present", false);
+            TraceStore.put("uaw.autolearn.ragControl.hold", true);
+            TraceStore.put("uaw.autolearn.ragControl.failureClass", "learning_gate_failed");
+            TraceStore.put("uaw.autolearn.ragControl.errorType",
+                    com.example.lms.trace.SafeRedactor.traceLabelOrFallback(
+                            controlFailure.getClass().getSimpleName(), "runtime_exception"));
+            return true;
+        }
     }
 
     private LearningSampleValidationMetadata feedbackCfvmPostValidation(LearningSampleValidationMetadata validation) {

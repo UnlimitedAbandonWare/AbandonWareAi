@@ -70,6 +70,7 @@ public class UawThumbnailService {
                 String host = uri.getHost();
                 return host == null ? "" : host.toLowerCase(Locale.ROOT);
             } catch (Exception e) {
+                traceSuppressed("evidence.domainParse", e);
                 log.debug("[UAW_THUMB] evidence URL domain parse skipped");
                 return "";
             }
@@ -166,6 +167,7 @@ public class UawThumbnailService {
                     result.anchors(),
                     result.confidenceScore()));
         } catch (Exception e) {
+            traceSuppressed("event.graphRagPublish", e);
             log.debug("[UAW_THUMB] graph-rag event skipped err={}", e.getClass().getSimpleName());
         }
     }
@@ -216,6 +218,7 @@ public class UawThumbnailService {
             List<String> parsed = parseLineList(out, n);
             if (!parsed.isEmpty()) return parsed;
         } catch (Exception e) {
+            traceSuppressed("anchors.llm", e);
             log.warn("[UAW_THUMB] anchors llm failed -> fallback. errorHash={} errorLength={}",
                     com.example.lms.trace.SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
@@ -283,6 +286,7 @@ public class UawThumbnailService {
             try {
                 snippets = webSearchProvider.search(anchor, webTopK);
             } catch (Exception e) {
+                traceSuppressed("evidence.webSearch", e);
                 log.warn("[UAW_THUMB] web search failed anchorHash={} errorHash={} errorLength={}",
                         hash12(anchor), com.example.lms.trace.SafeRedactor.hashValue(messageOf(e)), messageLength(e));
                 continue;
@@ -460,10 +464,21 @@ public class UawThumbnailService {
     }
 
     private static void traceSuppressed(String stage) {
+        traceSuppressed(stage, null);
+    }
+
+    private static void traceSuppressed(String stage, Throwable error) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
         TraceStore.putIfAbsent("uaw.thumbnail.suppressed", true);
         TraceStore.putIfAbsent("uaw.thumbnail.suppressed.stage", safeStage);
         TraceStore.inc("uaw.thumbnail.suppressed." + safeStage);
+        if (error != null) {
+            String prefix = "uaw.thumbnail.suppressed." + safeStage + ".";
+            TraceStore.putIfAbsent(prefix + "errorType",
+                    SafeRedactor.traceLabelOrFallback(error.getClass().getSimpleName(), "Throwable"));
+            TraceStore.putIfAbsent(prefix + "errorHash", SafeRedactor.hashValue(messageOf(error)));
+            TraceStore.putIfAbsent(prefix + "errorLength", messageLength(error));
+        }
         log.debug("[UAW_THUMB] suppressed stage={}", safeStage);
     }
 
@@ -518,6 +533,7 @@ public class UawThumbnailService {
 
             return new Rendered(caption, conf, normalizedJson);
         } catch (Exception e) {
+            traceSuppressed("render.failed", e);
             log.warn("[UAW_THUMB] render failed topicHash={} errorHash={} errorLength={}",
                     hash12(topic), com.example.lms.trace.SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             return null;

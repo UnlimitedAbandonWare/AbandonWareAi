@@ -53,7 +53,8 @@ public class UawThumbnailBudgetManager {
                 nowMillis,
                 state.lastSuccessMillis(),
                 state.backoffUntilMillis(),
-                state.consecutiveFailures()
+                state.consecutiveFailures(),
+                state.lastOutcome()
         );
         store.save(path, next);
 
@@ -71,7 +72,8 @@ public class UawThumbnailBudgetManager {
                 state.lastStartMillis(),
                 System.currentTimeMillis(),
                 0L,
-                0
+                0,
+                state.lastOutcome()
         );
         store.save(path, next);
     }
@@ -94,7 +96,8 @@ public class UawThumbnailBudgetManager {
                 state.lastStartMillis(),
                 state.lastSuccessMillis(),
                 until,
-                failures
+                failures,
+                state.lastOutcome()
         );
         store.save(path, next);
 

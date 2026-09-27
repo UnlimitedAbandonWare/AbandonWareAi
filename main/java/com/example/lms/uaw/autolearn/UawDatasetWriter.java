@@ -79,6 +79,9 @@ public class UawDatasetWriter {
         if (isMissingValidationMetadata(validation)) {
             return reject("missing_validation_metadata", redactedQuestion, redactedAnswer, modelUsed);
         }
+        if (validation.needleRoi().needleSignalCandidate() && !validation.needleRoi().promoted()) {
+            return reject("needle_roi_rejected", redactedQuestion, redactedAnswer, modelUsed);
+        }
         if (!validation.accepted()) {
             return reject("validation_rejected", redactedQuestion, redactedAnswer, modelUsed);
         }
@@ -277,6 +280,7 @@ public class UawDatasetWriter {
         node.set("runtime", runtimeNode(validation.runtime()));
         node.set("anomalies", anomaliesNode(validation.anomalies()));
         node.set("feedback", feedbackNode(validation.feedback()));
+        node.set("needleRoi", needleRoiNode(validation.needleRoi()));
         return node;
     }
 
@@ -325,6 +329,18 @@ public class UawDatasetWriter {
         ObjectNode node = om.createObjectNode();
         node.put("cfvmReward", f.cfvmReward());
         node.put("vectorDecision", f.vectorDecision());
+        return node;
+    }
+
+    private ObjectNode needleRoiNode(LearningSampleValidationMetadata.NeedleRoi needleRoi) {
+        LearningSampleValidationMetadata.NeedleRoi n = needleRoi == null
+                ? LearningSampleValidationMetadata.NeedleRoi.none()
+                : needleRoi;
+        ObjectNode node = om.createObjectNode();
+        node.put("needleSignalCandidate", n.needleSignalCandidate());
+        node.put("signalValueScore", n.signalValueScore());
+        node.put("promoted", n.promoted());
+        node.put("rejectReason", n.rejectReason());
         return node;
     }
 

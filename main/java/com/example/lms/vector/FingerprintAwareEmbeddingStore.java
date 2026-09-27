@@ -14,7 +14,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,14 +42,10 @@ public class FingerprintAwareEmbeddingStore implements EmbeddingStore<TextSegmen
 
     private final EmbeddingStore<TextSegment> delegate;
     private final EmbeddingFingerprint fingerprint;
-    private final EmbeddingStore<TextSegment> writerStore;
-    private final SoakMetricRegistry metricRegistry;
 
     private static final long FAIL_SOFT_WARN_INTERVAL_MS = 60_000L;
     private final AtomicLong lastFailSoftWarnAtMs = new AtomicLong(0L);
 
-    private static final long NO_FP_BYPASS_WARN_INTERVAL_MS = 300_000L;
-    private final AtomicLong lastNoFpBypassWarnAtMs = new AtomicLong(0L);
 
     public FingerprintAwareEmbeddingStore(EmbeddingStore<TextSegment> delegate, EmbeddingFingerprint fingerprint) {
         this(delegate, fingerprint, null, null);
@@ -70,8 +65,6 @@ public class FingerprintAwareEmbeddingStore implements EmbeddingStore<TextSegmen
             SoakMetricRegistry metricRegistry) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.fingerprint = Objects.requireNonNull(fingerprint, "fingerprint");
-        this.writerStore = writerStore;
-        this.metricRegistry = metricRegistry;
     }
 
 
@@ -189,128 +182,25 @@ public class FingerprintAwareEmbeddingStore implements EmbeddingStore<TextSegmen
                     allowLegacy);
         }
 
-        if (kept.isEmpty() && dropped > 0 && !rawMatches.isEmpty()) {
-            // Fail-soft: when fingerprint filtering drops everything, fall back to a dominant fingerprint (or raw top-k)
-            int topK = Math.max(1, request.maxResults());
-
-            Map<String, Long> fpCounts = new LinkedHashMap<>();
-            String gotFpSample = null;
-
-            for (EmbeddingMatch<TextSegment> m : rawMatches) {
-                if (m == null || m.embedded() == null) continue;
-                String fp = null;
-                try {
-                    Metadata md = m.embedded().metadata();
-                    if (md != null) {
-                        Object v = md.toMap().get(EmbeddingFingerprint.META_EMB_FP);
-                        fp = (v == null) ? null : String.valueOf(v);
-                    }
-                } catch (Exception ignored) {
-                    log.debug("[AWX2AF2][vector][fingerprint] fallback count metadata read skipped");
-                    fp = null;
-                }
-                if (fp != null && !fp.isBlank()) {
-                    String fpTrim = fp.trim();
-                    fpCounts.put(fpTrim, fpCounts.getOrDefault(fpTrim, 0L) + 1L);
-                    if (gotFpSample == null) {
-                        gotFpSample = fpTrim;
-                    }
-                }
-            }
-
-            // If the backing store does not preserve metadata, fingerprints may be missing for all matches.
-            // In that case fingerprint filtering is impossible; optionally bypass to legacy mode and avoid warn spam.
-            if (fpCounts.isEmpty()) {
-                // Empty + Writer fallback (quality first)
-                TraceStore.put("vector.fp.bypassed", true);
-                TraceStore.put("vector.fp.wantHash", SafeRedactor.hashValue(want));
-                TraceStore.put("vector.fp.wantLength", lengthOf(want));
-
-                // warn rate-limit (1/min) to avoid log spam
-                long now = System.currentTimeMillis();
-                long last = lastNoFpBypassWarnAtMs.get();
-                if (now - last > NO_FP_BYPASS_WARN_INTERVAL_MS && lastNoFpBypassWarnAtMs.compareAndSet(last, now)) {
-                    log.warn("[VectorFP] No fp metadata. Falling back to writer. wantHash={} wantLength={}",
-                            SafeRedactor.hashValue(want), lengthOf(want));
-                }
-
-                if (metricRegistry != null) {
-                    metricRegistry.incFpFilterLegacyBypass();
-                }
-
-                if (writerStore != null) {
-                    return writerStore.search(request);
-                }
-                return new EmbeddingSearchResult<>(Collections.emptyList());
-            }
-
-            String dominantFp = null;
-            long best = -1L;
-            for (Map.Entry<String, Long> e : fpCounts.entrySet()) {
-                long count = e.getValue() == null ? 0L : e.getValue();
-                if (count > best) {
-                    best = count;
-                    dominantFp = e.getKey();
-                }
-            }
-
-            if (dominantFp != null) {
-                for (EmbeddingMatch<TextSegment> m : rawMatches) {
-                    if (kept.size() >= topK) break;
-                    if (m == null || m.embedded() == null) continue;
-
-                    String fp = null;
-                    try {
-                        Metadata md = m.embedded().metadata();
-                        if (md != null) {
-                            Object v = md.toMap().get(EmbeddingFingerprint.META_EMB_FP);
-                            fp = (v == null) ? null : String.valueOf(v);
-                        }
-                    } catch (Exception ignored) {
-                        log.debug("[AWX2AF2][vector][fingerprint] dominant metadata read skipped");
-                        fp = null;
-                    }
-
-                    if (fp != null && Objects.equals(dominantFp, fp.trim())) {
-                        kept.add(m);
-                    }
-                }
-            }
-
-            if (kept.isEmpty()) {
-                // As a last resort, return the raw top-k (skipping nulls)
-                for (EmbeddingMatch<TextSegment> m : rawMatches) {
-                    if (kept.size() >= topK) break;
-                    if (m == null || m.embedded() == null) continue;
-                    kept.add(m);
-                }
-            }
-
-            warnFailSoft(dominantFp, want, gotFpSample);
-        } else if (kept.isEmpty() && dropped > 0) {
-            log.warn("[VectorFP] All vector matches were filtered out by embedding fingerprint. wantHash={} wantLength={}. " +
-                            "This usually means the vector store contains embeddings from a different model/provider. " +
-                            "Re-ingest/re-index under the current embedding config, or set vector.fingerprint.allow-legacy=true (NOT recommended).",
-                    SafeRedactor.hashValue(want), lengthOf(want));
+        TraceStore.put("vector.fp.bypassed", false);
+        TraceStore.put("vector.fp.dropped", dropped);
+        TraceStore.put("vector.fp.blockedReason", kept.isEmpty() && dropped > 0 ? "embedding_space_unverified" : "none");
+        if (kept.isEmpty() && dropped > 0) {
+            TraceStore.put("vector.fp.wantHash", SafeRedactor.hashValue(want));
+            TraceStore.put("vector.fp.wantLength", lengthOf(want));
+            warnIncompatible(want, dropped);
         }
 
         return new EmbeddingSearchResult<>(kept);
     }
 
 
-    private void warnFailSoft(String dominantFp, String want, String gotSample) {
+    private void warnIncompatible(String want, int dropped) {
         long now = System.currentTimeMillis();
         long last = lastFailSoftWarnAtMs.get();
         if (now - last > FAIL_SOFT_WARN_INTERVAL_MS && lastFailSoftWarnAtMs.compareAndSet(last, now)) {
-            log.warn("[VectorFP] fail-soft: using dominant fp hash or raw top-k. dominantFpHash={} dominantFpLength={} wantHash={} wantLength={} gotSampleHash={} gotSampleLength={}",
-                    SafeRedactor.hashValue(dominantFp), lengthOf(dominantFp),
-                    SafeRedactor.hashValue(want), lengthOf(want),
-                    SafeRedactor.hashValue(gotSample), lengthOf(gotSample));
-        } else {
-            log.debug("[VectorFP] fail-soft: using dominant fp hash or raw top-k. dominantFpHash={} dominantFpLength={} wantHash={} wantLength={} gotSampleHash={} gotSampleLength={}",
-                    SafeRedactor.hashValue(dominantFp), lengthOf(dominantFp),
-                    SafeRedactor.hashValue(want), lengthOf(want),
-                    SafeRedactor.hashValue(gotSample), lengthOf(gotSample));
+            log.warn("[VectorFP] incompatible vector evidence omitted. wantHash={} wantLength={} dropped={}",
+                    SafeRedactor.hashValue(want), lengthOf(want), dropped);
         }
     }
 

@@ -5,16 +5,30 @@ import com.example.lms.trace.SafeRedactor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.CopyOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 @Component
@@ -24,12 +38,40 @@ public class UawLearningAgentHandoffWriter {
     private static final int MIN_LINE_BYTES = 512;
     private static final int MAX_LINE_COUNT_SCAN = 10_000;
     private static final String DEFAULT_MANIFEST_PATH = "data/agent-handoff/codex/manifest.json";
+    private static final String LOCK_FILE_NAME = ".uaw-agent-handoff.lock";
+    private static final long DEFAULT_LOCK_TIMEOUT_MILLIS = 2_000L;
+    private static final long LOCK_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(10L);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UawAutolearnProperties props;
+    private final long lockTimeoutNanos;
+    private final MoveOperation mover;
+    private final LockWaiter lockWaiter;
 
+    @Autowired
     public UawLearningAgentHandoffWriter(UawAutolearnProperties props) {
+        this(props, DEFAULT_LOCK_TIMEOUT_MILLIS, Files::move,
+                nanos -> TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos)));
+    }
+
+    UawLearningAgentHandoffWriter(UawAutolearnProperties props,
+                                  long lockTimeoutMillis,
+                                  MoveOperation mover,
+                                  LockWaiter lockWaiter) {
         this.props = props == null ? new UawAutolearnProperties() : props;
+        this.lockTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(1L, lockTimeoutMillis));
+        this.mover = Objects.requireNonNull(mover, "mover");
+        this.lockWaiter = Objects.requireNonNull(lockWaiter, "lockWaiter");
+    }
+
+    @FunctionalInterface
+    interface MoveOperation {
+        Path move(Path source, Path target, CopyOption... options) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface LockWaiter {
+        void await(long nanos) throws InterruptedException;
     }
 
     public void recordSample(String sessionId,
@@ -55,6 +97,55 @@ public class UawLearningAgentHandoffWriter {
                                     String failureReason) {
         recordSampleInternal(sessionId, datasetName, question, answer, modelUsed, evidenceCount, metadata,
                 false, outcome, failureReason);
+    }
+
+    void recordHeldSample(String sampleHash,
+                          String sessionHash,
+                          String datasetHash,
+                          String questionHash,
+                          String answerHash,
+                          String modelHash,
+                          int evidenceCount) {
+        UawAutolearnProperties.AgentHandoff cfg = cfg();
+        if (!cfg.isEnabled()) {
+            return;
+        }
+        try {
+            ObjectNode node = objectMapper.createObjectNode();
+            String safeSampleHash = proofHashOrEmpty(sampleHash);
+            String safeSessionHash = proofHashOrEmpty(sessionHash);
+            node.put("schemaVersion", SCHEMA_VERSION);
+            node.put("type", "uaw_autolearn_hold");
+            node.put("ts", Instant.now().toString());
+            node.put("decision", "HOLD");
+            node.put("outcome", "HELD");
+            node.put("failureReason", "rag_control_hold");
+            node.put("sampleHash", safeSampleHash);
+            node.put("hasSessionId", !safeSessionHash.isBlank());
+            node.put("sessionHash", safeSessionHash);
+            node.put("datasetHash", proofHashOrEmpty(datasetHash));
+            node.put("questionHash", proofHashOrEmpty(questionHash));
+            node.put("answerHash", proofHashOrEmpty(answerHash));
+            node.put("modelHash", proofHashOrEmpty(modelHash));
+            node.put("evidenceCount", Math.max(0, evidenceCount));
+            node.put("containsFullText", false);
+            WriteReceipt receipt = writeRecord(
+                    path(cfg.getRejectedPath(), "rejected.jsonl"), node, null, cfg.getMaxLineBytes());
+            traceWriteReceipt(receipt);
+            TraceStore.put("uaw.agent.handoff.status", "hold_recorded");
+            TraceStore.put("uaw.agent.handoff.lastDecision", "HOLD");
+            TraceStore.put("uaw.agent.handoff.lastSampleHash", safeSampleHash);
+        } catch (WriteHoldException e) {
+            traceWriteHold(e.reason(), e.getCause());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            traceWriteHold("interrupted", null);
+        } catch (ManifestPublishException e) {
+            traceCommittedManifestFailure("hold_recorded_manifest_failed", e);
+        } catch (Exception e) {
+            TraceStore.put("uaw.agent.handoff.status", "sample_write_failed");
+            TraceStore.put("uaw.agent.handoff.error", SafeRedactor.traceLabelOrFallback(e.getMessage(), ""));
+        }
     }
 
     private void recordSampleInternal(String sessionId,
@@ -106,11 +197,18 @@ public class UawLearningAgentHandoffWriter {
             node.put("containsFullText", fullAccepted);
             node.set("validation", validationNode(validation));
             node.set("traceHints", traceHints());
-            appendLine(target, node, cfg.getMaxLineBytes());
-            writeManifest(null);
+            WriteReceipt receipt = writeRecord(target, node, null, cfg.getMaxLineBytes());
+            traceWriteReceipt(receipt);
             TraceStore.put("uaw.agent.handoff.status", "sample_recorded");
             TraceStore.put("uaw.agent.handoff.lastDecision", decision);
             TraceStore.put("uaw.agent.handoff.lastSampleHash", node.get("sampleHash").asText());
+        } catch (WriteHoldException e) {
+            traceWriteHold(e.reason(), e.getCause());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            traceWriteHold("interrupted", null);
+        } catch (ManifestPublishException e) {
+            traceCommittedManifestFailure("sample_recorded_manifest_failed", e);
         } catch (Exception e) {
             TraceStore.put("uaw.agent.handoff.status", "sample_write_failed");
             TraceStore.put("uaw.agent.handoff.error", SafeRedactor.traceLabelOrFallback(e.getMessage(), ""));
@@ -127,10 +225,18 @@ public class UawLearningAgentHandoffWriter {
         }
         try {
             ObjectNode node = cycleNode(sessionId, datasetPath, result, cycle);
-            appendLine(path(cfg.getCyclePath(), "cycles.jsonl"), node, cfg.getMaxLineBytes());
-            writeManifest(node);
+            WriteReceipt receipt = writeRecord(
+                    path(cfg.getCyclePath(), "cycles.jsonl"), node, node, cfg.getMaxLineBytes());
+            traceWriteReceipt(receipt);
             TraceStore.put("uaw.agent.handoff.status", "cycle_recorded");
             TraceStore.put("uaw.agent.handoff.manifestPathHash", hashOrEmpty(cfg.getManifestPath()));
+        } catch (WriteHoldException e) {
+            traceWriteHold(e.reason(), e.getCause());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            traceWriteHold("interrupted", null);
+        } catch (ManifestPublishException e) {
+            traceCommittedManifestFailure("cycle_recorded_manifest_failed", e);
         } catch (Exception e) {
             TraceStore.put("uaw.agent.handoff.status", "cycle_write_failed");
             TraceStore.put("uaw.agent.handoff.error", SafeRedactor.traceLabelOrFallback(e.getMessage(), ""));
@@ -196,7 +302,67 @@ public class UawLearningAgentHandoffWriter {
         return node;
     }
 
-    private void writeManifest(ObjectNode latestCycle) throws Exception {
+    private WriteReceipt writeRecord(Path target,
+                                     ObjectNode node,
+                                     ObjectNode latestCycle,
+                                     int configuredMaxBytes) throws Exception {
+        LockHandle handoffLock;
+        try {
+            handoffLock = acquireHandoffLock();
+        } catch (IOException e) {
+            throw new WriteHoldException("lock_unavailable", e);
+        }
+        try (handoffLock) {
+            AppendReceipt appendReceipt = appendLineLocked(target, node, configuredMaxBytes);
+            try {
+                ManifestReceipt manifestReceipt = writeManifestLocked(latestCycle);
+                return new WriteReceipt(appendReceipt, manifestReceipt);
+            } catch (Exception manifestFailure) {
+                throw new ManifestPublishException(appendReceipt, manifestFailure);
+            }
+        }
+    }
+
+    private LockHandle acquireHandoffLock() throws IOException, InterruptedException, WriteHoldException {
+        Path manifest = path(cfg().getManifestPath(), "manifest.json");
+        Path lockPath = manifest.resolveSibling(LOCK_FILE_NAME);
+        Path parent = lockPath.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        FileChannel channel = FileChannel.open(lockPath,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+        long deadline = System.nanoTime() + lockTimeoutNanos;
+        try {
+            while (true) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("handoff_lock_interrupted");
+                }
+                try {
+                    FileLock lock = channel.tryLock();
+                    if (lock != null) {
+                        return new LockHandle(channel, lock);
+                    }
+                } catch (OverlappingFileLockException busy) {
+                    // A cooperating writer in this JVM owns the same OS lock.
+                }
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0L) {
+                    throw new WriteHoldException("lock_timeout", null);
+                }
+                lockWaiter.await(Math.min(LOCK_POLL_NANOS, remaining));
+            }
+        } catch (IOException | InterruptedException | WriteHoldException | RuntimeException failure) {
+            try {
+                channel.close();
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private ManifestReceipt writeManifestLocked(ObjectNode latestCycle) throws Exception {
         UawAutolearnProperties.AgentHandoff cfg = cfg();
         ObjectNode manifest = objectMapper.createObjectNode();
         manifest.put("schemaVersion", SCHEMA_VERSION);
@@ -219,25 +385,179 @@ public class UawLearningAgentHandoffWriter {
             manifest.set("latestCycle", latestCycle);
         }
         Path target = path(cfg.getManifestPath(), "manifest.json");
-        Path parent = target.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        Files.writeString(target, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(manifest),
-                StandardCharsets.UTF_8);
+        byte[] expected = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
+        return publishManifestLocked(target, expected);
     }
 
-    private void appendLine(Path target, ObjectNode node, int configuredMaxBytes) throws Exception {
+    private ManifestReceipt publishManifestLocked(Path target, byte[] expected) throws Exception {
+        Path parent = target.getParent() == null ? Path.of(".") : target.getParent();
+        Files.createDirectories(parent);
+        Path ownedTemp = Files.createTempFile(parent,
+                "." + target.getFileName() + ".", ".tmp");
+        try {
+            try (FileChannel channel = FileChannel.open(ownedTemp,
+                    StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                writeFully(channel, ByteBuffer.wrap(expected));
+                channel.force(true);
+            }
+            if (!Arrays.equals(expected, Files.readAllBytes(ownedTemp))) {
+                throw new IOException("manifest_temp_readback_mismatch");
+            }
+            String moveMode;
+            try {
+                mover.move(ownedTemp, target,
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+                moveMode = "atomic";
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                mover.move(ownedTemp, target, StandardCopyOption.REPLACE_EXISTING);
+                moveMode = "replace_non_atomic";
+            }
+            byte[] observed = Files.readAllBytes(target);
+            if (!Arrays.equals(expected, observed)) {
+                throw new IOException("manifest_post_write_mismatch");
+            }
+            return new ManifestReceipt(sha256(observed), moveMode);
+        } finally {
+            Files.deleteIfExists(ownedTemp);
+        }
+    }
+
+    private AppendReceipt appendLineLocked(Path target,
+                                           ObjectNode node,
+                                           int configuredMaxBytes) throws Exception {
         Path parent = target.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
         }
-        String line = jsonWithinLimit(node, configuredMaxBytes);
-        try (BufferedWriter writer = Files.newBufferedWriter(target, StandardCharsets.UTF_8,
-                java.nio.file.StandardOpenOption.CREATE,
-                java.nio.file.StandardOpenOption.APPEND)) {
-            writer.write(line);
-            writer.newLine();
+        byte[] expected = (jsonWithinLimit(node, configuredMaxBytes) + System.lineSeparator())
+                .getBytes(StandardCharsets.UTF_8);
+        try (FileChannel channel = FileChannel.open(target,
+                StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            long offset = channel.size();
+            try {
+                channel.position(offset);
+                writeFully(channel, ByteBuffer.wrap(expected));
+                channel.force(true);
+                ByteBuffer observed = ByteBuffer.allocate(expected.length);
+                long readPosition = offset;
+                while (observed.hasRemaining()) {
+                    int count = channel.read(observed, readPosition);
+                    if (count <= 0) {
+                        throw new IOException("post_write_short_read");
+                    }
+                    readPosition += count;
+                }
+                if (!Arrays.equals(expected, observed.array())) {
+                    throw new IOException("post_write_mismatch");
+                }
+                return new AppendReceipt(sha256(observed.array()), expected.length);
+            } catch (Exception failure) {
+                try {
+                    channel.truncate(offset);
+                    channel.force(true);
+                } catch (Exception rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+                throw failure;
+            }
+        }
+    }
+
+    private static void writeFully(FileChannel channel, ByteBuffer bytes) throws IOException {
+        while (bytes.hasRemaining()) {
+            if (channel.write(bytes) <= 0) {
+                throw new IOException("write_made_no_progress");
+            }
+        }
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return "sha256:" + HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("sha256_unavailable", impossible);
+        }
+    }
+
+    private static void traceWriteReceipt(WriteReceipt receipt) {
+        traceAppendReceipt(receipt.append());
+        TraceStore.put("uaw.agent.handoff.lastManifestHash", receipt.manifest().postWriteHash());
+        TraceStore.put("uaw.agent.handoff.manifestMove", receipt.manifest().moveMode());
+        TraceStore.put("uaw.agent.handoff.holdReason", "");
+        TraceStore.put("uaw.agent.handoff.error", "");
+    }
+
+    private static void traceAppendReceipt(AppendReceipt receipt) {
+        TraceStore.put("uaw.agent.handoff.lastRecordHash", receipt.postWriteHash());
+        TraceStore.put("uaw.agent.handoff.lastRecordBytes", receipt.bytesWritten());
+    }
+
+    private static void traceWriteHold(String reason, Throwable cause) {
+        TraceStore.put("uaw.agent.handoff.status", "write_held");
+        TraceStore.put("uaw.agent.handoff.lastDecision", "HOLD");
+        TraceStore.put("uaw.agent.handoff.holdReason", reason);
+        TraceStore.put("uaw.agent.handoff.error", cause == null
+                ? ""
+                : SafeRedactor.traceLabelOrFallback(cause.getMessage(), ""));
+    }
+
+    private static void traceCommittedManifestFailure(String status,
+                                                      ManifestPublishException failure) {
+        traceAppendReceipt(failure.appendReceipt());
+        TraceStore.put("uaw.agent.handoff.status", status);
+        TraceStore.put("uaw.agent.handoff.lastDecision", "HOLD");
+        TraceStore.put("uaw.agent.handoff.holdReason", "manifest_publish_failed");
+        TraceStore.put("uaw.agent.handoff.manifestMove", "failed");
+        Throwable cause = failure.getCause();
+        TraceStore.put("uaw.agent.handoff.error", SafeRedactor.traceLabelOrFallback(
+                cause == null ? failure.getMessage() : cause.getMessage(), ""));
+    }
+
+    private record LockHandle(FileChannel channel, FileLock lock) implements AutoCloseable {
+        @Override
+        public void close() throws IOException {
+            try {
+                lock.release();
+            } finally {
+                channel.close();
+            }
+        }
+    }
+
+    private record AppendReceipt(String postWriteHash, int bytesWritten) {
+    }
+
+    private record ManifestReceipt(String postWriteHash, String moveMode) {
+    }
+
+    private record WriteReceipt(AppendReceipt append, ManifestReceipt manifest) {
+    }
+
+    private static final class WriteHoldException extends Exception {
+        private final String reason;
+
+        private WriteHoldException(String reason, Throwable cause) {
+            super(reason, cause);
+            this.reason = reason;
+        }
+
+        private String reason() {
+            return reason;
+        }
+    }
+
+    private static final class ManifestPublishException extends Exception {
+        private final AppendReceipt appendReceipt;
+
+        private ManifestPublishException(AppendReceipt appendReceipt, Throwable cause) {
+            super("manifest_publish_failed", cause);
+            this.appendReceipt = appendReceipt;
+        }
+
+        private AppendReceipt appendReceipt() {
+            return appendReceipt;
         }
     }
 
@@ -248,8 +568,10 @@ public class UawLearningAgentHandoffWriter {
             return line;
         }
         node.put("truncated", true);
-        node.put("questionPreview", "(truncated)");
-        node.put("answerPreview", "(truncated)");
+        if (!"uaw_autolearn_hold".equals(node.path("type").asText())) {
+            node.put("questionPreview", "(truncated)");
+            node.put("answerPreview", "(truncated)");
+        }
         node.remove("traceHints");
         line = objectMapper.writeValueAsString(node);
         if (line.getBytes(StandardCharsets.UTF_8).length <= maxBytes) {
@@ -447,6 +769,13 @@ public class UawLearningAgentHandoffWriter {
     private static String hashOrEmpty(String value) {
         String hash = SafeRedactor.hashValue(value);
         return hash == null ? "" : hash;
+    }
+
+    private static String proofHashOrEmpty(String value) {
+        if (value == null || !value.matches("(?i)hash:[a-f0-9]{12,64}")) {
+            return "";
+        }
+        return value.toLowerCase(java.util.Locale.ROOT);
     }
 
     private static String fileNameHash(String path) {

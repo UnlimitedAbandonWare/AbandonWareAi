@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Tracks "real" user requests in an async-safe way.
@@ -53,32 +54,33 @@ public class UserPresenceFilter extends OncePerRequestFilter {
         }
 
         tracker.onUserRequestStart();
-        boolean asyncStarted = false;
 
         try {
             chain.doFilter(req, res);
-            asyncStarted = req.isAsyncStarted();
         } finally {
-            if (asyncStarted) {
+            if (req.isAsyncStarted()) {
+                AtomicBoolean ended = new AtomicBoolean();
                 req.getAsyncContext().addListener(new AsyncListener() {
                     @Override
                     public void onComplete(AsyncEvent event) {
-                        tracker.onUserRequestEnd();
+                        if (ended.compareAndSet(false, true)) {
+                            tracker.onUserRequestEnd();
+                        }
                     }
 
                     @Override
                     public void onTimeout(AsyncEvent event) {
-                        tracker.onUserRequestEnd();
+                        // The container may dispatch or start another async cycle before completion.
                     }
 
                     @Override
                     public void onError(AsyncEvent event) {
-                        tracker.onUserRequestEnd();
+                        // The container may dispatch or start another async cycle before completion.
                     }
 
                     @Override
                     public void onStartAsync(AsyncEvent event) {
-                        // no-op
+                        event.getAsyncContext().addListener(this);
                     }
                 });
             } else {

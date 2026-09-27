@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
@@ -18,11 +19,13 @@ import java.util.UUID;
 
 
 @Component
-@Order(1)
+@Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class OwnerKeyBootstrapFilter implements Filter {
     private static final Logger log = LoggerFactory.getLogger(OwnerKeyBootstrapFilter.class);
 
     public static final String OWNER_KEY = "ownerKey";
+    static final String OWNER_KEY_REQUEST_ATTRIBUTE =
+            OwnerKeyBootstrapFilter.class.getName() + ".ownerKey";
     private static final int OWNER_TTL_SECONDS = 60 * 60 * 24 * 180; // 180 days
 
     @Override
@@ -35,37 +38,41 @@ public class OwnerKeyBootstrapFilter implements Filter {
         HttpServletRequest req = (HttpServletRequest) request;
         HttpServletResponse res = (HttpServletResponse) response;
 
-        boolean present = false;
+        String ownerKey = null;
         Cookie[] cookies = req.getCookies();
         if (cookies != null) {
             for (Cookie c : cookies) {
                 String existing = OWNER_KEY.equals(c.getName()) ? usableOwnerKey(c.getValue()) : null;
                 if (existing != null) {
-                    present = true;
-                    writeOwnerCookie(res, req, existing);
+                    ownerKey = existing;
                     break;
                 }
             }
         }
 
-        if (!present) {
-            String val = UUID.randomUUID().toString();
-            writeOwnerCookie(res, req, val);
+        if (ownerKey == null) {
+            ownerKey = UUID.randomUUID().toString();
             log.debug("Assigned new persistent ownerKey cookie");
         }
 
+        req.setAttribute(OWNER_KEY_REQUEST_ATTRIBUTE, ownerKey);
+        writeOwnerCookie(res, req, ownerKey);
         chain.doFilter(request, response);
     }
 
     private static void writeOwnerCookie(HttpServletResponse res, HttpServletRequest req, String value) {
         ResponseCookie cookie = ResponseCookie.from(OWNER_KEY, value)
                 .httpOnly(true)
-                .secure(req.isSecure())
+                .secure(isHttpsRequest(req))
                 .path("/")
                 .maxAge(Duration.ofSeconds(OWNER_TTL_SECONDS))
                 .sameSite("Lax")
                 .build();
         res.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    private static boolean isHttpsRequest(HttpServletRequest request) {
+        return request != null && request.isSecure();
     }
 
     public static String usableOwnerKey(String value) {

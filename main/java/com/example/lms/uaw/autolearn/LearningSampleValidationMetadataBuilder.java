@@ -127,6 +127,24 @@ public class LearningSampleValidationMetadataBuilder {
         if (historyContaminationScore >= MAX_CONTAMINATION_SCORE && requeryRequired && !requeryConfirmed) {
             rejectReasons.add("unconfirmed_history_contamination_requery");
         }
+        LearningSampleValidationMetadata.NeedleRoi needleRoi = needleRoi(
+                sampleScore,
+                sampleScoreMin,
+                laneCoverage,
+                requeryRequired,
+                requeryConfirmed,
+                finalGate,
+                disabledReason,
+                evidenceCount,
+                afterFilterCount,
+                contradictionScore,
+                contradictionMax,
+                contextContaminationScore,
+                contextContaminationMax,
+                rejectReasons);
+        if (needleRoi.needleSignalCandidate() && !needleRoi.promoted()) {
+            addNeedleRoiRejectReason(rejectReasons, needleRoi.rejectReason());
+        }
 
         LearningSampleValidationMetadata meta = new LearningSampleValidationMetadata(
                 questionType,
@@ -157,7 +175,8 @@ public class LearningSampleValidationMetadataBuilder {
                         laneCoverage,
                         readDouble("learning.metrics.errorRateWindow", 0.0d)),
                 LearningSampleValidationMetadata.Anomalies.none(),
-                new LearningSampleValidationMetadata.Feedback(0.0d, vectorDecision(rejectReasons)));
+                new LearningSampleValidationMetadata.Feedback(0.0d, vectorDecision(rejectReasons)),
+                needleRoi);
         trace(meta);
         return meta;
     }
@@ -297,6 +316,184 @@ public class LearningSampleValidationMetadataBuilder {
         return clamp01(score);
     }
 
+    private static LearningSampleValidationMetadata.NeedleRoi needleRoi(
+            double sampleScore,
+            double sampleScoreMin,
+            double laneCoverage,
+            boolean requeryRequired,
+            boolean requeryConfirmed,
+            boolean finalGate,
+            String disabledReason,
+            int evidenceCount,
+            int afterFilterCount,
+            double contradictionScore,
+            double contradictionMax,
+            double contextContaminationScore,
+            double contextContaminationMax,
+            List<String> rejectReasons) {
+        boolean candidate = readBoolean("needle.triggered", false);
+        if (!candidate) {
+            return LearningSampleValidationMetadata.NeedleRoi.none();
+        }
+        double signalValueScore = needleSignalValueScore(laneCoverage);
+        String runtimeFailure = runtimeFailureReason(disabledReason, evidenceCount, afterFilterCount);
+        String rejectReason = "";
+        if (!runtimeFailure.isBlank()) {
+            rejectReason = "runtime_failure_" + runtimeFailure.replace('-', '_');
+        } else if (!finalGate || containsReason(rejectReasons, "final_gate_failed")) {
+            rejectReason = "final_gate_failed";
+        } else if (signalValueScore < sampleScoreMin || sampleScore < sampleScoreMin) {
+            rejectReason = "signal_below_threshold";
+        } else if (laneCoverage <= 0.0d) {
+            rejectReason = "selfask_lane_coverage_missing";
+        } else if (requeryRequired && !requeryConfirmed) {
+            rejectReason = "requery_unconfirmed";
+        } else if (contradictionScore >= contradictionMax) {
+            rejectReason = "contradiction_risk";
+        } else if (contextContaminationScore >= contextContaminationMax) {
+            rejectReason = "context_contamination";
+        } else if (rejectReasons != null && !rejectReasons.isEmpty()) {
+            rejectReason = firstRejectReason(rejectReasons, "validation_rejected");
+        }
+        boolean promoted = rejectReason.isBlank();
+        return new LearningSampleValidationMetadata.NeedleRoi(
+                true,
+                signalValueScore,
+                promoted,
+                promoted ? "accepted" : rejectReason);
+    }
+
+    private static double needleSignalValueScore(double laneCoverage) {
+        int docs = (int) Math.max(0, Math.round(readDouble("needle.docs.count", 0.0d)));
+        int urls = (int) Math.max(0, Math.round(readDouble("needle.urls.count", 0.0d)));
+        double authority = readDouble("needle.quality.authorityAvg", 0.0d);
+        double coverage = readDouble("needle.quality.coverage", 0.0d);
+        double duplicate = readDouble("needle.quality.duplicateRatio", 1.0d);
+        double docsNorm = clamp01(docs / 4.0d);
+        double urlsNorm = clamp01(urls / 3.0d);
+        return round4(clamp01(
+                (0.22d * authority)
+                        + (0.20d * coverage)
+                        + (0.18d * (1.0d - duplicate))
+                        + (0.14d * docsNorm)
+                        + (0.11d * urlsNorm)
+                        + (0.15d * laneCoverage)));
+    }
+
+    private static void addNeedleRoiRejectReason(List<String> rejectReasons, String roiReason) {
+        if (rejectReasons == null) {
+            return;
+        }
+        String reason = switch (roiReason == null ? "" : roiReason) {
+            case "signal_below_threshold" -> "needle_roi_below_threshold";
+            case "requery_unconfirmed" -> "needle_roi_requery_unconfirmed";
+            default -> roiReason != null && roiReason.startsWith("runtime_failure_")
+                    ? "needle_roi_runtime_failure"
+                    : "needle_roi_rejected";
+        };
+        if (!rejectReasons.contains(reason)) {
+            rejectReasons.add(reason);
+        }
+    }
+
+    private static String runtimeFailureReason(String disabledReason, int evidenceCount, int afterFilterCount) {
+        if (disabledReason != null && !disabledReason.isBlank()) {
+            return "provider_disabled";
+        }
+        if (evidenceCount > 0 && afterFilterCount == 0) {
+            return "after_filter_starvation";
+        }
+        String fromAttempts = runtimeFailureFromObject(TraceStore.get("selfask.requery.attempts"));
+        if (!fromAttempts.isBlank()) {
+            return fromAttempts;
+        }
+        return firstRuntimeFailureLabel(
+                TraceStore.get("web.search.failureClass"),
+                TraceStore.get("web.failureClass"),
+                TraceStore.get("web.naver.failureClass"),
+                TraceStore.get("web.brave.failureClass"),
+                TraceStore.get("web.serpapi.failureClass"));
+    }
+
+    private static String runtimeFailureFromObject(Object raw) {
+        if (raw instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                String value = runtimeFailureFromObject(item);
+                if (!value.isBlank()) {
+                    return value;
+                }
+            }
+            return "";
+        }
+        if (raw instanceof Map<?, ?> map) {
+            return firstRuntimeFailureLabel(
+                    map.get("failureClass"),
+                    map.get("failure"),
+                    map.get("reason"));
+        }
+        return firstRuntimeFailureLabel(raw);
+    }
+
+    private static String firstRuntimeFailureLabel(Object... values) {
+        if (values == null) {
+            return "";
+        }
+        for (Object value : values) {
+            String label = runtimeFailureLabel(value);
+            if (!label.isBlank()) {
+                return label;
+            }
+        }
+        return "";
+    }
+
+    private static String runtimeFailureLabel(Object raw) {
+        if (raw == null) {
+            return "";
+        }
+        String v = String.valueOf(raw).trim().toLowerCase(Locale.ROOT).replace('_', '-');
+        if (v.isBlank() || "none".equals(v) || "ok".equals(v)) {
+            return "";
+        }
+        if (v.contains("timeout")) {
+            return "timeout";
+        }
+        if (v.contains("rate-limit") || v.contains("ratelimit") || v.contains("429")) {
+            return "rate_limit";
+        }
+        if (v.contains("provider-disabled") || v.contains("missing-key") || v.contains("unauthorized")) {
+            return "provider_disabled";
+        }
+        if (v.contains("after-filter") || v.contains("starvation")) {
+            return "after_filter_starvation";
+        }
+        return "";
+    }
+
+    private static boolean containsReason(List<String> rejectReasons, String expected) {
+        if (rejectReasons == null || expected == null) {
+            return false;
+        }
+        for (String reason : rejectReasons) {
+            if (expected.equals(reason)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String firstRejectReason(List<String> rejectReasons, String fallback) {
+        if (rejectReasons == null) {
+            return fallback;
+        }
+        for (String reason : rejectReasons) {
+            if (reason != null && !reason.isBlank()) {
+                return reason.trim();
+            }
+        }
+        return fallback;
+    }
+
     private static List<String> evaluationCriteria(String questionType, boolean requeryRequired) {
         List<String> out = new ArrayList<>();
         switch (questionType) {
@@ -374,6 +571,8 @@ public class LearningSampleValidationMetadataBuilder {
             TraceStore.put("learning.validation.afterFilterCount", meta.runtime().afterFilterCount());
             TraceStore.put("learning.validation.contradictionScore", meta.contradictionScore());
             TraceStore.put("learning.validation.contradictionCause", meta.contradictionCause());
+            TraceStore.put("selfask.3way.requery.required", meta.requery().required());
+            TraceStore.put("selfask.3way.requery.confirmed", meta.requery().confirmed());
             TraceStore.put("learning.validation.requeryRequired", meta.requery().required());
             TraceStore.put("learning.validation.requeryConfirmed", meta.requery().confirmed());
             TraceStore.put("learning.validation.contaminationScore", meta.contaminationScore());
@@ -382,6 +581,10 @@ public class LearningSampleValidationMetadataBuilder {
             TraceStore.put("learning.validation.decision", meta.accepted() ? "accepted" : "rejected");
             TraceStore.put("learning.validation.rejectReasons", meta.rejectReasons());
             TraceStore.put("learning.validation.contextContaminationScore", meta.contextContaminationScore());
+            TraceStore.put("learning.roi.needleSignalCandidate", meta.needleRoi().needleSignalCandidate());
+            TraceStore.put("learning.roi.signalValueScore", meta.needleRoi().signalValueScore());
+            TraceStore.put("learning.roi.promoted", meta.needleRoi().promoted());
+            TraceStore.put("learning.roi.rejectReason", meta.needleRoi().rejectReason());
             TraceStore.put("learning.threshold.sampleScoreMin", meta.thresholds().sampleScoreMin());
             TraceStore.put("learning.threshold.contaminationMax", meta.thresholds().contaminationMax());
             TraceStore.put("learning.threshold.contextContaminationMax", meta.thresholds().contextContaminationMax());
@@ -430,6 +633,15 @@ public class LearningSampleValidationMetadataBuilder {
             out.add(thresholdBreak("after_filter_starvation", "afterFilterCount", 0.0d,
                     1.0d, ">=", Math.max(1.0d, meta.runtime().evidenceCount()), "evidence_gate"));
         }
+        if (meta.needleRoi().needleSignalCandidate() && !meta.needleRoi().promoted()) {
+            out.add(thresholdBreak(meta.needleRoi().rejectReason(),
+                    "needleRoi.signalValueScore",
+                    meta.needleRoi().signalValueScore(),
+                    meta.thresholds().sampleScoreMin(),
+                    ">=",
+                    Math.max(0.01d, meta.thresholds().sampleScoreMin() - meta.needleRoi().signalValueScore()),
+                    "needle_roi"));
+        }
         return List.copyOf(out);
     }
 
@@ -462,6 +674,9 @@ public class LearningSampleValidationMetadataBuilder {
         }
         if ("QUARANTINE".equalsIgnoreCase(meta.feedback().vectorDecision())) {
             out.add("quarantine_vector_decision");
+        }
+        if (meta.needleRoi().needleSignalCandidate() && !meta.needleRoi().promoted()) {
+            out.add("needle_roi_not_promoted");
         }
         return out.stream().distinct().toList();
     }

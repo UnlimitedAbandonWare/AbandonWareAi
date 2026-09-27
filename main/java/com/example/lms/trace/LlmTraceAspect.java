@@ -104,7 +104,11 @@ public class LlmTraceAspect {
                 })
                 .doFinally(signal -> {
                     long dt = System.currentTimeMillis() - t0;
-                    String finish = signal == SignalType.CANCEL ? "cancel" : "stop";
+                    String finish = switch (signal) {
+                        case CANCEL -> "cancel";
+                        case ON_ERROR -> "error";
+                        default -> "stop";
+                    };
                     TraceLogger.emit("llm_resp", "llm", Map.of(
                             "finish", finish,
                             "otok", tokenCount.get(),

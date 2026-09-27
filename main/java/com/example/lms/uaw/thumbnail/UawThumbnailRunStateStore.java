@@ -61,6 +61,14 @@ public class UawThumbnailRunStateStore {
         }
     }
 
+    public synchronized void recordTerminal(Path path, String outcome) {
+        if (path == null) {
+            return;
+        }
+        UawThumbnailRunState current = load(path);
+        save(path, current.withLastOutcome(outcome));
+    }
+
     private static String messageOf(Throwable t) {
         return t == null ? null : t.getMessage();
     }

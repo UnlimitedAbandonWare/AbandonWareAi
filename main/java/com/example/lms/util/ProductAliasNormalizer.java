@@ -60,7 +60,7 @@ fq.put("아이폰17", "iPhone 17");
         sub.put("(?i)\\bwin11\\b", "Windows 11");
         sub.put("(?i)\\bwin10\\b", "Windows 10");
         sub.put("(?i)\\bintel\\s*i9\\b", "Intel Core i9");
-        sub.put("(?i)\\bi9\\b", "Core i9");
+        sub.put("(?i)\\bi9(?![A-Za-z0-9_])", "Core i9");
         sub.put("(?i)\\bi7\\b", "Core i7");
         sub.put("(?i)\\bryzen\\b", "Ryzen"); // 오타 보정
 // [ADD] Fold/Flip 부분 문자열 정규화

@@ -12,9 +12,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.lang.management.ManagementFactory;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 유저가 없고, 시스템 여유가 있을 때, 최근 user 질문을 골라 1-line thumbnail을 생성합니다.
@@ -30,6 +32,8 @@ public class UawThumbnailOrchestrator {
     private final ChatMessageRepository chatMessageRepository;
     private final KnowledgeBaseService knowledgeBase;
     private final UawThumbnailService thumbnailService;
+    private final UawThumbnailRunStateStore runStateStore;
+    private final AtomicBoolean thumbnailLease = new AtomicBoolean(false);
 
     public UawThumbnailOrchestrator(
             UawThumbnailProperties props,
@@ -37,7 +41,8 @@ public class UawThumbnailOrchestrator {
             UserAbsenceGate absenceGate,
             ChatMessageRepository chatMessageRepository,
             KnowledgeBaseService knowledgeBase,
-            UawThumbnailService thumbnailService
+            UawThumbnailService thumbnailService,
+            UawThumbnailRunStateStore runStateStore
     ) {
         this.props = props;
         this.budget = budget;
@@ -45,11 +50,26 @@ public class UawThumbnailOrchestrator {
         this.chatMessageRepository = chatMessageRepository;
         this.knowledgeBase = knowledgeBase;
         this.thumbnailService = thumbnailService;
+        this.runStateStore = runStateStore;
     }
 
     @Scheduled(fixedDelayString = "${uaw.thumbnail.tick-ms:300000}")
     public void tick() {
         if (!props.isEnabled()) return;
+
+        if (!thumbnailLease.compareAndSet(false, true)) {
+            log.debug("[UAW_THUMB] skip: generation already in flight");
+            return;
+        }
+
+        try {
+            tickWithLease();
+        } finally {
+            thumbnailLease.set(false);
+        }
+    }
+
+    private void tickWithLease() {
 
         if (!absenceGate.isUserAbsentNow()) {
             log.debug("[UAW_THUMB] skip: user present");
@@ -81,12 +101,21 @@ public class UawThumbnailOrchestrator {
         try {
             thumbnailService.generateAndPersist(topic);
             budget.onSuccess(token);
+            recordTerminal("succeeded");
         } catch (Exception e) {
             log.debug("[UAW_THUMB] generation failed topicHash={} topicLength={} errorType={}",
                     SafeRedactor.hashValue(topic), topic == null ? 0 : topic.length(),
                     SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
-            budget.onFailure(token, e);
+            try {
+                budget.onFailure(token, e);
+            } finally {
+                recordTerminal("failed");
+            }
         }
+    }
+
+    private void recordTerminal(String outcome) {
+        runStateStore.recordTerminal(Path.of(props.getStatePath()), outcome);
     }
 
     private Optional<String> pickTopicCandidate() {

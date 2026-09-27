@@ -11,6 +11,7 @@ import com.example.lms.infra.resilience.AuxBlockedReason;
 import com.example.lms.infra.resilience.NoiseRoutingGate;
 import com.example.lms.infra.resilience.NightmareKeys;
 import com.example.lms.search.TraceStore;
+import com.example.lms.search.SearchQueryConstraints;
 import com.example.lms.trace.SafeRedactor;
 import ai.abandonware.nova.orch.trace.OrchTrace;
 import com.example.lms.orchestration.OrchStageKeys;
@@ -41,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Component;
@@ -649,7 +651,10 @@ public class QueryTransformer {
             ExecutorService ex = (llmFastExecutor != null) ? llmFastExecutor : ForkJoinPool.commonPool();
 
             try {
-                Future<?> task = ex.submit(ContextPropagation.wrap(() -> {
+                // Keep the cancellable handle owned by QueryTransformer. Executor bean wrappers
+                // intentionally shield submit() futures from interrupts, while execute() still
+                // preserves their context propagation around this FutureTask.
+                FutureTask<Void> task = new FutureTask<>(ContextPropagation.wrap(() -> {
                     try {
                         String out = runLLM(p);
                         created.complete(out == null ? "" : out);
@@ -662,8 +667,9 @@ public class QueryTransformer {
                         }
                         created.complete("");
                     }
-                }));
+                }), null);
                 inflightTasks.put(p, task);
+                ex.execute(task);
                 // ✅ UAW: Force Kill (좀비 inflight 강제 차단)
                 long killMs = Math.max(1L, inflightTimeoutMs);
                 CompletableFuture.runAsync(ContextPropagation.wrap(() -> {
@@ -671,7 +677,7 @@ public class QueryTransformer {
                         return;
                     Future<?> toCancel = inflightTasks.get(p);
                     if (toCancel != null) {
-                        toCancel.cancel(false);
+                        toCancel.cancel(true);
                     }
 
                     // MERGE_HOOK:PROJ_AGENT::QT_FORCEKILL_MARKSOFT_V1
@@ -721,6 +727,12 @@ public class QueryTransformer {
             // - breaker를 trip하지 않는다 (힌트 타임아웃은 실패가 아니라 '느림' 신호)
             // - QueryTransformer는 옵션 단계이므로 auxDegraded 플래그를 올리지 않는다
             AuxDownTracker.markSoft("query-transformer:cachedLlm", "hint-timeout");
+            long cdMs = qtxSoftCooldownMsFor(
+                    NightmareBreaker.FailureKind.TIMEOUT,
+                    false,
+                    qtxSoftCooldownBaseMs,
+                    llmTimeoutOpenHintMs);
+            startQtxSoftCooldown("hint_timeout", NightmareBreaker.FailureKind.TIMEOUT, te, cdMs);
             try {
                 TraceStore.put("aux.queryTransformer", "hint-timeout");
                 TraceStore.put("queryTransformer.softTimeout", true);
@@ -749,11 +761,11 @@ public class QueryTransformer {
             }
             return "";
         } catch (InterruptedException ie) {
-            // Interrupt Hygiene: clear flag to avoid poisoning request thread
-            Thread.interrupted();
             Future<?> task = inflightTasks.get(prompt);
             if (task != null)
-                task.cancel(false);
+                task.cancel(true);
+            // Preserve upstream request cancellation after terminating this owned aux task.
+            Thread.currentThread().interrupt();
             // 조용히 우회 - breaker/faultmask 중복 기록하지 않음
             AuxDownTracker.markSoft("query-transformer:cachedLlm", "interrupted");
             try {
@@ -915,6 +927,7 @@ public class QueryTransformer {
         long softCooldownRemainingMs = 0L;
 
         GuardContext ctx = GuardContextHolder.getOrDefault();
+        boolean cheapSearchScope = isCheapSearchModeScopeActive(ctx);
 
         try {
             if (!novaOrchEnabled || !novaOrchQueryTransformerEnabled) {
@@ -967,6 +980,8 @@ public class QueryTransformer {
                 modeLabel = "STRIKE";
             } else if (ctx.isCompressionMode()) {
                 modeLabel = "COMPRESSION";
+            } else if (ctx.isCheapSearchMode() || cheapSearchScope) {
+                modeLabel = "CHEAP_SEARCH";
             }
         }
 
@@ -989,7 +1004,9 @@ public class QueryTransformer {
 
         AuxBlockedReason ctxReason = AuxBlockedReason.fromContext(ctx);
         boolean ctxBypass = ctx != null && ((ctx.isAuxDegraded() || ctx.isAuxHardDown())
+                || ctx.isCheapSearchMode()
                 || ctx.isStrikeMode() || ctx.isCompressionMode() || ctx.isBypassMode());
+        ctxBypass = ctxBypass || cheapSearchScope;
 
         boolean bypass = disabled || breakerOpen || failureCooldown || stagePolicyClamped || ctxBypass || softCooldown;
 
@@ -1037,6 +1054,9 @@ public class QueryTransformer {
         } else if (breakerOpen) {
             reason = AuxBlockedReason.BREAKER_OPEN;
             trigger = "breakerOpen";
+        } else if (cheapSearchScope) {
+            reason = AuxBlockedReason.CHEAP_SEARCH_MODE;
+            trigger = "forceLightSearchMode";
         } else if (stagePolicyClamped) {
             reason = AuxBlockedReason.STAGE_POLICY_CLAMP;
             trigger = "stagePolicyClamp";
@@ -1164,36 +1184,6 @@ public class QueryTransformer {
         final String breakerKey = NightmareKeys.QUERY_TRANSFORMER_RUN_LLM;
 
         // 1) Breaker 체크: OPEN이면 즉시 우회
-        if (nightmareBreaker != null) {
-            try {
-                nightmareBreaker.checkOpenOrThrow(breakerKey);
-            } catch (NightmareBreaker.OpenCircuitException e) {
-                // MERGE_HOOK:PROJ_AGENT::QT_BREAKEROPEN_SOFT_V1
-                AuxDownTracker.markSoft("query-transformer:runLLM", "breaker-open");
-                TraceStore.putIfAbsent("aux.queryTransformer", "degraded:breaker_open");
-                TraceStore.putIfAbsent("aux.queryTransformer.degraded", Boolean.TRUE);
-                TraceStore.putIfAbsent("aux.queryTransformer.degraded.reason", "breaker_open");
-                TraceStore.putIfAbsent("aux.queryTransformer.degraded.trigger", "nightmare_open");
-                TraceStore.inc("aux.queryTransformer.degraded.count");
-                try {
-                    java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-                    dd.put("key", breakerKey);
-                    dd.put("promptLen", (prompt != null ? prompt.length() : 0));
-                    dd.put("promptSha1", com.abandonware.ai.agent.integrations.TextUtils.sha1(prompt));
-                    emitQtx(
-                            DebugEventLevel.INFO,
-                            "qtx.breaker_open",
-                            "QueryTransformer bypass: NightmareBreaker open",
-                            "QueryTransformer.runLLM",
-                            dd,
-                            e);
-                } catch (Throwable ignore) {
-                    traceSuppressed("breakerOpen.debug");
-                }
-                return "";
-            }
-        }
-
         // Prompt-length guard (fail-soft): if the prompt is too large, bypass aux LLM
         // to avoid HttpTimeoutException -> breaker-open cascades.
         if (prompt == null || prompt.isBlank()) {
@@ -1237,6 +1227,36 @@ public class QueryTransformer {
             }
             return "";
         }
+        NightmareBreaker.CallPermit permit = null;
+        if (nightmareBreaker != null) {
+            try {
+                permit = nightmareBreaker.acquire(breakerKey, "query-transformer-run-llm");
+            } catch (NightmareBreaker.OpenCircuitException e) {
+                // MERGE_HOOK:PROJ_AGENT::QT_BREAKEROPEN_SOFT_V1
+                AuxDownTracker.markSoft("query-transformer:runLLM", "breaker-open");
+                TraceStore.putIfAbsent("aux.queryTransformer", "degraded:breaker_open");
+                TraceStore.putIfAbsent("aux.queryTransformer.degraded", Boolean.TRUE);
+                TraceStore.putIfAbsent("aux.queryTransformer.degraded.reason", "breaker_open");
+                TraceStore.putIfAbsent("aux.queryTransformer.degraded.trigger", "nightmare_open");
+                TraceStore.inc("aux.queryTransformer.degraded.count");
+                try {
+                    java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
+                    dd.put("key", breakerKey);
+                    dd.put("promptLen", (prompt != null ? prompt.length() : 0));
+                    dd.put("promptSha1", com.abandonware.ai.agent.integrations.TextUtils.sha1(prompt));
+                    emitQtx(
+                            DebugEventLevel.INFO,
+                            "qtx.breaker_open",
+                            "QueryTransformer bypass: NightmareBreaker open",
+                            "QueryTransformer.runLLM",
+                            dd,
+                            e);
+                } catch (Throwable ignore) {
+                    traceSuppressed("breakerOpen.debug");
+                }
+                return "";
+            }
+        }
         long started = System.nanoTime();
         String queryTransformerPromptForMessage = prompt;
         try {
@@ -1253,6 +1273,9 @@ public class QueryTransformer {
             // - breaker 과민 트립을 막고
             // - 짧은 soft-cooldown으로 step-down 라우팅
             if (text == null || text.isBlank()) {
+                if (permit != null) {
+                    permit.completeBlank("query-transformer-run-llm");
+                }
                 AuxDownTracker.markSoft("query-transformer:runLLM", "blank");
                 startQtxSoftCooldown("blank", NightmareBreaker.FailureKind.UNKNOWN, null,
                         Math.max(0L, (qtxSoftCooldownBaseMs > 0L ? qtxSoftCooldownBaseMs : llmTimeoutOpenHintMs)));
@@ -1284,6 +1307,9 @@ public class QueryTransformer {
             // FriendShield(회피/사과/정보없음) 패턴은 QTX에서 silent-failure로 간주:
             // breaker를 열지 않고 soft-cooldown으로 잠시 우회한다.
             if (FriendShieldPatternDetector.looksLikeSilentFailure(text)) {
+                if (permit != null) {
+                    permit.completeSilentFailure("query-transformer-run-llm", "friendshield");
+                }
                 AuxDownTracker.markSoft("query-transformer:runLLM", "friendshield");
                 startQtxSoftCooldown("friendshield", NightmareBreaker.FailureKind.UNKNOWN, null,
                         Math.max(0L, (qtxSoftCooldownBaseMs > 0L ? qtxSoftCooldownBaseMs : llmTimeoutOpenHintMs)));
@@ -1313,14 +1339,14 @@ public class QueryTransformer {
                 return "";
             }
 
-            if (nightmareBreaker != null) {
-                nightmareBreaker.recordSuccess(breakerKey, elapsedMs(started));
-            // Success: clear soft-cooldown streak so we can recover quickly.
-            try {
-                qtxSoftCooldownStreak.set(0);
-            } catch (Throwable ignore) {
-                traceSuppressed("cooldownStreakReset");
-            }
+            if (permit != null) {
+                permit.completeSuccess(elapsedMs(started));
+                // Success: clear soft-cooldown streak so we can recover quickly.
+                try {
+                    qtxSoftCooldownStreak.set(0);
+                } catch (Throwable ignore) {
+                    traceSuppressed("cooldownStreakReset");
+                }
             }
             return text;
         } catch (Exception e) {
@@ -1372,8 +1398,12 @@ public class QueryTransformer {
 
             // MERGE_HOOK:PROJ_AGENT::QT_INTERRUPT_CANCEL_SILENT_V1
             if (kind == NightmareBreaker.FailureKind.INTERRUPTED) {
-                // pooled worker 오염 방지: interrupt 플래그를 정리 (cancellation/teardown signal)
-                Thread.interrupted();
+                if (permit != null) {
+                    permit.completeCancelled(e, "query-transformer-run-llm");
+                }
+                // Preserve the cancellation signal until this owned task exits. The pool clears
+                // worker state at its task boundary before reusing the thread.
+                Thread.currentThread().interrupt();
                 // QueryTransformer는 옵션 단계이며, interrupt는 대부분 내부 취소/정리 신호다.
                 // breaker/faultmask를 중복 기록하지 않고 조용히 우회한다.
                 AuxDownTracker.markSoft("query-transformer:runLLM", "canceled");
@@ -1413,6 +1443,12 @@ public class QueryTransformer {
 
             boolean modelLoading = looksLikeModelLoading(e);
             if (isSoftTransientForQtx(kind, modelLoading)) {
+                if (permit != null) {
+                    Long hintMs = (kind == NightmareBreaker.FailureKind.TIMEOUT && llmTimeoutOpenHintMs > 0)
+                            ? llmTimeoutOpenHintMs
+                            : null;
+                    permit.completeFailure(kind, e, "query-transformer-run-llm", hintMs);
+                }
                 long cdMs = qtxSoftCooldownMsFor(kind, modelLoading, qtxSoftCooldownBaseMs, llmTimeoutOpenHintMs);
                 startQtxSoftCooldown(
                         modelLoading ? "model_loading" : ("soft_" + kind.name().toLowerCase(java.util.Locale.ROOT)),
@@ -1426,11 +1462,11 @@ public class QueryTransformer {
                 return "";
             }
 
-            if (nightmareBreaker != null) {
+            if (permit != null) {
                 Long hintMs = (kind == NightmareBreaker.FailureKind.TIMEOUT && llmTimeoutOpenHintMs > 0)
                         ? llmTimeoutOpenHintMs
                         : null;
-                nightmareBreaker.recordFailure(breakerKey, kind, e, prompt, hintMs);
+                permit.completeFailure(kind, e, "query-transformer-run-llm", hintMs);
             }
 
             try {
@@ -1497,7 +1533,16 @@ public class QueryTransformer {
             }
         }
         // 1) 알파벳숫자 복합 토큰(K8Plus, A7X 등)을 그대로 묶어 모호성 감소
+        if (shouldSkipAuxForDiagnosticSmoke(normalizedQuery) || isDiagnosticSmokeScopeActive()) {
+            traceDiagnosticSmokeSkip(normalizedQuery);
+            return List.of(normalizedQuery.trim());
+        }
+        if (isCheapSearchModeScopeActive()) {
+            traceCheapSearchModeSkip(normalizedQuery);
+            return List.of(normalizedQuery.trim());
+        }
         String preProcessed = preserveCompoundTokens(normalizedQuery.trim());
+        final String constraintSource = normalizedQuery.trim();
         String q = dict.getOrDefault(preProcessed, preProcessed);
         /* ① LLM 맞춤법 교정 */
         q = correctWithLLM(context, q);
@@ -1510,6 +1555,7 @@ public class QueryTransformer {
         List<String> out = Stream.concat(Stream.of(normalizedQuery, q), variants.stream())
                 .map(this::cleanUp)
                 .filter(s -> s != null && !s.isBlank())
+                .filter(s -> preservesQueryConstraints(constraintSource, s))
                 .distinct()
                 .toList();
         // 유사 문장(구두점/띄어쓰기만 다른 케이스) 제거
@@ -1534,6 +1580,101 @@ public class QueryTransformer {
         return sb.toString();
     }
 
+    private static boolean shouldSkipAuxForDiagnosticSmoke(String query) {
+        if (query == null) {
+            return false;
+        }
+        String q = query.trim();
+        if (q.isEmpty()) {
+            return false;
+        }
+        String lower = q.toLowerCase(Locale.ROOT);
+        boolean diagnostic = lower.contains("스모크")
+                || lower.contains("smoke")
+                || lower.contains("heartbeat")
+                || lower.contains("헬스체크")
+                || lower.contains("health check")
+                || lower.contains("디버그")
+                || lower.contains("debug");
+        boolean localUiOrRoute = lower.contains("ui")
+                || lower.contains("브라우저")
+                || lower.contains("browser")
+                || lower.contains("챗봇")
+                || lower.contains("chat")
+                || lower.contains("rag/auto")
+                || lower.contains("설정")
+                || lower.contains("상태")
+                || lower.contains("경로")
+                || lower.contains("route");
+        return diagnostic && localUiOrRoute && q.length() <= 140;
+    }
+
+    private static void traceDiagnosticSmokeSkip(String query) {
+        try {
+            TraceStore.put("aux.queryTransformer.diagnosticSmokeScope", Boolean.TRUE);
+            TraceStore.put("aux.queryTransformer.skipped", Boolean.TRUE);
+            TraceStore.put("aux.queryTransformer.skipReason", "diagnostic_smoke");
+            TraceStore.put("aux.queryTransformer.skipQueryHash", SafeRedactor.hashValue(query));
+            TraceStore.put("aux.queryTransformer.skipQueryLength", query == null ? 0 : query.length());
+            TraceStore.put("queryTransformer.bypassed", Boolean.TRUE);
+            TraceStore.put("queryTransformer.reason", "diagnostic_smoke");
+        } catch (Throwable ignore) {
+            traceSuppressed("diagnosticSmoke.skipTrace", ignore);
+        }
+    }
+
+    private static boolean isCheapSearchModeScopeActive() {
+        return isCheapSearchModeScopeActive(null);
+    }
+
+    private static boolean isCheapSearchModeScopeActive(@Nullable GuardContext ctx) {
+        try {
+            if (ctx != null && ctx.isCheapSearchMode()) {
+                return true;
+            }
+            GuardContext current = GuardContextHolder.get();
+            if (current != null && current.isCheapSearchMode()) {
+                return true;
+            }
+        } catch (Throwable ignore) {
+            traceSuppressed("cheapSearchMode.contextRead", ignore);
+        }
+        try {
+            Object value = TraceStore.get("search.mode.lightAuxBypass");
+            return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
+        } catch (Throwable ignore) {
+            traceSuppressed("cheapSearchMode.traceRead", ignore);
+            return false;
+        }
+    }
+
+    private static void traceCheapSearchModeSkip(String query) {
+        try {
+            TraceStore.put("aux.queryTransformer.skipped", Boolean.TRUE);
+            TraceStore.put("aux.queryTransformer.skipReason", "cheap-search-mode");
+            TraceStore.put("aux.queryTransformer.skipQueryHash", SafeRedactor.hashValue(query));
+            TraceStore.put("aux.queryTransformer.skipQueryLength", query == null ? 0 : query.length());
+            TraceStore.put("queryTransformer.bypassed", Boolean.TRUE);
+            TraceStore.put("queryTransformer.reason", "cheap-search-mode");
+            TraceStore.put("qtx.bypass", Boolean.TRUE);
+            TraceStore.put("qtx.bypass.trigger", "forceLightSearchMode");
+            TraceStore.put("qtx.bypass.reason", "cheap-search-mode");
+            TraceStore.put("qtx.bypass.modeLabel", "CHEAP_SEARCH");
+        } catch (Throwable ignore) {
+            traceSuppressed("cheapSearchMode.skipTrace", ignore);
+        }
+    }
+
+    private static boolean isDiagnosticSmokeScopeActive() {
+        try {
+            Object value = TraceStore.get("aux.queryTransformer.diagnosticSmokeScope");
+            return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
+        } catch (Throwable ignore) {
+            traceSuppressed("diagnosticSmoke.scopeRead", ignore);
+            return false;
+        }
+    }
+
     /** LLM 한 번 호출해 맞춤법을 교정한다 */
     private String correctWithLLM(String ctx, String q) {
         try {
@@ -1545,12 +1686,13 @@ public class QueryTransformer {
             ans = cleanUp(ans); // 불필요 토큰 제거
 
             /* +콜론/화살표 구분이 여전히 남아 있으면 오른쪽만 취함 */
-            if (ans.matches(".*[:：→>-].+")) {
-                ans = ans.replaceFirst(".*[:：→>-]\\s*", "");
+            if (ans != null) {
+                ans = ans.replaceFirst("(?i)^(?:corrected(?: query)?|correction|교정|수정)\\s*[:：]\\s*", "");
+                ans = ans.replaceFirst("^.+?\\s+(?:->|→|>)\\s+", "");
             }
-            return (ans != null && !ans.isBlank()) ? ans : q;
+            return preservesQueryConstraints(q, ans) ? ans : q;
         } catch (Exception e) {
-            traceSuppressed("correction.fallback");
+            traceSuppressed("correction.fallback", e);
             return q; // 실패 시 원본 유지
         }
     }
@@ -1582,7 +1724,9 @@ public class QueryTransformer {
                 .toList();
         // 의도 버프 얹기
         QueryIntent intent = classifyIntent(baseQuery);
-        List<String> buffed = raw.stream().map(q -> boostWithIntent(q, intent)).toList();
+        List<String> buffed = raw.stream().map(q -> boostWithIntent(q, intent))
+                .filter(q -> preservesQueryConstraints(baseQuery, q)).toList();
+        if (buffed.isEmpty()) return List.of(baseQuery);
         return dedupBySimilarity(buffed, 0.86);
     }
 
@@ -1603,15 +1747,16 @@ public class QueryTransformer {
                     .filter(s -> s != null && !s.isBlank())
                     .collect(Collectors.toList());
 
-            return QueryTransformerVariantSupport.selectLlmVariants(q, subject, raw, MAX_VARIANTS);
+            return QueryTransformerVariantSupport.selectLlmVariants(q, subject, raw, MAX_VARIANTS).stream()
+                    .filter(v -> preservesQueryConstraints(q, v)).toList();
         } catch (Exception e) {
-            traceSuppressed("variants.fallback");
+            traceSuppressed("variants.fallback", e);
             return fallbackVariants(q, subject);
         }
     }
 
     private List<String> fallbackVariants(String q, @Nullable String subject) {
-        return QueryTransformerVariantSupport.cheapVariantsFallback(
+        List<String> variants = QueryTransformerVariantSupport.cheapVariantsFallback(
                 q,
                 subject,
                 novaOrchEnabled && novaOrchQueryTransformerCheapEnabled,
@@ -1619,6 +1764,7 @@ public class QueryTransformer {
                 cheapVariants,
                 MAX_VARIANTS,
                 QueryTransformer::recoveredQueryTraceData);
+        return variants.stream().filter(v -> preservesQueryConstraints(q, v)).toList();
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1669,6 +1815,10 @@ public class QueryTransformer {
             }
             return List.of();
         }
+        if (shouldSkipAuxForDiagnosticSmoke(p) || isDiagnosticSmokeScopeActive()) {
+            traceDiagnosticSmokeSkip(p);
+            return List.of(p.trim());
+        }
 
         List<String> baseRaw = transform("", p);
         boolean bypassExtras = shouldBypassAuxLlm();
@@ -1715,6 +1865,7 @@ public class QueryTransformer {
                 .filter(s -> !QueryTransformerVariantSupport.hasDomainScopePrefix(s))
                 .filter(s -> QueryTransformerVariantSupport.allowedByUnwantedTerm(s, finalP))
                 .filter(s -> QueryTransformerVariantSupport.overlapsSubject(s, subject))
+                .filter(s -> preservesQueryConstraints(finalP, s))
                 .distinct()
                 .toList();
 
@@ -1793,7 +1944,7 @@ public class QueryTransformer {
                     .replaceAll("[^A-Za-z_]", "")
                     .toUpperCase(Locale.ROOT));
         } catch (Exception e) {
-            traceSuppressed("classifyIntent.fallback");
+            traceSuppressed("classifyIntent.fallback", e);
             return QueryIntent.GENERAL_KNOWLEDGE; // fallback
         }
     }
@@ -1978,19 +2129,35 @@ public class QueryTransformer {
     }
 
     private static void traceSuppressed(String stage) {
+        traceSuppressed(stage, null);
+    }
+
+    private static boolean preservesQueryConstraints(String original, String candidate) {
+        boolean preserved = SearchQueryConstraints.preserves(original, candidate);
+        if (!preserved) {
+            TraceStore.inc("qtx.constraints.rejectedCount");
+            TraceStore.put("qtx.constraints.reason", "explicit_constraint_loss");
+        }
+        return preserved;
+    }
+
+    private static void traceSuppressed(String stage, Throwable failure) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
+        String safeErrorType = failure == null
+                ? safeStage
+                : SafeRedactor.traceLabelOrFallback(failure.getClass().getSimpleName(), "unknown");
         try {
             TraceStore.put("queryTransformer.suppressed", true);
             TraceStore.put("queryTransformer.suppressed.stage", safeStage);
             TraceStore.put("queryTransformer.suppressed." + safeStage, true);
-            TraceStore.put("queryTransformer.suppressed.errorType", safeStage);
-            TraceStore.put("queryTransformer.suppressed." + safeStage + ".errorType", safeStage);
+            TraceStore.put("queryTransformer.suppressed.errorType", safeErrorType);
+            TraceStore.put("queryTransformer.suppressed." + safeStage + ".errorType", safeErrorType);
         } catch (Throwable traceFailure) {
             log.debug("[QueryTransformer] suppressed trace write failed stage={} errorType={}",
                     safeStage,
                     traceFailure == null ? "unknown" : traceFailure.getClass().getSimpleName());
         }
-        log.debug("[QueryTransformer] suppressed stage={} errorType={}", safeStage, safeStage);
+        log.debug("[QueryTransformer] suppressed stage={} errorType={}", safeStage, safeErrorType);
     }
 
     // ─────────────────────────────────────────────────────────────

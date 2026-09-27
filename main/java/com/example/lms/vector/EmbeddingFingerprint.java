@@ -32,14 +32,19 @@ public class EmbeddingFingerprint {
     public static final String META_EMB_MODEL = "emb_model";
     public static final String META_EMB_DIM = "emb_dim";
 
-    @Value("${embedding.provider:ollama}")
+    @Value("${embedding.provider:${embeddings.provider:ollama}}")
     private String provider;
+    @Value("${embeddings.provider:}")
+    private String legacyProvider;
 
     @Value("${embedding.model:qwen3-embedding:4b}")
     private String model;
 
     @Value("${embedding.dimensions:1536}")
     private int dimensions;
+
+    @Value("${embedding.normalization-mode:SLICE_TO_CONFIGURED_DIM}")
+    private String normalization;
 
     @Value("${vector.fingerprint.enabled:true}")
     private boolean enabled;
@@ -62,7 +67,18 @@ public class EmbeddingFingerprint {
     private boolean bypassIfMetadataMissing;
 
     public String provider() {
-        return norm(provider);
+        return resolveProvider(provider, legacyProvider);
+    }
+
+    /** Keep delegate selection and stored-vector identity on the same explicit configuration. */
+    public static String resolveProvider(String canonical, String legacy) {
+        String selected = norm(canonical);
+        String alias = norm(legacy);
+        if (!selected.isEmpty() && !alias.isEmpty() && !selected.equals(alias)) {
+            throw new IllegalArgumentException("embedding_provider_conflict");
+        }
+        if (selected.isEmpty()) selected = alias;
+        return selected.isEmpty() ? "ollama" : selected;
     }
 
     public String model() {
@@ -88,7 +104,10 @@ public class EmbeddingFingerprint {
 
     /** Fingerprint used for strict equality checks. */
     public String fingerprint() {
-        return embId();
+        String mode = norm(normalization);
+        // Preserve the established default contract; a changed transformation is a different space.
+        return mode.isEmpty() || "slice_to_configured_dim".equals(mode)
+                ? embId() : embId() + "|normalization=" + mode;
     }
 
     /** Returns the length of the fingerprint string. */
