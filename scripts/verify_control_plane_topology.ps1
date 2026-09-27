@@ -26,6 +26,12 @@ $ProjectCacheDir = if ([string]::IsNullOrWhiteSpace($env:AWX_PROJECT_CACHE_DIR))
     $env:AWX_PROJECT_CACHE_DIR
 }
 $env:AWX_PROJECT_CACHE_DIR = $ProjectCacheDir
+$FocusedTestClasses = @(
+    "com.example.lms.learning.ops.RagLearningOpsDashboardServiceTest",
+    "com.example.lms.learning.ops.RagLearningOpsCurationCollectorTest",
+    "com.example.lms.web.LearningDataTemplateTest",
+    "com.example.lms.manifest.LocalModelConfigYamlTest"
+)
 New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $ProjectCacheDir | Out-Null
 
 if (-not (Test-Path $Gradle)) {
@@ -48,6 +54,52 @@ function Invoke-Native([string]$Label, [string]$FilePath, [string[]]$Arguments) 
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "[AWX][topology-verify] $Label failed exit=$LASTEXITCODE"
+    }
+}
+
+function Get-FocusedTestResultRoot {
+    $hostId = [regex]::Replace($env:AWX_BUILD_HOST_ID, "[^A-Za-z0-9._-]+", "-").Trim([char[]]".-_")
+    if ([string]::IsNullOrWhiteSpace($hostId)) {
+        $hostId = "host"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:AWX_BUILD_ROOT_DIR)) {
+        $buildDir = Join-Path $Root ("build\{0}" -f $hostId)
+    } else {
+        $externalBuildRoot = $env:AWX_BUILD_ROOT_DIR.Trim()
+        if (-not [IO.Path]::IsPathRooted($externalBuildRoot)) {
+            $externalBuildRoot = Join-Path $Root $externalBuildRoot
+        }
+        $buildDir = Join-Path ([IO.Path]::GetFullPath($externalBuildRoot)) ("{0}\root" -f $hostId)
+    }
+    return (Join-Path $buildDir "test-results\test")
+}
+
+function Assert-FocusedTestReports([string[]]$ClassNames, [DateTime]$StartedAtUtc) {
+    $resultRoot = Get-FocusedTestResultRoot
+    foreach ($className in $ClassNames) {
+        $reportPath = Join-Path $resultRoot "TEST-$className.xml"
+        if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw "[AWX][topology-verify] focused-test-evidence-missing class=$className"
+        }
+        $report = Get-Item -LiteralPath $reportPath
+        if ($report.LastWriteTimeUtc -lt $StartedAtUtc) {
+            throw "[AWX][topology-verify] focused-test-evidence-stale class=$className"
+        }
+        try {
+            [xml]$xml = Get-Content -LiteralPath $reportPath -Raw
+            $tests = [int]$xml.testsuite.tests
+            $failures = [int]$xml.testsuite.failures
+            $errors = [int]$xml.testsuite.errors
+            $skipped = [int]$xml.testsuite.skipped
+            $executed = $tests - $skipped
+        } catch {
+            throw "[AWX][topology-verify] focused-test-evidence-invalid class=$className"
+        }
+        if ($tests -lt 1 -or $executed -lt 1 -or $failures -gt 0 -or $errors -gt 0) {
+            throw "[AWX][topology-verify] focused-test-evidence-failed class=$className tests=$tests executed=$executed failures=$failures errors=$errors skipped=$skipped"
+        }
+        Write-Host "[AWX][topology-verify] EVIDENCE class=$className tests=$tests executed=$executed failures=$failures errors=$errors skipped=$skipped"
     }
 }
 
@@ -98,15 +150,18 @@ try {
     if (-not $SkipGradle) {
         Assert-NoGradleCollision "before-focused-tests"
         Invoke-Step "focused-tests" {
-            Invoke-Native "focused-tests" $Gradle @(
-                "test",
-                "--tests", "com.example.lms.learning.ops.RagLearningOpsDashboardServiceTest",
-                "--tests", "com.example.lms.learning.ops.RagLearningOpsCurationCollectorTest",
-                "--tests", "com.example.lms.web.LearningDataTemplateTest",
-                "--tests", "com.example.lms.manifest.LocalModelConfigYamlTest",
+            $FocusedTestsStartedAtUtc = [DateTime]::UtcNow
+            $focusedTestArguments = @("test")
+            foreach ($className in $FocusedTestClasses) {
+                $focusedTestArguments += @("--tests", $className)
+            }
+            $focusedTestArguments += @(
+                "--rerun-tasks",
                 "--no-daemon",
                 "--project-cache-dir", $ProjectCacheDir
             )
+            Invoke-Native "focused-tests" $Gradle $focusedTestArguments
+            Assert-FocusedTestReports $FocusedTestClasses $FocusedTestsStartedAtUtc
         }
         Assert-NoGradleCollision "before-build-surface"
         Invoke-Step "build-surface" {
