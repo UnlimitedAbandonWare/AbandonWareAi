@@ -1,0 +1,12 @@
+# Devin START — mxasain 트레이스 Codex assist-only (소스 수정 금지)
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+SSOT: agent-prompts/devin-mxasain-trace-porting-assist-20260927/PASTE_TO_DEVIN.md
+Codex SSOT(읽기): agent-prompts/codex-mxasain-trace-porting-20260927/
+
+역할: Codex가 A(WP0→WP1→WP2) 끝내게 도구·셋업·룰/지침·검증 레일·막힘 해제만.
+금지: main/java·static JS·SecurityConfig·Admin 제품 소스 수정. Codex 패치 대신 쓰기 금지.
+허용: AGENTS/스킬/룰 포인터, ASSIST_NOTES, docs/diagnostics assist 부록, build/test 명령 조사, spend-guard, soft-auto git 안내, probe를 agent-prompts/tools에만.
+
+완료 조건에 admin login / logout-block / proto-open=false 넣지 말 것.
+끝나면 DEVIN_TRACE_PORTING_ASSIST: DONE|PARTIAL + product_source_edits: NONE.

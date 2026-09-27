@@ -1,0 +1,19 @@
+﻿# PASTE_SHORT — Devin (safe git commit + update)
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+SSOT: agent-prompts/devin-safe-git-commit-update-20260927/PASTE_TO_DEVIN.md
+git.exe: F:\git\cmd\git.exe
+remote: ONLY https://github.com/UnlimitedAbandonWare/AbandonWareAi (AbandonWare3 금지)
+
+사용자 승인(2026-09-27): 로컬 커밋 + origin(AbandonWareAi)으로 안전하게 push/update 허용.
+
+LIVE: branch `codex/owned-runtime-browser-restart`, HEAD 847d3238, dirty ~6442 lines (M~968 / D~3670 / ??~1803). staged 1개 외래: SelfAskPlannerOwnershipContractTest.java → 보존·언스테이지 금지. index.lock 없음. blast-radius: 커밋당 path≤40 / deletion≤15.
+
+필수:
+1) python -B scripts/conditional_local_git.py policy|check|scan
+2) add -A / commit -a / --no-verify / reset --hard / clean -fdx 금지
+3) 주제별 선택 커밋: --preserve-foreign-staged --path … (캡 안)
+4) 비밀 스캔 통과 후에만 commit
+5) push는 로컬 커밋 후 origin AbandonWareAi만. force-push 금지
+6) secrets·uploads·DB·모델·거대 로그·.env 실값 커밋 금지
+보고: SAFE_GIT_UPDATE: DONE|PARTIAL + commits SHAs + push result + left dirty count

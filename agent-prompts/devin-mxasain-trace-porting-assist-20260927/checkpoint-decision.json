@@ -1,0 +1,21 @@
+{
+  "goalId": "devin-mxasain-trace-assist-0927-6663616f",
+  "reasonCode": "mxasain-trace-codex-assist-notes-only",
+  "risk": {
+    "recovery": 0,
+    "blastRadius": 0,
+    "regression": 0,
+    "uncertainty": 0,
+    "cost": 0
+  },
+  "gates": {
+    "bulkDelete": false,
+    "unrecoverableOverwrite": false,
+    "credentialChange": false,
+    "externalRealData": false,
+    "paidBulkCalls": false,
+    "productionMutation": false,
+    "permissionChange": false,
+    "irreversibleLoss": false
+  }
+}

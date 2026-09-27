@@ -1,0 +1,16 @@
+﻿# PASTE_SHORT — Devin
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+CODEX_HOME: C:\Users\nninn\.codex
+SSOT: agent-prompts/devin-codex-heavy-purge-20260927/PASTE_TO_DEVIN.md
+
+목표: Codex가 자주 쓰는 경로 중 당장 격리(이동)해도 되는 무거운 쓰레기만 치운다. 제품 소스 수정 금지.
+
+LIVE 2026-09-27: CODEX_HOME 25.45 GB. Top: sessions 9.7GB / visualizations 8.1GB / thread_history_1.sqlite 2.82GB / logs_2.sqlite 1.57GB / cache 713MB / tmp 632MB / integrations 631MB / plugins 516MB.
+
+1) Codex idle 확인. madasin build(desktop-madasin-*/verify-test-*)·Java/Gradle kill 금지.
+2) dry-run → apply: scripts/codex_home_quarantine.py → rescue=C:\AbandonWare\_rescue\codex-quarantine-20260927
+   classes: child-stale-no-evidence, viz-gradle-cache, tmp-globalstate (안전하면 automation-stale)
+3) TIER_A 수동 후보(활성 아님 확인 후 move→rescue): tmp\demo1-audit50-gradle-home(~630MB), cache\prompt-boundary-probe(~658MB), attachments mtime>7d(~16MB), .tmp 오래된 orphan
+4) TIER_B는 사용자 확인 전 보류: .plugin-appserver, gemini-agy, visualizations 전체 rd, sessions 통삭제, live sqlite DELETE
+5) secrets/auth/config 출력·커밋 금지. 9only restore 금지. DONE/PARTIAL + GB before/after 보고.
