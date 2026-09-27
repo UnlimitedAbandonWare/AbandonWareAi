@@ -37,10 +37,19 @@ SAFE_AUDIT_FIELDS = (
 SECRET_RE = re.compile(
     r"sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|"
     r"pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|"
-    r"sbp_[A-Za-z0-9_-]{10,}",
-    re.ASCII,
+    r"sbp_[A-Za-z0-9_-]{10,}|"
+    r"\b(?:authorization|cookie)\s*[:=]|"
+    r"-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY-----",
+    re.ASCII | re.IGNORECASE,
 )
 PRODUCER_FAIL_RE = re.compile(r"\[producer-bundle\]\[FAIL\]\[([A-Za-z0-9_.:-]+)\]", re.ASCII)
+FORBIDDEN_PATCH_PATH_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(^|/)(apikey\.txt|apikey\.ps1)$", re.IGNORECASE), "secret-setup"),
+    (re.compile(r"(^|/)\.env[^/]*(?:/|$)", re.IGNORECASE), "secret-env"),
+    (re.compile(r"(^|/)pages/api/", re.IGNORECASE), "nextjs-pages-api"),
+    (re.compile(r"(^|/)(\.gradle|build|node_modules|\.next|\.turbo|\.swc)(/|$)", re.IGNORECASE), "shared-cache-build-output"),
+    (re.compile(r"\.(p12|jks)$", re.IGNORECASE), "keystore"),
+)
 
 
 def main() -> int:
@@ -154,6 +163,12 @@ def main() -> int:
         "desktopFinalProof": "evidence_needed",
         "promotionReady": False,
         "diffHeaderCount": 0,
+        "filemodeLineCount": 0,
+        "allowedNewFileCount": 0,
+        "filemodeViolationCount": 0,
+        "binaryPatchMarkerCount": 0,
+        "secretPatternHits": 0,
+        "rawSecretPatternHits": 0,
         "outputHash": "",
         "outputLineCount": 0,
         "failReason": "",
@@ -176,18 +191,54 @@ def main() -> int:
             command.extend(["--pathspec", spec])
         producer = run_text(command, cwd=source_root)
         producer_fail = producer_fail_reason(producer["raw"])
+        producer_output_secret_hits = len(SECRET_RE.findall(producer["raw"]))
         raw_outputs.append(producer["raw"])
         sidecars_complete = all(
             (patchdrop_root / args.node_role / f"{bundle}{suffix}").exists()
             for suffix in (".patch", ".report.md", ".verify.log", ".sha256.txt", ".manifest.json")
         ) and (patchdrop_root / f"{slug}.{args.node_role}-pending.md").exists()
         patch_path = patchdrop_root / args.node_role / f"{bundle}.patch"
-        manifest_summary = read_manifest_summary(patchdrop_root / args.node_role / f"{bundle}.manifest.json")
         sha_summary = read_producer_sha_summary(patchdrop_root, args.node_role, slug, bundle) if sidecars_complete else {
             "ok": False,
             "failReason": "producer-sidecars-missing",
         }
-        promotion_ready = producer["exitCode"] == 0 and sidecars_complete and manifest_summary["ok"] and sha_summary["ok"]
+        patch_contract = validate_patch_contract(patch_path)
+        bundle_paths = [
+            patchdrop_root / args.node_role / f"{bundle}{suffix}"
+            for suffix in (".patch", ".report.md", ".verify.log", ".sha256.txt", ".manifest.json")
+        ]
+        bundle_paths.append(patchdrop_root / f"{slug}.{args.node_role}-pending.md")
+        sidecar_secret_hits = secret_hit_count_for_paths(bundle_paths)
+        manifest_summary = read_manifest_summary(
+            patchdrop_root / args.node_role / f"{bundle}.manifest.json",
+            expected_topic=slug,
+            expected_node=args.node_role,
+            expected_active_patch=f"{bundle}.patch",
+            expected_source_root_hash=stable_hash(str(source_root)),
+            actual_patch=patch_contract,
+            actual_secret_hits=sidecar_secret_hits,
+            actual_raw_secret_hits=producer_output_secret_hits,
+        )
+        promotion_ready = (
+            producer["exitCode"] == 0
+            and sidecars_complete
+            and manifest_summary["ok"]
+            and sha_summary["ok"]
+            and patch_contract["ok"]
+            and sidecar_secret_hits == 0
+            and producer_output_secret_hits == 0
+        )
+        bundle_fail_reasons = [
+            reason
+            for reason in (
+                producer_fail,
+                patch_contract["failReason"],
+                manifest_summary["failReason"],
+                sha_summary["failReason"],
+                "secret-leak-risk" if sidecar_secret_hits or producer_output_secret_hits else "",
+            )
+            if reason
+        ]
         bundle_result = {
             "ok": promotion_ready,
             "exitCode": producer["exitCode"],
@@ -196,11 +247,17 @@ def main() -> int:
             "sourceIsolation": manifest_summary["sourceIsolation"],
             "desktopFinalProof": manifest_summary["desktopFinalProof"],
             "promotionReady": promotion_ready,
-            "diffHeaderCount": manifest_summary["diffHeaderCount"],
+            "diffHeaderCount": patch_contract["diffHeaderCount"],
+            "filemodeLineCount": patch_contract["filemodeLineCount"],
+            "allowedNewFileCount": patch_contract["allowedNewFileCount"],
+            "filemodeViolationCount": patch_contract["filemodeViolationCount"],
+            "binaryPatchMarkerCount": patch_contract["binaryPatchMarkerCount"],
+            "secretPatternHits": sidecar_secret_hits,
+            "rawSecretPatternHits": producer_output_secret_hits,
             "patchHash": sha256_file(patch_path),
             "outputHash": stable_hash(producer["raw"]),
             "outputLineCount": len([line for line in producer["raw"].splitlines() if line.strip()]),
-            "failReason": producer_fail,
+            "failReason": ",".join(bundle_fail_reasons),
         }
         if producer["exitCode"] != 0:
             failures.append("producer-bundle-failed")
@@ -212,9 +269,13 @@ def main() -> int:
             failures.append(sha_summary["failReason"])
         if not manifest_summary["ok"]:
             failures.append(manifest_summary["failReason"])
+        if patch_path.is_file() and not patch_contract["ok"]:
+            failures.extend(reason for reason in patch_contract["failReason"].split(",") if reason)
+        if sidecar_secret_hits or producer_output_secret_hits:
+            failures.append("secret-leak-risk")
 
-    raw_secret_hits = len(SECRET_RE.findall("\n".join(raw_outputs)))
-    if raw_secret_hits:
+    raw_secret_hits = len(SECRET_RE.findall("\n".join(raw_outputs))) + int(bundle_result.get("secretPatternHits", 0))
+    if raw_secret_hits and "secret-leak-risk" not in failures:
         failures.append("secret-leak-risk")
 
     result = {
@@ -303,6 +364,345 @@ def producer_fail_reason(raw_output: str) -> str:
     return safe_scalar(match.group(1), 120)
 
 
+def secret_hit_count_for_paths(paths: list[Path]) -> int:
+    hits = 0
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            hits += len(SECRET_RE.findall(path.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            hits += 1
+    return hits
+
+
+def validate_patch_contract(patch_path: Path) -> dict[str, Any]:
+    if not patch_path.is_file():
+        return {
+            "ok": False,
+            "failReason": "producer-patch-missing",
+            "diffHeaderCount": 0,
+            "filemodeLineCount": 0,
+            "allowedNewFileCount": 0,
+            "filemodeViolationCount": 0,
+            "binaryPatchMarkerCount": 0,
+            "forbiddenPathCount": 0,
+            "secretPatternHits": 0,
+        }
+    try:
+        patch_text = patch_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {
+            "ok": False,
+            "failReason": "producer-patch-unreadable",
+            "diffHeaderCount": 0,
+            "filemodeLineCount": 0,
+            "allowedNewFileCount": 0,
+            "filemodeViolationCount": 0,
+            "binaryPatchMarkerCount": 0,
+            "forbiddenPathCount": 0,
+            "secretPatternHits": 0,
+        }
+
+    failures: list[str] = []
+    mode_summary = patch_mode_summary_text(patch_text)
+    if mode_summary["filemodeViolationCount"]:
+        failures.append("filemode-blocked")
+    binary_markers = len(re.findall(r"(?m)^(GIT binary patch|Binary files .+ differ)$", patch_text))
+    if binary_markers:
+        failures.append("binary-patch-blocked")
+    secret_hits = len(SECRET_RE.findall(patch_text))
+    if secret_hits:
+        failures.append("secret-leak-risk")
+    forbidden = forbidden_patch_paths_text(patch_text)
+    if forbidden:
+        failures.append("forbidden-path:" + ",".join(sorted({item["reason"] for item in forbidden})))
+    diff_headers = len(re.findall(r"(?m)^diff --git ", patch_text.lstrip("\ufeff")))
+    if not patch_text.strip():
+        failures.append("producer-patch-empty")
+    elif diff_headers == 0:
+        failures.append("producer-patch-not-unified-diff")
+    elif patch_structure_violation_count_text(patch_text):
+        failures.append("producer-patch-not-unified-diff")
+    return {
+        "ok": not failures,
+        "failReason": ",".join(failures),
+        "diffHeaderCount": diff_headers,
+        "filemodeLineCount": mode_summary["filemodeLineCount"],
+        "allowedNewFileCount": mode_summary["allowedNewFileCount"],
+        "filemodeViolationCount": mode_summary["filemodeViolationCount"],
+        "binaryPatchMarkerCount": binary_markers,
+        "forbiddenPathCount": len(forbidden),
+        "secretPatternHits": secret_hits,
+    }
+
+
+def patch_mode_summary_text(patch_text: str) -> dict[str, int]:
+    text = patch_text.lstrip("\ufeff")
+    blocks: list[list[str]] = []
+    preamble: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            if current is not None:
+                blocks.append(current)
+            current = [line]
+        elif current is None:
+            preamble.append(line)
+        else:
+            current.append(line)
+    if current is not None:
+        blocks.append(current)
+
+    mode_header = re.compile(r"^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$")
+    preamble_modes = [line for line in preamble if mode_header.match(line)]
+    total = len(preamble_modes)
+    allowed = 0
+    violations = len(preamble_modes)
+    seen_targets: set[str] = set()
+    for block in blocks:
+        mode_lines = [line for line in block if mode_header.match(line)]
+        total += len(mode_lines)
+        envelope = patch_envelope_lines(block)
+        has_old_null = "--- /dev/null" in envelope
+        has_new_null = "+++ /dev/null" in envelope
+        if has_new_null or (has_old_null and not mode_lines):
+            violations += max(1, len(mode_lines))
+            continue
+        if not mode_lines:
+            continue
+        header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0]) if block else None
+        target = header.group(1) if header is not None and header.group(1) == header.group(2) else ""
+        if is_canonical_new_file_block(block, mode_lines) and target not in seen_targets:
+            seen_targets.add(target)
+            allowed += 1
+        else:
+            violations += len(mode_lines)
+    return {
+        "filemodeLineCount": total,
+        "allowedNewFileCount": allowed,
+        "filemodeViolationCount": violations,
+    }
+
+
+def patch_envelope_lines(lines: list[str]) -> list[str]:
+    first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), len(lines))
+    return lines[:first_hunk]
+
+
+def is_canonical_repo_relative_patch_path(value: str) -> bool:
+    if not value or value != value.replace("\\", "/"):
+        return False
+    if value.startswith(("/", "//")) or re.match(r"^[A-Za-z]:", value):
+        return False
+    if re.search(r"[\x00-\x20\x7f\"<>:|?*]", value):
+        return False
+    return all(
+        part not in {"", ".", ".."}
+        and not part.endswith((".", " "))
+        and re.match(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)", part, re.IGNORECASE) is None
+        for part in value.split("/")
+    )
+
+
+def is_canonical_new_file_block(block: list[str], mode_lines: list[str]) -> bool:
+    if not block or mode_lines != ["new file mode 100644"]:
+        return False
+    header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0])
+    if header is None or header.group(1) != header.group(2):
+        return False
+    target = header.group(1)
+    if not is_canonical_repo_relative_patch_path(target):
+        return False
+    if any(pattern.search(target) for pattern, _ in FORBIDDEN_PATCH_PATH_PATTERNS):
+        return False
+    envelope = patch_envelope_lines(block)
+    old_headers = [line for line in envelope if line.startswith("--- ")]
+    new_headers = [line for line in envelope if line.startswith("+++ ")]
+    if old_headers != ["--- /dev/null"] or new_headers != [f"+++ b/{target}"]:
+        return False
+    if not has_canonical_new_file_hunk(block):
+        return False
+    return not any(
+        line.startswith(("rename from ", "rename to ", "copy from ", "copy to "))
+        or line == "GIT binary patch"
+        or (line.startswith("Binary files ") and line.endswith(" differ"))
+        for line in block
+    )
+
+
+def has_exact_hunk_sequence(lines: list[str], *, require_new_file: bool) -> bool:
+    first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), -1)
+    if first_hunk < 0:
+        return False
+    envelope = lines[:first_hunk]
+    old_indexes = [index for index, line in enumerate(envelope) if line.startswith("--- ")]
+    new_indexes = [index for index, line in enumerate(envelope) if line.startswith("+++ ")]
+    if len(old_indexes) != 1 or len(new_indexes) != 1 or new_indexes[0] != old_indexes[0] + 1:
+        return False
+    if first_hunk != new_indexes[0] + 1:
+        return False
+    index = first_hunk
+    hunk_count = 0
+    header_pattern = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$")
+    while index < len(lines):
+        header = header_pattern.fullmatch(lines[index])
+        if header is None:
+            return False
+        old_start = int(header.group(1))
+        old_expected = int(header.group(2)) if header.group(2) is not None else 1
+        new_start = int(header.group(3))
+        new_expected = int(header.group(4)) if header.group(4) is not None else 1
+        if require_new_file and (hunk_count != 0 or old_start != 0 or old_expected != 0 or new_start != 1 or new_expected <= 0):
+            return False
+        hunk_count += 1
+        index += 1
+        old_actual = 0
+        new_actual = 0
+        old_eof_marked = False
+        new_eof_marked = False
+        while index < len(lines) and not lines[index].startswith("@@ "):
+            line = lines[index]
+            if line == r"\ No newline at end of file":
+                if index == 0 or not lines[index - 1].startswith((" ", "+", "-")):
+                    return False
+                if any(candidate.startswith("@@ ") for candidate in lines[index + 1 :]):
+                    return False
+                previous_kind = lines[index - 1][0]
+                if previous_kind == "-":
+                    if old_eof_marked or new_eof_marked:
+                        return False
+                    old_eof_marked = True
+                elif previous_kind == "+":
+                    if new_eof_marked:
+                        return False
+                    new_eof_marked = True
+                else:
+                    if old_eof_marked or new_eof_marked:
+                        return False
+                    old_eof_marked = True
+                    new_eof_marked = True
+                index += 1
+                continue
+            if not line or line[0] not in {" ", "+", "-"}:
+                return False
+            if new_eof_marked or (old_eof_marked and line[0] != "+"):
+                return False
+            if require_new_file and line[0] != "+":
+                return False
+            if line[0] in {" ", "-"}:
+                old_actual += 1
+            if line[0] in {" ", "+"}:
+                new_actual += 1
+            if old_actual > old_expected or new_actual > new_expected:
+                return False
+            index += 1
+        if old_actual != old_expected or new_actual != new_expected:
+            return False
+    return hunk_count == 1 if require_new_file else hunk_count > 0
+
+
+def has_canonical_new_file_hunk(lines: list[str]) -> bool:
+    return has_exact_hunk_sequence(lines, require_new_file=True)
+
+
+def patch_structure_violation_count_text(patch_text: str) -> int:
+    text = patch_text.lstrip("\ufeff")
+    blocks: list[list[str]] = []
+    preamble: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            if current is not None:
+                blocks.append(current)
+            current = [line]
+        elif current is None:
+            preamble.append(line)
+        else:
+            current.append(line)
+    if current is not None:
+        blocks.append(current)
+    violations = 1 if any(line.strip() for line in preamble) or not blocks else 0
+    seen_targets: set[str] = set()
+    for block in blocks:
+        header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0])
+        if header is None or header.group(1) != header.group(2):
+            violations += 1
+            continue
+        target = header.group(1)
+        if not is_canonical_repo_relative_patch_path(target) or target in seen_targets:
+            violations += 1
+            continue
+        seen_targets.add(target)
+        envelope = patch_envelope_lines(block)
+        old_headers = [line for line in envelope if line.startswith("--- ")]
+        new_headers = [line for line in envelope if line.startswith("+++ ")]
+        mode_lines = [
+            line
+            for line in block
+            if re.match(r"^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$", line)
+        ]
+        if old_headers == ["--- /dev/null"]:
+            if not is_canonical_new_file_block(block, mode_lines):
+                violations += 1
+        elif old_headers != [f"--- a/{target}"] or new_headers != [f"+++ b/{target}"]:
+            violations += 1
+        elif not has_exact_hunk_sequence(block, require_new_file=False):
+            violations += 1
+    parsed = subprocess.run(
+        ["git", "apply", "--numstat", "--whitespace=nowarn", "-"],
+        input=text.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if parsed.returncode != 0:
+        violations += 1
+    return violations
+
+
+def normalize_patch_path(value: str) -> str:
+    path = value.strip().strip('"').replace("\\", "/")
+    if path in {"", "/dev/null"}:
+        return ""
+    if path.startswith(("a/", "b/")):
+        path = path[2:]
+    return path
+
+
+def forbidden_patch_paths_text(patch_text: str) -> list[dict[str, str]]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    hunk_started = False
+    for line in patch_text.lstrip("\ufeff").splitlines():
+        candidates: list[str] = []
+        if line.startswith("diff --git "):
+            hunk_started = False
+            parts = line.split()
+            candidates.extend(parts[2:4])
+        elif line.startswith("@@ "):
+            hunk_started = True
+        elif not hunk_started and line.startswith(("+++ ", "--- ")):
+            candidates.append(line[4:].split("\t", 1)[0])
+        elif line.startswith(("rename from ", "rename to ", "copy from ", "copy to ")):
+            candidates.append(line.split(" ", 2)[2])
+        for candidate in candidates:
+            normalized = normalize_patch_path(candidate)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                paths.append(normalized)
+    blocked: list[dict[str, str]] = []
+    for target in paths:
+        if not is_canonical_repo_relative_patch_path(target):
+            blocked.append({"path": target, "reason": "unsafe-path"})
+            continue
+        for pattern, reason in FORBIDDEN_PATCH_PATH_PATTERNS:
+            if pattern.search(target):
+                blocked.append({"path": target, "reason": reason})
+                break
+    return blocked
+
+
 def failure_result(
     *,
     args: argparse.Namespace,
@@ -378,7 +778,17 @@ def append_audit_if_requested(raw_path: str, result: dict[str, Any]) -> None:
         handle.write(json.dumps(row, ensure_ascii=True, separators=(",", ":")) + "\n")
 
 
-def read_manifest_summary(manifest_path: Path) -> dict[str, Any]:
+def read_manifest_summary(
+    manifest_path: Path,
+    *,
+    expected_topic: str,
+    expected_node: str,
+    expected_active_patch: str,
+    expected_source_root_hash: str,
+    actual_patch: dict[str, Any],
+    actual_secret_hits: int,
+    actual_raw_secret_hits: int,
+) -> dict[str, Any]:
     if not manifest_path.exists():
         return {
             "ok": False,
@@ -406,9 +816,9 @@ def read_manifest_summary(manifest_path: Path) -> dict[str, Any]:
             "diffHeaderCount": 0,
         }
 
-    desktop_final_proof = safe_scalar(data.get("desktopFinalProof", "evidence_needed"), 80)
+    desktop_final_proof = safe_scalar(data.get("desktopFinalProof", ""), 80)
     verification = data.get("verification") if isinstance(data.get("verification"), dict) else {}
-    diff_header_count = safe_int(verification.get("diffHeaderCount", 0))
+    diff_header_count = actual_patch["diffHeaderCount"]
     isolation = data.get("sourceIsolation")
     if not isinstance(isolation, dict):
         return {
@@ -422,60 +832,57 @@ def read_manifest_summary(manifest_path: Path) -> dict[str, Any]:
     source_isolation = {
         "guard": safe_scalar(isolation.get("guard", ""), 40),
         "sourceRootKind": safe_scalar(isolation.get("sourceRootKind", ""), 40),
-        "sharedSourceRoot": bool(isolation.get("sharedSourceRoot", False)),
-        "desktopCanonicalSourceRoot": bool(isolation.get("desktopCanonicalSourceRoot", False)),
-        "directCanonicalSourceEdit": bool(isolation.get("directCanonicalSourceEdit", False)),
+        "sharedSourceRoot": isolation.get("sharedSourceRoot"),
+        "desktopCanonicalSourceRoot": isolation.get("desktopCanonicalSourceRoot"),
+        "directCanonicalSourceEdit": isolation.get("directCanonicalSourceEdit"),
         "gitRootPresent": isolation.get("gitRootPresent") is True,
         "gitRootMatchesSourceRoot": isolation.get("gitRootMatchesSourceRoot") is True,
         "gitRootHash": safe_scalar(isolation.get("gitRootHash", ""), 120),
     }
-    git_root_missing = (
-        not source_isolation["gitRootPresent"]
-        or not source_isolation["gitRootMatchesSourceRoot"]
-        or not source_isolation["gitRootHash"]
-    )
-    if git_root_missing:
-        return {
-            "ok": False,
-            "failReason": "producer-git-root-missing",
-            "sourceIsolation": source_isolation,
-            "desktopFinalProof": desktop_final_proof,
-            "diffHeaderCount": diff_header_count,
-        }
-    source_isolation_violation = (
+    failures: list[str] = []
+    exact_fields = {
+        "schemaVersion": "patchdrop-producer-v3",
+        "topic": expected_topic,
+        "slug": expected_topic,
+        "node": expected_node,
+        "activePatch": expected_active_patch,
+        "desktopFinalProof": "evidence_needed",
+        "sourceRootInputHash": expected_source_root_hash,
+        "sourceRootHash": expected_source_root_hash,
+    }
+    for name, expected in exact_fields.items():
+        if data.get(name) != expected:
+            failures.append(f"producer-manifest-{name}")
+    if (
         source_isolation["guard"] != "PASS"
         or source_isolation["sourceRootKind"] != "local-worktree"
-        or source_isolation["sharedSourceRoot"]
-        or source_isolation["desktopCanonicalSourceRoot"]
-        or source_isolation["directCanonicalSourceEdit"]
-    )
-    if source_isolation_violation:
-        return {
-            "ok": False,
-            "failReason": "producer-source-isolation-violation",
-            "sourceIsolation": source_isolation,
-            "desktopFinalProof": desktop_final_proof,
-            "diffHeaderCount": diff_header_count,
-        }
-    if desktop_final_proof != "evidence_needed":
-        return {
-            "ok": False,
-            "failReason": "producer-desktop-proof-not-pending",
-            "sourceIsolation": source_isolation,
-            "desktopFinalProof": desktop_final_proof,
-            "diffHeaderCount": diff_header_count,
-        }
+        or source_isolation["sharedSourceRoot"] is not False
+        or source_isolation["desktopCanonicalSourceRoot"] is not False
+        or source_isolation["directCanonicalSourceEdit"] is not False
+        or not source_isolation["gitRootPresent"]
+        or not source_isolation["gitRootMatchesSourceRoot"]
+        or source_isolation["gitRootHash"] != expected_source_root_hash
+    ):
+        failures.append("producer-source-isolation-violation")
+
+    expected_metrics = {
+        "diffHeaderCount": actual_patch["diffHeaderCount"],
+        "filemodeLineCount": actual_patch["filemodeLineCount"],
+        "allowedNewFileCount": actual_patch["allowedNewFileCount"],
+        "filemodeViolationCount": actual_patch["filemodeViolationCount"],
+        "forbiddenPathCount": actual_patch["forbiddenPathCount"],
+        "secretPatternHits": actual_secret_hits,
+        "rawSecretPatternHits": actual_raw_secret_hits,
+    }
+    for name, expected in expected_metrics.items():
+        value = verification.get(name)
+        if type(value) is not int or value != expected:
+            failures.append(f"producer-manifest-verification-{name}")
     if diff_header_count <= 0:
-        return {
-            "ok": False,
-            "failReason": "producer-patch-not-unified-diff",
-            "sourceIsolation": source_isolation,
-            "desktopFinalProof": desktop_final_proof,
-            "diffHeaderCount": diff_header_count,
-        }
+        failures.append("producer-patch-not-unified-diff")
     return {
-        "ok": True,
-        "failReason": "",
+        "ok": not failures,
+        "failReason": ",".join(failures),
         "sourceIsolation": source_isolation,
         "desktopFinalProof": desktop_final_proof,
         "diffHeaderCount": diff_header_count,

@@ -59,7 +59,8 @@ def patch_groovy(txt: str, injects: List[str]) -> str:
     """Inject dependency snippets into a Groovy build.gradle file."""
     if not injects:
         return txt
-    if any(s in txt for s in injects):
+    missing_injects = [snippet for snippet in dict.fromkeys(injects) if snippet not in txt]
+    if not missing_injects:
         return txt
 
     lines = txt.splitlines()
@@ -69,7 +70,10 @@ def patch_groovy(txt: str, injects: List[str]) -> str:
             dep_idx = i
             break
 
-    snippet = ["  // injected by build_error_mitigator.py"] + [f"  {s}" for s in injects]
+    snippet = []
+    if "// injected by build_error_mitigator.py" not in txt:
+        snippet.append("  // injected by build_error_mitigator.py")
+    snippet.extend(f"  {dependency}" for dependency in missing_injects)
     if dep_idx is not None:
         lines[dep_idx + 1 : dep_idx + 1] = snippet
     else:
@@ -90,7 +94,8 @@ def patch_kts(txt: str, injects: List[str]) -> str:
     """Inject dependency snippets into a Kotlin build.gradle.kts file."""
     if not injects:
         return txt
-    if any(s in txt for s in injects):
+    missing_injects = [snippet for snippet in dict.fromkeys(injects) if snippet not in txt]
+    if not missing_injects:
         return txt
 
     lines = txt.splitlines()
@@ -100,7 +105,10 @@ def patch_kts(txt: str, injects: List[str]) -> str:
             dep_idx = i
             break
 
-    snippet = ["  // injected by build_error_mitigator.py"] + [f"  {s}" for s in injects]
+    snippet = []
+    if "// injected by build_error_mitigator.py" not in txt:
+        snippet.append("  // injected by build_error_mitigator.py")
+    snippet.extend(f"  {dependency}" for dependency in missing_injects)
     if dep_idx is not None:
         lines[dep_idx + 1 : dep_idx + 1] = snippet
     else:

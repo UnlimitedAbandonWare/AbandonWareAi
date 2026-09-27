@@ -6,7 +6,9 @@ param(
 
     [string]$Root = "",
 
-    [string]$InputJson = ""
+    [string]$InputJson = "",
+
+    [switch]$RuntimeSession
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +52,15 @@ if (-not (Test-Path -LiteralPath $Toolbox)) {
 $Python = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $Python) {
     Write-ToolboxFail "python-missing" "python is required for the external MCP toolbox"
+}
+
+if ($RuntimeSession) {
+    if ([string]::IsNullOrWhiteSpace($InputJson)) { $InputJson = "{}" }
+    # Windows PowerShell's native argument marshaller removes embedded JSON
+    # quotes. Transport the same UTF-8 config without consuming command stdin.
+    $EncodedInput = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($InputJson))
+    & $Python.Source $Toolbox $Tool --runtime-session --input-base64 $EncodedInput
+    exit $LASTEXITCODE
 }
 
 if ([string]::IsNullOrWhiteSpace($InputJson)) {

@@ -33,9 +33,10 @@ INTENTIONAL_VAR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# breadcrumb가 있는 catch (traceSuppressed, TraceStore.put, SafeRedactor, log.warn/error/debug)
+# breadcrumb가 있는 catch (traceSuppressed, TraceStore.put, SafeRedactor, logger calls)
 BREADCRUMB_PATTERN = re.compile(
-    r'traceSuppressed|TraceStore\.put|SafeRedactor|safeTrace|'
+    r'traceSuppressed|(?<![\w.])traceChatSuppressed\s*\(|'
+    r'(?<![\w.])traceContextFallbackSkipped\s*\(|TraceStore\.put|SafeRedactor|safeTrace|'
     r'traceTelemetrySkipped|traceSkipped|traceFailure|traceCancelFailure|'
     r'traceSearchPolicyFailure|logSuppressed|recordDebugEventEmitFailure|'
     r'traceContextPropagationSkipped|recordDebugEventResolveFailure|recordError|'
@@ -43,10 +44,7 @@ BREADCRUMB_PATTERN = re.compile(
     r'[A-Za-z0-9_]+TraceSuppressions\.trace|'
     r'EmbeddingTraceSuppressions\.trace|DegradedStorageTraceSuppressions\.trace|'
     r'recordNoiseFilterFallback|'
-    r'log\.warn|log\.error|log\.debug|log\.trace|'
-    r'LOG\.warn|LOG\.error|LOG\.debug|LOG\.trace|'
-    r'logger\.warn|logger\.error|logger\.debug|'
-    r'LOGGER\.warn|LOGGER\.error|LOGGER\.debug'
+    r'(?<![\w.])(?:log|LOG|logger|LOGGER)\.(?:info|warn|error|debug|trace)\s*\('
 )
 
 # 진짜 silent catch 를 가리키는 패턴:
@@ -179,13 +177,14 @@ def extract_catch_blocks(path: pathlib.Path) -> list:
 
 
 def strip_java_comments(text: str) -> str:
-    """Remove Java // and /* */ comments while preserving newlines and strings."""
+    """Mask Java comments and literals while preserving structural newlines."""
     out = []
     i = 0
     in_block = False
     in_line = False
     in_string = False
     in_char = False
+    in_text_block = False
     escaped = False
 
     while i < len(text):
@@ -209,8 +208,22 @@ def strip_java_comments(text: str) -> str:
             i += 1
             continue
 
+        if in_text_block:
+            if ch == '"' and text.startswith('"""', i) and not escaped:
+                out.extend('   ')
+                in_text_block = False
+                i += 3
+                continue
+            out.append('\n' if ch == '\n' else ' ')
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            i += 1
+            continue
+
         if in_string or in_char:
-            out.append(ch)
+            out.append('\n' if ch == '\n' else ' ')
             if escaped:
                 escaped = False
             elif ch == '\\':
@@ -231,11 +244,23 @@ def strip_java_comments(text: str) -> str:
             i += 2
             continue
 
-        out.append(ch)
+        if text.startswith('"""', i):
+            out.extend('   ')
+            in_text_block = True
+            i += 3
+            continue
         if ch == '"':
+            out.append(' ')
             in_string = True
-        elif ch == "'":
+            i += 1
+            continue
+        if ch == "'":
+            out.append(' ')
             in_char = True
+            i += 1
+            continue
+
+        out.append(ch)
         i += 1
 
     return ''.join(out)

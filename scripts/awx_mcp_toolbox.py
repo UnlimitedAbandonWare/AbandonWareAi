@@ -12,12 +12,16 @@ import argparse
 import datetime as dt
 import fnmatch
 import hashlib
+import hmac
+import importlib.util
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -25,15 +29,67 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.awx_shared_state import Change, Conflict, apply_changes, read_optional, plain_path
+    from scripts.awx_host_runtime import local_state_root, host_facts
+except ModuleNotFoundError:
+    from awx_shared_state import Change, Conflict, apply_changes, read_optional, plain_path
+    from awx_host_runtime import local_state_root, host_facts
+
+try:
+    from scripts.harmony_catch_contract import classify_java_catches, summarize_catches
+except ModuleNotFoundError as error:
+    if error.name not in {"scripts", "scripts.harmony_catch_contract"}:
+        raise
+    _contract_path = Path(__file__).resolve().with_name("harmony_catch_contract.py")
+    _contract_name = (
+        "_awx_harmony_catch_contract_"
+        + hashlib.sha256(str(_contract_path).encode("utf-8")).hexdigest()[:16]
+    )
+    _contract_module = sys.modules.get(_contract_name)
+    if _contract_module is None:
+        _contract_spec = importlib.util.spec_from_file_location(_contract_name, _contract_path)
+        if _contract_spec is None or _contract_spec.loader is None:
+            raise ImportError("harmony catch contract loader unavailable")
+        _contract_module = importlib.util.module_from_spec(_contract_spec)
+        sys.modules[_contract_name] = _contract_module
+        try:
+            _contract_spec.loader.exec_module(_contract_module)
+        except Exception:
+            sys.modules.pop(_contract_name, None)
+            raise
+    classify_java_catches = _contract_module.classify_java_catches
+    summarize_catches = _contract_module.summarize_catches
+
 
 SCHEMA_VERSION = "awx.mcp.toolbox.v1"
 HARMONY_RUNTIME_PROOF_SCHEMA_VERSION = "awx.mcp.harmony_runtime_proof.v1"
+APP_JAVA_CLEAN_RUNTIME_EXCLUDES = (
+    "com/example/lms/guard/AnswerSanitizer*",
+    "com/example/lms/service/onnx/OnnxCrossEncoderReranker*",
+    "com/example/lms/service/rag/AnalyzeWebSearchRetriever*",
+    "com/example/lms/service/rag/auth/DomainWhitelist*",
+    "com/example/lms/service/rag/fusion/RerankCanonicalizer*",
+    "com/example/lms/service/rag/fusion/WeightedRRF*",
+    "com/example/lms/service/rag/fusion/WeightedPowerMeanFuser*",
+    "com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain*",
+    "com/example/lms/service/rag/handler/KnowledgeGraphHandler*",
+    "com/example/lms/service/rag/overdrive/AngerOverdriveNarrower*",
+    "com/example/lms/service/rag/overdrive/OverdriveGuard*",
+    "com/example/lms/service/rag/rerank/DppDiversityReranker*",
+    "service/rag/DppDiversityReranker*",
+    "com/example/lms/strategy/RetrievalOrderService*",
+    "com/example/lms/trace/TraceContext*",
+    "service/rag/planner/SelfAskPlanner*",
+    "trace/TimeBudget*",
+)
 ENV_REFS = (
     "NAVER_KEYS",
     "NAVER_CLIENT_ID",
     "NAVER_CLIENT_SECRET",
     "OPENAI_API_KEY",
     "BRAVE_API_KEY",
+    "BRAVE_API_KEY_FREE",
     "SERPAPI_API_KEY",
     "TAVILY_API_KEY",
     "LMS_DB_URL",
@@ -45,6 +101,8 @@ ENV_REFS = (
     "AGENT_DB_CONTEXT_QUERY_TIMEOUT_SECONDS",
     "AWX_AGENT_DB_CONTEXT_BASE_URL",
     "AWX_TRACE_SNAPSHOT_BASE_URL",
+    "APP_PUBLIC_BASE_URL",
+    "PUBLIC_BASE_URL",
     "AWX_ADMIN_TOKEN",
 )
 SUPABASE_ENV_REFS = (
@@ -80,12 +138,16 @@ PATCHDROP_HANDOFF_REQUIRED_ARTIFACTS = (
     "pendingNotice",
 )
 HIGH_CONF_SECRET_PATTERNS = (
-    re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
     re.compile(r"gsk_[A-Za-z0-9_-]{20,}"),
     re.compile(r"pcsk_[A-Za-z0-9_-]{20,}"),
     re.compile(r"sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}"),
     re.compile(r"sbp_[A-Za-z0-9_-]{10,}"),
+)
+PATCH_SECRET_PATTERNS = HIGH_CONF_SECRET_PATTERNS + (
+    re.compile(r"\b(?:authorization|cookie)\s*[:=]", re.IGNORECASE),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY-----", re.IGNORECASE),
 )
 SUPABASE_IMPORT_TEXT_JSON_MAX_CHARS = 200_000
 REDACTION_PATTERNS = HIGH_CONF_SECRET_PATTERNS + (
@@ -126,6 +188,13 @@ TOOL_ALIASES = {
     "producer.kit_export": "producer_kit_export",
     "desktop.dispatch_packet": "desktop_dispatch_packet",
     "desktop.control_loop": "desktop_control_loop",
+    "debug.smb_decommission_probe": "smb_decommission_debug_probe",
+    "smb.decommission_debug_probe": "smb_decommission_debug_probe",
+    "smb.debug_probe": "smb_decommission_debug_probe",
+    "peer.evidence_bus": "peer_evidence_bus",
+    "peer.evidence": "peer_evidence_bus",
+    "web.probe_refresh": "web_probe_refresh",
+    "web.probe.refresh": "web_probe_refresh",
     "harmony.scan": "harmony_scan",
     "agent.db_snapshot": "agent_db_snapshot",
     "agent.db.snapshot": "agent_db_snapshot",
@@ -137,12 +206,38 @@ TOOL_ALIASES = {
     "supabase.schema_snapshot": "supabase_schema_snapshot",
     "supabase.import_snapshot": "supabase_schema_snapshot_import",
     "supabase.schema_snapshot_import": "supabase_schema_snapshot_import",
+    "guard.status": "guard_status",
+    "agent.preflight": "guard_status",
+    "session.evidence": "session_evidence",
+    "session.search": "session_evidence",
 }
 PRODUCER_KIT_FILES = (
     "scripts/awx_mcp_toolbox.py",
     "scripts/awx_mcp_toolbox.ps1",
     "scripts/awx_mcp_stdio_server.py",
+    "scripts/awx_codex_review_adapter.py",
     "scripts/awx_mcp_node_setup.py",
+    "scripts/awx_shared_state.py",
+    "scripts/awx_host_runtime.py",
+    "scripts/awx_project_secrets.py",
+    "scripts/awx_project_keys.py",
+    "scripts/awx_resource_inputs.py",
+    "scripts/awx_device_bus.py",
+    "scripts/awx_device_capabilities.py",
+    "scripts/awx_secrets_acl.ps1",
+    "scripts/use_project_keys.ps1",
+    "scripts/verify_ydrive_backing_identity.ps1",
+    "config/project-resources.json",
+    "scripts/awx_device_policy.py",
+    "scripts/awx_device_work.py",
+    "scripts/awx_skill_registry.py",
+    "scripts/awx_mcp_safe_install.py",
+    "scripts/harmony_catch_contract.py",
+    ".codex/hooks.json",
+    ".codex/shared-runtime.json",
+    ".codex/hooks/source_edit_triage.py",
+    ".codex/hooks/source_edit_triage.ps1",
+    ".codex/hooks/source_edit_triage.sh",
     "scripts/awx_mcp_node_smoke.py",
     "scripts/awx_mcp_producer_handoff.py",
     "scripts/awx_mcp_completion_audit.py",
@@ -211,31 +306,270 @@ NODE_SMOKE_FALLBACK_DECISIONS = {
         "trace_snapshot_unavailable_with_local_fallback",
     },
 }
-HARMONY_BREAK_WEIGHTS = {
-    "HB-01": 35.6,
-    "HB-02": 21.1,
-    "HB-03": 17.4,
-    "HB-04": 18.7,
-    "HB-05": 12.9,
-    "HB-06": 9.8,
-    "HB-07": 23.2,
-    "HB-08": 12.6,
-    "HB-09": 15.4,
-    "HB-10": 11.7,
-    "HB-11": 10.5,
-    "HB-12": 10.5,
+NODE_SMOKE_STEP_FIELDS = frozenset(
+    {
+        "toolName",
+        "exitCode",
+        "ok",
+        "decision",
+        "failReason",
+        "localFallbackPresent",
+        "outputCount",
+        "elapsedMs",
+        "evidence_needed",
+    }
+)
+HARMONY_EVIDENCE_CONTRACT_SHA256 = (
+    "560438505e10525ada56118b9b26360eed14c7f29b3a811541bbbce877694a09"
+)
+HARMONY_EVIDENCE_CONTRACT_SCHEMA = "awx.harmony.evidence-contract.v1"
+HARMONY_EVIDENCE_CONTRACT_ID = "HB-01-12"
+HARMONY_VERIFIED_STATUS = "DONE"
+HARMONY_BLOCKED_STATUS = "BLOCKED_EVIDENCE"
+HARMONY_EXPECTED_ROOTS = (
+    ("mainJava", "main/java"),
+    ("mainResources", "main/resources"),
+    ("testJava", "src/test/java"),
+    ("testResources", "src/test/resources"),
+    ("appJavaClean", "app/src/main/java_clean"),
+    ("appResources", "app/src/main/resources"),
+)
+HARMONY_EXPECTED_BREAK_IDS = tuple(f"HB-{number:02d}" for number in range(1, 13))
+HARMONY_ALLOWED_SUBSYSTEMS = {f"S{number:02d}" for number in range(1, 9)}
+HARMONY_ALLOWED_RUNTIME_RULES = {
+    "EMPTY_COLLECTION",
+    "NON_BLANK_STRING",
+    "FINITE_NUMBER",
+    "ZERO_NUMBER",
+    "NON_NEGATIVE_NUMBER",
+    "TRUE_BOOLEAN",
 }
-HARMONY_REQUIRED_TRACE_KEYS = (
-    "boosterMode.active",
-    "retrievalOrder.lastSetBy",
-    "extremeZ.cancelShieldWrapped",
-    "extremeZ.timeBudgetConsumedMs",
-    "hypernova.cvarPhi",
-    "cihRag.breadcrumb.queryRedacted",
-    "moe.evolverPlateRegistered",
-    "cfvm.boltzmannTemp",
-    "timeBudget.forceFallback",
-    "timeBudget.routeMultiplier",
+HARMONY_ALLOWED_MUTATION_OPERATIONS = {
+    "REMOVE",
+    "REPLACE_TEXT",
+    "APPEND_DUPLICATE",
+    "ADD_TOP_LEVEL",
+}
+
+
+class HarmonyEvidenceContractError(ValueError):
+    """Redacted fail-closed contract validation error."""
+
+
+def harmony_evidence_contract_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "main"
+        / "resources"
+        / "mcp"
+        / "harmony-evidence-contract.v1.json"
+    )
+
+
+def _contract_object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise HarmonyEvidenceContractError("contract_schema_failed: duplicate_field")
+        result[key] = value
+    return result
+
+
+def _contract_text(mapping: dict[str, Any], key: str, *, allow_empty: bool = False) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or (not allow_empty and not value.strip()):
+        raise HarmonyEvidenceContractError(f"contract_schema_failed: {key}_text_required")
+    return value
+
+
+def _require_contract_fields(mapping: dict[str, Any], expected: set[str], location: str) -> None:
+    if not isinstance(mapping, dict) or set(mapping) != expected:
+        raise HarmonyEvidenceContractError(f"contract_schema_failed: {location}_fields")
+
+
+def parse_harmony_evidence_contract_bytes(
+    raw: bytes,
+    expected_sha256: str,
+) -> dict[str, Any]:
+    if not raw:
+        raise HarmonyEvidenceContractError("contract_integrity_failed: resource_empty")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise HarmonyEvidenceContractError("contract_schema_failed: invalid_utf8") from error
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    actual_sha256 = hashlib.sha256(canonical).hexdigest()
+    if not isinstance(expected_sha256, str) or not hmac.compare_digest(
+        actual_sha256,
+        expected_sha256.lower(),
+    ):
+        raise HarmonyEvidenceContractError("contract_integrity_failed: sha256_mismatch")
+    try:
+        contract = json.loads(
+            canonical.decode("utf-8"),
+            object_pairs_hook=_contract_object_without_duplicates,
+        )
+    except HarmonyEvidenceContractError:
+        raise
+    except json.JSONDecodeError as error:
+        raise HarmonyEvidenceContractError(
+            "contract_schema_failed: invalid_json"
+        ) from error
+
+    _require_contract_fields(
+        contract,
+        {
+            "schemaVersion",
+            "contractId",
+            "statuses",
+            "activeSourceRoots",
+            "requiredTraceKeys",
+            "breaks",
+            "parserMutationCorpus",
+        },
+        "root",
+    )
+    if _contract_text(contract, "schemaVersion") != HARMONY_EVIDENCE_CONTRACT_SCHEMA:
+        raise HarmonyEvidenceContractError("contract_schema_failed: schema_version_mismatch")
+    if _contract_text(contract, "contractId") != HARMONY_EVIDENCE_CONTRACT_ID:
+        raise HarmonyEvidenceContractError("contract_schema_failed: contract_id_mismatch")
+
+    statuses = contract.get("statuses")
+    _require_contract_fields(statuses, {"verified", "blocked"}, "statuses")
+    if (
+        _contract_text(statuses, "verified") != HARMONY_VERIFIED_STATUS
+        or _contract_text(statuses, "blocked") != HARMONY_BLOCKED_STATUS
+    ):
+        raise HarmonyEvidenceContractError("contract_schema_failed: statuses_mismatch")
+
+    roots = contract.get("activeSourceRoots")
+    if not isinstance(roots, list) or len(roots) != len(HARMONY_EXPECTED_ROOTS):
+        raise HarmonyEvidenceContractError("contract_schema_failed: active_source_roots_size")
+    for index, (expected_id, expected_path) in enumerate(HARMONY_EXPECTED_ROOTS):
+        item = roots[index]
+        _require_contract_fields(item, {"id", "path"}, f"activeSourceRoots[{index}]")
+        if (
+            _contract_text(item, "id") != expected_id
+            or _contract_text(item, "path") != expected_path
+        ):
+            raise HarmonyEvidenceContractError(
+                "contract_schema_failed: active_source_root_mismatch"
+            )
+
+    trace_keys = contract.get("requiredTraceKeys")
+    if (
+        not isinstance(trace_keys, list)
+        or not trace_keys
+        or any(not isinstance(key, str) or not key.strip() for key in trace_keys)
+        or len(set(trace_keys)) != len(trace_keys)
+    ):
+        raise HarmonyEvidenceContractError("contract_schema_failed: required_trace_keys_invalid")
+    trace_key_set = set(trace_keys)
+
+    breaks = contract.get("breaks")
+    if not isinstance(breaks, list) or len(breaks) != len(HARMONY_EXPECTED_BREAK_IDS):
+        raise HarmonyEvidenceContractError("contract_schema_failed: breaks_size")
+    for index, expected_id in enumerate(HARMONY_EXPECTED_BREAK_IDS):
+        item = breaks[index]
+        _require_contract_fields(
+            item,
+            {"id", "weight", "subsystem", "label", "runtimeRequirements"},
+            f"breaks[{index}]",
+        )
+        if _contract_text(item, "id") != expected_id:
+            raise HarmonyEvidenceContractError("contract_schema_failed: break_id_mismatch")
+        weight = item.get("weight")
+        if (
+            isinstance(weight, bool)
+            or not isinstance(weight, (int, float))
+            or not math.isfinite(float(weight))
+            or float(weight) <= 0.0
+        ):
+            raise HarmonyEvidenceContractError("contract_schema_failed: invalid_break_weight")
+        if _contract_text(item, "subsystem") not in HARMONY_ALLOWED_SUBSYSTEMS:
+            raise HarmonyEvidenceContractError("contract_schema_failed: invalid_subsystem")
+        _contract_text(item, "label")
+        requirements = item.get("runtimeRequirements")
+        if not isinstance(requirements, list) or not requirements:
+            raise HarmonyEvidenceContractError(
+                "contract_schema_failed: runtime_requirements_missing"
+            )
+        requirement_keys: set[str] = set()
+        for requirement_index, requirement in enumerate(requirements):
+            _require_contract_fields(
+                requirement,
+                {"traceKey", "rule"},
+                f"breaks[{index}].runtimeRequirements[{requirement_index}]",
+            )
+            trace_key = _contract_text(requirement, "traceKey")
+            rule = _contract_text(requirement, "rule")
+            if (
+                trace_key not in trace_key_set
+                or trace_key in requirement_keys
+                or rule not in HARMONY_ALLOWED_RUNTIME_RULES
+            ):
+                raise HarmonyEvidenceContractError(
+                    "contract_schema_failed: invalid_runtime_requirement"
+                )
+            requirement_keys.add(trace_key)
+
+    mutations = contract.get("parserMutationCorpus")
+    if not isinstance(mutations, list) or len(mutations) < 8:
+        raise HarmonyEvidenceContractError("contract_schema_failed: mutation_corpus_missing")
+    mutation_ids: set[str] = set()
+    for index, mutation in enumerate(mutations):
+        _require_contract_fields(
+            mutation,
+            {"id", "operation", "path", "value", "expectedStatus"},
+            f"parserMutationCorpus[{index}]",
+        )
+        mutation_id = _contract_text(mutation, "id")
+        operation = _contract_text(mutation, "operation")
+        path = _contract_text(mutation, "path")
+        _contract_text(mutation, "value", allow_empty=True)
+        expected_status = _contract_text(mutation, "expectedStatus")
+        if (
+            mutation_id in mutation_ids
+            or operation not in HARMONY_ALLOWED_MUTATION_OPERATIONS
+            or not path.startswith("/")
+            or expected_status != HARMONY_BLOCKED_STATUS
+        ):
+            raise HarmonyEvidenceContractError(
+                "contract_schema_failed: invalid_mutation_corpus"
+            )
+        mutation_ids.add(mutation_id)
+
+    contract["sha256"] = actual_sha256
+    return contract
+
+
+def load_harmony_evidence_contract() -> dict[str, Any]:
+    path = harmony_evidence_contract_path()
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise HarmonyEvidenceContractError(
+            "contract_integrity_failed: resource_unreadable"
+        ) from error
+    return parse_harmony_evidence_contract_bytes(
+        raw,
+        HARMONY_EVIDENCE_CONTRACT_SHA256,
+    )
+
+
+try:
+    _HARMONY_EVIDENCE_CONTRACT = load_harmony_evidence_contract()
+except HarmonyEvidenceContractError:
+    _HARMONY_EVIDENCE_CONTRACT = None
+
+HARMONY_BREAK_WEIGHTS = {
+    item["id"]: float(item["weight"])
+    for item in (_HARMONY_EVIDENCE_CONTRACT or {}).get("breaks", [])
+}
+HARMONY_REQUIRED_TRACE_KEYS = tuple(
+    (_HARMONY_EVIDENCE_CONTRACT or {}).get("requiredTraceKeys", [])
 )
 HARMONY_SUBSYSTEM_KEYWORDS = {
     "S01_OVERDRIVE": ("OverdriveGuard", "DynamicContextCompressor", "overdrive", "anchor"),
@@ -249,11 +583,670 @@ HARMONY_SUBSYSTEM_KEYWORDS = {
 }
 
 
+class RuntimeToolkit:
+    """Invocation-owned composition of the existing Spring launcher and bridge.
+
+    Keep this object alive for start/status/smoke/stop/doctor via --runtime-session.
+    One-shot commands always close their client-owned pipes before returning.
+    No Ollama PID is ever acquired as a termination target here.
+    """
+    def __init__(self, payload=None):
+        import threading
+        import queue
+        self.config = payload or {}
+        self.root = Path(__file__).absolute().parents[1]
+        self.manifest_path = self.root / "main/resources/mcp/awx-control-tower-tools.json"
+        self.manifest_hash = ""
+        self.refresh_manifest()
+        self.base_url = self.config.get("baseUrl", "http://127.0.0.1:8080").rstrip("/")
+        parsed = urllib.parse.urlparse(self.base_url)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.path or parsed.username or parsed.query or parsed.fragment:
+            raise ValueError("runtime_requires_loopback_http")
+        self.lock = threading.RLock()
+        self.incoming = queue.Queue(maxsize=32)
+        self.pipe_eof = object()  # Internal event, impossible to forge with a JSON reply.
+        self.owned = None
+        self.reader = None
+        self.stderr_reader = None
+        self.sequence = 0
+        self.starts = []
+        self.proof = {}
+        self.spring_state = None
+        self.spring_job = None
+        self.owner_started = self.process_started_ms(os.getpid())
+        self.published = False
+        self.telemetry = {key: 0 for key in ("processStarts", "processRestarts", "restartLimited", "smokeSuccess", "smokeFailure", "toolTimeout", "toolCancelled", "toolFailed")}
+        self.telemetry_lock = threading.Lock()
+        self.lifecycle = queue.Queue(maxsize=32)
+        self.transport_verified_at = 0
+        self.transport_verified_at_epoch_ms = 0
+        self.timeout_extension = False
+
+    def refresh_manifest(self):
+        raw = self.manifest_path.read_bytes()
+        current_hash = hashlib.sha256(raw).hexdigest()
+        if current_hash != self.manifest_hash:
+            self.manifest = json.loads(raw.decode("utf-8"))
+            self.manifest_hash = current_hash
+
+    @staticmethod
+    def process_started_ms(pid):
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes as w
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            k.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+            k.OpenProcess.restype = w.HANDLE
+            k.GetProcessTimes.argtypes = [w.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            k.CloseHandle.argtypes = [w.HANDLE]
+            handle = k.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return 0
+            values = [ctypes.c_uint64() for _ in range(4)]
+            try:
+                if not k.GetProcessTimes(handle, *(ctypes.byref(v) for v in values)):
+                    return 0
+                return (values[0].value - 116444736000000000) // 10000
+            finally:
+                k.CloseHandle(handle)
+        # No guessed owner identity on platforms without an established reader.
+        return 0
+
+    def http_snapshot(self):
+        started = time.monotonic()
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(self.base_url + "/api/chat/ui-heartbeat", timeout=2) as response:
+                data = json.loads(response.read(256 * 1024))
+            if not isinstance(data.get("runtimeToolkit"), dict):
+                return {"reasonCode": "PROTOCOL_MISMATCH", "FULL_LOAD_READY": False}
+            return data["runtimeToolkit"]
+        except (OSError, ValueError, urllib.error.URLError):
+            return {"reasonCode": "SPRING_UNAVAILABLE", "FULL_LOAD_READY": False}
+        finally:
+            self.health_probe_elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    def ensure_session(self):
+        import awx_mcp_stdio_server as bridge
+        import threading
+        import queue
+        if self.owned and self.owned.process.poll() is None:
+            return
+        if self.owned:
+            self.close_pipe()
+        now = time.monotonic()
+        self.starts = [t for t in self.starts if now - t < 300]
+        if len(self.starts) >= 3:
+            self.telemetry["restartLimited"] += 1
+            self.proof = {"restartLimited": True}
+            raise RuntimeError("RESTART_RATE_LIMITED")
+        self.starts.append(now)
+        self.telemetry["processRestarts"] += int(self.telemetry["processStarts"] > 0)
+        self.telemetry["processStarts"] += 1
+        self.proof = {}
+        self.incoming = queue.Queue(maxsize=32)
+        self.lifecycle = queue.Queue(maxsize=32)
+        self.transport_verified_at = 0
+        self.transport_verified_at_epoch_ms = 0
+        self.owned = bridge.OwnedWorker([sys.executable, str(self.root / "scripts/awx_mcp_stdio_server.py")])
+        process = self.owned.process
+        incoming = self.incoming  # A retiring reader must not publish into its replacement.
+
+        def read():
+            try:
+                while True:
+                    line = process.stdout.readline(4 * 1024 * 1024 + 1)
+                    if not line:
+                        break
+                    if len(line) > 4 * 1024 * 1024:
+                        raise ValueError("protocol_output_limit")
+                    incoming.put(json.loads(line), timeout=1)
+            except ValueError:
+                try:
+                    incoming.put_nowait(None)  # Malformed output is not a recoverable EOF.
+                except queue.Full:
+                    pass
+            except (OSError, queue.Full):
+                pass
+            finally:
+                try:
+                    incoming.put_nowait(self.pipe_eof)
+                except queue.Full:
+                    pass
+
+        def drain_stderr():
+            for line in iter(lambda: process.stderr.readline(4097), ""):
+                try:
+                    event = json.loads(line)
+                    if event.get("service") == "awx-stdio" and event.get("event") == "request_finished":
+                        key = {"timeout": "toolTimeout", "cancelled": "toolCancelled", "internal_error": "toolFailed", "output_limit": "toolFailed"}.get(event.get("outcome"))
+                        if key:
+                            with self.telemetry_lock:
+                                self.telemetry[key] += 1
+                    if event.get("service") == "awx-stdio" and event.get("event") in {"handler_entered", "request_finished"}:
+                        safe = {key: event[key] for key in ("event", "outcome", "workerStarted", "workerExited") if key in event}
+                        if self.lifecycle.full():
+                            try:
+                                self.lifecycle.get_nowait()
+                            except queue.Empty:
+                                pass
+                        self.lifecycle.put_nowait(safe)
+                except (ValueError, AttributeError):
+                    pass
+
+        self.reader = threading.Thread(target=read, name="awx-toolkit-pipe", daemon=True)
+        self.stderr_reader = threading.Thread(target=drain_stderr, name="awx-toolkit-stderr", daemon=True)
+        self.reader.start()
+        self.stderr_reader.start()
+        init = self.rpc("initialize", {"protocolVersion": "2024-11-05", "clientInfo": {"name": "awx-toolbox", "version": "1.0"}, "capabilities": {}})
+        self.notify("notifications/initialized", {})
+        self.proof["protocolProbe"] = init.get("protocolVersion") == "2024-11-05"
+        self.timeout_extension = init.get("capabilities", {}).get("experimental", {}).get("awx/executionTimeoutMs", {}).get("onlyShortensServerLimit") is True
+
+    def notify(self, method, params):
+        self.owned.process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, "params": params}) + "\n")
+        self.owned.process.stdin.flush()
+
+    def rpc(self, method, params=None, *, expected_error=None):
+        return self.await_rpc(self.send_rpc(method, params), expected_error=expected_error)
+
+    def send_rpc(self, method, params=None):
+        self.sequence += 1
+        request_id = self.sequence
+        self.owned.process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": {} if params is None else params}) + "\n")
+        self.owned.process.stdin.flush()
+        return request_id
+
+    def await_rpc(self, request_id, *, expected_error=None):
+        import queue
+        try:
+            reply = self.incoming.get(timeout=10)
+        except queue.Empty:
+            self.notify("notifications/cancelled", {"requestId": request_id})
+            raise RuntimeError("STDIO_TIMEOUT") from None
+        if reply is self.pipe_eof:
+            raise RuntimeError("STDIO_PROCESS_EXITED")
+        if not isinstance(reply, dict) or type(reply.get("id")) is not int or reply.get("id") != request_id:
+            raise RuntimeError("STDIO_PROTOCOL_MISMATCH")
+        if expected_error is not None:
+            if reply.get("error", {}).get("code") != expected_error:
+                raise RuntimeError("STDIO_ERROR_CONTRACT_FAILED")
+            return {}
+        if "error" in reply:
+            raise RuntimeError("STDIO_RPC_FAILED")
+        return reply["result"]
+
+    def await_lifecycle(self, name, *, outcome=None, timeout=5):
+        import queue
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                event = self.lifecycle.get(timeout=max(.001, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+            if event.get("event") == name and (outcome is None or event.get("outcome") == outcome):
+                return event
+        raise RuntimeError("STDIO_LIFECYCLE_NOT_OBSERVED")
+
+    def transport_smoke(self):
+        """Exercise the existing read-only handler against an owned dependency.
+
+        HTTP entry and disconnect are handshakes, not elapsed-time assumptions.
+        This proves pipe/worker containment, never external provider health.
+        """
+        import threading
+        import socket
+        import uuid
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        if time.monotonic() - self.transport_verified_at < 60:
+            return
+        self.proof.update(cancelVerified=False, timeoutVerified=False, probeResourcesClosed=False,
+                          transportVerificationScope="controlled_loopback_dependency_actual_handler")
+        if not self.timeout_extension:
+            raise RuntimeError("STDIO_TIMEOUT_EXTENSION_UNAVAILABLE")
+        for outcome in ("cancelled", "timeout"):
+            entered, disconnected, release = threading.Event(), threading.Event(), threading.Event()
+            nonce = uuid.uuid4().hex
+
+            class HeldResponse(BaseHTTPRequestHandler):
+                def log_message(self, *_args):
+                    pass  # Headers, tokens and request text are never recorded.
+
+                def do_GET(self):
+                    if self.path != "/" + nonce + "/api/diagnostics/trace/snapshots?limit=1":
+                        self.send_error(404)
+                        return
+                    entered.set()
+                    self.connection.settimeout(.1)
+                    deadline = time.monotonic() + 8
+                    while not release.is_set() and time.monotonic() < deadline:
+                        try:
+                            if not self.connection.recv(1):
+                                disconnected.set()
+                                return
+                        except socket.timeout:
+                            continue
+                        except OSError:
+                            disconnected.set()
+                            return
+
+            server = HTTPServer(("127.0.0.1", 0), HeldResponse)
+            thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=.05),
+                                      name="awx-toolkit-probe", daemon=True)
+            thread.start()
+            request_id = None
+            try:
+                while not self.lifecycle.empty():
+                    self.lifecycle.get_nowait()
+                params = {"name": "trace_snapshot_probe", "arguments": {"nodeRole": "desktop", "limit": 1,
+                          "timeout_sec": 60, "base_url": "http://127.0.0.1:%d/%s" % (server.server_port, nonce)},
+                          "_meta": {"awx/executionTimeoutMs": 3000 if outcome == "timeout" else 6000}}
+                request_id = self.send_rpc("tools/call", params)
+                if not entered.wait(4):
+                    raise RuntimeError("STDIO_HANDLER_HTTP_ENTRY_NOT_OBSERVED")
+                self.await_lifecycle("handler_entered")
+                if outcome == "cancelled":
+                    self.notify("notifications/cancelled", {"requestId": request_id})
+                else:
+                    self.await_rpc(request_id, expected_error=-32001)
+                finished = self.await_lifecycle("request_finished", outcome=outcome)
+                if not finished.get("workerExited") or not disconnected.wait(2):
+                    raise RuntimeError("STDIO_OWNED_RESOURCE_EXIT_NOT_OBSERVED")
+                self.rpc("ping")  # Detect a cancelled response, duplicate response, or stdout contamination.
+                self.proof["cancelVerified" if outcome == "cancelled" else "timeoutVerified"] = True
+                request_id = None
+            finally:
+                try:
+                    if request_id is not None:
+                        self.notify("notifications/cancelled", {"requestId": request_id})
+                finally:
+                    release.set()
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
+                if thread.is_alive():
+                    raise RuntimeError("STDIO_PROBE_RESOURCE_CLEANUP_FAILED")
+        self.proof["probeResourcesClosed"] = True
+        self.transport_verified_at = time.monotonic()
+        self.transport_verified_at_epoch_ms = int(time.time() * 1000)
+
+    def all_pages(self, method, field):
+        rows, cursor, seen = [], None, set()
+        for _ in range(32):
+            page = self.rpc(method, {} if cursor is None else {"cursor": cursor})
+            rows.extend(page[field])
+            cursor = page.get("nextCursor")
+            if not cursor:
+                return rows
+            if cursor in seen:
+                break
+            seen.add(cursor)
+        raise RuntimeError("STDIO_PAGINATION_INVALID")
+
+    def smoke(self):
+        # Only this fixed read-only probe sequence can be replayed. Generic RPC
+        # calls retain their original delivery semantics and never retry here.
+        for attempt in range(2):
+            try:
+                return self._smoke_once()
+            except (OSError, RuntimeError) as failure:
+                exited = (isinstance(failure, RuntimeError) and str(failure) == "STDIO_PROCESS_EXITED")
+                exited = exited or (isinstance(failure, OSError) and self.owned is not None
+                                     and self.owned.process.poll() is not None)
+                if not exited:
+                    raise
+                self.telemetry["smokeFailure"] += 1
+                self.close_pipe()
+                if attempt:
+                    raise
+                # ensure_session retains the shared three-start/300s budget.
+
+    def _smoke_once(self):
+        self.refresh_manifest()
+        self.ensure_session()
+        self.proof["smokeVerified"] = False
+        self.proof.pop("smokeVerifiedAtEpochMs", None)
+        catalog = self.rpc("awx/catalog")
+        tools = self.all_pages("tools/list", "tools")
+        resources = self.all_pages("resources/list", "resources")
+        prompts = self.all_pages("prompts/list", "prompts")
+        names_match = all([r["name"] for r in rows] == sorted(r["name"] for r in self.manifest[family])
+                          for family, rows in (("tools", tools), ("resources", resources), ("prompts", prompts)))
+        expected = {r["name"]: r["input_schema"] for r in self.manifest["tools"]}
+        expected_outputs = {r["name"]: r.get("output_schema") for r in self.manifest["tools"]}
+        schema_match = all(row["inputSchema"] == expected.get(row["name"])
+                           and row.get("outputSchema") == expected_outputs.get(row["name"]) for row in tools)
+        self.proof.update(catalogValidated=catalog.get("ok") is True and catalog.get("protocolFamily") == "MCP_STYLE"
+                          and catalog.get("manifestHash") == self.manifest_hash and names_match and schema_match,
+                          toolCount=len(tools), resourceCount=len(resources), promptCount=len(prompts),
+                          manifestHash=catalog.get("manifestHash"), protocolFamily=catalog.get("protocolFamily"))
+        resource = next(r for r in resources if r["name"] == "tool_manifest")
+        self.rpc("resources/read", {"uri": resource["uri"]})
+        if prompts:
+            self.rpc("prompts/get", {"name": prompts[0]["name"]})
+        self.rpc("tools/list", [], expected_error=-32602)
+        self.rpc("tools/call", {"name": "__awx_unknown_probe__"}, expected_error=-32602)
+        result = self.rpc("tools/call", {"name": "boot_verify", "arguments": {"nodeRole": "desktop"}})
+        self.transport_smoke()
+        self.proof["smokeVerified"] = not result.get("isError", True) and all(self.proof.get(key) is True
+            for key in ("cancelVerified", "timeoutVerified", "probeResourcesClosed"))
+        if self.proof["smokeVerified"] and self.proof["catalogValidated"]:
+            # Cached cancellation/timeout proof keeps its original verification
+            # time. A status publication or partial smoke cannot extend its life.
+            self.proof["smokeVerifiedAtEpochMs"] = self.transport_verified_at_epoch_ms
+        self.telemetry["smokeSuccess" if self.proof["smokeVerified"] and self.proof["catalogValidated"] else "smokeFailure"] += 1
+        return self.status()
+
+    def publish(self, snapshot):
+        # Existing runtime state directory; no prompts, responses, sessions or
+        # application memory. Readers require owner start identity + fresh hash.
+        state_root = os.environ.get('AWX_LOCAL_STATE_ROOT')
+        path = (local_state_root(self.root,state_root)/'toolkit-current.json' if state_root
+                else self.root / "var/codex-runtime/toolkit-current.json")
+        alive = self.owned is not None and self.owned.process.poll() is None
+        record = {"schemaVersion": "awx.runtime.client-proof.v1", "ownerPid": os.getpid(),
+                  "ownerStartedAtEpochMs": self.owner_started, "observedAtEpochMs": int(time.time()*1000),
+                  "springPid": snapshot.get("springPid", 0),
+                  "manifestHash": hashlib.sha256(self.manifest_path.read_bytes()).hexdigest(),
+                  "stdio": {**self.proof, "sessionAlive": alive,
+                            "telemetry": dict(self.telemetry), "healthProbeElapsedMs": getattr(self, "health_probe_elapsed_ms", 0),
+                            "processPid": self.owned.process.pid if alive else 0,
+                            "processStartedAtEpochMs": self.process_started_ms(self.owned.process.pid) if alive else 0}}
+        if path.is_file():
+            try:
+                previous = json.loads(path.read_text(encoding="utf-8"))
+                other_pid = previous.get("ownerPid", 0)
+                actual_start = self.process_started_ms(other_pid)
+                if other_pid != os.getpid() and actual_start and abs(actual_start - previous.get("ownerStartedAtEpochMs", 0)) < 1000:
+                    return False
+            except (OSError, ValueError, TypeError):
+                return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".%d.tmp" % os.getpid())
+        temporary.write_text(json.dumps(record), encoding="utf-8")
+        temporary.replace(path)
+        self.published = True
+        return True
+
+    def status(self):
+        snapshot = self.http_snapshot()
+        publication = "not_attempted"
+        if self.owned is not None or self.published:
+            publication = "published" if self.publish(snapshot) else "rejected"
+            snapshot = self.http_snapshot()
+        # The same Java composition and live manager decide FULL_LOAD for the UI
+        # and toolkit. Do not turn a client-side port probe into Spring readiness.
+        alive = self.owned is not None and self.owned.process.poll() is None
+        invocation_ready = (snapshot.get("FULL_LOAD_READY") is True and alive and publication == "published"
+                            and all(self.proof.get(key) is True for key in ("protocolProbe", "catalogValidated", "smokeVerified")))
+        return {"ok": True, "command": "status", **snapshot, "stdio": {**self.proof,
+                "sessionAlive": alive, "evidenceScope": "current_invocation"},
+                "readinessScope": "shared_runtime", "proofPublication": publication,
+                "invocationFullLoadReady": invocation_ready,
+                "springOwnedByInvocation": self.spring_state is not None}
+
+    @staticmethod
+    def executable_diagnostics():
+        """Bounded version commands only; never return command lines or raw output."""
+        results = {}
+        patterns = {"java": r'(?m)^(?:openjdk|java) (?:version )?"?(\d+(?:\.\d+){0,3})',
+                    "python": r'(?m)^Python (\d+(?:\.\d+){1,3})',
+                    "node": r'(?m)^v(\d+(?:\.\d+){1,3})'}
+        for name in ("java", "python", "node", "ollama"):
+            executable = shutil.which(name)
+            row = results[name] = {"present": executable is not None,
+                                   "reasonCode": "EXECUTABLE_FOUND" if executable else "EXECUTABLE_NOT_FOUND"}
+            if not executable or name == "ollama":
+                continue
+            try:
+                completed = subprocess.run([executable, "-version" if name == "java" else "--version"],
+                    capture_output=True, text=True, errors="replace", timeout=2,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                output = (completed.stdout + "\n" + completed.stderr)
+                match = re.search(patterns[name], output) if completed.returncode == 0 and len(output) <= 16384 else None
+                if not match:
+                    row["reasonCode"] = "VERSION_UNAVAILABLE"
+                    continue
+                row["version"] = match.group(1)
+                parts = tuple(int(part) for part in row["version"].split("."))
+                compatible = parts[0] == 17 if name == "java" else parts >= (3, 10) if name == "python" else True
+                row["reasonCode"] = "VERSION_OBSERVED" if compatible else "VERSION_INCOMPATIBLE"
+            except subprocess.TimeoutExpired:
+                row["reasonCode"] = "VERSION_TIMEOUT"
+            except (OSError, ValueError):
+                row["reasonCode"] = "VERSION_UNAVAILABLE"
+        return results
+
+    def doctor(self):
+        result = self.status()
+        versions = self.executable_diagnostics()
+        checks = {"loopbackConfigured": result.get("loopbackConfigured") is True,
+                  "requiredSetKnown": result.get("requiredTotal", 0) > 0,
+                  "dependenciesReady": result.get("dependenciesReady") is True,
+                  "clientProofFresh": result.get("clientProofReason") == "client_proof_verified",
+                  "restartBudgetAvailable": len([t for t in self.starts if time.monotonic()-t < 300]) < 3}
+        issues = []
+        def issue(reason, evidence, action):
+            issues.append({"reasonCode": reason, "evidence": evidence, "safeNextAction": action})
+        for name, row in versions.items():
+            if row["reasonCode"] not in ("EXECUTABLE_FOUND", "VERSION_OBSERVED"):
+                issue(row["reasonCode"], {"executable": name, **row},
+                      "Verify the existing executable path and version; Java must remain 17 and Python must support 3.10 syntax.")
+        actions = {
+            "loopbackConfigured": ("LOOPBACK_UNVERIFIED", "Inspect the existing listener's configured and actual loopback address."),
+            "requiredSetKnown": ("REQUIRED_SET_UNKNOWN", "Inspect the current runtime profile and manifest before evaluating FULL_LOAD_READY."),
+            "dependenciesReady": ("DEPENDENCIES_UNVERIFIED", "Inspect required service dependencies in the existing heartbeat."),
+            "clientProofFresh": ("CLIENT_PROOF_UNVERIFIED", "Run smoke in the owning runtime session and inspect its current catalog and process identity."),
+            "restartBudgetAvailable": ("RESTART_RATE_LIMITED", "Wait for the existing cooldown window; inspect the failure before retrying.")}
+        for check, passed in checks.items():
+            if not passed:
+                reason, action = actions[check]
+                issue(reason, {"check": check, "verified": False}, action)
+        if result["proofPublication"] == "rejected":
+            issue("CLIENT_PROOF_PUBLICATION_REJECTED", {"evidenceScope": "current_invocation"},
+                  "Inspect the existing proof owner; another client's shared readiness does not prove this invocation's session.")
+        known_ids = {row["serviceId"] for row in self.manifest.get("runtimeToolkit", {}).get("services", [])}
+        for service in result.get("services", []):
+            if service.get("serviceId") in known_ids and service.get("required") is True and service.get("status") != "READY":
+                functional = service.get("functionalStatus")
+                issue("REQUIRED_SERVICE_NOT_READY", {"serviceId": service["serviceId"],
+                      "functionalStatus": functional if functional in ("FALLBACK_ACTIVE", "VERIFIED", "NOT_OBSERVED") else "NOT_OBSERVED"},
+                      "Inspect this service's existing manager diagnostics and reasonCode; preserve external process ownership.")
+        result.update(command="doctor", executables={name: row["present"] for name, row in versions.items()},
+                      runtimeVersions=versions, checks=checks, issues=issues,
+                      verificationCoverage={"runtimeVersions": "ATTEMPTED", "serviceState": "HEARTBEAT_EVIDENCE",
+                          "externalProcessHandles": "NOT_OBSERVED", "secretValues": "NOT_INSPECTED",
+                          "unresolvedPlaceholders": "NOT_OBSERVED", "portOwnerIdentity": "NOT_OBSERVED"},
+                      nextAction=issues[0]["safeNextAction"] if issues else "No issue observed within the reported verification coverage.")
+        return result
+
+    def start_spring(self):
+        if self.http_snapshot().get("springPid"):
+            return
+        if self.config.get("startSpring") is not True:
+            return
+        if os.name != "nt":
+            raise RuntimeError("EXISTING_SPRING_LAUNCHER_REQUIRES_WINDOWS")
+        port = urllib.parse.urlparse(self.base_url).port or 8080
+        state_root = os.environ.get('AWX_LOCAL_STATE_ROOT')
+        state = ((local_state_root(self.root,state_root)/('toolkit-spring-%d.json' % os.getpid())) if state_root
+                 else self.root / ("var/codex-runtime/toolkit-spring-%d.json" % os.getpid()))
+        if state.exists():
+            raise RuntimeError("INVOCATION_STATE_COLLISION")
+        import awx_mcp_stdio_server as bridge
+        quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+        options = "Port=" + str(port) + ";ManagementPort=" + str(port+1) + ";FixedPorts=$true;StatePath=" + quote(state) + ";ReadyTimeoutSeconds=120"
+        if state_root:
+            local = local_state_root(self.root,state_root)
+            options += ";BuildHostId=" + quote(host_facts(self.root)['hostId'])
+            for key,relative in [('OutDir','logs'),('ProjectCacheDir','gradle-project'),('GradleUserHome','gradle-user')]:
+                options += ";" + key + "=" + quote(local/relative)
+        else:
+            options += ";BuildHostId='desktop-runtime-toolkit'"
+        script = "$launchArgs=@{" + options + "}; & " + quote(self.root / "scripts/chat_ui_vibe_listener.ps1") + " @launchArgs"
+        script += "; if (-not $?) { exit 1 }; if (-not (Test-Path -LiteralPath " + quote(state) + ")) { exit 2 }; . " + quote(self.root / "scripts/chat_ui_vibe_lifecycle.ps1")
+        script += "; $m = Get-Content -LiteralPath " + quote(state) + " -Raw | ConvertFrom-Json; $v = Test-AwxOwnedRuntimeIdentity -Manifest $m -Root " + quote(self.root) + "; if (-not $v.ok) { exit 3 }"
+        script = "$env:SERVER_ADDRESS='127.0.0.1'; $env:MANAGEMENT_SERVER_ADDRESS='127.0.0.1'; " + script
+        import base64
+        encoded = base64.b64encode(("$null=[Console]::ReadLine(); " + script).encode("utf-16-le")).decode("ascii")
+        self.spring_job = bridge.OwnedWorker(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], capture=False)
+        try:
+            # Release the launch barrier only after its owned Job is assigned.
+            self.spring_job.process.communicate("\n", timeout=240)
+            if state.is_file():
+                self.spring_state = state
+            if self.spring_job.process.returncode != 0 or self.spring_state is None:
+                raise RuntimeError("SPRING_OWNERSHIP_EVIDENCE_MISSING")
+        except BaseException:
+            self.spring_job.close()
+            self.spring_job = None
+            self.spring_state = None
+            raise
+
+    def close_pipe(self):
+        if not self.owned:
+            return
+        process = self.owned.process
+        try:
+            try:
+                process.stdin.close()
+            except OSError:
+                # An exited peer may reject buffered stdin during close. The
+                # owned-process proof below still decides whether stop succeeded.
+                pass
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        finally:
+            closed = self.owned.close()
+            for reader in (self.reader, self.stderr_reader):
+                if reader:
+                    reader.join(timeout=2)
+            for stream in (process.stdout, process.stderr):
+                stream.close()
+            if closed:
+                self.owned = None
+                self.proof = {}
+            else:
+                raise RuntimeError("BRIDGE_STOP_FAILED")
+
+    def stop(self):
+        pipe_failure = False
+        try:
+            self.close_pipe()
+        except Exception:
+            pipe_failure = True
+        if self.spring_state:
+            # Existing provenance/lineage/start-time guard, never PID-only kill.
+            import base64
+            quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+            script = ". " + quote(self.root / "scripts/chat_ui_vibe_lifecycle.ps1") + "; $m = Get-Content -LiteralPath " + quote(self.spring_state) + " -Raw | ConvertFrom-Json; $r = Stop-AwxOwnedRuntime -Manifest $m -Root " + quote(self.root) + "; if (-not $r.ok) { exit 1 }"
+            encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+            try:
+                completed = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=40,
+                                           creationflags=subprocess.CREATE_NO_WINDOW)
+            finally:
+                # Job ownership was established before the launcher ran. Even a
+                # timed-out guard must not abandon this invocation's children.
+                if self.spring_job is not None:
+                    self.spring_job.close()
+                    self.spring_job = None
+            if completed.returncode:
+                raise RuntimeError("SPRING_OWNERSHIP_STOP_REJECTED")
+            self.spring_state = None
+        elif self.spring_job is not None:
+            self.spring_job.close()
+            self.spring_job = None
+        if pipe_failure:
+            raise RuntimeError("BRIDGE_STOP_FAILED")
+        snapshot = self.status()
+        return {**snapshot, "command": "stop", "FULL_LOAD_READY": False, "readinessScope": "current_invocation",
+                "invocationFullLoadReady": False, "reasonCode": "invocation_owned_resources_stopped"}
+
+    def command(self, action):
+        with self.lock:
+            if action == "start":
+                try:
+                    self.start_spring()
+                    return {**self.smoke(), "command": action}
+                except Exception:
+                    try:
+                        self.stop()
+                    except Exception:
+                        self.last_cleanup_error = "OWNED_CLEANUP_FAILED"
+                    raise
+            if action == "smoke":
+                return {**self.smoke(), "command": action}
+            if action == "status":
+                return self.status()
+            if action == "stop":
+                return self.stop()
+            if action == "doctor":
+                return self.doctor()
+            raise ValueError("unknown_runtime_command")
+
+
+def grok_review_change(payload: dict[str, Any]) -> dict[str, Any]:
+    """Grok readiness only until isolation and included-only usage are proven."""
+    from awx_grok_review_adapter import installed_adapter
+    return installed_adapter().run(payload)
+
+
+def kimi_review_change(payload: dict[str, Any]) -> dict[str, Any]:
+    """Registration seam only; fails closed until a verified pin exists."""
+    from awx_kimi_review_adapter import installed_adapter
+    return installed_adapter().run(payload)
+
+
+def codex_review_change(payload: dict[str, Any]) -> dict[str, Any]:
+    """One bounded personal review; direct review needs stdio worker ownership."""
+    from awx_codex_review_adapter import installed_adapter
+    return installed_adapter().run(payload)
+
+
+def device_work(payload: dict[str, Any]) -> dict[str, Any]:
+    """Cooperative task artifacts; source mutation still uses its existing guard."""
+    from awx_device_work import device_work as coordinate
+    return coordinate({k: v for k, v in payload.items() if k not in {"requestId", "sessionId", "nodeRole"}})
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AWX MCP-style toolbox")
     parser.add_argument("tool", help="Tool name, for example archive_search")
     parser.add_argument("--input-json", default="", help="JSON payload. Defaults to stdin; use '-' for stdin.")
+    parser.add_argument("--runtime-session", action="store_true", help="Keep invocation-owned runtime pipes until EOF; accept JSON command lines")
+    parser.add_argument("--input-base64", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.input_base64:
+        import base64
+        args.input_json = base64.b64decode(args.input_base64, validate=True).decode("utf-8")
+    if args.runtime_session or args.tool in {"start", "status", "smoke", "stop", "doctor"}:
+        initial = load_payload(args.input_json) if args.input_json or not args.runtime_session else {}
+        toolkit = RuntimeToolkit(initial)
+        failed = False
+        try:
+            commands = sys.stdin if args.runtime_session else [json.dumps({"command": args.tool})]
+            for line in commands:
+                try:
+                    action = json.loads(line).get("command", "status")
+                    result = toolkit.command(action)
+                except Exception as exc:
+                    reason = str(exc) if re.fullmatch(r"[A-Z_]{3,80}", str(exc)) else "RUNTIME_COMMAND_FAILED"
+                    result = {"ok": False, "FULL_LOAD_READY": False, "reasonCode": reason}
+                    failed = True
+                if not args.runtime_session:
+                    toolkit.stop()
+                    result["readyDuringInvocation"] = result.get("invocationFullLoadReady", False)
+                    result["FULL_LOAD_READY"] = False
+                    result["readinessScope"] = "current_invocation"
+                    result["invocationFullLoadReady"] = False
+                    result["sessionClosed"] = True
+                print(json.dumps(redact(result), ensure_ascii=True), flush=True)
+        finally:
+            toolkit.stop()
+        return 1 if failed else 0
 
     started = time.monotonic()
     try:
@@ -261,6 +1254,10 @@ def main() -> int:
         requested_tool = args.tool.strip()
         tool = TOOL_ALIASES.get(requested_tool, requested_tool)
         handlers = {
+            "device_work": device_work,
+            "grok_review_change": grok_review_change,
+            "kimi_review_change": kimi_review_change,
+            "codex_review_change": codex_review_change,
             "source_scan": source_scan,
             "patch_plan": patch_plan,
             "patch_render": patch_render,
@@ -276,12 +1273,17 @@ def main() -> int:
             "producer_kit_export": producer_kit_export,
             "desktop_dispatch_packet": desktop_dispatch_packet,
             "desktop_control_loop": desktop_control_loop,
+            "smb_decommission_debug_probe": smb_decommission_debug_probe,
+            "peer_evidence_bus": peer_evidence_bus,
+            "web_probe_refresh": web_probe_refresh,
             "harmony_scan": harmony_scan,
             "agent_db_snapshot": agent_db_snapshot,
             "trace_snapshot_probe": trace_snapshot_probe,
             "supabase_context_probe": supabase_context_probe,
             "supabase_schema_snapshot": supabase_schema_snapshot,
             "supabase_schema_snapshot_import": supabase_schema_snapshot_import,
+            "guard_status": guard_status,
+            "session_evidence": session_evidence,
             "schema": schema,
         }
         if tool not in handlers:
@@ -307,7 +1309,13 @@ def main() -> int:
 def load_payload(raw_arg: str) -> dict[str, Any]:
     raw = raw_arg
     if not raw or raw.strip() == "-":
-        raw = sys.stdin.read()
+        stdin_buffer = getattr(sys.stdin, "buffer", None)
+        raw = (
+            stdin_buffer.read().decode("utf-8-sig")
+            if stdin_buffer is not None
+            else sys.stdin.read()
+        )
+    raw = raw.lstrip("\ufeff")
     if not raw.strip():
         return {}
     data = json.loads(raw)
@@ -336,6 +1344,10 @@ def finalize(tool: str, payload: dict[str, Any], result: dict[str, Any], started
     audit_log = payload.get("audit_log")
     if isinstance(audit_log, str) and audit_log.strip():
         append_audit(Path(audit_log), result)
+
+
+def deployment_public_base_url() -> str:
+    return safe_scalar(os.environ.get("APP_PUBLIC_BASE_URL") or os.environ.get("PUBLIC_BASE_URL") or "", 240).strip()
 
 
 def source_scan(payload: dict[str, Any]) -> dict[str, Any]:
@@ -377,13 +1389,1062 @@ def source_scan(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def guard_status(payload: dict[str, Any]) -> dict[str, Any]:
+    """Shared task-entry preflight: device bus, active journals, lease state,
+    installed agent adapters, status-doc hash, common-guard tool presence."""
+    root = resolve_path(payload.get("root") or ".")
+    import agent_preflight
+    return agent_preflight.collect(root)
+
+
+def session_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+    """Read-only-ish session evidence: index (writes only the derived index
+    under data/agent-handoff/session-evidence/), parents, search, sessions."""
+    import contextlib
+    import io
+    import awx_session_evidence as se
+    root = resolve_path(payload.get("root") or ".")
+    home = Path(safe_scalar(payload.get("codexHome"), 400) or
+                os.environ.get("CODEX_HOME") or str(se.CODEX_HOME))
+    action = safe_scalar(payload.get("action") or "sessions", 32)
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            if action == "index":
+                code = se.cmd_index(root, home)
+            elif action == "parents":
+                code = se.cmd_parents(root, safe_scalar(payload.get("session"), 160))
+            elif action == "search":
+                code = se.cmd_search(
+                    root, safe_scalar(payload.get("term"), 200),
+                    session=safe_scalar(payload.get("session"), 160) or None,
+                    since_ms=payload.get("sinceMs") if isinstance(payload.get("sinceMs"), int) else None,
+                    max_files=min(int(payload.get("maxFiles") or 64), 256),
+                    max_file_mb=min(int(payload.get("maxFileMb") or 32), 64))
+            elif action == "sessions":
+                code = se.cmd_sessions(
+                    root, source=safe_scalar(payload.get("source"), 80) or None,
+                    children_of=safe_scalar(payload.get("childrenOf"), 160) or None,
+                    stale_days=payload.get("staleDays") if isinstance(payload.get("staleDays"), (int, float)) else None,
+                    limit=min(int(payload.get("limit") or 50), 200))
+            else:
+                return {"ok": False, "decision": "error", "failReason": "unknown_action",
+                        "allowedActions": ["index", "parents", "search", "sessions"]}
+    except Exception as exc:
+        return {"ok": False, "decision": "error", "failReason": exc.__class__.__name__,
+                "message": safe_message(str(exc), 240)}
+    try:
+        body = json.loads(buffer.getvalue().strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        body = {"raw": safe_message(buffer.getvalue(), 2000)}
+    return {"ok": code == 0, "action": action, "result": body}
+
+
+def peer_tri_perspective_query_packet(target_metric: str) -> dict[str, Any]:
+    return {
+        "schemaVersion": "awx.mcp.tri_perspective_query_packet.v1",
+        "targetMetric": safe_scalar(target_metric, 64),
+        "executionMode": "sequential-existing-runtime",
+        "candidateLimit": 3,
+        "activeCandidateLimit": 1,
+        "modelCallLimitPerCandidate": 3,
+        "roles": [
+            {
+                "name": "SUPPORT",
+                "purpose": "prove-smallest-source-backed-benefit",
+                "requiredFields": [
+                    "benefitClaim",
+                    "existingOwner",
+                    "activeSourceSet",
+                    "evidenceIds",
+                    "redTest",
+                    "proofCommand",
+                    "groundingScore",
+                ],
+            },
+            {
+                "name": "FALSIFY",
+                "purpose": "find-duplicate-risk-or-decisive-counter-evidence",
+                "requiredFields": [
+                    "disproofClaim",
+                    "duplicateOwner",
+                    "conflictingEvidenceIds",
+                    "failureClass",
+                    "falsifyingTest",
+                    "proofCommand",
+                    "groundingScore",
+                ],
+            },
+            {
+                "name": "HOLD",
+                "purpose": "adjudicate-owned-evidence-without-new-claims",
+                "requiredFields": [
+                    "decision",
+                    "confidence",
+                    "decisiveEvidenceIds",
+                    "supportGrounding",
+                    "falsifyGrounding",
+                    "scoreGap",
+                    "reasonCode",
+                    "nextSingleAction",
+                ],
+            },
+        ],
+        "promotionGate": {
+            "decision": "APPLY",
+            "minimumGrounding": 0.70,
+            "minimumScoreGap": 0.05,
+            "safetyGate": "PASS",
+            "evidenceStatus": "SUFFICIENT",
+            "activeSourceOwnerRequired": True,
+            "focusedRedTestRequired": True,
+            "externalCredentialsAllowed": False,
+            "advisoryOnly": True,
+        },
+        "evidenceContract": {
+            "rawPromptStored": False,
+            "rawQueryStored": False,
+            "rawPathStored": False,
+            "artifactByReference": True,
+            "hashOnlyIdentifiers": True,
+        },
+        "rejectedPatterns": [
+            "dom-response-extraction",
+            "anti-detection",
+            "browser-profile-automation",
+            "public-tunnel-write-default",
+            "unrestricted-shell",
+            "duplicate-agent-broker",
+            "prompt-builder-bypass",
+        ],
+    }
+
+
+def peer_evidence_bus(payload: dict[str, Any]) -> dict[str, Any]:
+    root = resolve_path(payload.get("root") or ".")
+    node_role = safe_scalar(payload.get("nodeRole", "desktop"), 32).lower() or "desktop"
+    target_metric = safe_scalar(payload.get("targetMetric") or payload.get("target_metric") or "harmony", 64)
+    target_metric = re.sub(r"[^a-zA-Z0-9_.-]+", "-", target_metric.strip().lower()).strip("-") or "harmony"
+    prompt_pack = peer_prompt_pack_summary(root)
+    patchdrop = patchdrop_summary(root / "__patch_drop__")
+    peer_identity = peer_identity_summary(payload.get("peers"))
+    web_probe_ledger = peer_web_probe_ledger(target_metric)
+    web_probe_refresh_packet = peer_web_probe_refresh_packet(target_metric, web_probe_ledger)
+    tri_perspective_query_packet = peer_tri_perspective_query_packet(target_metric)
+
+    evidence_lanes = [
+        peer_lane(
+            "desktop",
+            "canonical-source-owner",
+            "source_scan,harmony_scan,desktop_control_loop",
+            "ready-to-run",
+            "run-desktop-control-loop",
+            read_only=False,
+        ),
+        peer_lane(
+            "macmini",
+            "patch-producer",
+            "node_smoke,PatchDrop-v3-sidecars,external_evidence_audit",
+            "evidence_needed",
+            "collect-macmini-patchdrop-v3-proof",
+        ),
+        peer_lane(
+            "notebook",
+            "supporting-probe",
+            "node_smoke,review-notes,PatchDrop-v3-sidecars",
+            "evidence_needed",
+            "collect-notebook-patchdrop-v3-proof",
+        ),
+        peer_lane(
+            "supabase",
+            "read-only-db-evidence",
+            "supabase_context_probe,supabase_schema_snapshot,get_advisors",
+            "evidence_needed",
+            "collect-supabase-live-proof",
+            required_env=["SUPABASE_PROJECT_REF"],
+            required_tools=["supabase_context_probe", "supabase_schema_snapshot"],
+        ),
+        peer_lane(
+            "browser",
+            "dom-runtime-proof",
+            "localhost-or-public-DOM-smoke,screenshot-if-needed",
+            "evidence_needed",
+            "collect-browser-dom-proof",
+        ),
+        peer_lane(
+            "computer",
+            "gui-proof-only",
+            "Computer-Use-visible-state,not-terminal-automation",
+            "evidence_needed",
+            "collect-computer-use-gui-proof",
+        ),
+        peer_lane(
+            "superpowers",
+            "process-guard",
+            "using-superpowers,TDD,verification-before-completion",
+            "ready-to-run",
+            "keep-skill-proof-subordinate-to-repo-evidence",
+        ),
+    ]
+    next_actions = [
+        safe_scalar(lane.get("nextAction", ""), 120)
+        for lane in evidence_lanes
+        if lane.get("status") == "evidence_needed" and safe_scalar(lane.get("nextAction", ""), 120)
+    ]
+    if not prompt_pack["present"]:
+        next_actions.insert(0, "build-peer-evidence-bus-prompt-pack")
+    try:
+        raw_secret_hits = int(prompt_pack.get("rawSecretPatternHits", 0) or 0)
+    except Exception:
+        raw_secret_hits = 0
+    evidence_needed = [
+        "Supabase project-scoped MCP/CLI proof before DB-backed claims",
+        "Browser DOM proof before claiming rendered UX success",
+        "Computer Use GUI proof only when visible Windows app state matters",
+        "Mac mini/Notebook evidence through PatchDrop, not direct canonical source edits",
+    ]
+    if not prompt_pack["present"]:
+        evidence_needed.append("demo1_claude_peers_web_probe_agent_upgrade_5h prompt pack")
+    return {
+        "schemaVersion": "awx.mcp.peer_evidence_bus.v1",
+        "ok": True,
+        "rootHash": stable_hash(str(root)),
+        "rootLength": len(str(root)),
+        "nodeRole": node_role,
+        "targetMetric": target_metric,
+        "promptPack": prompt_pack,
+        "patchDrop": {
+            "exists": bool(patchdrop.get("exists")),
+            "topLevelPatchCount": int(patchdrop.get("topLevelPatchCount", 0) or 0),
+            "pendingProducerCount": int(patchdrop.get("pendingProducerCount", 0) or 0),
+            "pendingPatchCount": int(patchdrop.get("topLevelPatchCount", 0) or 0),
+            "pendingV3Count": int(patchdrop.get("pendingV3Count", 0) or 0),
+            "nestedProducerBundleCount": int(patchdrop.get("pendingProducerCount", 0) or 0),
+            "evidenceMode": "manual-supporting",
+            "producerBundlesRequired": False,
+        },
+        "rawSecretPatternHits": raw_secret_hits,
+        "peerIdentitySummary": peer_identity,
+        "webProbeLedger": web_probe_ledger,
+        "webProbeRefreshPacket": web_probe_refresh_packet,
+        "triPerspectiveQueryPacket": tri_perspective_query_packet,
+        "claudePeersMapping": {
+            "list_peers": "peer_evidence_bus.evidenceLanes",
+            "resolve_peer": "role/topic/sourceIsolation metadata",
+            "send_message": "desktop_dispatch_packet or PatchDrop producer command files",
+            "set_summary": "redacted TraceStore/DebugEventStore/handoff summary artifacts",
+            "check_messages": "external_evidence_audit, PatchDrop inventory, source lease state",
+            "close_conversation": "Desktop apply/reject decision plus rerun completion audit",
+            "heartbeat": "node_smoke plus sourceIsolation guard",
+        },
+        "claudePeersProtocol": {
+            "referenceTools": [
+                "list_peers",
+                "resolve_peer",
+                "send_message",
+                "close_conversation",
+                "set_summary",
+                "check_messages",
+            ],
+            "brokerContract": {
+                "scope": "localhost-only reference pattern, not installed or started by demo-1",
+                "defaultPort": 7899,
+                "portEnvName": "CLAUDE_PEERS_PORT",
+                "dbEnvName": "CLAUDE_PEERS_DB",
+                "messageRetention": "undelivered messages remain queued until an explicit check",
+            },
+            "codexDeliveryPolicy": {
+                "mode": "manual-queue-preserving",
+                "manualCheckTool": "check_messages",
+                "reason": "Codex runtimes may not surface channel notifications into the model context",
+            },
+            "conversationClosure": {
+                "closeTool": "close_conversation",
+                "requiresMutualClose": True,
+                "reopenRequiresExplicitFlag": True,
+                "demo1Mapping": "Desktop apply/reject decision plus completion audit rerun",
+            },
+            "messageSafety": {
+                "redactedSummariesOnly": True,
+                "rawMessageBodiesStored": False,
+                "directCanonicalSourceEdit": False,
+                "dispatchViaPatchDropOrCommandPacket": True,
+            },
+        },
+        "safePeerIdentityContract": {
+            "sourceFields": [
+                "id",
+                "logical_name",
+                "cwd",
+                "repo_name",
+                "repo_root",
+                "branch",
+                "model",
+                "summary",
+                "registered_at",
+                "last_seen",
+            ],
+            "safeFields": [
+                "peerIdHash",
+                "logicalName",
+                "role",
+                "repoName",
+                "branch",
+                "modelFamily",
+                "summaryHash",
+                "summaryLength",
+                "logicalNameCollisionCount",
+                "cwdHash",
+                "repoRootHash",
+                "lastSeenAgeClass",
+            ],
+            "identityResolution": {
+                "logicalNamePreferred": True,
+                "ephemeralIdMayRotate": True,
+                "resolvePeerBeforeSend": True,
+                "duplicateLogicalNameRequiresPeerId": True,
+                "ambiguousNameResolution": "fail-closed",
+                "fallback": "role-plus-topic-with-hash",
+            },
+            "messageEnvelope": {
+                "fromKinds": ["peer", "system"],
+                "storeRawText": False,
+                "storeMessageHash": True,
+                "storeMessageLength": True,
+                "storeReadReceiptState": True,
+            },
+            "forbiddenFields": [
+                "rawCwd",
+                "rawRepoRoot",
+                "rawMessageText",
+                "rawSummary",
+                "rawEnv",
+                "rawPrompt",
+                "rawToken",
+                "rawPath",
+            ],
+            "redactionMode": "hash-count-and-allowlisted-labels-only",
+        },
+        "sourceIntegration": {
+            "existingSeams": [
+                "source_scan",
+                "harmony_scan",
+                "desktop_control_loop",
+                "external_evidence_audit",
+                "TraceStore",
+                "DebugEventStore",
+                "PromptBuilder.build(PromptContext)",
+            ],
+            "mode": "read-only orchestration evidence bus",
+            "mutationBoundary": "Desktop canonical source only after tests and Gradle proof",
+        },
+        "evidenceLanes": evidence_lanes,
+        "nextActions": dedupe_scalar_list(next_actions),
+        "evidence_needed": dedupe_scalar_list(evidence_needed),
+        "outputCount": len(evidence_lanes),
+        "decision": "peer_evidence_bus",
+    }
+
+
+def peer_prompt_pack_summary(root: Path) -> dict[str, Any]:
+    prompt_id = "demo1_claude_peers_web_probe_agent_upgrade_5h"
+    paths = {
+        "system": root / "agent-prompts" / "agents" / prompt_id / "system_ko.md",
+        "meta": root / "agent-prompts" / "agents" / prompt_id / "meta.yaml",
+        "output": root / "agent-prompts" / "out" / f"{prompt_id}.prompt",
+    }
+    texts: dict[str, str] = {}
+    file_hashes: dict[str, str] = {}
+    missing: list[str] = []
+    raw_secret_hits = 0
+    for name, path in paths.items():
+        if not path_is_file(path):
+            missing.append(name)
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            missing.append(name)
+            continue
+        texts[name] = text
+        file_hashes[name] = sha256_file(path)
+        raw_secret_hits += high_conf_secret_count(text)
+    combined = "\n".join(texts.values())
+    required_signals = {
+        "peerEvidenceBus": "Peer Evidence Bus" in combined,
+        "webProbeLedger": "Web Probe Ledger" in combined,
+        "webProbeRefreshPacket": "webProbeRefreshPacket" in combined or "Web Probe Refresh Packet" in combined,
+        "supabaseLane": "Supabase" in combined,
+        "browserLane": "Browser" in combined,
+        "computerLane": "Computer Use" in combined or "Computer" in combined,
+        "patchDropLane": "PatchDrop" in combined,
+    }
+    return {
+        "id": prompt_id,
+        "present": not missing and all(required_signals.values()),
+        "fileCount": len(file_hashes),
+        "fileHashes": file_hashes,
+        "missing": missing,
+        "requiredSignals": required_signals,
+        "missingSignals": sorted(key for key, value in required_signals.items() if not value),
+        "rawSecretPatternHits": raw_secret_hits,
+    }
+
+
+def peer_identity_summary(raw_peers: Any) -> dict[str, Any]:
+    peers = raw_peers if isinstance(raw_peers, list) else []
+    safe_names: list[str] = []
+    peer_hashes: list[str] = []
+    summary_hashes: list[str] = []
+    for item in peers:
+        if not isinstance(item, dict):
+            continue
+        logical_name = (
+            safe_scalar(item.get("logical_name") or item.get("logicalName") or item.get("name") or "", 80)
+            .strip()
+            .lower()
+        )
+        logical_name = re.sub(r"[^a-z0-9_.-]+", "-", logical_name).strip("-")
+        if logical_name:
+            safe_names.append(logical_name)
+        peer_id = safe_scalar(item.get("id") or item.get("peerId") or item.get("peer_id") or "", 160).strip()
+        if peer_id:
+            peer_hashes.append(stable_hash(peer_id)[:16])
+        summary = safe_scalar(item.get("summary") or "", 1000).strip()
+        if summary:
+            summary_hashes.append(stable_hash(summary)[:16])
+    counts: dict[str, int] = {}
+    for name in safe_names:
+        counts[name] = counts.get(name, 0) + 1
+    ambiguous = sorted(name for name, count in counts.items() if count > 1)
+    return {
+        "peerCount": len([item for item in peers if isinstance(item, dict)]),
+        "logicalNameCount": len(counts),
+        "logicalNameCollisionCount": len(ambiguous),
+        "ambiguousLogicalNames": ambiguous,
+        "peerIdRequiredFor": ambiguous,
+        "safeToResolveByLogicalNameOnly": not ambiguous,
+        "ambiguousNameResolution": "fail-closed" if ambiguous else "not-applicable",
+        "peerIdHashes": sorted(set(peer_hashes)),
+        "summaryHashes": sorted(set(summary_hashes)),
+        "rawIdentityStored": False,
+        "rawPathStored": False,
+        "rawSummaryStored": False,
+    }
+
+
+def peer_web_probe_ledger(target_metric: str) -> dict[str, Any]:
+    sources = [
+        {
+            "sourceUrl": "https://modelcontextprotocol.io/docs/concepts/tools",
+            "sourceKind": "official_doc",
+            "contractExtract": "MCP tools are model-controlled operations and need clear tool contracts.",
+            "contractImpact": "require_gate",
+        },
+        {
+            "sourceUrl": "https://modelcontextprotocol.io/docs/concepts/transports",
+            "sourceKind": "official_doc",
+            "contractExtract": "Stdio MCP uses newline-delimited JSON-RPC over a client-launched subprocess.",
+            "contractImpact": "allow",
+        },
+        {
+            "sourceUrl": "https://supabase.com/docs/guides/ai-tools/mcp",
+            "sourceKind": "official_doc",
+            "contractExtract": "Supabase MCP can be scoped to project_ref and read-only mode.",
+            "contractImpact": "require_gate",
+        },
+        {
+            "sourceUrl": "https://supabase.com/docs/guides/api/securing-your-api",
+            "sourceKind": "official_doc",
+            "contractExtract": "Data API exposure needs grants and RLS evidence before access claims.",
+            "contractImpact": "require_gate",
+        },
+        {
+            "sourceUrl": "https://supabase.com/changelog",
+            "sourceKind": "official_doc",
+            "contractExtract": "Supabase behavior is change-prone; refresh changelog before Supabase patches.",
+            "contractImpact": "evidence_only",
+        },
+    ]
+    safe_sources = []
+    for source in sources:
+        url = safe_scalar(source.get("sourceUrl"), 240)
+        safe_sources.append(
+            {
+                "sourceUrl": url,
+                "sourceHash": stable_hash(url)[:16],
+                "sourceKind": safe_scalar(source.get("sourceKind"), 40),
+                "contractExtract": safe_scalar(source.get("contractExtract"), 180),
+                "contractImpact": safe_scalar(source.get("contractImpact"), 40),
+                "rawContentStored": False,
+                "fullArticleStored": False,
+            }
+        )
+    return {
+        "mode": "web-probe-first",
+        "targetMetric": safe_scalar(target_metric, 64),
+        "sourceCount": len(safe_sources),
+        "sources": safe_sources,
+        "allowedDomains": [
+            "modelcontextprotocol.io",
+            "supabase.com",
+            "docs.anthropic.com",
+            "github.com",
+        ],
+        "queryHash": stable_hash("demo1 claude peers web probe harmony supabase mcp")[:16],
+        "queryLength": len("demo1 claude peers web probe harmony supabase mcp"),
+        "rawQueryStored": False,
+        "rawContentStored": False,
+        "requiresRefreshBeforePatch": True,
+        "refreshCommand": "refresh Web Probe Ledger from primary sources before source changes that depend on external contracts",
+    }
+
+
+def peer_web_probe_refresh_packet(target_metric: str, ledger: dict[str, Any]) -> dict[str, Any]:
+    sources = ledger.get("sources") if isinstance(ledger.get("sources"), list) else []
+    fetch_targets = []
+    for item in sources:
+        if not isinstance(item, dict):
+            continue
+        source_url = safe_scalar(item.get("sourceUrl"), 240)
+        if not source_url:
+            continue
+        parsed = urllib.parse.urlparse(source_url)
+        host = parsed.netloc.lower()
+        markdown_url = source_url + ".md" if not source_url.endswith(".md") else source_url
+        method = "markdown-fetch" if host.endswith("supabase.com") else "browser-or-markdown-fetch"
+        required_signals = ["official-doc", "contract"]
+        if "supabase.com" in host and "mcp" in parsed.path:
+            required_signals = ["project_ref", "read_only", "features"]
+        elif "supabase.com" in host and "securing-your-api" in parsed.path:
+            required_signals = ["RLS", "GRANT"]
+        elif "supabase.com" in host and "changelog" in parsed.path:
+            required_signals = ["breaking-change", "Data API"]
+            markdown_url = "https://supabase.com/changelog.md"
+        elif "modelcontextprotocol.io" in host and "tools" in parsed.path:
+            required_signals = ["inputSchema", "outputSchema", "structuredContent"]
+        elif "modelcontextprotocol.io" in host and "transports" in parsed.path:
+            required_signals = ["stdio", "streamable HTTP", "JSON-RPC"]
+        fetch_targets.append(
+            {
+                "sourceUrl": source_url,
+                "sourceHash": safe_scalar(item.get("sourceHash"), 40),
+                "markdownUrl": markdown_url,
+                "host": host,
+                "method": method,
+                "requiredSignals": required_signals,
+                "contractImpact": safe_scalar(item.get("contractImpact"), 40),
+                "rawContentStored": False,
+                "fullArticleStored": False,
+            }
+        )
+    return {
+        "schemaVersion": "awx.web_probe.refresh_packet.v1",
+        "mode": "read-only-official-sources",
+        "targetMetric": safe_scalar(target_metric, 64),
+        "officialSourceCount": len(fetch_targets),
+        "fetchTargets": fetch_targets,
+        "supabaseMcpGate": {
+            "requiredEnv": ["SUPABASE_PROJECT_REF"],
+            "manualAuthSensitiveEnvRefs": ["SUPABASE_ACCESS_TOKEN"],
+            "endpointTemplate": (
+                "https://mcp.supabase.com/mcp?"
+                "project_ref=${SUPABASE_PROJECT_REF}&read_only=true&features=database,debugging,docs"
+            ),
+            "featureGroups": ["database", "debugging", "docs"],
+            "readOnly": True,
+            "mutationAllowed": False,
+            "storeAccessToken": False,
+            "requiredTools": ["execute_sql", "get_advisors", "search_docs"],
+        },
+        "browserProbeGate": {
+            "target": "official-docs-or-localhost-proof-only",
+            "storeRawUrl": False,
+            "storeScreenshotPath": False,
+            "storeDomSnapshot": False,
+            "storeExtractHashOnly": True,
+        },
+        "importContract": {
+            "storeExtractsOnly": True,
+            "maxExtractChars": 240,
+            "allowedImpacts": ["allow", "block", "require_gate", "evidence_only"],
+            "requiresSourceHash": True,
+            "requiresFetchedAt": True,
+            "forbiddenFields": ["rawHtml", "rawMarkdown", "rawToken", "rawCookie", "rawScreenshotPath"],
+        },
+        "rawContentStored": False,
+        "rawQueryStored": False,
+        "mutationAllowed": False,
+    }
+
+
+def web_probe_refresh(payload: dict[str, Any]) -> dict[str, Any]:
+    root = resolve_path(payload.get("root") or ".")
+    target_metric = safe_scalar(payload.get("targetMetric") or payload.get("target_metric") or "harmony", 64)
+    target_metric = re.sub(r"[^a-zA-Z0-9_.-]+", "-", target_metric.strip().lower()).strip("-") or "harmony"
+    packet = payload.get("refreshPacket") if isinstance(payload.get("refreshPacket"), dict) else None
+    if packet is None:
+        packet = peer_evidence_bus({"root": str(root), "nodeRole": payload.get("nodeRole", "desktop"), "targetMetric": target_metric}).get(
+            "webProbeRefreshPacket",
+            {},
+        )
+    targets = packet.get("fetchTargets") if isinstance(packet.get("fetchTargets"), list) else []
+    source_bodies = payload.get("sourceBodies") if isinstance(payload.get("sourceBodies"), dict) else {}
+    max_bytes = bounded_int(payload.get("maxBytes") or payload.get("max_bytes"), 200_000, 1024, 1_000_000)
+    timeout_seconds = bounded_int(payload.get("timeoutSeconds") or payload.get("timeout_seconds"), 20, 3, 60)
+    allowed_hosts = {
+        "modelcontextprotocol.io",
+        "supabase.com",
+        "docs.anthropic.com",
+        "github.com",
+        "raw.githubusercontent.com",
+    }
+    rows: list[dict[str, Any]] = []
+    raw_secret_hits = 0
+    fetched_content_secret_hits = 0
+    fetched_count = 0
+    failed_count = 0
+    skipped_count = 0
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        source_url = safe_scalar(target.get("sourceUrl"), 260)
+        markdown_url = safe_scalar(target.get("markdownUrl"), 280)
+        parsed = urllib.parse.urlparse(source_url)
+        host = parsed.netloc.lower()
+        required_signals = [
+            safe_scalar(item, 80)
+            for item in target.get("requiredSignals", [])
+            if safe_scalar(item, 80)
+        ] if isinstance(target.get("requiredSignals"), list) else []
+        row = {
+            "sourceUrl": source_url,
+            "sourceHash": stable_hash(source_url)[:16],
+            "host": host,
+            "method": safe_scalar(target.get("method") or "markdown-fetch", 80),
+            "contractImpact": safe_scalar(target.get("contractImpact"), 40),
+            "requiredSignalCount": len(required_signals),
+            "requiredSignalHits": 0,
+            "missingSignals": required_signals,
+            "statusCode": 0,
+            "fetched": False,
+            "fetchMode": "not-started",
+            "contentHash": "",
+            "contentLength": 0,
+            "rawContentStored": False,
+            "fullArticleStored": False,
+        }
+        if host not in allowed_hosts:
+            row["decision"] = "skipped"
+            row["disabledReason"] = "domain-not-allowed"
+            skipped_count += 1
+            rows.append(row)
+            continue
+        body = source_bodies.get(source_url) or (source_bodies.get(markdown_url) if markdown_url else "")
+        status_code = 200 if body else 0
+        fetch_mode = "fixture"
+        fail_reason = ""
+        if not body:
+            body, status_code, fetch_mode, fail_reason = fetch_web_probe_content(
+                [markdown_url, source_url],
+                max_bytes=max_bytes,
+                timeout_seconds=timeout_seconds,
+            )
+        row["statusCode"] = status_code
+        row["fetchMode"] = fetch_mode
+        if body:
+            fetched_count += 1
+            fetched_content_secret_hits += high_conf_secret_count(body)
+            row["fetched"] = True
+            row["decision"] = "fetched"
+            row["contentHash"] = stable_hash(body)[:16]
+            row["contentLength"] = len(body)
+            body_lower = body.lower()
+            missing = [signal for signal in required_signals if signal.lower() not in body_lower]
+            row["missingSignals"] = missing
+            row["requiredSignalHits"] = len(required_signals) - len(missing)
+        else:
+            failed_count += 1
+            row["decision"] = "fetch_failed"
+            row["failReason"] = safe_scalar(fail_reason or "empty-response", 120)
+        rows.append(row)
+    output_raw = payload.get("output_path") or payload.get("outputPath") or root / "var" / "codex-smoke" / "web-probe-refresh.json"
+    output_candidate = Path(str(output_raw))
+    output_path = resolve_path(output_candidate if output_candidate.is_absolute() else root / output_candidate)
+    artifact_path = safe_relative_path(root, output_path)
+    missing_signal_count = sum(len(row.get("missingSignals", [])) for row in rows)
+    result = {
+        "schemaVersion": "awx.web_probe.refresh.v1",
+        "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "ok": failed_count == 0 and skipped_count == 0 and missing_signal_count == 0 and raw_secret_hits == 0,
+        "decision": "web_probe_refresh",
+        "mode": "read-only-official-sources",
+        "targetMetric": target_metric,
+        "artifactPath": artifact_path,
+        "artifactPathHash": stable_hash(str(output_path)),
+        "artifactPathLength": len(str(output_path)),
+        "sourceCount": len(rows),
+        "fetchedCount": fetched_count,
+        "failedCount": failed_count,
+        "skippedCount": skipped_count,
+        "missingSignalCount": missing_signal_count,
+        "rawSecretPatternHits": raw_secret_hits,
+        "fetchedContentSecretPatternHits": fetched_content_secret_hits,
+        "sources": rows,
+        "rawContentStored": False,
+        "rawQueryStored": False,
+        "mutationAllowed": False,
+        "evidence_needed": [],
+    }
+    if not result["ok"]:
+        result["evidence_needed"] = [
+            "web probe refresh did not fetch all official sources with required signals and zero secret hits"
+        ]
+    artifact = dict(result)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    result["artifactHash"] = sha256_file(output_path)
+    result["artifactBytes"] = path_size(output_path)
+    result["outputCount"] = len(rows)
+    return result
+
+
+def smb_decommission_debug_probe(payload: dict[str, Any]) -> dict[str, Any]:
+    root = resolve_path(payload.get("root") or ".")
+    node_role = safe_scalar(payload.get("nodeRole", "desktop"), 32).lower() or "desktop"
+    output_raw = payload.get("output_dir") or payload.get("outputDir") or "var/codex-smoke/smb-decommission"
+    output_candidate = Path(str(output_raw))
+    output_path = resolve_path(output_candidate if output_candidate.is_absolute() else root / output_candidate)
+    output_dir = safe_relative_path(root, output_path)
+    script = root / "scripts" / "smb_decommission_debug_probe.ps1"
+    summary_name = "smb-decommission-debug-probe.summary.json"
+    events_name = "smb-decommission-debug-probe.events.ndjson"
+    viewer_name = "smb-decommission-debug-probe.viewer.html"
+    summary_path = output_path / summary_name
+    events_path = output_path / events_name
+    viewer_path = output_path / viewer_name
+    base_result: dict[str, Any] = {
+        "schemaVersion": "awx.mcp.smb_decommission_debug_probe.v1",
+        "nodeRole": node_role,
+        "mode": "desktop-only-read-only-wrapper",
+        "mutationAllowed": False,
+        "writeDispatch": False,
+        "writeProducerKit": False,
+        "rootHash": stable_hash(str(root)),
+        "rootLength": len(str(root)),
+        "scriptPresent": path_is_file(script),
+        "scriptHash": sha256_file(script),
+        "scriptLength": path_size(script),
+        "outputDir": output_dir,
+        "outputDirHash": stable_hash(str(output_path)),
+        "outputDirLength": len(str(output_path)),
+        "summaryArtifact": safe_relative_path(output_path, summary_path),
+        "eventsArtifact": safe_relative_path(output_path, events_path),
+        "viewerArtifact": safe_relative_path(output_path, viewer_path),
+        "stdoutStored": False,
+        "stderrStored": False,
+        "rawSecretPatternHits": 0,
+        "scriptOutputSecretPatternHits": 0,
+        "artifactSecretPatternHits": 0,
+        "summary": {},
+        "evidence_needed": [],
+    }
+    if node_role != "desktop":
+        return {
+            **base_result,
+            "ok": False,
+            "decision": "smb_decommission_debug_probe_failed",
+            "failReason": "unsupported-node-role",
+            "evidence_needed": ["smb_decommission_debug_probe must run on Desktop source owner"],
+        }
+    if not path_is_file(script):
+        return {
+            **base_result,
+            "ok": False,
+            "decision": "smb_decommission_debug_probe_failed",
+            "failReason": "probe-script-missing",
+            "evidence_needed": ["scripts/smb_decommission_debug_probe.ps1"],
+        }
+
+    timeout_seconds = bounded_int(payload.get("timeout_sec") or payload.get("timeoutSeconds"), 180, 5, 900)
+    args = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script),
+        "-Root",
+        str(root),
+        "-OutputDir",
+        str(output_path),
+        "-Topic",
+        safe_scalar(payload.get("topic") or "smb-decommission", 120),
+        "-AttachmentSampleCount",
+        str(bounded_int(payload.get("attachment_sample_count") or payload.get("attachmentSampleCount"), 5, 0, 50)),
+        "-SourceProbeSampleCount",
+        str(bounded_int(payload.get("source_probe_sample_count") or payload.get("sourceProbeSampleCount"), 8, 0, 50)),
+    ]
+    optional_args = (
+        ("-AttachmentPath", payload.get("attachment_path") or payload.get("attachmentPath")),
+        ("-BrowserProofPath", payload.get("browser_proof_path") or payload.get("browserProofPath")),
+        ("-ComputerProofPath", payload.get("computer_proof_path") or payload.get("computerProofPath")),
+    )
+    for flag, raw_value in optional_args:
+        text = safe_scalar(raw_value, 500).strip()
+        if text:
+            args.extend([flag, text])
+
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        script_exit_code = int(completed.returncode)
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        secret_hits = high_conf_secret_count(stdout + "\n" + stderr)
+        return {
+            **base_result,
+            "ok": False,
+            "decision": "smb_decommission_debug_probe_failed",
+            "failReason": "probe-timeout",
+            "scriptExitCode": -1,
+            "stdoutHash": stable_hash(stdout),
+            "stdoutLength": len(stdout),
+            "stderrHash": stable_hash(stderr),
+            "stderrLength": len(stderr),
+            "scriptOutputSecretPatternHits": secret_hits,
+            "rawSecretPatternHits": secret_hits,
+            "evidence_needed": ["rerun scripts/smb_decommission_debug_probe.ps1 with a larger timeout or inspect local process hang"],
+        }
+    except OSError as exc:
+        return {
+            **base_result,
+            "ok": False,
+            "decision": "smb_decommission_debug_probe_failed",
+            "failReason": exc.__class__.__name__,
+            "scriptExitCode": -1,
+            "evidence_needed": ["PowerShell runtime needed to run scripts/smb_decommission_debug_probe.ps1"],
+        }
+
+    summary = sanitize_probe_artifact_value(load_json_file(summary_path), root)
+    artifact_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in (summary_path, events_path, viewer_path)
+        if path_is_file(path)
+    )
+    artifact_secret_hits = high_conf_secret_count(artifact_text)
+    script_output_secret_hits = high_conf_secret_count(stdout + "\n" + stderr)
+    raw_secret_hits = artifact_secret_hits + script_output_secret_hits
+    ok = (
+        script_exit_code == 0
+        and bool(summary)
+        and bool(summary.get("ok", True) if isinstance(summary, dict) else False)
+        and raw_secret_hits == 0
+    )
+    fail_reason = ""
+    evidence_needed: list[str] = []
+    if script_exit_code != 0:
+        fail_reason = f"probe-exit-{script_exit_code}"
+        evidence_needed.append("rerun scripts/smb_decommission_debug_probe.ps1 and inspect generated summary/events artifacts")
+    elif not summary:
+        fail_reason = "summary-missing"
+        evidence_needed.append("smb-decommission-debug-probe.summary.json")
+    elif raw_secret_hits:
+        fail_reason = "secret-leak-risk"
+        evidence_needed.append("remove secret-like data from generated probe artifacts or script output")
+
+    return {
+        **base_result,
+        "ok": ok,
+        "decision": "smb_decommission_debug_probe" if ok else "smb_decommission_debug_probe_failed",
+        "failReason": fail_reason,
+        "scriptExitCode": script_exit_code,
+        "stdoutHash": stable_hash(stdout),
+        "stdoutLength": len(stdout),
+        "stderrHash": stable_hash(stderr),
+        "stderrLength": len(stderr),
+        "scriptOutputSecretPatternHits": script_output_secret_hits,
+        "artifactSecretPatternHits": artifact_secret_hits,
+        "rawSecretPatternHits": raw_secret_hits,
+        "summary": summary,
+        "summaryArtifactHash": sha256_file(summary_path),
+        "summaryArtifactBytes": path_size(summary_path),
+        "eventsArtifactHash": sha256_file(events_path),
+        "eventsArtifactBytes": path_size(events_path),
+        "viewerArtifactHash": sha256_file(viewer_path),
+        "viewerArtifactBytes": path_size(viewer_path),
+        "outputCount": 1 if summary else 0,
+        "evidence_needed": evidence_needed,
+    }
+
+
+def sanitize_probe_artifact_value(value: Any, root: Path) -> Any:
+    root_variants = {str(root), root.as_posix(), str(root).replace("\\", "/")}
+    path_like = re.compile(r"(?i)(?:\b[a-z]:[\\/]|\\\\)")
+    if isinstance(value, dict):
+        return {safe_scalar(key, 120): sanitize_probe_artifact_value(item, root) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_probe_artifact_value(item, root) for item in value]
+    if isinstance(value, str):
+        text = safe_message(value, 1000)
+        normalized = text.replace("\\", "/")
+        if path_like.search(text) or any(root_text and root_text.replace("\\", "/") in normalized for root_text in root_variants):
+            return "<redacted-path-like-value>"
+        return text
+    return value
+
+
+def fetch_web_probe_content(urls: list[str], *, max_bytes: int, timeout_seconds: int) -> tuple[str, int, str, str]:
+    seen: set[str] = set()
+    last_error = ""
+    for raw_url in urls:
+        url = safe_scalar(raw_url, 300)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https":
+            last_error = "non-https-url"
+            continue
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "AWX-WebProbe/1.0"})
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                raw = response.read(max_bytes + 1)
+                if len(raw) > max_bytes:
+                    raw = raw[:max_bytes]
+                charset = response.headers.get_content_charset() or "utf-8"
+                return raw.decode(charset, errors="ignore"), int(getattr(response, "status", 200) or 200), "live", ""
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            last_error = exc.__class__.__name__
+    return "", 0, "live", last_error or "fetch-failed"
+
+
+def safe_relative_path(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return redacted_path_text(path)
+
+
+def peer_lane(
+    name: str,
+    role: str,
+    evidence: str,
+    status: str,
+    next_action: str,
+    *,
+    read_only: bool = True,
+    required_env: list[str] | None = None,
+    required_tools: list[str] | None = None,
+) -> dict[str, Any]:
+    lane = {
+        "name": safe_scalar(name, 48),
+        "role": safe_scalar(role, 96),
+        "evidenceContract": safe_scalar(evidence, 180),
+        "status": safe_scalar(status, 48),
+        "nextAction": safe_scalar(next_action, 120),
+        "readOnly": bool(read_only),
+    }
+    if required_env:
+        lane["requiredEnv"] = [safe_scalar(item, 80) for item in required_env]
+    if required_tools:
+        lane["requiredTools"] = [safe_scalar(item, 80) for item in required_tools]
+    return lane
+
+
+def harmony_source_fingerprint(
+    root: Path,
+    contract: dict[str, Any],
+    max_files: int,
+) -> dict[str, Any]:
+    root_rows: list[str] = []
+    root_reports: list[dict[str, Any]] = []
+    error_count = 0
+    total_files = 0
+    for source_root in contract["activeSourceRoots"]:
+        source_id = source_root["id"]
+        relative_root = source_root["path"]
+        absolute_root = root / Path(relative_root)
+        exists = path_exists(absolute_root) and absolute_root.is_dir()
+        file_rows: list[str] = []
+        if exists:
+            try:
+                candidates = sorted(
+                    (path for path in absolute_root.rglob("*") if path.is_file()),
+                    key=lambda path: path.relative_to(absolute_root).as_posix(),
+                )
+            except OSError:
+                candidates = []
+                error_count += 1
+            if len(candidates) > max_files:
+                error_count += 1
+                candidates = candidates[:max_files]
+            for path in candidates:
+                digest = sha256_file(path)
+                if not digest:
+                    error_count += 1
+                    continue
+                relative_path = path.relative_to(absolute_root).as_posix()
+                file_rows.append(f"{relative_path}\0{digest}")
+        source_sha256 = hashlib.sha256(
+            "\n".join(file_rows).encode("utf-8")
+        ).hexdigest()
+        file_count = len(file_rows)
+        total_files += file_count
+        root_rows.append(
+            f"{source_id}\0{str(exists).lower()}\0{file_count}\0{source_sha256}"
+        )
+        root_reports.append(
+            {
+                "id": source_id,
+                "path": relative_root,
+                "exists": exists,
+                "fileCount": file_count,
+                "sha256": source_sha256,
+            }
+        )
+    aggregate_sha256 = hashlib.sha256(
+        "\n".join(root_rows).encode("utf-8")
+    ).hexdigest()
+    return {
+        "status": HARMONY_VERIFIED_STATUS if error_count == 0 else HARMONY_BLOCKED_STATUS,
+        "fileCount": total_files,
+        "errorCount": error_count,
+        "sha256": aggregate_sha256,
+        "roots": root_reports,
+    }
+
+
 def harmony_scan(payload: dict[str, Any]) -> dict[str, Any]:
     root = resolve_path(payload.get("root") or ".")
     max_files = bounded_int(payload.get("max_files"), 8000, 100, 25000)
+    contract_error = ""
+    try:
+        contract = load_harmony_evidence_contract()
+    except HarmonyEvidenceContractError as error:
+        contract = None
+        contract_error = error.__class__.__name__
+    active_root_specs = (
+        contract["activeSourceRoots"]
+        if contract is not None
+        else [{"id": source_id, "path": path} for source_id, path in HARMONY_EXPECTED_ROOTS]
+    )
     active_roots = {
-        "mainJava": root / "main" / "java",
-        "testJava": root / "src" / "test" / "java",
-        "appJavaClean": root / "app" / "src" / "main" / "java_clean",
+        item["id"]: root / Path(item["path"])
+        for item in active_root_specs
+    }
+    java_scan_roots = {
+        key: active_roots[key]
+        for key in ("mainJava", "testJava", "appJavaClean")
     }
     secret_roots = [
         active_roots["mainJava"],
@@ -393,37 +2454,63 @@ def harmony_scan(payload: dict[str, Any]) -> dict[str, Any]:
     ]
 
     text_by_path: dict[Path, str] = {}
-    for scan_root in active_roots.values():
+    runtime_excluded_paths: list[Path] = []
+    for scan_root in java_scan_roots.values():
         for file_path in iter_regular_files(scan_root, max_files=max_files):
             if file_path.suffix.lower() != ".java" or path_size(file_path) > 1_500_000:
+                continue
+            if is_harmony_runtime_excluded(file_path, root):
+                runtime_excluded_paths.append(file_path)
                 continue
             try:
                 text_by_path[file_path] = file_path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
 
-    all_text = "\n".join(text_by_path.values())
+    runtime_text_by_path = {
+        path: text
+        for path, text in text_by_path.items()
+        if "test" not in path.parts
+    }
+    runtime_text = "\n".join(runtime_text_by_path.values())
     test_text = "\n".join(
         text
         for path, text in text_by_path.items()
         if "test" in path.parts
     )
     trace_coverage = {
-        key: key in all_text
+        key: key in runtime_text
         for key in HARMONY_REQUIRED_TRACE_KEYS
-    }
-    runtime_text_by_path = {
-        path: text
-        for path, text in text_by_path.items()
-        if "test" not in path.parts
     }
     catch_stats = harmony_catch_stats(runtime_text_by_path, root)
     all_catch_stats = harmony_catch_stats(text_by_path, root)
     duplicate_info = harmony_duplicate_fqcns(text_by_path, root)
     cross_subsystem = harmony_cross_subsystem_files(text_by_path, root)
-    breaks = harmony_break_statuses(all_text, test_text, trace_coverage, catch_stats)
-    open_weight = round(sum(item["weight"] for item in breaks if item["status"] == "OPEN"), 1)
-    review_weight = round(sum(item["weight"] for item in breaks if item["status"] == "REVIEW"), 1)
+    if contract is None:
+        breaks = [{
+            "code": "HB-CONTRACT",
+            "status": HARMONY_BLOCKED_STATUS,
+            "weight": 100.0,
+            "evidence": ["contract_integrity_failed"],
+        }]
+        source_fingerprint = {
+            "status": HARMONY_BLOCKED_STATUS,
+            "fileCount": 0,
+            "errorCount": 1,
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "roots": [],
+        }
+    else:
+        breaks = harmony_break_statuses(runtime_text, test_text, trace_coverage, catch_stats)
+        for item in breaks:
+            if item.get("status") != HARMONY_VERIFIED_STATUS:
+                item["status"] = HARMONY_BLOCKED_STATUS
+        source_fingerprint = harmony_source_fingerprint(root, contract, max_files)
+    blocked_weight = round(sum(
+        float(item["weight"])
+        for item in breaks
+        if item["status"] != HARMONY_VERIFIED_STATUS
+    ), 1)
     runtime_proof_payload = payload.get("runtimeProof") if isinstance(payload.get("runtimeProof"), dict) else {}
     runtime_proof = {
         "traceStoreExportOk": runtime_proof_payload.get("traceStoreExportOk") is True,
@@ -452,12 +2539,27 @@ def harmony_scan(payload: dict[str, Any]) -> dict[str, Any]:
             "rerun_harmony_scan_with_runtime_probe",
         ]
 
+    promotion_allowed = (
+        contract is not None
+        and source_fingerprint["status"] == HARMONY_VERIFIED_STATUS
+        and blocked_weight == 0.0
+        and runtime_proof["traceStoreExportOk"]
+        and runtime_proof["agentDbSnapshotOk"]
+    )
     report = {
         "schemaVersion": "awx.mcp.harmony_scan.v1",
         "ok": True,
         "rootHash": stable_hash(str(root)),
         "rootLength": len(str(root)),
         "activeSourceSets": {name: scan_tree(path) for name, path in active_roots.items()},
+        "evidenceContract": {
+            "status": HARMONY_VERIFIED_STATUS if contract is not None else HARMONY_BLOCKED_STATUS,
+            "schemaVersion": contract.get("schemaVersion", "") if contract else "",
+            "contractId": contract.get("contractId", "") if contract else "",
+            "sha256": contract.get("sha256", "") if contract else "",
+            "errorType": contract_error,
+        },
+        "sourceFingerprint": source_fingerprint,
         "metrics": {
             "activeJavaFileCount": len(text_by_path),
             "catchBlockCount": catch_stats["catchBlockCount"],
@@ -472,6 +2574,7 @@ def harmony_scan(payload: dict[str, Any]) -> dict[str, Any]:
             "duplicateFqcnCount": duplicate_info["duplicateFqcnCount"],
             "crossSubsystemFileCount": cross_subsystem["crossSubsystemFileCount"],
             "crossSubsystemRiskCounts": cross_subsystem["riskCounts"],
+            "runtimeExcludedFileCount": len(runtime_excluded_paths),
             "secretPatternHits": sum(
                 secret_hit_count(path, max_files=3000, skip_tests=True)
                 for path in secret_roots
@@ -482,6 +2585,10 @@ def harmony_scan(payload: dict[str, Any]) -> dict[str, Any]:
             "duplicateFqcns": duplicate_info["samples"],
             "crossSubsystemFiles": cross_subsystem["samples"],
             "crossSubsystemReviewQueue": cross_subsystem["reviewQueue"],
+            "runtimeExcludedFiles": [
+                safe_relpath(path, root)
+                for path in sorted(runtime_excluded_paths)[:20]
+            ],
         },
         "traceCoverage": {
             "presentCount": sum(1 for present in trace_coverage.values() if present),
@@ -490,10 +2597,13 @@ def harmony_scan(payload: dict[str, Any]) -> dict[str, Any]:
         },
         "harmonyBreaks": breaks,
         "harmonyScore": {
-            "score": round(max(0.0, 100.0 - open_weight - (review_weight * 0.35)), 1),
-            "openWeight": open_weight,
-            "reviewWeight": review_weight,
-            "scale": "heuristic_source_scan",
+            "score": 100.0 if promotion_allowed else 0.0,
+            "openWeight": 0.0,
+            "reviewWeight": 0.0,
+            "blockedWeight": blocked_weight,
+            "scale": "contract_strict",
+            "statusSemantics": "blocked_evidence_contract_v1",
+            "promotionAllowed": promotion_allowed,
         },
         "runtimeProof": runtime_proof,
         "runtimeProofSource": runtime_proof_source,
@@ -502,6 +2612,7 @@ def harmony_scan(payload: dict[str, Any]) -> dict[str, Any]:
         "nextActions": next_actions,
         "outputCount": len(breaks),
         "decision": "harmony_scan",
+        "promotionDecision": "PROMOTE" if promotion_allowed else HARMONY_BLOCKED_STATUS,
     }
     if (
         runtime_proof_source == "live-runtime"
@@ -554,6 +2665,7 @@ def harmony_live_runtime_proof(payload: dict[str, Any], root: Path) -> dict[str,
         payload.get("runtime_base_url")
         or payload.get("runtimeBaseUrl")
         or os.environ.get("AWX_AGENT_DB_CONTEXT_BASE_URL")
+        or deployment_public_base_url()
         or "",
         240,
     ).strip()
@@ -561,6 +2673,7 @@ def harmony_live_runtime_proof(payload: dict[str, Any], root: Path) -> dict[str,
         payload.get("trace_base_url")
         or payload.get("traceBaseUrl")
         or os.environ.get("AWX_TRACE_SNAPSHOT_BASE_URL")
+        or deployment_public_base_url()
         or "",
         240,
     ).strip()
@@ -619,62 +2732,34 @@ def harmony_live_runtime_proof(payload: dict[str, Any], root: Path) -> dict[str,
     }
 
 
+def is_harmony_runtime_excluded(path: Path, root: Path) -> bool:
+    rel = safe_relpath(path, root).replace("\\", "/")
+    prefix = "app/src/main/java_clean/"
+    if not rel.startswith(prefix):
+        return False
+    java_path = rel[len(prefix):]
+    return any(fnmatch.fnmatch(java_path, pattern) for pattern in APP_JAVA_CLEAN_RUNTIME_EXCLUDES)
+
+
 def harmony_catch_stats(text_by_path: dict[Path, str], root: Path) -> dict[str, Any]:
-    catch_blocks = 0
-    silent = 0
-    samples: list[dict[str, Any]] = []
-    for path, text in text_by_path.items():
-        scan_text = strip_java_comments_and_strings_preserve_lines(text)
-        for match in re.finditer(r"catch\s*\([^)]*\)\s*\{(?P<body>.*?)\n\s*\}", scan_text, re.DOTALL):
-            catch_blocks += 1
-            body = match.group("body")
-            has_breadcrumb = re.search(
-                r"TraceStore|DebugEventStore|log\.|logger\.|LOG\.|System\.err|console\.debug|throw\s+|checkpoint|AWX|"
-                r"logSuppressed|traceSuppressed|traceTelemetrySkipped|recordDebugEventEmitFailure|"
-                r"recordDebugEventResolveFailure|"
-                r"traceContextPropagationSkipped|traceCancelShieldSkipped|recordError|traceSkipped|"
-                r"traceParseSkipped|"
-                r"recordProviderError|"
-                r"recordStreamFailure|"
-                r"traceWebSoakMaxRecentParseFallback|traceAspectError|lastEx\s*=|"
-                r"recordRunFailure|recordRunOnceFailure|"
-                r"recordNoiseFilterFallback|traceInterruptedPoll|traceMetaIntParseFallback|"
-                r"traceSearchPolicyFailure|traceCancelFailure|traceFailure|"
-                r"recordFailure|tracePreflightSkipped|"
-                r"WebFailSoftFailureTrace\.record|"
-                r"trace[A-Za-z0-9_]*(?:Suppressed|Failure|Skipped|Fallback|RiskNumber|MalformedRow)\s*\(|"
-                r"INVALID_NUMBER_SUPPRESSOR\.accept|"
-                r"WebFailSoftTraceSuppressions\.trace|"
-                r"DegradedStorageTraceSuppressions\.trace|"
-                r"faultMaskingLayerMonitor|monitor\.record",
-                body,
-            )
-            if has_breadcrumb:
-                continue
-            silent += 1
-            if len(samples) < 20:
-                samples.append({
-                    "path": safe_relpath(path, root),
-                    "line": text.count("\n", 0, match.start()) + 1,
-                })
-    ratio = 0.0 if catch_blocks == 0 else round(silent / catch_blocks, 4)
+    rows = tuple(
+        row
+        for path, text in text_by_path.items()
+        for row in classify_java_catches(path=path, root=root, text=text)
+    )
+    summary = summarize_catches(rows)
+    unhandled = [row for row in rows if row.reason_code == "NO_LOCAL_BREADCRUMB"]
+    total = summary["catchBlockCount"]
+    silent = summary["catchWithoutBreadcrumbCount"]
     return {
-        "catchBlockCount": catch_blocks,
+        "catchBlockCount": total,
         "catchWithoutBreadcrumbCount": silent,
-        "catchWithoutBreadcrumbRatio": ratio,
-        "samples": samples,
+        "catchWithoutBreadcrumbRatio": 0.0 if total == 0 else round(silent / total, 4),
+        "samples": [
+            {"path": row.path, "line": row.line}
+            for row in unhandled[:20]
+        ],
     }
-
-
-def strip_java_comments_and_strings_preserve_lines(text: str) -> str:
-    def blank(match: re.Match[str]) -> str:
-        return "".join("\n" if ch == "\n" else " " for ch in match.group(0))
-
-    without_blocks = re.sub(r"/\*.*?\*/", blank, text or "", flags=re.DOTALL)
-    without_line_comments = re.sub(r"//[^\n\r]*", blank, without_blocks)
-    without_text_blocks = re.sub(r'""".*?"""', blank, without_line_comments, flags=re.DOTALL)
-    without_strings = re.sub(r'"(?:\\.|[^"\\\r\n])*"', blank, without_text_blocks)
-    return re.sub(r"'(?:\\.|[^'\\\r\n])+'", blank, without_strings)
 
 
 def harmony_duplicate_fqcns(text_by_path: dict[Path, str], root: Path) -> dict[str, Any]:
@@ -795,7 +2880,11 @@ def harmony_break_statuses(
     def item(code: str, status: str, evidence: list[str]) -> dict[str, Any]:
         return {
             "code": code,
-            "status": status,
+            "status": (
+                HARMONY_VERIFIED_STATUS
+                if status == HARMONY_VERIFIED_STATUS
+                else HARMONY_BLOCKED_STATUS
+            ),
             "weight": HARMONY_BREAK_WEIGHTS[code],
             "evidence": evidence[:6],
         }
@@ -822,6 +2911,27 @@ def harmony_break_statuses(
             "builderDisablesOnlyWhenNoRawMatrixEntriesExist",
         )
     )
+    booster_contract_present = all(
+        token in all_text
+        for token in (
+            "routing.executionPlan.primaryMode",
+            "boosterMode.active",
+            "boosterMode.excludedModes",
+            "boosterMode.exclusionReason",
+        )
+    )
+    cancel_shield_contract_present = all(
+        token in all_text
+        for token in (
+            "extremeZ.cancelShieldWrapped",
+            "extremeZ.timeBudgetConsumedMs",
+            "cancel(false)",
+        )
+    )
+    moe_prompt_boundary_present = (
+        trace_coverage.get("moe.evolverPlateRegistered", False)
+        and 'setPromptTemplate("' not in all_text
+    )
     return [
         item(
             "HB-01",
@@ -835,8 +2945,11 @@ def harmony_break_statuses(
         ),
         item(
             "HB-03",
-            "DONE" if "routing.executionPlan.primaryMode" in all_text else "OPEN",
-            ["routing.executionPlan.primaryMode"],
+            "DONE" if booster_contract_present else "OPEN",
+            [
+                "routing.executionPlan.primaryMode",
+                "boosterMode.active/excludedModes/exclusionReason",
+            ],
         ),
         item(
             "HB-04",
@@ -855,8 +2968,8 @@ def harmony_break_statuses(
         ),
         item(
             "HB-07",
-            "DONE" if "extremeZ.cancelShieldWrapped" in all_text and "extremeZ.timeBudgetConsumedMs" in all_text else "OPEN",
-            ["extremeZ.cancelShieldWrapped", "extremeZ.timeBudgetConsumedMs"],
+            "DONE" if cancel_shield_contract_present else "OPEN",
+            ["extremeZ.cancelShieldWrapped", "extremeZ.timeBudgetConsumedMs", "cancel(false)"],
         ),
         item(
             "HB-08",
@@ -865,9 +2978,7 @@ def harmony_break_statuses(
         ),
         item(
             "HB-09",
-            "OPEN" if "stub_pending_condense_fuse_impl" in all_text
-            else "DONE" if raw_tile_contract_present and raw_tile_test_present
-            else "REVIEW",
+            "DONE" if raw_tile_contract_present and raw_tile_test_present else "OPEN",
             [
                 "CfvmRawTileBuilder raw-tile trace contract",
                 "CfvmRawTileBuilderTest focused proof",
@@ -876,8 +2987,8 @@ def harmony_break_statuses(
         ),
         item(
             "HB-10",
-            "DONE" if trace_coverage.get("moe.evolverPlateRegistered", False) else "OPEN",
-            ["moe.evolverPlateRegistered"],
+            "DONE" if moe_prompt_boundary_present else "OPEN",
+            ["moe.evolverPlateRegistered", "PromptBuilder boundary"],
         ),
         item(
             "HB-11",
@@ -887,8 +2998,8 @@ def harmony_break_statuses(
         ),
         item(
             "HB-12",
-            "DONE" if "providerAwareWhitening" in all_text or "whitening.provider" in all_text else "OPEN",
-            ["providerAwareWhitening or whitening.provider"],
+            "DONE" if "hypernova.whitening.provider" in all_text else "OPEN",
+            ["hypernova.whitening.provider"],
         ),
     ]
 
@@ -934,7 +3045,9 @@ def patch_render(payload: dict[str, Any]) -> dict[str, Any]:
     patch_file = payload.get("patch_file")
     patch_path = resolve_path(patch_file) if isinstance(patch_file, str) and patch_file.strip() else None
     secret_hits = secret_hit_count(patch_path, max_files=1, include_generic=True) if patch_path and patch_path.exists() else 0
-    filemode_lines = filemode_line_count(patch_path) if patch_path and patch_path.exists() else 0
+    mode_summary = patch_mode_summary(patch_path) if patch_path and patch_path.exists() else empty_patch_mode_summary()
+    filemode_lines = mode_summary["filemodeLineCount"]
+    binary_markers = binary_patch_marker_count(patch_path) if patch_path and patch_path.exists() else 0
     forbidden_paths = forbidden_patch_paths(patch_path) if patch_path and patch_path.exists() else []
     evidence_needed = "" if patch_path and patch_path.exists() else "patch_file / provide a generated diff for safety scan"
     return {
@@ -947,6 +3060,9 @@ def patch_render(payload: dict[str, Any]) -> dict[str, Any]:
         },
         "secretPatternHits": secret_hits,
         "filemodeLineCount": filemode_lines,
+        "allowedNewFileCount": mode_summary["allowedNewFileCount"],
+        "filemodeViolationCount": mode_summary["filemodeViolationCount"],
+        "binaryPatchMarkerCount": binary_markers,
         "forbiddenPathCount": len(forbidden_paths),
         "forbiddenPathReasons": sorted({item["reason"] for item in forbidden_paths}),
         "desktopFinalProof": "evidence_needed",
@@ -1322,28 +3438,60 @@ def run_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
     missing = [name for name, exists in tools.items() if not exists]
     pipeline_plan: dict[str, Any] = {}
     pipeline_plan_exit_code = 0
+    pipeline_failure = ""
     if mcp_pipeline.exists():
-        proc = subprocess.run(
-            [sys.executable, str(mcp_pipeline), "--root", str(root), "--plan-only"],
-            cwd=str(root),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        pipeline_plan_exit_code = int(proc.returncode)
         try:
-            pipeline_plan = json.loads((proc.stdout or "").lstrip("\ufeff"))
-        except Exception:
+            proc = subprocess.run(
+                [sys.executable, str(mcp_pipeline), "--root", str(root), "--plan-only"],
+                cwd=str(root),
+                text=True,
+                capture_output=True,
+                timeout=45,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # Synthetic timeout classification, not an observed child exit.
+            pipeline_plan_exit_code = 124
+            pipeline_failure = "pipeline-plan-timeout"
             pipeline_plan = {
                 "schemaVersion": "awx.mcp.control_tower_pipeline.v1",
                 "ok": False,
                 "desktopFinalProof": "evidence_needed",
-                "decision": "control_tower_pipeline_unparseable",
-                "failReason": "invalid-json",
+                "decision": "control_tower_pipeline_timeout",
+                "failReason": pipeline_failure,
             }
-        if pipeline_plan_exit_code != 0 and "mcp_control_tower_pipeline_plan" not in missing:
+        else:
+            pipeline_plan_exit_code = int(proc.returncode)
+            try:
+                pipeline_plan = json.loads((proc.stdout or "").lstrip("\ufeff"))
+            except (TypeError, ValueError):
+                pipeline_failure = "pipeline-plan-invalid-json"
+                pipeline_plan = {
+                    "schemaVersion": "awx.mcp.control_tower_pipeline.v1",
+                    "ok": False,
+                    "desktopFinalProof": "evidence_needed",
+                    "decision": "control_tower_pipeline_unparseable",
+                    "failReason": "invalid-json",
+                }
+            if not isinstance(pipeline_plan, dict):
+                pipeline_failure = "pipeline-plan-invalid-payload"
+                pipeline_plan = {
+                    "schemaVersion": "awx.mcp.control_tower_pipeline.v1",
+                    "ok": False,
+                    "desktopFinalProof": "evidence_needed",
+                    "decision": "control_tower_pipeline_unparseable",
+                    "failReason": "invalid-payload",
+                }
+            if not pipeline_failure:
+                if pipeline_plan_exit_code != 0:
+                    pipeline_failure = "pipeline-plan-exit-nonzero"
+                elif pipeline_plan.get("ok") is not True:
+                    pipeline_failure = "pipeline-plan-failed"
+        if pipeline_failure and "mcp_control_tower_pipeline_plan" not in missing:
             missing.append("mcp_control_tower_pipeline_plan")
     return {
+        "ok": not pipeline_failure,
+        "failReason": pipeline_failure,
         "tools": tools,
         "commands": {
             "verify_boot": "bash verify_boot.sh",
@@ -1901,25 +4049,87 @@ def dedupe_next_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def completion_audit_next_actions_for_root(root: str) -> list[str]:
+def dedupe_scalar_list(items: list[Any]) -> list[str]:
+    out: list[str] = []
+    for item in items:
+        text = safe_scalar(item, 500)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def completion_audit_summary_for_root(
+    root: str,
+    *,
+    require_supabase_live_proof: bool = False,
+    include_supporting_next_actions: bool = False,
+) -> dict[str, Any]:
     script = Path(__file__).resolve().with_name("awx_mcp_completion_audit.py")
     if not script.is_file():
-        return []
+        return {
+            "_awxCompletionAuditInvocation": {
+                "executed": False,
+                "failureClass": "completion-audit-script-missing",
+            }
+        }
+    args = [sys.executable, str(script), "--root", str(resolve_path(root))]
+    if require_supabase_live_proof:
+        args.append("--require-supabase-proof")
+    if include_supporting_next_actions:
+        args.append("--include-supporting-next-actions")
     try:
         completed = subprocess.run(
-            [sys.executable, str(script), "--root", str(resolve_path(root))],
+            args,
             capture_output=True,
             text=True,
             timeout=45,
             check=False,
         )
+    except subprocess.TimeoutExpired:
+        return {
+            "_awxCompletionAuditInvocation": {
+                "executed": False,
+                "failureClass": "completion-audit-timeout",
+            }
+        }
     except Exception:
-        return []
+        return {
+            "_awxCompletionAuditInvocation": {
+                "executed": False,
+                "failureClass": "completion-audit-invocation-failed",
+            }
+        }
     try:
         payload = json.loads(completed.stdout)
     except Exception:
-        return []
-    actions = payload.get("nextActions") if isinstance(payload, dict) else []
+        return {
+            "_awxCompletionAuditInvocation": {
+                "executed": False,
+                "failureClass": "completion-audit-invalid-json",
+            }
+        }
+    if not isinstance(payload, dict) or not (
+        isinstance(payload.get("ok"), bool)
+        and isinstance(payload.get("status"), str)
+        and bool(payload.get("status", "").strip())
+        and isinstance(payload.get("nextActions"), list)
+    ):
+        return {
+            "_awxCompletionAuditInvocation": {
+                "executed": False,
+                "failureClass": "completion-audit-invalid-payload",
+            }
+        }
+    payload["_awxCompletionAuditInvocation"] = {
+        "executed": True,
+        "failureClass": "none",
+    }
+    return payload
+
+
+def completion_audit_next_actions_for_root(root: str) -> list[str]:
+    payload = completion_audit_summary_for_root(root)
+    actions = payload.get("nextActions")
     if not isinstance(actions, list):
         return []
     deduped: list[str] = []
@@ -2003,14 +4213,22 @@ def validate_producer_bundle_evidence(
     for path in paths.values():
         if path.is_file():
             raw = path.read_text(encoding="utf-8", errors="ignore")
-            raw_secret_hits += sum(len(pattern.findall(raw)) for pattern in HIGH_CONF_SECRET_PATTERNS)
+            raw_secret_hits += sum(len(pattern.findall(raw)) for pattern in PATCH_SECRET_PATTERNS)
     if raw_secret_hits:
         failures.append("secret-leak-risk")
-    filemode_lines = filemode_line_count(paths["patch"]) if paths["patch"].is_file() else 0
-    if filemode_lines:
+    mode_summary = patch_mode_summary(paths["patch"]) if paths["patch"].is_file() else empty_patch_mode_summary()
+    filemode_lines = mode_summary["filemodeLineCount"]
+    if mode_summary["filemodeViolationCount"]:
         failures.append("filemode-blocked")
+    binary_markers = binary_patch_marker_count(paths["patch"]) if paths["patch"].is_file() else 0
+    if binary_markers:
+        failures.append("binary-patch-blocked")
     diff_headers = diff_header_count(paths["patch"]) if paths["patch"].is_file() else 0
     if paths["patch"].is_file() and paths["patch"].stat().st_size > 0 and diff_headers == 0:
+        failures.append("producer-patch-not-unified-diff")
+    elif paths["patch"].is_file() and patch_structure_violation_count_text(
+        paths["patch"].read_text(encoding="utf-8", errors="replace")
+    ):
         failures.append("producer-patch-not-unified-diff")
     forbidden_paths = forbidden_patch_paths(paths["patch"]) if paths["patch"].is_file() else []
     if forbidden_paths:
@@ -2030,15 +4248,24 @@ def validate_producer_bundle_evidence(
     if manifest_data:
         if manifest_data.get("schemaVersion") != "patchdrop-producer-v3":
             failures.append("producer-manifest-schema")
-        if safe_scalar(manifest_data.get("node", ""), 32).lower() != role_slug:
+        if manifest_data.get("topic") != topic_slug:
+            failures.append("producer-manifest-topic")
+        if manifest_data.get("slug") != topic_slug:
+            failures.append("producer-manifest-slug")
+        if manifest_data.get("node") != role_slug:
             failures.append("producer-manifest-node")
-        if safe_scalar(manifest_data.get("activePatch", ""), 240) != f"{bundle}.patch":
+        if manifest_data.get("activePatch") != f"{bundle}.patch":
             failures.append("producer-active-patch-mismatch")
-        if safe_scalar(manifest_data.get("desktopFinalProof", ""), 80) != "evidence_needed":
+        if manifest_data.get("desktopFinalProof") != "evidence_needed":
             failures.append("producer-desktop-proof-not-pending")
         source_root_input_hash = safe_scalar(manifest_data.get("sourceRootInputHash", ""), 120)
+        source_root_hash = safe_scalar(manifest_data.get("sourceRootHash", ""), 120)
+        if re.fullmatch(r"[a-f0-9]{64}", source_root_input_hash) is None:
+            failures.append("producer-source-root-input-hash-invalid")
+        if re.fullmatch(r"[a-f0-9]{64}", source_root_hash) is None:
+            failures.append("producer-source-root-hash-invalid")
         if expected_source_root_hash:
-            if not source_root_input_hash:
+            if not source_root_input_hash or not source_root_hash:
                 failures.append("producer-source-root-hash-missing")
             elif source_root_input_hash != expected_source_root_hash:
                 failures.append("producer-source-root-mismatch")
@@ -2046,7 +4273,7 @@ def validate_producer_bundle_evidence(
         git_root_ok = (
             isolation.get("gitRootPresent") is True
             and isolation.get("gitRootMatchesSourceRoot") is True
-            and bool(safe_scalar(isolation.get("gitRootHash", ""), 120))
+            and isolation.get("gitRootHash") == source_root_hash
         )
         if not git_root_ok:
             failures.append("producer-git-root-missing")
@@ -2058,6 +4285,20 @@ def validate_producer_bundle_evidence(
             and isolation.get("directCanonicalSourceEdit") is False
         ):
             failures.append("producer-source-isolation-violation")
+        verification = manifest_data.get("verification") if isinstance(manifest_data.get("verification"), dict) else {}
+        expected_metrics = {
+            "diffHeaderCount": diff_headers,
+            "filemodeLineCount": mode_summary["filemodeLineCount"],
+            "allowedNewFileCount": mode_summary["allowedNewFileCount"],
+            "filemodeViolationCount": mode_summary["filemodeViolationCount"],
+            "forbiddenPathCount": len(forbidden_paths),
+            "secretPatternHits": raw_secret_hits,
+            "rawSecretPatternHits": raw_secret_hits,
+        }
+        for metric_name, expected_metric in expected_metrics.items():
+            metric_value = verification.get(metric_name)
+            if type(metric_value) is not int or metric_value != expected_metric:
+                failures.append("producer-manifest-verification-" + metric_name)
 
     sha_verified = False
     if paths["sha256"].is_file():
@@ -2106,6 +4347,9 @@ def validate_producer_bundle_evidence(
         "shaVerified": sha_verified,
         "rawSecretPatternHits": raw_secret_hits,
         "filemodeLineCount": filemode_lines,
+        "allowedNewFileCount": mode_summary["allowedNewFileCount"],
+        "filemodeViolationCount": mode_summary["filemodeViolationCount"],
+        "binaryPatchMarkerCount": binary_markers,
         "diffHeaderCount": diff_headers,
         "forbiddenPathCount": len(forbidden_paths),
         "expectedSourceRootHash": expected_source_root_hash[:12],
@@ -2516,8 +4760,10 @@ def supabase_live_proof_next_action(root: Path, completion_actions: list[str]) -
         ),
         "requiredEnv": [
             {"name": "SUPABASE_PROJECT_REF", "sensitive": False},
-            {"name": "SUPABASE_ACCESS_TOKEN", "sensitive": True},
         ],
+        "mcpOAuthSupported": True,
+        "supportedAuthModes": ["supabase_mcp_oauth_session", "manual_SUPABASE_ACCESS_TOKEN"],
+        "manualAuthSensitiveEnvRefs": ["SUPABASE_ACCESS_TOKEN"],
         "requiredMcpTools": ["execute_sql", "get_advisors"],
         "artifactPaths": artifact_paths,
         "queryCount": bounded_int(packet.get("queryCount"), len(required_result_names), 0, 100),
@@ -2681,7 +4927,10 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
     canonical_root = resolve_path(canonical_root_raw)
     source_root_cmd = host_path_for_role(source_root_raw, node_role)
     patchdrop_root_cmd = host_path_for_role(patchdrop_root_raw, node_role)
-    canonical_root_cmd = host_path_for_role(canonical_root_raw, node_role)
+    producer_canonical_root_cmd = safe_scalar(
+        payload.get("producer_canonical_root") or "<desktop-canonical-root>",
+        500,
+    )
     shared_root_cmd = host_path_for_role(shared_root_raw, node_role)
     source_root_input_hash = stable_hash(source_root_cmd.strip())
     node_smoke_query = topic + " external node proof"
@@ -2702,8 +4951,8 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
     node_smoke_script = host_path_join(shared_root_cmd, "scripts", "awx_mcp_node_smoke.py")
     handoff_script = host_path_join(shared_root_cmd, "scripts", "awx_mcp_producer_handoff.py")
     producer_script = host_path_join(source_root_cmd, "__patch_drop__", "producer_bundle.py")
-    config_path = host_path_join(source_root_cmd, ".codex", "awx-control-tower.mcp.json")
-    audit_log_path = host_path_join(source_root_cmd, ".codex", "awx-control-tower.audit.jsonl")
+    config_path = setup_config_path(source_root_cmd,node_role)
+    audit_log_path = setup_audit_log_path(source_root_cmd,node_role)
     proof_json_check = (
         'import json,sys; '
         'd=json.load(open(sys.argv[1], encoding="utf-8-sig")); '
@@ -2812,7 +5061,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 "python3",
                 node_setup_script,
                 source_root_cmd,
-                canonical_root_cmd,
+                producer_canonical_root_cmd,
                 config_path,
                 node_role,
                 audit_log_path=audit_log_path,
@@ -2821,7 +5070,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
             (
                 f"python3 {sh_quote(node_smoke_script)} "
                 f"--root {sh_quote(source_root_cmd)} "
-                f"--canonical-root {sh_quote(canonical_root_cmd)} "
+                f"--canonical-root {sh_quote(producer_canonical_root_cmd)} "
                 f"--node-role {sh_quote(node_role)} "
                 f"--query {sh_quote(node_smoke_query)} "
                 f"> {sh_quote(proof_path)}"
@@ -2840,7 +5089,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
                     "python3",
                     handoff_script,
                     source_root_cmd,
-                    canonical_root_cmd,
+                    producer_canonical_root_cmd,
                     patchdrop_root_cmd,
                     producer_script,
                     node_role,
@@ -2868,7 +5117,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 "python",
                 node_setup_script,
                 source_root_cmd,
-                canonical_root_cmd,
+                producer_canonical_root_cmd,
                 config_path,
                 node_role,
                 quote_fn=ps_quote,
@@ -2881,7 +5130,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
             (
                 f"python {ps_quote(node_smoke_script)} "
                 f"--root {ps_quote(source_root_cmd)} "
-                f"--canonical-root {ps_quote(canonical_root_cmd)} "
+                f"--canonical-root {ps_quote(producer_canonical_root_cmd)} "
                 f"--node-role {ps_quote(node_role)} "
                 f"--query {ps_quote(node_smoke_query)} "
                 "1> $ProofPath"
@@ -2906,7 +5155,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
                     "python",
                     handoff_script,
                     source_root_cmd,
-                    canonical_root_cmd,
+                    producer_canonical_root_cmd,
                     patchdrop_root_cmd,
                     producer_script,
                     node_role,
@@ -2965,10 +5214,18 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     canonical_root = safe_scalar(payload.get("canonical_root") or "C:/AbandonWare/demo-1/demo-1/src", 500)
+    producer_canonical_root_raw = safe_scalar(
+        payload.get("producer_canonical_root") or str(resolve_path(canonical_root)),
+        500,
+    )
     patchdrop_root = safe_scalar(payload.get("patchdrop_root") or "__patch_drop__", 500)
     desktop_patchdrop_root = str(resolve_path(patchdrop_root))
     evidence_dir = safe_scalar(payload.get("evidence_dir") or "data/agent-handoff/mcp-control-tower", 500)
     topic = safe_scalar(payload.get("topic") or "patchdrop-handoff", 120)
+    # Explicit evidence_dir remains an exact caller-selected destination.
+    # Default dispatches isolate each topic instead of rewriting shared role files.
+    if not payload.get("evidence_dir"):
+        evidence_dir = f"{evidence_dir}/tasks/{slug(topic)}"
     raw_roles = payload.get("target_roles") if isinstance(payload.get("target_roles"), list) else ["macmini", "notebook"]
     target_roles = [
         role
@@ -3035,6 +5292,74 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
         role for role in target_roles
         if not effective_pathspec_sets.get(role)
     ]
+    roles_literal = "@(" + ",".join(ps_quote(role) for role in target_roles) + ")"
+    topic_literal = ps_quote(slug(topic))
+    require_literal = "$true" if require_producer_bundles else "$false"
+    desktop_audit_command = (
+        f"@{{ nodeRole = 'desktop'; patchdrop_root = {ps_quote(patchdrop_root)}; "
+        f"evidence_dir = {ps_quote(evidence_dir)}; "
+        f"required_roles = {roles_literal}; topic = {topic_literal}; require_producer_bundles = {require_literal} }} | "
+        "ConvertTo-Json -Depth 20 -Compress | "
+        "python .\\scripts\\awx_mcp_toolbox.py external_evidence_audit"
+    )
+    desktop_intake_command = (
+        f"@{{ nodeRole = 'desktop'; patchdrop_root = {ps_quote(patchdrop_root)}; "
+        f"evidence_dir = {ps_quote(evidence_dir)}; required_roles = {roles_literal}; "
+        f"topic = {topic_literal}; require_producer_bundles = {require_literal} }} | "
+        "ConvertTo-Json -Depth 20 -Compress | "
+        "python .\\scripts\\awx_mcp_toolbox.py external_evidence_intake"
+    )
+    if not require_producer_bundles and missing_pathspec_roles:
+        safe_missing_roles = [safe_scalar(role, 32) for role in missing_pathspec_roles]
+        example_role_pathspec = {
+            role: [f"<relative/source/path-owned-by-{role}>"]
+            for role in safe_missing_roles
+            if role
+        }
+        rerun_payload = {
+            "nodeRole": "desktop",
+            "canonical_root": canonical_root,
+            "patchdrop_root": patchdrop_root,
+            "topic": slug(topic),
+            "role_pathspec": example_role_pathspec,
+            "write_dispatch": True,
+            "require_producer_bundles": True,
+        }
+        return {
+            "ok": True,
+            "nodeRole": "desktop",
+            "topic": slug(topic),
+            "packets": [],
+            "desktopAuditCommand": desktop_audit_command,
+            "desktopIntakeCommand": desktop_intake_command,
+            "evidenceDir": evidence_dir,
+            "desktopFinalProof": "evidence_needed",
+            "allowedEnvRefs": list(ALLOWED_CONTROL_TOWER_ENV_REFS),
+            "outputCount": 0,
+            "producerBundlesRequired": False,
+            "externalEvidenceMode": "optional",
+            "missingPathspecRoles": safe_missing_roles,
+            "pathspecOverlap": [],
+            "evidence_needed": [],
+            "optionalNextActions": [{
+                "action": "assign-producer-role-pathspec",
+                "nodeRole": "desktop",
+                "missingRoles": safe_missing_roles,
+                "decision": "supporting_evidence_optional",
+                "hint": "pass role_pathspec only when explicitly assigning Mac mini or Notebook producer work",
+                "nonOverlapRule": "each relative path must appear under exactly one producer role",
+                "examplePayload": rerun_payload,
+                "rerunCommand": (
+                    "@'\n"
+                    f"{json.dumps(rerun_payload, ensure_ascii=True, sort_keys=True)}\n"
+                    "'@ | python .\\scripts\\awx_mcp_toolbox.py desktop_control_loop"
+                ),
+            }],
+            "dispatchArtifacts": [],
+            "nextActions": [],
+            "decision": "desktop_dispatch_packet_optional",
+            "failReason": "",
+        }
     if require_producer_bundles and missing_pathspec_roles:
         return {
             "ok": False,
@@ -3046,6 +5371,8 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
             "desktopFinalProof": "evidence_needed",
             "allowedEnvRefs": list(ALLOWED_CONTROL_TOWER_ENV_REFS),
             "outputCount": 0,
+            "producerBundlesRequired": True,
+            "externalEvidenceMode": "required",
             "missingPathspecRoles": missing_pathspec_roles,
             "pathspecOverlap": [],
             "evidence_needed": [
@@ -3072,6 +5399,8 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
             "desktopFinalProof": "evidence_needed",
             "allowedEnvRefs": list(ALLOWED_CONTROL_TOWER_ENV_REFS),
             "outputCount": 0,
+            "producerBundlesRequired": require_producer_bundles,
+            "externalEvidenceMode": "required" if require_producer_bundles else "optional",
             "pathspecOverlap": overlap_list,
             "evidence_needed": [
                 "pathspec-overlap: assign each source path to only one producer role with role_pathspec before writing PatchDrop dispatch"
@@ -3099,6 +5428,7 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
         plan_payload["nodeRole"] = role
         plan_payload["source_root"] = safe_scalar(producer_roots.get(role) or default_roots[role], 500)
         plan_payload["canonical_root"] = canonical_root
+        plan_payload["producer_canonical_root"] = host_path_for_role(producer_canonical_root_raw, role)
         plan_payload["patchdrop_root"] = safe_scalar(
             producer_patchdrop_roots.get(role) or default_patchdrop_roots.get(role) or desktop_patchdrop_root,
             500,
@@ -3143,22 +5473,6 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
             )
 
     evidence_needed.append("external Mac mini/Notebook host smoke output remains evidence_needed until Desktop intake/audit passes")
-    roles_literal = "@(" + ",".join(ps_quote(role) for role in target_roles) + ")"
-    topic_literal = ps_quote(topic_slug)
-    desktop_audit_command = (
-        f"@{{ nodeRole = 'desktop'; patchdrop_root = {ps_quote(patchdrop_root)}; "
-        f"evidence_dir = {ps_quote(evidence_dir)}; "
-        f"required_roles = {roles_literal}; topic = {topic_literal}; require_producer_bundles = $true }} | "
-        "ConvertTo-Json -Depth 20 -Compress | "
-        "python .\\scripts\\awx_mcp_toolbox.py external_evidence_audit"
-    )
-    desktop_intake_command = (
-        f"@{{ nodeRole = 'desktop'; patchdrop_root = {ps_quote(patchdrop_root)}; "
-        f"evidence_dir = {ps_quote(evidence_dir)}; required_roles = {roles_literal}; "
-        f"topic = {topic_literal}; require_producer_bundles = $true }} | "
-        "ConvertTo-Json -Depth 20 -Compress | "
-        "python .\\scripts\\awx_mcp_toolbox.py external_evidence_intake"
-    )
     result = {
         "ok": all(packet.get("ok") for packet in packets),
         "nodeRole": "desktop",
@@ -3166,9 +5480,12 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
         "packets": packets,
         "desktopAuditCommand": desktop_audit_command,
         "desktopIntakeCommand": desktop_intake_command,
+            "evidenceDir": evidence_dir,
         "desktopFinalProof": "evidence_needed",
         "allowedEnvRefs": list(ALLOWED_CONTROL_TOWER_ENV_REFS),
         "outputCount": len(packets),
+        "producerBundlesRequired": require_producer_bundles,
+        "externalEvidenceMode": "required" if require_producer_bundles else "optional",
         "evidence_needed": evidence_needed,
         "dispatchArtifacts": [],
         "decision": "desktop_dispatch_packet",
@@ -3222,6 +5539,9 @@ def desktop_control_loop(payload: dict[str, Any]) -> dict[str, Any]:
         for role in (safe_scalar(item, 32).lower() for item in raw_roles)
         if role in {"macmini", "notebook"}
     ] or ["macmini", "notebook"]
+    require_producer_bundles = truthy(payload.get("require_producer_bundles", False), False)
+    require_supabase_live_proof = truthy(payload.get("require_supabase_live_proof", False), False)
+    run_completion_audit = truthy(payload.get("run_completion_audit", True), True)
 
     source_payload = {
         "requestId": safe_scalar(payload.get("requestId", ""), 96),
@@ -3252,6 +5572,15 @@ def desktop_control_loop(payload: dict[str, Any]) -> dict[str, Any]:
         "decision": safe_scalar(harmony_scan_report.get("decision", ""), 80),
         "failReason": safe_scalar(harmony_scan_report.get("failReason", ""), 120),
     }
+    peer_bus = peer_evidence_bus(
+        {
+            "requestId": safe_scalar(payload.get("requestId", ""), 96),
+            "sessionId": safe_scalar(payload.get("sessionId", ""), 96),
+            "nodeRole": "desktop",
+            "root": root,
+            "targetMetric": payload.get("targetMetric") or payload.get("target_metric") or "harmony",
+        }
+    )
 
     producer_kit: dict[str, Any] = {}
     if str(payload.get("write_producer_kit", "")).strip().lower() in {"1", "true", "yes", "on"}:
@@ -3268,10 +5597,13 @@ def desktop_control_loop(payload: dict[str, Any]) -> dict[str, Any]:
     dispatch_payload["nodeRole"] = "desktop"
     dispatch_payload["canonical_root"] = canonical_root
     dispatch_payload["patchdrop_root"] = patchdrop_root
-    dispatch_payload["evidence_dir"] = evidence_dir
+    if payload.get("evidence_dir"):
+        dispatch_payload["evidence_dir"] = evidence_dir
     dispatch_payload["topic"] = topic
     dispatch_payload["target_roles"] = target_roles
+    dispatch_payload["require_producer_bundles"] = require_producer_bundles
     dispatch = desktop_dispatch_packet(dispatch_payload)
+    evidence_dir = dispatch.get("evidenceDir", evidence_dir)
 
     audit_payload = {
         "requestId": safe_scalar(payload.get("requestId", ""), 96),
@@ -3281,7 +5613,7 @@ def desktop_control_loop(payload: dict[str, Any]) -> dict[str, Any]:
         "evidence_dir": evidence_dir,
         "required_roles": target_roles,
         "topic": slug(topic),
-        "require_producer_bundles": payload.get("require_producer_bundles", True),
+        "require_producer_bundles": require_producer_bundles,
         "archive_index": safe_scalar(payload.get("archive_index", ""), 500),
     }
     external = external_evidence_audit(audit_payload)
@@ -3319,40 +5651,151 @@ def desktop_control_loop(payload: dict[str, Any]) -> dict[str, Any]:
                 "'@ | python .\\scripts\\awx_mcp_toolbox.py desktop_control_loop"
             ),
         })
-    next_actions = dedupe_next_actions(
-        dispatch_next_actions
-        + list(producer_kit.get("nextActions", []))
-        + list(external.get("nextActions", []))
+    external_next_actions = list(external.get("nextActions", []))
+    external_optional_next_actions = list(external.get("optionalNextActions", []))
+    dispatch_run_next_actions = list(dispatch.get("nextActions", []))
+    if require_producer_bundles:
+        next_actions = dedupe_next_actions(
+            dispatch_next_actions
+            + dispatch_run_next_actions
+            + list(producer_kit.get("nextActions", []))
+            + external_next_actions
+        )
+        optional_next_actions = dedupe_next_actions(
+            list(dispatch.get("optionalNextActions", []))
+            + external_optional_next_actions
+        )
+    else:
+        next_actions = dedupe_next_actions(
+            dispatch_next_actions
+            + dispatch_run_next_actions
+            + list(producer_kit.get("nextActions", []))
+        )
+        optional_next_actions = dedupe_next_actions(
+            list(dispatch.get("optionalNextActions", []))
+            + external_next_actions
+            + external_optional_next_actions
+        )
+    completion_audit_summary = (
+        completion_audit_summary_for_root(
+            root,
+            require_supabase_live_proof=require_supabase_live_proof,
+            include_supporting_next_actions=True,
+        )
+        if run_completion_audit
+        else {
+            "ok": True,
+            "status": "deferred-to-caller",
+            "nextActions": [],
+            "nextActionDetails": [],
+            "supportingEvidenceNextActions": [],
+            "supportingEvidenceNextActionDetails": [],
+        }
     )
-    optional_next_actions = dedupe_next_actions(list(external.get("optionalNextActions", [])))
-    completion_audit_next_actions = completion_audit_next_actions_for_root(root)
+    completion_audit_invocation = completion_audit_summary.get("_awxCompletionAuditInvocation")
+    if run_completion_audit:
+        if isinstance(completion_audit_invocation, dict):
+            completion_audit_executed = bool(completion_audit_invocation.get("executed", False))
+            completion_audit_failure_class = safe_scalar(
+                completion_audit_invocation.get("failureClass"), 80
+            ) or ("none" if completion_audit_executed else "completion-audit-invalid-payload")
+        else:
+            completion_audit_executed = bool(completion_audit_summary)
+            completion_audit_failure_class = (
+                "none" if completion_audit_executed else "completion-audit-invalid-payload"
+            )
+        completion_audit_evidence_source = (
+            "nested-control-loop" if completion_audit_executed else "nested-control-loop-failed"
+        )
+    else:
+        completion_audit_executed = False
+        completion_audit_failure_class = "not-requested"
+        completion_audit_evidence_source = "deferred-to-caller"
+    completion_audit_next_actions = dedupe_scalar_list(
+        [
+            safe_scalar(action, 120)
+            for action in completion_audit_summary.get("nextActions", [])
+            if safe_scalar(action, 120)
+        ]
+        if isinstance(completion_audit_summary.get("nextActions"), list)
+        else []
+    )
+    completion_audit_supporting_next_actions = dedupe_scalar_list(
+        [
+            safe_scalar(action, 120)
+            for action in completion_audit_summary.get("supportingEvidenceNextActions", [])
+            if safe_scalar(action, 120)
+        ]
+        if isinstance(completion_audit_summary.get("supportingEvidenceNextActions"), list)
+        else []
+    )
     source_contract_next_actions = source_contract_next_actions_for_root(root)
     if source_contract_next_actions:
         next_actions = dedupe_next_actions(next_actions + source_contract_next_actions)
+    completion_audit_supabase_actions = dedupe_scalar_list(
+        completion_audit_next_actions + completion_audit_supporting_next_actions
+    )
     if any(
         "supabase" in action.lower()
         or action in {"set_SUPABASE_PROJECT_REF", "execute_each_query_once", "collect_get_advisors_rows"}
-        for action in completion_audit_next_actions
+        for action in completion_audit_supabase_actions
     ):
-        next_actions = dedupe_next_actions(
-            next_actions
-            + [supabase_live_proof_next_action(resolve_path(root), completion_audit_next_actions)]
-        )
+        supabase_live_action = supabase_live_proof_next_action(resolve_path(root), completion_audit_supabase_actions)
+        if require_supabase_live_proof:
+            next_actions = dedupe_next_actions(next_actions + [supabase_live_action])
+        else:
+            optional_next_actions = dedupe_next_actions(optional_next_actions + [supabase_live_action])
     harmony_scan_next_actions = [
         safe_scalar(action, 120)
         for action in harmony_summary.get("nextActions", [])
         if safe_scalar(action, 120)
     ]
     evidence_needed: list[str] = []
-    for source in (scan, harmony_summary, dispatch, producer_kit, external):
+    supporting_evidence_needed: list[str] = []
+
+    def add_evidence_needed(target: list[str], value: Any) -> None:
+        text = safe_scalar(value, 500)
+        if text and text not in target:
+            target.append(text)
+
+    def desktop_only_supporting_evidence_text(value: Any) -> bool:
+        text = safe_scalar(value, 500).lower()
+        if not text:
+            return False
+        return (
+            "mac mini/notebook" in text
+            or "browser dom proof" in text
+            or "computer use gui proof" in text
+            or "supabase project-scoped mcp/cli proof" in text
+        )
+
+    if run_completion_audit and not completion_audit_executed:
+        add_evidence_needed(
+            evidence_needed,
+            f"completion audit unavailable ({completion_audit_failure_class})",
+        )
+
+    for source_name, source in (
+        ("scan", scan),
+        ("harmony", harmony_summary),
+        ("peer_bus", peer_bus),
+        ("dispatch", dispatch),
+        ("producer_kit", producer_kit),
+    ):
         for item in source.get("evidence_needed", []) if isinstance(source.get("evidence_needed", []), list) else []:
-            text = safe_scalar(item, 500)
-            if text and text not in evidence_needed:
-                evidence_needed.append(text)
+            target = evidence_needed
+            if (
+                source_name == "peer_bus"
+                and not require_producer_bundles
+                and desktop_only_supporting_evidence_text(item)
+            ):
+                target = supporting_evidence_needed
+            add_evidence_needed(target, item)
+    external_evidence_target = evidence_needed if require_producer_bundles else supporting_evidence_needed
+    for item in external.get("evidence_needed", []) if isinstance(external.get("evidence_needed", []), list) else []:
+        add_evidence_needed(external_evidence_target, item)
     for item in external.get("optional_evidence_needed", []) if isinstance(external.get("optional_evidence_needed", []), list) else []:
-        text = safe_scalar(item, 500)
-        if text and text not in evidence_needed:
-            evidence_needed.append(text)
+        add_evidence_needed(supporting_evidence_needed, item)
 
     external_complete = bool(external.get("externalEvidenceComplete", False))
     kit_ok = True if not producer_kit else bool(producer_kit.get("ok", False))
@@ -3366,8 +5809,14 @@ def desktop_control_loop(payload: dict[str, Any]) -> dict[str, Any]:
         "completionReady": completion_ready,
         "desktopFinalProof": "evidence_needed",
         "externalEvidenceComplete": external_complete,
+        "supabaseLiveProofRequired": require_supabase_live_proof,
+        "completionAuditRunRequested": run_completion_audit,
+        "completionAuditExecuted": completion_audit_executed,
+        "completionAuditEvidenceSource": completion_audit_evidence_source,
+        "completionAuditFailureClass": completion_audit_failure_class,
         "sourceScan": scan,
         "harmonyScan": harmony_summary,
+        "peerEvidenceBus": peer_bus,
         "dispatch": dispatch,
         "dispatchIntegrity": external.get("dispatchIntegrity", {}),
         "producerKit": producer_kit,
@@ -3376,16 +5825,65 @@ def desktop_control_loop(payload: dict[str, Any]) -> dict[str, Any]:
         "nextActions": next_actions,
         "optionalNextActions": optional_next_actions,
         "completionAuditNextActions": completion_audit_next_actions,
+        "completionAuditNextActionDetails": completion_audit_summary.get("nextActionDetails", [])
+        if isinstance(completion_audit_summary.get("nextActionDetails"), list)
+        else [],
+        "completionAuditSupportingEvidenceNextActions": completion_audit_summary.get("supportingEvidenceNextActions", [])
+        if isinstance(completion_audit_summary.get("supportingEvidenceNextActions"), list)
+        else [],
+        "completionAuditSupportingEvidenceNextActionDetails": completion_audit_summary.get(
+            "supportingEvidenceNextActionDetails", []
+        )
+        if isinstance(completion_audit_summary.get("supportingEvidenceNextActionDetails"), list)
+        else [],
         "harmonyScanNextActions": harmony_scan_next_actions,
+        "peerEvidenceBusNextActions": peer_bus.get("nextActions", []),
         "allowedEnvRefs": list(ALLOWED_CONTROL_TOWER_ENV_REFS),
         "outputCount": len(next_actions),
         "evidence_needed": evidence_needed,
+        "supportingEvidenceNeeded": supporting_evidence_needed,
         "decision": "external_evidence_complete" if external_complete else "external_evidence_needed",
         "failReason": "" if external_complete else "evidence-needed",
     }
 
 
 def producer_kit_export(payload: dict[str, Any]) -> dict[str, Any]:
+    """Stage and validate the whole kit; existing exports are immutable."""
+    root = resolve_path(payload.get('root') or '.')
+    exchange = resolve_path(payload.get('patchdrop_root') or root/'__patch_drop__')
+    destination = resolve_path(payload.get('output_dir') or exchange/'producer-kit'/f"{slug(payload.get('topic') or 'awx-mcp-producer-kit')}-producer-kit")
+    if payload.get('nodeRole','desktop') != 'desktop' or not is_relative_to_path(destination, exchange):
+        return {'ok':False,'decision':'producer_kit_export_failed','failReason':'producer-kit-scope-violation','outputCount':0}
+    try:
+        plain_path(destination)
+        state = local_state_root(root, os.environ.get('AWX_LOCAL_STATE_ROOT'))
+        state.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='kit-stage-', dir=state) as folder:
+            stage = Path(folder)/'kit'
+            result = _producer_kit_build({**payload,'output_dir':str(stage),'patchdrop_root':folder})
+            if not result['ok']:
+                return {**result,'kitDir':'','manifestPath':'','outputCount':0}
+            changes=[]
+            expected=set()
+            for path in sorted(stage.rglob('*')):
+                if not path.is_file():continue
+                rel=path.relative_to(stage);expected.add(rel.as_posix())
+                target=plain_path(destination/rel);before=read_optional(target);after=path.read_bytes()
+                if before is not None and before != after:raise Conflict('existing-kit-content-conflict')
+                changes.append(Change(target,before,after))
+            if destination.exists():
+                for path in destination.rglob('*'):
+                    plain_path(path)
+                    if path.is_file() and path.relative_to(destination).as_posix() not in expected:
+                        raise Conflict('existing-kit-extra-content')
+            receipt=apply_changes(changes,state/'kit-export')
+            return {**result,'kitDir':str(destination),'manifestPath':str(destination/'producer-kit.manifest.json'),
+                    'transaction':receipt,'outputCount':receipt['changedCount']}
+    except (Conflict,OSError) as error:
+        return {'ok':False,'decision':'producer_kit_export_failed','failReason':str(error) if isinstance(error,Conflict) else 'producer-kit-io-failed','outputCount':0}
+
+
+def _producer_kit_build(payload: dict[str, Any]) -> dict[str, Any]:
     node_role = safe_scalar(payload.get("nodeRole", "desktop"), 48).lower()
     root = resolve_path(payload.get("root") or ".")
     patchdrop_root = resolve_path(payload.get("patchdrop_root") or root / "__patch_drop__")
@@ -3423,14 +5921,19 @@ def producer_kit_export(payload: dict[str, Any]) -> dict[str, Any]:
     packaged_paths: set[str] = set()
     evidence_needed: list[str] = []
     missing_required: list[str] = []
-    for rel in PRODUCER_KIT_FILES:
+    skill_files = [path.relative_to(root).as_posix() for path in (root/'.agents/skills').rglob('*')
+                   if path.is_file() and not any(part.startswith('.') or part in {'__pycache__','tests'} for part in path.relative_to(root/'.agents/skills').parts)
+                   and path.suffix not in {'.pyc','.pyo'} and '.bak_' not in path.name]
+    for rel in dict.fromkeys((*PRODUCER_KIT_FILES,*sorted(skill_files))):
         src = root / rel
+        plain_path(src)
         dest = kit_dir / rel
         optional_doc = (
             rel.startswith(".agents/skills/")
             or rel.startswith("agent-prompts/")
             or rel.startswith("data/agent-handoff/mcp-control-tower/skills/")
             or rel in {
+                "data/agent-handoff/mcp-control-tower/README.md",
                 "data/agent-handoff/mcp-control-tower/demo1_mcp_control_tower.prompt",
                 "data/agent-handoff/mcp-control-tower/prompt-manifest.yaml",
             }
@@ -3461,6 +5964,19 @@ def producer_kit_export(payload: dict[str, Any]) -> dict[str, Any]:
         "agent-prompts/agents/demo1_mcp_control_tower/system.md": "data/agent-handoff/mcp-control-tower/demo1_mcp_control_tower.prompt",
         "agent-prompts/out/demo1_mcp_control_tower.prompt": "data/agent-handoff/mcp-control-tower/demo1_mcp_control_tower.prompt",
     }
+    for protected_doc, fallback_doc in protected_doc_fallbacks.items():
+        if protected_doc not in packaged_paths or fallback_doc in packaged_paths:
+            continue
+        source = kit_dir / protected_doc
+        fallback = kit_dir / fallback_doc
+        try:
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, fallback)
+        except OSError:
+            evidence_needed.append(f"{fallback_doc} / producer kit fallback doc copy failed")
+            continue
+        files.append(candidate_row(kit_dir, fallback))
+        packaged_paths.add(fallback_doc)
     evidence_needed = [
         item
         for item in evidence_needed
@@ -3476,10 +5992,14 @@ def producer_kit_export(payload: dict[str, Any]) -> dict[str, Any]:
     for generated in (install_mac, install_notebook, readme):
         files.append(candidate_row(kit_dir, generated))
 
-    raw_secret_hits = secret_hit_count(kit_dir, max_files=200, include_generic=False, skip_tests=False)
+    raw_secret_hits = secret_hit_count(kit_dir, max_files=len(files)+10, include_generic=False, skip_tests=False)
     manifest_path = kit_dir / "producer-kit.manifest.json"
     manifest_data = {
         "schemaVersion": "awx.mcp.producer_kit.v1",
+        "installerVersion": 2,
+        "sourceRevision": run_git_head(root),
+        "toolCatalogHash": sha256_file(kit_dir/'main/resources/mcp/awx-control-tower-tools.json') if (kit_dir/'main/resources/mcp/awx-control-tower-tools.json').is_file() else None,
+        "sharedSkillCount": len(list((kit_dir/'.agents/skills').glob('*/SKILL.md'))),
         "topic": slug(topic),
         "desktopFinalProof": "evidence_needed",
         "sourcePolicy": {
@@ -3487,7 +6007,8 @@ def producer_kit_export(payload: dict[str, Any]) -> dict[str, Any]:
             "forbiddenInstallTarget": "Desktop canonical source root or shared SMB/NAS source mount",
         },
         "allowedEnvRefs": list(ALLOWED_CONTROL_TOWER_ENV_REFS),
-        "files": files,
+        "files": [{"path": p.relative_to(kit_dir).as_posix(), "sha256": sha256_file(p), "sizeBytes": p.stat().st_size}
+                  for p in sorted(kit_dir.rglob('*')) if p.is_file()],
         "rawSecretPatternHits": raw_secret_hits,
     }
     manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -3529,135 +6050,44 @@ def producer_kit_export(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def render_macmini_install_script() -> str:
-    rels = "\n".join(f"  {sh_quote(rel)}" for rel in PRODUCER_KIT_FILES)
-    return f"""#!/usr/bin/env bash
-set -euo pipefail
-ProducerRoot="${{1:-}}"
-NodeRole="${{2:-macmini}}"
-if [ -z "$ProducerRoot" ]; then echo "[AWX][producer-kit] evidence_needed: producer root argument required" >&2; exit 1; fi
-NormalizedProducerRoot="$(printf '%s' "$ProducerRoot" | tr '\\\\' '/' | tr '[:upper:]' '[:lower:]')"
-case "$ProducerRoot" in
-  *"AbandonWare/demo-1/demo-1/src"*|*"AbandonWare\\\\demo-1\\\\demo-1\\\\src"*|/Volumes/*|/mnt/*|/media/*) echo "[AWX][producer-kit] refusing Desktop canonical or shared source target: $ProducerRoot" >&2; exit 1 ;;
-esac
-case "$NormalizedProducerRoot" in
-  */patchdrop|*/patchdrop/*|*/__patch_drop__|*/__patch_drop__/*) echo "[AWX][producer-kit] refusing Desktop canonical or shared source target: $ProducerRoot" >&2; exit 1 ;;
-esac
-ProducerRootAbs="$(cd "$ProducerRoot" 2>/dev/null && pwd)" || {{ echo "[AWX][producer-kit] producer-git-root-invalid: $ProducerRoot" >&2; exit 1; }}
-GitRoot="$(git -C "$ProducerRootAbs" rev-parse --show-toplevel 2>/dev/null)" || {{ echo "[AWX][producer-kit] producer-git-root-invalid: $ProducerRoot" >&2; exit 1; }}
-GitRootAbs="$(cd "$GitRoot" 2>/dev/null && pwd)" || {{ echo "[AWX][producer-kit] producer-git-root-invalid: $ProducerRoot" >&2; exit 1; }}
-if [ "$GitRootAbs" != "$ProducerRootAbs" ]; then echo "[AWX][producer-kit] producer-git-root-invalid: gitRoot=$GitRootAbs producerRoot=$ProducerRootAbs" >&2; exit 1; fi
-KitRoot="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-KitManifest="$KitRoot/producer-kit.manifest.json"
-[ -f "$KitManifest" ] || {{ echo "[AWX][producer-kit] producer-kit-manifest-missing: $KitManifest" >&2; exit 1; }}
-python3 - "$KitRoot" "$KitManifest" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
+def run_git_head(root: Path) -> str | None:
+    result = subprocess.run(["git","--no-optional-locks","-C",str(root),"rev-parse","HEAD"],
+                            capture_output=True,text=True,timeout=10)
+    value=result.stdout.strip()
+    return value if result.returncode==0 and re.fullmatch(r"[a-f0-9]{40,64}",value) else None
 
-root = Path(sys.argv[1])
-manifest = Path(sys.argv[2])
-data = json.load(manifest.open(encoding="utf-8-sig"))
-failures = []
-for item in data.get("files", []):
-    rel = str(item.get("path") or "")
-    expected = str(item.get("sha256") or "").lower()
-    if not rel or not expected:
-        continue
-    path = root / rel
-    if not path.is_file():
-        failures.append("missing:" + rel)
-        continue
-    actual = hashlib.sha256(path.read_bytes()).hexdigest()
-    if actual != expected:
-        failures.append("sha:" + rel)
-if failures:
-    print("[AWX][producer-kit] producer-kit-manifest-mismatch: " + ",".join(failures[:5]), file=sys.stderr)
-    raise SystemExit(1)
-PY
-for Rel in \\
-{rels}
-do
-  [ -f "$KitRoot/$Rel" ] || continue
-  mkdir -p "$ProducerRoot/$(dirname "$Rel")"
-  cp "$KitRoot/$Rel" "$ProducerRoot/$Rel"
-done
-python3 "$ProducerRoot/scripts/awx_mcp_node_setup.py" --node-role "$NodeRole" --source-root "$ProducerRoot" --canonical-root "C:/AbandonWare/demo-1/demo-1/src" --output "$ProducerRoot/.codex/awx-control-tower.mcp.json" --audit-log "$ProducerRoot/.codex/awx-control-tower.audit.jsonl"
-echo "[AWX][producer-kit] installed role=$NodeRole target=$ProducerRoot"
+
+def render_macmini_install_script() -> str:
+    return """#!/bin/sh
+set -eu
+[ "$#" -ge 1 ] || { echo "producer root required" >&2; exit 2; }
+ProducerRoot="$1"
+NodeRole="macbook"
+if [ "$#" -ge 2 ]; then NodeRole="$2"; fi
+KitRoot="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Safe installer owns Desktop canonical/shared guards, Git root validation,
+# producer-kit.manifest.json hashes, configuration merges and exact backups.
+if [ "$#" -ge 3 ]; then
+  exec python3 -B "$KitRoot/scripts/awx_mcp_safe_install.py" --kit-root "$KitRoot" --producer-root "$ProducerRoot" --node-role "$NodeRole" --state-root "$3"
+fi
+exec python3 -B "$KitRoot/scripts/awx_mcp_safe_install.py" --kit-root "$KitRoot" --producer-root "$ProducerRoot" --node-role "$NodeRole"
 """
 
 
 def render_notebook_install_script() -> str:
-    rel_items = "\n".join(f"    {ps_quote(rel)}" for rel in PRODUCER_KIT_FILES)
-    return f"""param(
+    return """param(
     [Parameter(Mandatory = $true)][string]$ProducerRoot,
-    [string]$NodeRole = "notebook"
+    [ValidateSet("notebook","macmini","macbook")][string]$NodeRole = "notebook",
+    [string]$StateRoot = ""
 )
 $ErrorActionPreference = "Stop"
-$NormalizedProducerRoot = ($ProducerRoot -replace "\\\\","/").ToLowerInvariant()
-if ($ProducerRoot -match "AbandonWare[\\\\/]demo-1[\\\\/]demo-1[\\\\/]src" -or $ProducerRoot -match "^\\\\\\\\|^[A-Za-z]:[\\\\/]$" -or $NormalizedProducerRoot -match "(^|/)(patchdrop|__patch_drop__)(/|$)") {{
-    Write-Error "[AWX][producer-kit] refusing Desktop canonical or shared source target: $ProducerRoot"
-    exit 1
-}}
-if (-not (Test-Path -LiteralPath $ProducerRoot -PathType Container)) {{
-    Write-Error "[AWX][producer-kit] producer-git-root-invalid: $ProducerRoot"
-    exit 1
-}}
-$PreviousErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-try {{
-    $GitRoot = git -C $ProducerRoot rev-parse --show-toplevel 2>$null
-    $GitRootExit = $LASTEXITCODE
-}} finally {{
-    $ErrorActionPreference = $PreviousErrorActionPreference
-}}
-if ($GitRootExit -ne 0 -or [string]::IsNullOrWhiteSpace($GitRoot)) {{
-    Write-Error "[AWX][producer-kit] producer-git-root-invalid: $ProducerRoot"
-    exit 1
-}}
-$ResolvedProducerRoot = (Resolve-Path -LiteralPath $ProducerRoot).Path.TrimEnd('\\')
-$ResolvedGitRoot = (Resolve-Path -LiteralPath $GitRoot).Path.TrimEnd('\\')
-if (-not $ResolvedGitRoot.Equals($ResolvedProducerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {{
-    Write-Error "[AWX][producer-kit] producer-git-root-invalid: gitRoot=$ResolvedGitRoot producerRoot=$ResolvedProducerRoot"
-    exit 1
-}}
 $KitRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$KitManifest = Join-Path $KitRoot "producer-kit.manifest.json"
-if (-not (Test-Path -LiteralPath $KitManifest -PathType Leaf)) {{
-    Write-Error "[AWX][producer-kit] producer-kit-manifest-missing: $KitManifest"
-    exit 1
-}}
-$ManifestJson = Get-Content -LiteralPath $KitManifest -Raw | ConvertFrom-Json
-$ManifestFailures = @()
-foreach ($Item in @($ManifestJson.files)) {{
-    $Rel = [string]$Item.path
-    $Expected = ([string]$Item.sha256).ToLowerInvariant()
-    if ([string]::IsNullOrWhiteSpace($Rel) -or [string]::IsNullOrWhiteSpace($Expected)) {{ continue }}
-    $Candidate = Join-Path $KitRoot $Rel
-    if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) {{
-        $ManifestFailures += "missing:$Rel"
-        continue
-    }}
-    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Candidate).Hash.ToLowerInvariant()
-    if ($Actual -ne $Expected) {{ $ManifestFailures += "sha:$Rel" }}
-}}
-if (@($ManifestFailures).Count -gt 0) {{
-    Write-Error ("[AWX][producer-kit] producer-kit-manifest-mismatch: " + ((@($ManifestFailures) | Select-Object -First 5) -join ","))
-    exit 1
-}}
-$Files = @(
-{rel_items}
-)
-foreach ($Rel in $Files) {{
-    $Source = Join-Path $KitRoot $Rel
-    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {{ continue }}
-    $Target = Join-Path $ProducerRoot $Rel
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Target) | Out-Null
-    Copy-Item -LiteralPath $Source -Destination $Target -Force
-}}
-python (Join-Path $ProducerRoot "scripts\\awx_mcp_node_setup.py") --node-role $NodeRole --source-root $ProducerRoot --canonical-root "C:/AbandonWare/demo-1/demo-1/src" --output (Join-Path $ProducerRoot ".codex\\awx-control-tower.mcp.json") --audit-log (Join-Path $ProducerRoot ".codex\\awx-control-tower.audit.jsonl")
-Write-Host "[AWX][producer-kit] installed role=$NodeRole target=$ProducerRoot"
+# The shared Python owner checks Desktop canonical/shared paths, Git root,
+# producer-kit.manifest.json, hashes and destination preimages before writes.
+$Arguments = @("-B", (Join-Path $KitRoot "scripts/awx_mcp_safe_install.py"), "--kit-root", $KitRoot, "--producer-root", $ProducerRoot, "--node-role", $NodeRole)
+if ($StateRoot) { $Arguments += @("--state-root", $StateRoot) }
+& python @Arguments
+exit $LASTEXITCODE
 """
 
 
@@ -3682,10 +6112,12 @@ Notebook:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\\INSTALL.notebook.ps1 -ProducerRoot C:\\AbandonWare\\worktrees\\awx-notebook -NodeRole notebook
 ```
 
-The installer copies `__patch_drop__/producer_bundle.py` into the producer-local
+The installer validates and safely updates `__patch_drop__/producer_bundle.py` in the producer-local
 worktree. Generated producer commands execute that local helper while writing
-bundle artifacts to the shared PatchDrop exchange path. The installer then runs
-`scripts/awx_mcp_node_setup.py` and keeps Desktop final proof as
+bundle artifacts to the shared PatchDrop exchange path. Settings, receipts and
+timestamped backups stay in host-local AWX storage. Personal edits stop the update;
+there is no force option. All shared skill definitions and runtime references
+are included; development test fixtures and caches are excluded. Desktop final proof stays
 `evidence_needed`.
 
 After install, prefer the Desktop-rendered command file for this topic instead
@@ -3731,7 +6163,22 @@ def write_desktop_dispatch_artifacts(
     topic_slug = slug(topic)
     json_path = dispatch_dir / f"{topic_slug}-desktop-dispatch.json"
     desktop_path = dispatch_dir / f"{topic_slug}-desktop-intake.ps1"
+    source_health_queue_path = dispatch_dir / f"{topic_slug}-source-health-producer-queue.json"
     artifact_paths = [json_path]
+    source_health_queue = (
+        payload.get("sourceHealthProducerQueue")
+        if isinstance(payload.get("sourceHealthProducerQueue"), dict)
+        else {}
+    )
+    source_health_queue_written = False
+    if source_health_queue:
+        queue_payload = {"sourceHealthProducerQueue": source_health_queue}
+        source_health_queue_path.write_text(
+            json.dumps(redact(queue_payload), ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        artifact_paths.append(source_health_queue_path)
+        source_health_queue_written = True
     dispatch_next_actions: list[dict[str, Any]] = []
 
     for packet in result.get("packets", []):
@@ -3825,15 +6272,16 @@ def write_desktop_dispatch_artifacts(
     desktop_text = "\n".join(
         [
             "# Run on Desktop canonical root after Mac mini and Notebook proof files arrive.",
-            "$DesktopLeaseOwner = if ($Env:COMPUTERNAME) { $Env:COMPUTERNAME } else { 'desktop-codex' }",
-            "$DesktopLeaseAcquired = $false",
-            "$LeaseEndExit = 0",
+            "$ErrorActionPreference = 'Stop'",
+            "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop",
+            ". .\\__patch_drop__\\source_edit_lease_contract.ps1",
+            f"$EvidenceDir = {ps_quote(result.get('evidenceDir') or payload.get('evidence_dir') or 'data/agent-handoff/mcp-control-tower/tasks/' + topic_slug)}",
+            "$EvidenceHandle = $null",
             "try {",
-            f"  powershell -NoProfile -ExecutionPolicy Bypass -File .\\__patch_drop__\\source_edit_session.ps1 -Action begin -Role desktop-consumer -Root . -Topic {ps_quote(topic_slug)} -OwnerId $DesktopLeaseOwner -TtlMinutes 180",
-            "  $LeaseBeginExit = $LASTEXITCODE",
-            "  if ($LeaseBeginExit -ne 0) { Write-Error \"[AWX][desktop] source-lease-begin-failed exitCode=$LeaseBeginExit\"; exit $LeaseBeginExit }",
-            "  $DesktopLeaseAcquired = $true",
             *desktop_dispatch_preflight,
+            "  Assert-AwxLeaseSafePath -Path $EvidenceDir",
+            "  [void][IO.Directory]::CreateDirectory($EvidenceDir)",
+            "  try { $EvidenceHandle = Open-AwxCoordinationHandle -Path (Join-Path $EvidenceDir '.evidence-intake.lock') -TimeoutMs 5000 } catch { Write-Error '[AWX][desktop] evidence-intake-lock-busy'; exit 4 }",
             "  $IntakeRaw = " + safe_scalar(result.get("desktopIntakeCommand", ""), 2000),
             "  $IntakeExit = $LASTEXITCODE",
             "  if ($IntakeExit -ne 0) { Write-Error \"[AWX][desktop] external-evidence-intake-failed exitCode=$IntakeExit\"; exit $IntakeExit }",
@@ -3845,17 +6293,12 @@ def write_desktop_dispatch_artifacts(
             "  if ($AuditExit -ne 0) { Write-Error \"[AWX][desktop] external-evidence-audit-failed exitCode=$AuditExit\"; exit $AuditExit }",
             "  try { $AuditJson = $AuditRaw | ConvertFrom-Json } catch { Write-Error \"[AWX][desktop] external-evidence-audit-invalid-json\"; exit 1 }",
             "  if (($AuditJson.ok -ne $true) -or ($AuditJson.externalEvidenceComplete -ne $true)) { Write-Error \"[AWX][desktop] external-evidence-audit-incomplete\"; exit 1 }",
-            "  python .\\scripts\\awx_mcp_completion_audit.py --root .",
+            f"  python .\\scripts\\awx_mcp_completion_audit.py --root . --evidence-dir $EvidenceDir --topic {ps_quote(topic_slug)}",
             "  $CompletionAuditExit = $LASTEXITCODE",
             "  if ($CompletionAuditExit -ne 0) { Write-Error \"[AWX][desktop] completion-audit-failed exitCode=$CompletionAuditExit\"; exit $CompletionAuditExit }",
             "} finally {",
-            "  if ($DesktopLeaseAcquired) {",
-            f"    powershell -NoProfile -ExecutionPolicy Bypass -File .\\__patch_drop__\\source_edit_session.ps1 -Action end -Role desktop-consumer -Root . -Topic {ps_quote(topic_slug)} -OwnerId $DesktopLeaseOwner",
-            "    $LeaseEndExit = $LASTEXITCODE",
-            "    if ($LeaseEndExit -ne 0) { Write-Error \"[AWX][desktop] source-lease-end-failed exitCode=$LeaseEndExit\" }",
-            "  }",
+            "  if ($EvidenceHandle) { $EvidenceHandle.Dispose() }",
             "}",
-            "if ($LeaseEndExit -ne 0) { exit $LeaseEndExit }",
             "",
         ]
     )
@@ -3900,6 +6343,11 @@ def write_desktop_dispatch_artifacts(
         "## Required Producer Proof",
         f"- Dispatch integrity sidecar: `dispatch/{topic_slug}-dispatch.sha256.txt`",
         "- Each producer command file must match the dispatch sidecar before handoff; stale or rewritten command files fail as `dispatch-command-sha-mismatch`.",
+        *(
+            [f"- Source-health producer queue: `dispatch/{source_health_queue_path.name}`"]
+            if source_health_queue_written
+            else []
+        ),
         "- `external-node-proof/macmini-node-smoke.json`",
         "- `external-node-proof/notebook-node-smoke.json`",
         "- `external-node-proof/macmini-producer-handoff.json`",
@@ -3954,6 +6402,11 @@ def write_desktop_dispatch_artifacts(
         "handoffSummary": str(handoff_path),
         "dispatchSha256Sidecar": str(sha_sidecar_path),
         "sha256CoveredArtifacts": [str(path) for path in covered_artifact_paths],
+        **(
+            {"sourceHealthProducerQueue": str(source_health_queue_path)}
+            if source_health_queue_written
+            else {}
+        ),
         "producerCommands": [
             {
                 "nodeRole": safe_scalar(action.get("nodeRole", ""), 32),
@@ -4009,7 +6462,10 @@ def agent_db_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     if endpoint not in allowed_endpoints:
         raise ValueError("invalid_agent_db_context_endpoint")
     base_url = safe_scalar(
-        payload.get("base_url") or os.environ.get("AWX_AGENT_DB_CONTEXT_BASE_URL") or "http://localhost:8080",
+        payload.get("base_url")
+        or os.environ.get("AWX_AGENT_DB_CONTEXT_BASE_URL")
+        or deployment_public_base_url()
+        or "http://localhost:8080",
         240,
     ).rstrip("/")
     timeout_sec = bounded_int(payload.get("timeout_sec"), 10, 1, 60)
@@ -4070,6 +6526,7 @@ def trace_snapshot_probe(payload: dict[str, Any]) -> dict[str, Any]:
         or payload.get("baseUrl")
         or os.environ.get("AWX_TRACE_SNAPSHOT_BASE_URL")
         or os.environ.get("AWX_AGENT_DB_CONTEXT_BASE_URL")
+        or deployment_public_base_url()
         or "http://localhost:8080",
         240,
     ).rstrip("/")
@@ -5818,6 +8275,69 @@ def supabase_db_snapshot_plan(cli: dict[str, Any], mcp_config: dict[str, Any]) -
             ),
         },
         {
+            "name": "shadow_memory_candidate_tables",
+            "sql": (
+                "select table_schema, table_name, table_type "
+                "from information_schema.tables "
+                "where table_schema not in ('pg_catalog','information_schema') "
+                "and ("
+                "lower(table_schema) like '%memory%' "
+                "or lower(table_schema) like '%trace%' "
+                "or lower(table_name) like '%memory%' "
+                "or lower(table_name) like '%trace%' "
+                "or lower(table_name) like '%cfvm%' "
+                "or lower(table_name) like '%debug%' "
+                "or lower(table_name) like '%rag%' "
+                "or lower(table_name) like '%vector%' "
+                "or lower(table_name) like '%embedding%'"
+                ") "
+                "order by table_schema, table_name"
+            ),
+        },
+        {
+            "name": "shadow_memory_candidate_columns",
+            "sql": (
+                "select table_schema, table_name, column_name, data_type, ordinal_position "
+                "from information_schema.columns "
+                "where table_schema not in ('pg_catalog','information_schema') "
+                "and ("
+                "lower(table_schema) like '%memory%' "
+                "or lower(table_schema) like '%trace%' "
+                "or lower(table_name) like '%memory%' "
+                "or lower(table_name) like '%trace%' "
+                "or lower(table_name) like '%cfvm%' "
+                "or lower(table_name) like '%debug%' "
+                "or lower(table_name) like '%rag%' "
+                "or lower(table_name) like '%vector%' "
+                "or lower(table_name) like '%embedding%'"
+                ") "
+                "order by table_schema, table_name, ordinal_position"
+            ),
+        },
+        {
+            "name": "shadow_memory_metadata_fingerprints",
+            "sql": (
+                "select table_schema, table_name, count(*) as column_count, "
+                "md5(string_agg(column_name || ':' || data_type || ':' || ordinal_position::text, '|' "
+                "order by ordinal_position)) as metadata_fingerprint "
+                "from information_schema.columns "
+                "where table_schema not in ('pg_catalog','information_schema') "
+                "and ("
+                "lower(table_schema) like '%memory%' "
+                "or lower(table_schema) like '%trace%' "
+                "or lower(table_name) like '%memory%' "
+                "or lower(table_name) like '%trace%' "
+                "or lower(table_name) like '%cfvm%' "
+                "or lower(table_name) like '%debug%' "
+                "or lower(table_name) like '%rag%' "
+                "or lower(table_name) like '%vector%' "
+                "or lower(table_name) like '%embedding%'"
+                ") "
+                "group by table_schema, table_name "
+                "order by table_schema, table_name"
+            ),
+        },
+        {
             "name": "extensions",
             "sql": "select extname, extversion from pg_extension order by extname",
         },
@@ -6591,11 +9111,17 @@ def scan_tree(path: Path) -> dict[str, Any]:
 
 def patchdrop_summary(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"exists": False, "topLevelPatchCount": 0, "pendingProducerCount": 0}
+        return {
+            "exists": False,
+            "topLevelPatchCount": 0,
+            "pendingProducerCount": 0,
+            "pendingV3Count": 0,
+        }
     return {
         "exists": True,
         "topLevelPatchCount": len(list(path.glob("*.patch"))),
         "pendingProducerCount": len(list(path.glob("*.macmini-pending.md"))) + len(list(path.glob("*.notebook-pending.md"))),
+        "pendingV3Count": len(list(path.glob("*-v3.patch"))),
     }
 
 
@@ -6691,6 +9217,8 @@ def iter_regular_files(path: Path, max_files: int, skip_tests: bool = False):
             dirs[:] = []
             continue
         for name in files:
+            if skip_tests and name.lower().startswith("test_"):
+                continue
             if Path(name).suffix.lower() in {".pyc", ".pyo", ".class"}:
                 continue
             yield Path(current) / name
@@ -6883,11 +9411,26 @@ def validate_node_smoke_evidence(
     missing_tools = sorted(REQUIRED_NODE_SMOKE_TOOLS - step_tools)
     if missing_tools:
         failures.append("missing-tools:" + ",".join(missing_tools))
+    unallowlisted_step_count = sum(
+        1
+        for step in steps
+        if isinstance(step, dict) and bool(set(step) - NODE_SMOKE_STEP_FIELDS)
+    )
+    if unallowlisted_step_count:
+        failures.append(f"unallowlisted-step-fields:count={unallowlisted_step_count}")
+    terminal_steps = [step for step in steps if node_smoke_step_has_terminal_outcome(step)]
+    invalid_step_count = len(steps) - len(terminal_steps)
+    if invalid_step_count:
+        failures.append(f"invalid-step-shape:count={invalid_step_count}")
+    terminal_tools = {safe_scalar(step.get("toolName", ""), 80) for step in terminal_steps}
+    missing_terminal_tools = sorted(REQUIRED_NODE_SMOKE_TOOLS - terminal_tools)
+    if missing_terminal_tools:
+        failures.append("missing-terminal-outcome:" + ",".join(missing_terminal_tools))
     for tool_name, allowed_decisions in NODE_SMOKE_DECISION_ALLOWLIST.items():
         matching_steps = [
             step
-            for step in steps
-            if isinstance(step, dict) and safe_scalar(step.get("toolName", ""), 80) == tool_name
+            for step in terminal_steps
+            if safe_scalar(step.get("toolName", ""), 80) == tool_name
         ]
         if matching_steps and not any(
             safe_scalar(step.get("decision", ""), 120) in allowed_decisions
@@ -6897,10 +9440,9 @@ def validate_node_smoke_evidence(
     for tool_name, fallback_decisions in NODE_SMOKE_FALLBACK_DECISIONS.items():
         fallback_steps = [
             step
-            for step in steps
+            for step in terminal_steps
             if (
-                isinstance(step, dict)
-                and safe_scalar(step.get("toolName", ""), 80) == tool_name
+                safe_scalar(step.get("toolName", ""), 80) == tool_name
                 and safe_scalar(step.get("decision", ""), 120) in fallback_decisions
             )
         ]
@@ -6908,11 +9450,10 @@ def validate_node_smoke_evidence(
             failures.append(tool_name.replace("_", "-") + "-local-fallback")
 
     restore_blocked = any(
-        isinstance(step, dict)
-        and step.get("toolName") == "archive_restore"
+        step.get("toolName") == "archive_restore"
         and step.get("decision") == "restore_target_blocked"
         and step.get("failReason") == "smb-conflict-risk"
-        for step in steps
+        for step in terminal_steps
     )
     if role in {"macmini", "notebook", "read-only"} and not restore_blocked:
         failures.append("restore-block-missing")
@@ -6923,6 +9464,39 @@ def validate_node_smoke_evidence(
         "restoreBlocked": restore_blocked,
         "failReason": ",".join(failures),
     }
+
+
+def node_smoke_step_has_terminal_outcome(step: Any) -> bool:
+    if not isinstance(step, dict) or set(step) != NODE_SMOKE_STEP_FIELDS:
+        return False
+    tool_name = step.get("toolName")
+    decision = step.get("decision")
+    fail_reason = step.get("failReason")
+    evidence_needed = step.get("evidence_needed")
+    exit_code = step.get("exitCode")
+    output_count = step.get("outputCount")
+    elapsed_ms = step.get("elapsedMs")
+    return (
+        isinstance(tool_name, str)
+        and tool_name in REQUIRED_NODE_SMOKE_TOOLS
+        and isinstance(step.get("ok"), bool)
+        and isinstance(step.get("localFallbackPresent"), bool)
+        and isinstance(decision, str)
+        and 0 < len(decision) <= 120
+        and isinstance(fail_reason, str)
+        and len(fail_reason) <= 120
+        and isinstance(evidence_needed, str)
+        and len(evidence_needed) <= 2000
+        and isinstance(exit_code, int)
+        and not isinstance(exit_code, bool)
+        and -(2**31) <= exit_code < 2**31
+        and isinstance(output_count, int)
+        and not isinstance(output_count, bool)
+        and 0 <= output_count <= 1_000_000
+        and isinstance(elapsed_ms, int)
+        and not isinstance(elapsed_ms, bool)
+        and 0 <= elapsed_ms <= 86_400_000
+    )
 
 
 def validate_producer_handoff_evidence(
@@ -7132,9 +9706,8 @@ def producer_kit_bootstrap_command(
 
 
 def setup_config_path(source_root: str, role: str) -> str:
-    if role == "macmini":
-        return source_root.rstrip("/\\").replace("\\", "/") + "/.codex/awx-control-tower.mcp.json"
-    return str(Path(source_root) / ".codex" / "awx-control-tower.mcp.json")
+    # The receiving host resolves its local state directory at execution time.
+    return ""
 
 
 def setup_audit_log_path(source_root: str, role: str) -> str:
@@ -7155,6 +9728,7 @@ def producer_setup_command(
 ) -> str:
     parts = [
         python_cmd,
+        "-B",
         quote_fn(setup_script),
         "--node-role",
         quote_fn(node_role),
@@ -7162,9 +9736,9 @@ def producer_setup_command(
         quote_fn(source_root),
         "--canonical-root",
         quote_fn(canonical_root),
-        "--output",
-        quote_fn(output_path),
     ]
+    if output_path:
+        parts.extend(["--output",quote_fn(output_path)])
     if audit_log_path:
         parts.extend(["--audit-log", quote_fn(audit_log_path)])
     return " ".join(parts)
@@ -7407,6 +9981,10 @@ def redact(value: Any) -> Any:
             key_text = str(key)
             if redaction_safe_count_field(key_text, item):
                 out[key_text] = item
+            elif key_text in {"secretEnvRefs", "apikeyEnvRefs"} and isinstance(item, list):
+                # These fields contain public names, never credential values.
+                out[key_text] = [ref if isinstance(ref, str) and ref in ENV_REFS
+                                 else "<redacted>" for ref in item]
             elif isinstance(item, bool):
                 out[key_text] = item
             elif re.search(r"(?i)(secret|password|token|api.?key|authorization|cookie)", key_text):
@@ -7466,8 +10044,239 @@ def has_unsafe_glob(pattern: str) -> bool:
 
 
 def filemode_line_count(path: Path) -> int:
+    return patch_mode_summary(path)["filemodeLineCount"]
+
+
+def empty_patch_mode_summary() -> dict[str, int]:
+    return {
+        "filemodeLineCount": 0,
+        "allowedNewFileCount": 0,
+        "filemodeViolationCount": 0,
+    }
+
+
+def patch_mode_summary(path: Path) -> dict[str, int]:
+    return patch_mode_summary_text(path.read_text(encoding="utf-8", errors="ignore"))
+
+
+def patch_mode_summary_text(patch_text: str) -> dict[str, int]:
+    text = patch_text.lstrip("\ufeff")
+    blocks: list[list[str]] = []
+    preamble: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            if current is not None:
+                blocks.append(current)
+            current = [line]
+        elif current is None:
+            preamble.append(line)
+        else:
+            current.append(line)
+    if current is not None:
+        blocks.append(current)
+
+    mode_header = re.compile(r"^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$")
+    preamble_modes = [line for line in preamble if mode_header.match(line)]
+    total = len(preamble_modes)
+    allowed = 0
+    violations = len(preamble_modes)
+    seen_targets: set[str] = set()
+    for block in blocks:
+        mode_lines = [line for line in block if mode_header.match(line)]
+        total += len(mode_lines)
+        envelope = patch_envelope_lines(block)
+        has_old_null = "--- /dev/null" in envelope
+        has_new_null = "+++ /dev/null" in envelope
+        if has_new_null or (has_old_null and not mode_lines):
+            violations += max(1, len(mode_lines))
+            continue
+        if not mode_lines:
+            continue
+        header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0]) if block else None
+        target = header.group(1) if header is not None and header.group(1) == header.group(2) else ""
+        if is_canonical_new_file_block(block, mode_lines) and target not in seen_targets:
+            seen_targets.add(target)
+            allowed += 1
+        else:
+            violations += len(mode_lines)
+    return {
+        "filemodeLineCount": total,
+        "allowedNewFileCount": allowed,
+        "filemodeViolationCount": violations,
+    }
+
+
+def patch_envelope_lines(lines: list[str]) -> list[str]:
+    first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), len(lines))
+    return lines[:first_hunk]
+
+
+def is_canonical_repo_relative_patch_path(value: str) -> bool:
+    if not value or value != value.replace("\\", "/"):
+        return False
+    if value.startswith(("/", "//")) or re.match(r"^[A-Za-z]:", value):
+        return False
+    if re.search(r"[\x00-\x20\x7f\"<>:|?*]", value):
+        return False
+    return all(
+        part not in {"", ".", ".."}
+        and not part.endswith((".", " "))
+        and re.match(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)", part, re.IGNORECASE) is None
+        for part in value.split("/")
+    )
+
+
+def is_canonical_new_file_block(block: list[str], mode_lines: list[str]) -> bool:
+    if not block or mode_lines != ["new file mode 100644"]:
+        return False
+    header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0])
+    if header is None or header.group(1) != header.group(2):
+        return False
+    target = header.group(1)
+    if not is_canonical_repo_relative_patch_path(target):
+        return False
+    if any(pattern.search(target) for pattern, _ in FORBIDDEN_PATCH_PATH_PATTERNS):
+        return False
+    envelope = patch_envelope_lines(block)
+    old_headers = [line for line in envelope if line.startswith("--- ")]
+    new_headers = [line for line in envelope if line.startswith("+++ ")]
+    if old_headers != ["--- /dev/null"] or new_headers != [f"+++ b/{target}"]:
+        return False
+    if not has_canonical_new_file_hunk(block):
+        return False
+    return not any(
+        line.startswith(("rename from ", "rename to ", "copy from ", "copy to "))
+        or line == "GIT binary patch"
+        or (line.startswith("Binary files ") and line.endswith(" differ"))
+        for line in block
+    )
+
+
+def has_exact_hunk_sequence(lines: list[str], *, require_new_file: bool) -> bool:
+    first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), -1)
+    if first_hunk < 0:
+        return False
+    envelope = lines[:first_hunk]
+    old_indexes = [index for index, line in enumerate(envelope) if line.startswith("--- ")]
+    new_indexes = [index for index, line in enumerate(envelope) if line.startswith("+++ ")]
+    if len(old_indexes) != 1 or len(new_indexes) != 1 or new_indexes[0] != old_indexes[0] + 1:
+        return False
+    if first_hunk != new_indexes[0] + 1:
+        return False
+    index = first_hunk
+    hunk_count = 0
+    header_pattern = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$")
+    while index < len(lines):
+        header = header_pattern.fullmatch(lines[index])
+        if header is None:
+            return False
+        old_start = int(header.group(1))
+        old_expected = int(header.group(2)) if header.group(2) is not None else 1
+        new_start = int(header.group(3))
+        new_expected = int(header.group(4)) if header.group(4) is not None else 1
+        if require_new_file and (hunk_count != 0 or old_start != 0 or old_expected != 0 or new_start != 1 or new_expected <= 0):
+            return False
+        hunk_count += 1
+        index += 1
+        old_actual = 0
+        new_actual = 0
+        old_eof_marked = False
+        new_eof_marked = False
+        while index < len(lines) and not lines[index].startswith("@@ "):
+            line = lines[index]
+            if line == r"\ No newline at end of file":
+                if index == 0 or not lines[index - 1].startswith((" ", "+", "-")):
+                    return False
+                if any(candidate.startswith("@@ ") for candidate in lines[index + 1 :]):
+                    return False
+                previous_kind = lines[index - 1][0]
+                if previous_kind == "-":
+                    if old_eof_marked or new_eof_marked:
+                        return False
+                    old_eof_marked = True
+                elif previous_kind == "+":
+                    if new_eof_marked:
+                        return False
+                    new_eof_marked = True
+                else:
+                    if old_eof_marked or new_eof_marked:
+                        return False
+                    old_eof_marked = True
+                    new_eof_marked = True
+                index += 1
+                continue
+            if not line or line[0] not in {" ", "+", "-"}:
+                return False
+            if new_eof_marked or (old_eof_marked and line[0] != "+"):
+                return False
+            if require_new_file and line[0] != "+":
+                return False
+            if line[0] in {" ", "-"}:
+                old_actual += 1
+            if line[0] in {" ", "+"}:
+                new_actual += 1
+            if old_actual > old_expected or new_actual > new_expected:
+                return False
+            index += 1
+        if old_actual != old_expected or new_actual != new_expected:
+            return False
+    return hunk_count == 1 if require_new_file else hunk_count > 0
+
+
+def has_canonical_new_file_hunk(lines: list[str]) -> bool:
+    return has_exact_hunk_sequence(lines, require_new_file=True)
+
+
+def patch_structure_violation_count_text(patch_text: str) -> int:
+    text = patch_text.lstrip("\ufeff")
+    blocks: list[list[str]] = []
+    preamble: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("diff --git "):
+            if current is not None:
+                blocks.append(current)
+            current = [line]
+        elif current is None:
+            preamble.append(line)
+        else:
+            current.append(line)
+    if current is not None:
+        blocks.append(current)
+    violations = 1 if any(line.strip() for line in preamble) or not blocks else 0
+    seen_targets: set[str] = set()
+    for block in blocks:
+        header = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', block[0])
+        if header is None or header.group(1) != header.group(2):
+            violations += 1
+            continue
+        target = header.group(1)
+        if not is_canonical_repo_relative_patch_path(target) or target in seen_targets:
+            violations += 1
+            continue
+        seen_targets.add(target)
+        envelope = patch_envelope_lines(block)
+        old_headers = [line for line in envelope if line.startswith("--- ")]
+        new_headers = [line for line in envelope if line.startswith("+++ ")]
+        mode_lines = [
+            line
+            for line in block
+            if re.match(r"^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$", line)
+        ]
+        if old_headers == ["--- /dev/null"]:
+            if not is_canonical_new_file_block(block, mode_lines):
+                violations += 1
+        elif old_headers != [f"--- a/{target}"] or new_headers != [f"+++ b/{target}"]:
+            violations += 1
+        elif not has_exact_hunk_sequence(block, require_new_file=False):
+            violations += 1
+    return violations
+
+
+def binary_patch_marker_count(path: Path) -> int:
     text = path.read_text(encoding="utf-8", errors="ignore")
-    return len(re.findall(r"(?m)^(old mode|new mode|deleted file mode|new file mode) 100(644|755)$", text))
+    return len(re.findall(r"(?m)^(GIT binary patch|Binary files .+ differ)$", text))
 
 
 def diff_header_count(path: Path) -> int:
@@ -7477,7 +10286,7 @@ def diff_header_count(path: Path) -> int:
 
 FORBIDDEN_PATCH_PATH_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(^|/)(apikey\.txt|apikey\.ps1)$", re.IGNORECASE), "secret-setup"),
-    (re.compile(r"(^|/)\.env($|[./])", re.IGNORECASE), "secret-env"),
+    (re.compile(r"(^|/)\.env[^/]*(?:/|$)", re.IGNORECASE), "secret-env"),
     (re.compile(r"(^|/)pages/api/", re.IGNORECASE), "nextjs-pages-api"),
     (re.compile(r"(^|/)(\.gradle|build|node_modules|\.next|\.turbo|\.swc)(/|$)", re.IGNORECASE), "shared-cache-build-output"),
     (re.compile(r"\.(p12|jks)$", re.IGNORECASE), "keystore"),
@@ -7497,12 +10306,16 @@ def patch_target_paths(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="ignore").lstrip("\ufeff")
     paths: list[str] = []
     seen: set[str] = set()
+    hunk_started = False
     for line in text.splitlines():
         candidates: list[str] = []
         if line.startswith("diff --git "):
+            hunk_started = False
             parts = line.split()
             candidates.extend(parts[2:4])
-        elif line.startswith("+++ ") or line.startswith("--- "):
+        elif line.startswith("@@ "):
+            hunk_started = True
+        elif not hunk_started and (line.startswith("+++ ") or line.startswith("--- ")):
             candidates.append(line[4:].split("\t", 1)[0])
         elif line.startswith("rename from ") or line.startswith("rename to "):
             candidates.append(line.split(" ", 2)[2])
@@ -7517,14 +10330,7 @@ def patch_target_paths(path: Path) -> list[str]:
 
 
 def is_unsafe_patch_target(target: str) -> bool:
-    parts = [part for part in target.replace("\\", "/").split("/") if part]
-    return (
-        ".." in parts
-        or target.startswith("/")
-        or target.startswith("//")
-        or target.startswith("\\\\")
-        or re.match(r"^[A-Za-z]:", target) is not None
-    )
+    return not is_canonical_repo_relative_patch_path(target)
 
 
 def forbidden_patch_paths(path: Path) -> list[dict[str, str]]:
