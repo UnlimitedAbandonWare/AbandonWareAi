@@ -75,8 +75,7 @@ public class RateLimitPolicy {
             if (sec <= 0) {
                 return 0L;
             }
-            long ms = sec * 1000L;
-            return Math.min(60_000L, ms);
+            return Math.min(sec, 60L) * 1000L;
         } catch (NumberFormatException ex) {
             traceSuppressed("retryAfter.secondsParseFallback", ex);
             // fallthrough to HTTP-date
