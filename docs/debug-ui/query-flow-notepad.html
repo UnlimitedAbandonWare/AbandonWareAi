@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Query Flow Notepad</title>
+<style>
+  :root { --bg:#111418; --panel:#1a1f26; --line:#2a313b; --fg:#d7dde5;
+          --dim:#8b95a1; --acc:#5aa0ff; --ok:#58c98b; --warn:#e0b35a; --err:#e06a6a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:13px/1.45 "Segoe UI",Consolas,monospace; }
+  header { padding:10px 14px; border-bottom:1px solid var(--line);
+           display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .pill { padding:1px 8px; border:1px solid var(--line); border-radius:10px;
+          color:var(--dim); font-size:11px; }
+  .pill.ok { color:var(--ok); } .pill.warn { color:var(--warn); }
+  .pill.err { color:var(--err); }
+  input[type=text], select { background:var(--panel); color:var(--fg);
+    border:1px solid var(--line); border-radius:4px; padding:4px 8px; }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+           border-radius:4px; padding:4px 10px; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  nav.tabs { display:flex; gap:2px; padding:6px 14px 0; }
+  nav.tabs button { border-bottom:none; border-radius:6px 6px 0 0; color:var(--dim); }
+  nav.tabs button.on { color:var(--fg); border-color:var(--acc); background:#202733; }
+  main { display:flex; border-top:1px solid var(--line); min-height:70vh; }
+  #list { flex:1 1 55%; overflow-y:auto; max-height:78vh; }
+  #side { flex:1 1 45%; border-left:1px solid var(--line); overflow-y:auto;
+          max-height:78vh; padding:10px 12px; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { padding:3px 7px; border-bottom:1px solid var(--line);
+           text-align:left; vertical-align:top; }
+  th { color:var(--dim); font-weight:500; position:sticky; top:0;
+       background:var(--bg); }
+  tr.row { cursor:pointer; }
+  tr.row:hover { background:#1e2630; }
+  tr.row.sel { background:#223041; }
+  .mono { font-family:Consolas,monospace; font-size:12px; }
+  .dim { color:var(--dim); } .ok { color:var(--ok); }
+  .warn { color:var(--warn); } .err { color:var(--err); }
+  .badge { display:inline-block; padding:0 6px; border-radius:8px; font-size:11px;
+           border:1px solid var(--line); color:var(--dim); }
+  .badge.completed { color:var(--ok); } .badge.failed { color:var(--err); }
+  pre { background:var(--panel); border:1px solid var(--line); border-radius:5px;
+        padding:8px; overflow-x:auto; white-space:pre-wrap; word-break:break-all;
+        font-size:11.5px; }
+  h3 { font-size:12.5px; color:var(--dim); text-transform:uppercase;
+       letter-spacing:.04em; margin:14px 0 6px; }
+  footer { border-top:1px solid var(--line); padding:8px 14px; color:var(--dim);
+           font-size:11.5px; }
+  .hidden { display:none; }
+  mark { background:#4a3d1e; color:#ffe9a8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Query Flow Notepad</h1>
+  <span id="bundleInfo" class="pill">bundle: not loaded</span>
+  <span id="secretsInfo" class="pill">NO_SECRETS: ?</span>
+  <input type="file" id="filePick" accept=".json" title="load bundle.json">
+  <input type="text" id="q" placeholder="search (id/model/message/where)" size="30">
+  <input type="text" id="fSid" placeholder="sessionId (hash:…)" size="16">
+  <select id="fSurface"><option value="">surface*</option></select>
+  <select id="fOutcome"><option value="">outcome*</option></select>
+</header>
+
+<nav class="tabs">
+  <button data-tab="sessions" class="on">Sessions</button>
+  <button data-tab="db">DB export</button>
+  <button data-tab="timeline">Timeline</button>
+  <button data-tab="trail">RAG trail</button>
+</nav>
+
+<main>
+  <div id="list"></div>
+  <div id="side"><p class="dim">좌측 행을 선택하면 상세가 표시된다.</p></div>
+</main>
+
+<footer id="foot">journals: not loaded · analyzer: scripts/request_trace_analyze.py
+ · source lanes: chat-session-traces · rag-launcher LATEST · meta-db export.sqlite
+ · logs/*.ndjson · work_journal — read-only, no second SSOT</footer>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+let B = null;          // bundle.json
+let TAB = "sessions";
+let SEL = null;        // selected row payload
+
+// ---------- load ----------
+async function tryFetchJson(url) {
+  try { const r = await fetch(url, {cache:"no-store"});
+        if (r.ok) return await r.json(); } catch (e) {}
+  return null;
+}
+function varUrlCandidates(path) {
+  // 절대/루트상대 경로 어떤 형태든 /var/ 이후 구간만 뽑아 두 접두로 시도.
+  const p = String(path || "").replace(/\\/g, "/");
+  const i = p.indexOf("/var/");
+  const tail = i >= 0 ? p.slice(i + 1)
+              : (p.startsWith("var/") ? p : "var/" + p);
+  return ["/" + tail, "../../" + tail];
+}
+async function autoLoad() {
+  // http.server 모드: latest.json 포인터 → bundle.json. file:// 는 실패 → 수동 선택.
+  const latest = await tryFetchJson("../../var/debug/query-flow/latest.json")
+              || await tryFetchJson("/var/debug/query-flow/latest.json");
+  let b = null;
+  if (latest) {
+    const cands = [];
+    if (latest.bundleJson) cands.push(...varUrlCandidates(latest.bundleJson));
+    if (latest.bundleDir)  cands.push(...varUrlCandidates(
+        "var/debug/" + String(latest.bundleDir).replace(/\\/g,"/")
+          .replace(/^var\/debug\//, "") + "/bundle.json"));
+    for (const u of cands) { b = await tryFetchJson(u); if (b) break; }
+  }
+  if (!b) b = await tryFetchJson("bundle.json");
+  if (b) setBundle(b, "auto");
+  else $("#bundleInfo").textContent =
+    "bundle: pick file (or serve repo root via http.server)";
+}
+$("#filePick").addEventListener("change", ev => {
+  const f = ev.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => { try { setBundle(JSON.parse(rd.result), f.name); }
+                    catch (e) { alert("bundle.json parse failed: " + e); } };
+  rd.readAsText(f);
+});
+function setBundle(b, src) {
+  B = b;
+  const gen = (b.generatedAtUtc || "").slice(0,19);
+  $("#bundleInfo").textContent =
+    `bundle: ${gen} (${src}) sessions=${(b.sessions||[]).length} ` +
+    `events=${(b.events||[]).length} journals=${(b.journals||[]).length}`;
+  $("#bundleInfo").className = "pill ok";
+  $("#secretsInfo").textContent = "NO_SECRETS: required by bundle lane";
+  $("#secretsInfo").className = "pill ok";
+  fillFilters(); render();
+}
+function fillFilters() {
+  const surf = new Set(), outc = new Set();
+  for (const s of B.sessions || []) {
+    if (s.surface) surf.add(s.surface);
+    if (s.outcome) outc.add(s.outcome);
+  }
+  $("#fSurface").innerHTML = '<option value="">surface*</option>' +
+    [...surf].sort().map(v => `<option>${esc(v)}</option>`).join("");
+  $("#fOutcome").innerHTML = '<option value="">outcome*</option>' +
+    [...outc].sort().map(v => `<option>${esc(v)}</option>`).join("");
+}
+
+// ---------- helpers ----------
+const esc = v => String(v ?? "").replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const hl = (txt, q) => {
+  const t = esc(txt); if (!q) return t;
+  const needle = esc(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return t.replace(new RegExp("(" + needle + ")", "gi"), "<mark>$1</mark>");
+};
+const qv = () => $("#q").value.trim().toLowerCase();
+const match = (hay, q) => !q || String(hay||"").toLowerCase().includes(q);
+const cell = (v, q) => `<td class="mono">${hl(v ?? "", q)}</td>`;
+const oc = v => `<span class="badge ${esc(v||"")}">${esc(v||"-")}</span>`;
+function shortTs(ts) { return String(ts||"").replace("T"," ").slice(5,19); }
+
+// ---------- tabs ----------
+document.querySelectorAll("nav.tabs button").forEach(b =>
+  b.addEventListener("click", () => {
+    document.querySelectorAll("nav.tabs button")
+      .forEach(x => x.classList.remove("on"));
+    b.classList.add("on"); TAB = b.dataset.tab; SEL = null; render();
+  }));
+["q","fSid","fSurface","fOutcome"].forEach(id =>
+  $("#"+id).addEventListener("input", render));
+
+// ---------- render ----------
+function render() {
+  if (!B) return;
+  ({ sessions: renderSessions, db: renderDb,
+     timeline: renderTimeline, trail: renderTrail })[TAB]();
+  renderFoot();
+}
+function renderFoot() {
+  const js = (B.journals||[]).map(j =>
+    `${esc(j.taskId||"?")}(${esc(j.agent||"?")}): ${esc(j.purpose||"")}`);
+  $("#foot").innerHTML =
+    "active journals: " + (js.length ? js.join(" · ") : "none observed") +
+    " · analyzer: <code>python -B scripts/request_trace_analyze.py " +
+    "&lt;file-with-request.events-lines&gt;</code>" +
+    " · bundle is read-only redacted; share paths not bodies";
+}
+
+function sessionFilter(s, q) {
+  if ($("#fSid").value.trim() &&
+      !match(s.sessionId, $("#fSid").value.trim().toLowerCase())) return false;
+  if ($("#fSurface").value && s.surface !== $("#fSurface").value) return false;
+  if ($("#fOutcome").value && s.outcome !== $("#fOutcome").value) return false;
+  if (!q) return true;
+  return [s.sessionId, s.runId, s.recordId, s.requestedModel,
+          s.effectiveModel, s.outcome, s.errorClass, s.surface, s.file]
+         .some(v => match(v, q));
+}
+
+function renderSessions() {
+  const q = qv();
+  const rows = (B.sessions||[]).filter(s => sessionFilter(s, q));
+  const html = [`<table><tr><th>ts</th><th>surface</th><th>session</th>
+    <th>run</th><th>model</th><th>outcome</th><th>err</th><th>fb</th></tr>`];
+  for (const s of [...rows].reverse()) {   // 최신이 위 — chrono list 유지
+    html.push(`<tr class="row" data-i="${(B.sessions||[]).indexOf(s)}">` +
+      cell(shortTs(s.ts), q) + cell(s.surface, q) +
+      cell((s.sessionId||"").replace("hash:",""), q) +
+      cell((s.runId||"").replace("hash:",""), q) +
+      cell(s.effectiveModel || s.requestedModel, q) +
+      `<td>${oc(s.outcome)}</td>` + cell(s.errorClass, q) +
+      cell(s.fallbackCount ?? "", q) + "</tr>");
+  }
+  html.push("</table>");
+  $("#list").innerHTML = html.join("") ||
+    '<p class="dim">no session records</p>';
+  document.querySelectorAll("#list tr.row").forEach(tr =>
+    tr.addEventListener("click", () => {
+      document.querySelectorAll("tr.sel").forEach(x=>x.classList.remove("sel"));
+      tr.classList.add("sel");
+      SEL = B.sessions[+tr.dataset.i]; renderSessionSide(SEL);
+    }));
+}
+
+function joinedEvents(pred) {
+  return (B.events||[]).filter(e =>
+    (pred.sid && e.sid === pred.sid) ||
+    (pred.requestId && (e.requestId === pred.requestId ||
+                        e.traceId === pred.requestId)));
+}
+
+function renderSessionSide(s) {
+  const ev = joinedEvents({sid: s.sessionId, requestId: null});
+  const kv = Object.entries(s).map(([k,v]) =>
+    `<tr><td class="dim">${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("");
+  const analyzeCmd =
+    "python -B scripts/request_trace_analyze.py <file>\n" +
+    "# requestId=" + (s.runId || s.recordId || "?") +
+    "  sid=" + (s.sessionId || "?") + "\n" +
+    "# analyzer needs seq|t+<ms>|stage|event|fields|remain= lines\n" +
+    "# (sanitized traces carry ids only — paste an exported payload)";
+  $("#side").innerHTML =
+    `<h3>record</h3><table>${kv}</table>` +
+    `<h3>joined ndjson events (sid match: ${ev.length})</h3>` +
+    `<pre>${ev.map(e => esc(e.ts) + "  " + esc(e.kind) + "  " +
+       esc(e.probe||"") + "  " + esc(e.message||e.stage||"")).join("\n") ||
+       "none"}</pre>` +
+    `<h3>analyze</h3><pre>${esc(analyzeCmd)}</pre>` +
+    `<button id="copyCmd">copy record json</button>`;
+  $("#copyCmd").addEventListener("click", () =>
+    navigator.clipboard.writeText(JSON.stringify(s, null, 1)));
+}
+
+function renderDb() {
+  const d = B.dbExport || {};
+  let html = `<p class="dim">export: ${esc(d.dir||"none")} ` +
+             `(createdAt ${esc(((d.latestPointer||{}).createdAt)||"?")})</p>`;
+  html += `<table><tr><th>table</th><th>rows</th></tr>` +
+    (d.tables||[]).map(t =>
+      `<tr><td class="mono">${esc(t.name)}</td><td>${esc(t.rowCount)}</td></tr>`)
+    .join("") + "</table>";
+  $("#list").innerHTML = html;
+  let side = "";
+  for (const [name, tail] of Object.entries(d.tails || {})) {
+    side += `<h3>${esc(name)} (tail ${tail.tailRowCount ?? "?"})</h3>`;
+    if (tail.error) { side += `<pre class="err">${esc(tail.error)}</pre>`; continue; }
+    side += "<table><tr>" + tail.columns.map(c=>`<th>${esc(c)}</th>`).join("") +
+      "</tr>" + tail.rows.map(r => "<tr>" + r.map(v => {
+        const shown = (v && typeof v === "object")
+          ? `${esc(v.preview||"")} <span class="dim">(${v.len},${v.sha12})</span>`
+          : esc(v);
+        return `<td class="mono">${shown}</td>`; }).join("") + "</tr>").join("") +
+      "</table>";
+  }
+  $("#side").innerHTML = side || '<p class="dim">no export tails</p>';
+}
+
+function renderTimeline() {
+  const q = qv();
+  const sidF = $("#fSid").value.trim().toLowerCase();
+  const rows = (B.events||[]).filter(e => {
+    if (sidF && !(match(e.sid, sidF) || match(e.requestId, sidF) ||
+                  match(e.traceId, sidF))) return false;
+    if (!q) return true;
+    return [e.probe, e.level, e.message, e.where, e.sid, e.traceId,
+            e.requestId, e.stage, e.error, e.detail].some(v => match(v, q));
+  });
+  const html = [`<table><tr><th>ts</th><th>kind</th><th>probe/type</th>
+    <th>lvl</th><th>message/stage</th><th>sid</th><th>requestId</th>
+    <th>where</th></tr>`];
+  for (const e of [...rows].reverse()) {
+    html.push(`<tr class="row" data-i="${(B.events||[]).indexOf(e)}">` +
+      cell(shortTs(e.ts), q) + cell(e.kind, q) + cell(e.probe, q) +
+      cell(e.level, q) + cell(e.message || e.stage || "", q) +
+      cell((e.sid||"").replace("hash:",""), q) +
+      cell((e.requestId||"").replace("hash:",""), q) +
+      cell(e.where, q) + "</tr>");
+  }
+  html.push("</table>");
+  $("#list").innerHTML = html.join("") || '<p class="dim">no ndjson tail</p>';
+  document.querySelectorAll("#list tr.row").forEach(tr =>
+    tr.addEventListener("click", () => {
+      document.querySelectorAll("tr.sel").forEach(x=>x.classList.remove("sel"));
+      tr.classList.add("sel");
+      const e = B.events[+tr.dataset.i];
+      $("#side").innerHTML =
+        `<h3>event</h3><pre>${esc(JSON.stringify(e,null,1))}</pre>`;
+    }));
+}
+
+function renderTrail() {
+  const t = B.ragTrail || {};
+  const l = t.latest || {};
+  const d = t.debug || {};
+  $("#list").innerHTML =
+    `<h3>rag trail (${esc(t._collect||t.source||"unknown")})</h3>` +
+    `<table>` +
+    `<tr><td class="dim">verdict</td><td>${oc(t.verdict)}</td></tr>` +
+    `<tr><td class="dim">runId</td><td class="mono">${esc(l.runId||"")}</td></tr>` +
+    `<tr><td class="dim">status/stage</td><td class="mono">${esc(l.status||"")} / ${esc(l.stage||"")}</td></tr>` +
+    `<tr><td class="dim">reason</td><td class="mono">${esc(l.reason||"")}</td></tr>` +
+    `<tr><td class="dim">failurePoint</td><td class="mono">${esc(l.failurePoint||"")}</td></tr>` +
+    `<tr><td class="dim">listener</td><td class="mono">${esc(l.listenerStatus||"")} ${esc(l.listenerReason||"")}</td></tr>` +
+    `<tr><td class="dim">nextAction</td><td class="mono">${esc(l.nextAction||"")}</td></tr>` +
+    `<tr><td class="dim">ports</td><td class="mono">${esc(JSON.stringify(l.ports||""))} ollama=${esc(l.ollamaPort||"")}</td></tr>` +
+    `<tr><td class="dim">debug digest</td><td class="mono">${d.found? esc(d.file)+" "+esc(d.status)+" exit="+esc(d.exitCode) : esc(d.note||"none")}</td></tr>` +
+    `</table>`;
+  let side = "<h3>warnings / excerpts</h3>";
+  side += `<pre>${esc(((t.warnings)||[]).join("\n") || "no warnings")}</pre>`;
+  const ev = (t.evidence||{});
+  side += "<h3>first error excerpt</h3><pre>" +
+    esc(((ev.firstErrorExcerpt)||[]).join("\n") || "none") + "</pre>";
+  for (const ex of (ev.excerpts||[])) {
+    side += `<h3>${esc(ex.path)}</h3><pre>${esc((ex.lines||[]).join("\n"))}</pre>`;
+  }
+  side += `<h3>evidence paths</h3><pre>${esc(((ev.paths)||[]).join("\n")||"none")}</pre>`;
+  side += `<h3>nextCommand (hint only)</h3><pre>${esc(t.nextCommand||"")}</pre>`;
+  $("#side").innerHTML = side;
+}
+
+autoLoad();
+</script>
+</body>
+</html>
