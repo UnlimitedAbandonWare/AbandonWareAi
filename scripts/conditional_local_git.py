@@ -22,6 +22,7 @@ MAX_COMMIT_PATHS = 40
 MAX_COMMIT_DELETIONS = 15
 INTENDED_REMOTE = "AbandonWareAi"
 INTENDED_REMOTE_URL = "https://github.com/UnlimitedAbandonWare/AbandonWareAi"
+DISCARDED_REMOTE_MARKERS = ("abandonware3",)
 SCHEMA = "awx.conditional-local-git.v1"
 
 READ_ONLY = {"status", "diff", "rev-parse", "ls-files", "show", "log", "version", "help"}
@@ -360,14 +361,35 @@ def worktree_counts(repo: Path) -> dict:
 
 
 def remote_status(repo: Path) -> dict:
-    """Report-only remote observation; never prints the URL, mutates config, or hard-stops."""
-    proc = git(repo, ["remote", "get-url", "origin"])
-    url = text(proc.stdout).rstrip("/") if proc.returncode == 0 else ""
-    if url.lower().endswith(".git"):
-        url = url[:-4]
+    """Remote observation feeding the commit gate; emits flags only, never URLs.
+
+    Any remote (any name, fetch or push URL) carrying a discarded-upstream
+    marker sets `forbiddenRemote`; an `origin` that differs from the sole
+    intended remote sets `originMismatch`. Observation only — never mutates
+    config.
+    """
+    proc = git(repo, ["remote"])
+    names = ([line.strip() for line in text(proc.stdout).splitlines() if line.strip()]
+             if proc.returncode == 0 else [])
+    urls: list[str] = []
+    origin_url = ""
+    for name in names:
+        for extra in ([], ["--push"]):
+            got = git(repo, ["remote", "get-url", *extra, name])
+            if got.returncode != 0:
+                continue
+            url = text(got.stdout).rstrip("/").lower()
+            if url.endswith(".git"):
+                url = url[:-4]
+            urls.append(url)
+            if name == "origin" and not extra:
+                origin_url = url
     return {
         "intendedRemote": INTENDED_REMOTE,
-        "originMismatch": bool(url) and url.lower() != INTENDED_REMOTE_URL.lower(),
+        "forbiddenRemote": any(
+            marker in url for url in urls for marker in DISCARDED_REMOTE_MARKERS
+        ),
+        "originMismatch": bool(origin_url) and origin_url != INTENDED_REMOTE_URL.lower(),
     }
 
 
@@ -392,9 +414,14 @@ def inspect_index(repo: Path, expected: list[str] | None) -> dict:
     foreign: list[str] = []
     if wanted is not None and sorted(paths) != wanted:
         foreign = sorted(set(paths) - set(wanted))
+    remote = remote_status(repo)
     reason = "ok"
     code = 0
-    if lock:
+    if remote["forbiddenRemote"]:
+        reason, code = "forbidden-remote", 2
+    elif remote["originMismatch"]:
+        reason, code = "origin-mismatch", 2
+    elif lock:
         reason, code = "index-lock", 4
     elif scanned["missingBlobPaths"]:
         reason, code = "missing-blob", 3
@@ -418,7 +445,7 @@ def inspect_index(repo: Path, expected: list[str] | None) -> dict:
         "candidatePathCount": len(paths),
         "candidateDeletionCount": deletions,
         "worktreeCounts": worktree_counts(repo),
-        **remote_status(repo),
+        **remote,
         "snapshot": snapshot(records),
         "identityPresent": True,
         **scanned,
@@ -489,6 +516,11 @@ def commit_selected(repo: Path, message_file: Path, paths: list[str]) -> dict:
     directory = git_dir(repo)
     if directory is None or not identity_present(repo):
         return fail("missing-repository-or-identity", 3)
+    remote = remote_status(repo)
+    if remote["forbiddenRemote"]:
+        return fail("forbidden-remote", 2)
+    if remote["originMismatch"]:
+        return fail("origin-mismatch", 2)
     if not message_ok(message_file):
         return fail("message-missing-reason-verify-constraint", 2)
     wanted = set(paths)

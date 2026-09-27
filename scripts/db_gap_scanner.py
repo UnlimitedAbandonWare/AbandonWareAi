@@ -473,8 +473,8 @@ def assess_subsystem(
     has_volatile = len(gap.volatile_patterns_found) > 0
     design_persistence = str(spec["design_persistence"]).strip().lower()
     needs_persistence = not design_persistence.startswith("configuration only")
-    has_ndjson_persistence = sid == "S07_CIH_RAG" and any(
-        c.simple_name == "TraceSnapshotExporter" for c in classes
+    has_ndjson_trace_snapshot = sid == "S07_CIH_RAG" and any(
+        c.fqcn == "com.example.lms.trace.TraceSnapshotExporter" for c in classes
     )
 
     if has_entity and has_repo:
@@ -482,10 +482,10 @@ def assess_subsystem(
         gap.persistence_type = "JPA"
         gap.persistence_status = "resolved_jpa"
         gap.action_required = False
-    elif has_ndjson_persistence:
+    elif has_ndjson_trace_snapshot:
         gap.has_db_persistence = True
-        gap.persistence_type = "NDJSON"
-        gap.persistence_status = "resolved_ndjson"
+        gap.persistence_type = "NDJSON_TRACE_SNAPSHOT"
+        gap.persistence_status = "review_ndjson_trace_snapshot"
         gap.action_required = False
     elif not needs_persistence:
         gap.has_db_persistence = True
@@ -527,6 +527,12 @@ def assess_subsystem(
         gap.gap_details = (
             f"Missing entities: {gap.entities_missing}; "
             f"missing repos: {gap.repositories_missing}"
+        )
+    elif gap.persistence_status == "review_ndjson_trace_snapshot":
+        gap.gap_severity = "LOW"
+        gap.gap_details = (
+            "Canonical TraceSnapshotExporter provides an allowlisted NDJSON sidecar, "
+            "but durable MLA breadcrumb records and full IQR history remain unproven"
         )
     elif gap.duplicate_classes:
         gap.gap_severity = "LOW"
@@ -1663,7 +1669,7 @@ def format_supabase_collection_packet(collection_packet: dict) -> str:
 def persistence_contract_badge(gap: SubsystemGap) -> str:
     if gap.action_required:
         return "[PATCH]"
-    if gap.persistence_status == "review_runtime_only":
+    if gap.persistence_status.startswith("review_"):
         return "[REVIEWED]"
     if gap.has_db_persistence:
         return "[OK]"

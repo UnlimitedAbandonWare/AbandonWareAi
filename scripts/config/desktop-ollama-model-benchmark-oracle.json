@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "corpusId": "awx.desktop-ollama-benchmark.v2",
+  "cases": [
+    {"id": "fast-rewrite-ko", "expected": {"meaningUnits": ["DOWNLOAD_MODEL", "VERIFY_BEFORE_DEFAULT_CHANGE", "CHANGE_DEFAULT_ONLY_AFTER_PASS"]}},
+    {"id": "fast-json-extract", "expected": {"gpu": "RTX 3060", "role": "fast", "port": 11435}},
+    {"id": "fast-instruction", "expected": {"token": "PASS"}},
+    {"id": "main-grounded-ko", "expected": {"claims": [{"claimCode": "QWEN35_IS_3060_CANDIDATE", "citation": "A"}, {"claimCode": "GPU_LOAD_CHECK_BEFORE_PROMOTION", "citation": "B"}]}},
+    {"id": "main-uncertainty-ko", "expected": {"evidenceState": "INSUFFICIENT", "answerKind": "NO_VALUE", "value": null, "unit": "NONE", "reasonCodes": ["EVIDENCE_MISSING"]}},
+    {"id": "main-policy-ko", "expected": {"decision": "REJECT", "reasonCodes": ["CPU_OFFLOAD", "QUALITY_REGRESSION"]}}
+  ]
+}
