@@ -51,6 +51,14 @@ class NovaCvarAggregatorTest {
     }
 
     @Test
+    void upperTailMeanPreservesFiniteRawNegativeScoreDomain() {
+        double out = CvarAggregator.upperTailMean(
+                List.of(-0.90d, -0.40d, -0.10d), 1.0d);
+
+        assertEquals((-0.90d - 0.40d - 0.10d) / 3.0d, out, 1.0e-9d);
+    }
+
+    @Test
     void lowerTailMeanClampsInvalidScoresForRiskDiagnostics() {
         double out = CvarAggregator.lowerTailMean(
                 List.of(Double.NaN, -1.0d, 0.40d, 2.0d), 0.50d);

@@ -20,7 +20,7 @@ test('owner cache restores unacknowledged input without auto submission and reco
   const cache={async read(key){return key?structuredClone(rows.get(key)||{pages:{},outbox:[]}):null;},async change(key,fn){if(!key)return null;const row=structuredClone(rows.get(key)||{pages:{},outbox:[]});fn(row);rows.set(key,row);return row;}};
   const settings={presentation:{}};
   function setup(){
-    const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',type:'text',disabled:false,children:[],replaceChildren(){this.children=[];},append(...items){this.children.push(...items);}});return elements.get(id);};
+    const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',type:'text',disabled:false,children:[],append(){},removeAttribute(){},replaceChildren(){this.children=[];},append(...items){this.children.push(...items);}});return elements.get(id);};
     const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},crypto:{randomUUID:()=> 'stable-request'}};
     const client={async focusRequest(route,body){
       if(route==='settings/read')return {settingsVersion:1,settings,cacheScope:scope};
@@ -29,7 +29,7 @@ test('owner cache restores unacknowledged input without auto submission and reco
       if(route==='history'){if(!online)throw Error('offline');return {turns:[{question:'synthetic question',answer:'synthetic answer',state:'COMPLETED'}],beforeSequence:null};}
       throw Error(route);
     }};
-    const controls=mount({host,cache,document:{getElementById:element,addEventListener(){},createElement:tag=>({textContent:'',append(){}})},client});
+    const controls=mount({host,cache,document:{getElementById:element,removeEventListener(){},createElement:()=>({textContent:'',append(){}}),addEventListener(){},createElement:tag=>({textContent:'',append(){}})},client});
     return {controls,element,connect:id=>controls.update({assistId:id,epoch:1,ready:true,connection:'READY',focusProducer:true})};
   }
   const first=setup();first.connect('first');await flush();first.element('nova-question').value='pending synthetic question';
@@ -62,10 +62,10 @@ test('Focus input uses its owned endpoint during capture and does not stop audio
 
 test('settings load from server, send CAS version, and never write localStorage',async()=>{
   const elements=new Map(),calls=[];let localWrites=0;
-  const element=id=>{if(!elements.has(id))elements.set(id,{type:['nf-enabled','nf-sequential','nf-fade-on'].includes(id)?'checkbox':'number',value:'',checked:false,disabled:false,textContent:'',replaceChildren(){},append(){}});return elements.get(id);};
+  const element=id=>{if(!elements.has(id))elements.set(id,{type:['nf-enabled','nf-sequential','nf-fade-on'].includes(id)?'checkbox':'number',value:'',checked:false,disabled:false,textContent:'',append(){},removeAttribute(){},replaceChildren(){},append(){}});return elements.get(id);};
   const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,presentation:{sequentialTextEnabled:true,charIntervalMs:80,maxVisibleLines:6,autoFadeEnabled:true,tailHoldMs:5000,fadeMs:400}};
   const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},localStorage:{setItem(){localWrites++;}},crypto:{randomUUID:()=> 'r'}};
-  const controls=mount({host,document:{getElementById:element,addEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});return {settingsVersion:route==='settings'?8:7,settings};}}});
+  const controls=mount({host,document:{getElementById:element,removeEventListener(){},createElement:()=>({textContent:'',append(){}}),addEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});return {settingsVersion:route==='settings'?8:7,settings};}}});
   controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true,testStatus:null});await flush();
   assert.equal(element('nova-open').disabled,false);
   assert.equal(element('nf-speed').value,80);assert.equal(element('nf-enabled').checked,false);
@@ -75,10 +75,10 @@ test('settings load from server, send CAS version, and never write localStorage'
 });
 test('a manual retry after an unknown HTTP outcome keeps the same request identity',async()=>{
  const elements=new Map(),requests=[];let id=0;
- const element=name=>{if(!elements.has(name))elements.set(name,{value:'',textContent:'',disabled:false,replaceChildren(){}});return elements.get(name);};
+ const element=name=>{if(!elements.has(name))elements.set(name,{value:'',textContent:'',disabled:false,append(){},removeAttribute(){},replaceChildren(){}});return elements.get(name);};
  const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},crypto:{randomUUID:()=>String(++id)}};
  const row={pages:{},outbox:[]},cache={async read(){return row;},async change(scope,fn){fn(row);return row;}};
- const controls=mount({host,cache,document:{getElementById:element,addEventListener(){}},client:{async focusRequest(route,body){
+ const controls=mount({host,cache,document:{getElementById:element,removeEventListener(){},createElement:()=>({textContent:'',append(){}}),addEventListener(){}},client:{async focusRequest(route,body){
    if(route==='settings/read')return {settingsVersion:1,settings:{presentation:{}},cacheScope:'a'.repeat(64)};
    if(route==='input/status')return {accepted:true};
    requests.push({...body});if(requests.length===1)throw Error('timeout');return {};
@@ -91,9 +91,9 @@ test('a manual retry after an unknown HTTP outcome keeps the same request identi
 });
 test('manual input waits for producer scope and works without IndexedDB',async()=>{
  const elements=new Map(),requests=[];let resolveSettings;
- const element=name=>{if(!elements.has(name))elements.set(name,{value:'',textContent:'',disabled:false,replaceChildren(){}});return elements.get(name);};
+ const element=name=>{if(!elements.has(name))elements.set(name,{value:'',textContent:'',disabled:false,append(){},removeAttribute(){},replaceChildren(){}});return elements.get(name);};
  const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},crypto:{randomUUID:()=> 'r'}};
- const controls=mount({host,document:{getElementById:element,addEventListener(){}},client:{async focusRequest(route){
+ const controls=mount({host,document:{getElementById:element,removeEventListener(){},createElement:()=>({textContent:'',append(){}}),addEventListener(){}},client:{async focusRequest(route){
    requests.push(route);if(route==='settings/read')return new Promise(resolve=>{resolveSettings=resolve;});return {};
  }}});
  controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});
@@ -106,9 +106,9 @@ test('manual input waits for producer scope and works without IndexedDB',async()
 });
 test('unavailable settings stop automatic retries and retain an explicit reload action',async()=>{
  const elements=new Map();let attempts=0;
- const element=name=>{if(!elements.has(name))elements.set(name,{value:'',textContent:'',disabled:false,replaceChildren(){}});return elements.get(name);};
+ const element=name=>{if(!elements.has(name))elements.set(name,{value:'',textContent:'',disabled:false,append(){},removeAttribute(){},replaceChildren(){}});return elements.get(name);};
  const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}}};
- const controls=mount({host,document:{getElementById:element,addEventListener(){}},client:{async focusRequest(){attempts++;throw Error('unavailable');}}});
+ const controls=mount({host,document:{getElementById:element,removeEventListener(){},createElement:()=>({textContent:'',append(){}}),addEventListener(){}},client:{async focusRequest(){attempts++;throw Error('unavailable');}}});
  for(let i=0;i<12;i++){controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();}
  assert.equal(attempts,3);await element('nf-reload').onclick();assert.equal(attempts,4);controls.dispose();
 });

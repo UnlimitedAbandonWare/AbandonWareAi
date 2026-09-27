@@ -46,6 +46,7 @@ class NovaNextFusionServiceTest {
         assertTrue(out.get(0).getTailSignal() >= 0.70d);
         assertEquals(props.getGrandas().getBodeC(), TraceStore.get("nova.next.bodeClamp.c"));
         assertTrue(TraceStore.get("nova.next.bodeClamp.result") instanceof Double);
+        assertEquals(Boolean.TRUE, TraceStore.get("hypernova.clampApplied"));
         assertEquals(Boolean.TRUE, TraceStore.get("hypernova.activated"));
         assertEquals(Boolean.TRUE, TraceStore.get("hypernova.active"));
         assertTrue(TraceStore.get("hypernova.twpmP") instanceof Double);
@@ -61,6 +62,44 @@ class NovaNextFusionServiceTest {
         assertEquals(Boolean.FALSE, TraceStore.get("hypernova.finalGatePassed"));
         assertEquals("downstream_gate_callback_pending",
                 TraceStore.get("hypernova.finalGateDisabledReason"));
+    }
+
+    @Test
+    void extremeConfiguredTwpmPowerIsBoundedBeforeFusion() {
+        NovaNextProperties props = new NovaNextProperties();
+        props.setP0(1_000_000.0d);
+        props.setAlphaTwpm(1_000_000.0d);
+        props.getGrandas().setPMax(1_000_000.0d);
+        NovaNextFusionService service = new NovaNextFusionService(props);
+
+        List<NovaNextFusionService.ScoredResult> out = service.fuse(List.of(
+                scored("sparse", 0.95d, 0.95d),
+                scored("weak", 0.10d, 0.10d)));
+
+        assertEquals(8.0d, (Double) TraceStore.get("hypernova.twpmP.max"), 1.0e-9d);
+        assertEquals(Boolean.TRUE, TraceStore.get("hypernova.twpmP.maxBounded"));
+        assertTrue((Double) TraceStore.get("hypernova.twpmP") <= 8.0d);
+        assertTrue(out.stream().allMatch(result -> Double.isFinite(result.getAdjustedScore())));
+    }
+
+    @Test
+    void cvarFusedScoreTraceReportsActualTwpmCvarBlend() {
+        NovaNextProperties props = new NovaNextProperties();
+        props.setLambdaCvar(0.35d);
+        NovaNextFusionService service = new NovaNextFusionService(props);
+        NovaNextFusionService.ScoredResult candidate = scored("trace-contract", 0.80d, 0.80d);
+        candidate.setSourceScores(List.of(0.20d, 0.80d));
+
+        service.fuse(List.of(candidate));
+
+        double twpm = ((Number) TraceStore.get("hypernova.twpmResult")).doubleValue();
+        double cvar = ((Number) TraceStore.get("hypernova.cvarValue")).doubleValue();
+        double expected = ((1.0d - props.getLambdaCvar()) * twpm)
+                + (props.getLambdaCvar() * cvar);
+
+        assertEquals(expected,
+                ((Number) TraceStore.get("hypernova.cvarFusedScore")).doubleValue(),
+                1.0e-6d);
     }
 
     @Test
@@ -184,13 +223,110 @@ class NovaNextFusionServiceTest {
     }
 
     @Test
-    void clampAppliedOnlyChangesWhenClampAdjustsDelta() throws Exception {
-        String source = java.nio.file.Files.readString(java.nio.file.Path.of(
-                "main/java/com/nova/protocol/fusion/NovaNextFusionService.java"));
+    void clampAppliedRemainsFalseWhenBodeClampDoesNotChangeDelta() {
+        NovaNextProperties props = new NovaNextProperties();
+        props.getGrandas().setBodeC(0.0d);
+        NovaNextFusionService service = new NovaNextFusionService(props);
+        NovaNextFusionService.ScoredResult candidate = scored("unclamped", 1.0d, 0.95d);
+        candidate.setAuthorityAvg(0.90d);
+        candidate.setStrongCitationRate(1.0d);
+        candidate.setGrandasReadiness(0.90d);
 
-        assertFalse(source.contains("clampApplied = true;\n            double target"),
-                "clampApplied should not be unconditional for every fused row");
-        assertTrue(source.contains("if (Math.abs(clampedDeltaNorm) > 1.0e-9d)"));
+        service.fuse(List.of(candidate));
+
+        double input = ((Number) TraceStore.get("nova.next.bodeClamp.input")).doubleValue();
+        double result = ((Number) TraceStore.get("nova.next.bodeClamp.result")).doubleValue();
+        assertTrue(input > 1.0e-9d);
+        assertEquals(input, result, 1.0e-12d);
+        assertEquals(Boolean.FALSE, TraceStore.get("hypernova.clampApplied"));
+    }
+
+    @Test
+    void allNegativeRawScoresRemainOrderedWithFiniteNonDegenerateGuardBands() {
+        NovaNextFusionService service = new NovaNextFusionService(new NovaNextProperties());
+
+        List<NovaNextFusionService.ScoredResult> forward = service.fuse(negativeFixture(false));
+        List<NovaNextFusionService.ScoredResult> reverse = service.fuse(negativeFixture(true));
+        List<NovaNextFusionService.ScoredResult> equal = service.fuse(List.of(
+                scored("equal-b", -0.40d, 0.10d),
+                scored("equal-a", -0.40d, 0.10d)));
+        List<String> expectedOrder = List.of("least-negative", "middle", "most-negative");
+
+        assertEquals(expectedOrder,
+                forward.stream().map(NovaNextFusionService.ScoredResult::getId).toList());
+        assertEquals(expectedOrder,
+                reverse.stream().map(NovaNextFusionService.ScoredResult::getId).toList());
+        assertEquals(List.of("equal-a", "equal-b"),
+                equal.stream().map(NovaNextFusionService.ScoredResult::getId).toList());
+        List<NovaNextFusionService.ScoredResult> checked = new java.util.ArrayList<>(forward);
+        checked.addAll(equal);
+        for (NovaNextFusionService.ScoredResult result : checked) {
+            assertTrue(Double.isFinite(result.getAdjustedScore()));
+            assertTrue(Double.isFinite(result.getGuardBand()));
+            assertTrue(result.getGuardBand() > 0.0d, "raw finite scores need a non-degenerate interval");
+            assertTrue(result.getAdjustedScore()
+                    >= result.getBaseScore() - result.getGuardBand() - 1.0e-9d);
+            assertTrue(result.getAdjustedScore()
+                    <= result.getBaseScore() + result.getGuardBand() + 1.0e-9d);
+        }
+    }
+
+    @Test
+    void calibratedSourceScoreIsNotRenormalizedByUnrelatedRawMaximum() {
+        List<List<Double>> cvarInputs = new java.util.ArrayList<>();
+        CvarAggregator capturingCvar = new CvarAggregator() {
+            @Override
+            public double cvarAtQuantile(List<Double> scores, double quantile) {
+                cvarInputs.add(List.copyOf(scores));
+                return super.cvarAtQuantile(scores, quantile);
+            }
+        };
+        NovaNextFusionService service = new NovaNextFusionService(
+                new NovaNextProperties(), null, null, null, capturingCvar);
+        NovaNextFusionService.ScoredResult raw = scored("raw", 100.0d, 0.20d);
+        raw.setSourceScores(List.of(100.0d));
+        NovaNextFusionService.ScoredResult calibrated = scored("calibrated", 0.80d, 0.20d);
+        calibrated.setSourceScores(List.of(0.80d));
+
+        service.fuse(List.of(raw, calibrated));
+
+        assertEquals(List.of(0.80d), cvarInputs.get(1));
+    }
+
+    @Test
+    void dppRerankPreservesOriginalObjectIdentityAndIdMetadataBinding() {
+        NovaNextFusionService service = new NovaNextFusionService(
+                new NovaNextProperties(),
+                null,
+                new DppDiversityReranker(new DppDiversityReranker.Config(0.50d, 4)),
+                null);
+        NovaNextFusionService.ScoredResult a = scored("id-a", 0.10d, 0.10d);
+        a.setSource("source-a");
+        NovaNextFusionService.ScoredResult b = scored("id-b", 0.95d, 0.95d);
+        b.setSource("source-b");
+        NovaNextFusionService.ScoredResult c = scored("id-c", 0.70d, 0.70d);
+        c.setSource("source-c");
+        Map<String, NovaNextFusionService.ScoredResult> original = Map.of(
+                "id-a", a,
+                "id-b", b,
+                "id-c", c);
+
+        List<NovaNextFusionService.ScoredResult> out = service.fuse(List.of(a, b, c));
+
+        assertEquals(3, out.size());
+        for (NovaNextFusionService.ScoredResult result : out) {
+            assertSame(original.get(result.getId()), result);
+            assertEquals("source-" + result.getId().substring(3), result.getSource());
+        }
+    }
+
+    private static List<NovaNextFusionService.ScoredResult> negativeFixture(boolean reverse) {
+        NovaNextFusionService.ScoredResult mostNegative = scored("most-negative", -0.90d, 0.10d);
+        NovaNextFusionService.ScoredResult middle = scored("middle", -0.40d, 0.10d);
+        NovaNextFusionService.ScoredResult leastNegative = scored("least-negative", -0.10d, 0.10d);
+        return reverse
+                ? List.of(leastNegative, middle, mostNegative)
+                : List.of(mostNegative, leastNegative, middle);
     }
 
     private static NovaNextFusionService.ScoredResult scored(String id, double score, double tail) {

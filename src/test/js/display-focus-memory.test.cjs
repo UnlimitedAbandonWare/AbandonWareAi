@@ -3,11 +3,11 @@ const {mount}=require('../../../main/resources/static/assets/display/display-foc
 const flush=()=>new Promise(setImmediate);
 function fixture(){
  const elements=new Map(),calls=[];let count=0;
- const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,textContent:'',disabled:false,children:[],replaceChildren(){this.children=[];},append(...x){this.children.push(...x);}});return elements.get(id);};
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,textContent:'',disabled:false,children:[],removeAttribute(){},replaceChildren(){this.children=[];},append(...x){this.children.push(...x);}});return elements.get(id);};
  const settings={recallEnabled:false,rememberFactsEnabled:true,presentation:{}};
  const host={crypto:{randomUUID:()=> '00000000-0000-0000-0000-'+String(++count).padStart(12,'0')},NovaFocus:{receiptSender:()=>()=>{},createProjection:()=>({update(){},visibility(){},dispose(){},isActive:()=>false})}};
  const client={async focusRequest(route,body){calls.push({route,body});if(route==='settings/read')return {settingsVersion:2,cacheScope:'a'.repeat(64),settings};if(route==='memory/read')return [];return {};}};
- const document={getElementById:element,addEventListener(){},createElement:()=>({textContent:'',append(){}})};
+ const document={getElementById:element,removeEventListener(){},createElement:()=>({textContent:'',append(){}}),addEventListener(){},createElement:()=>({textContent:'',append(){}})};
  const controls=mount({host,document,client});const state={assistId:'s',epoch:1,focusProducer:true,ready:true,connection:'READY'};
  controls.update(state);return {controls,element,calls,client,state};
 }

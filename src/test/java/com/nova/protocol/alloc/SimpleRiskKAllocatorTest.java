@@ -84,6 +84,21 @@ class SimpleRiskKAllocatorTest {
     }
 
     @Test
+    void overflowingFloorsAreRescaledWithoutNegativeLanes() {
+        SimpleRiskKAllocator allocator = new SimpleRiskKAllocator();
+
+        int[] out = allocator.alloc(
+                new double[]{0.0d, 0.0d},
+                null,
+                1,
+                1.0d,
+                new int[]{Integer.MAX_VALUE, Integer.MAX_VALUE});
+
+        assertTrue(java.util.Arrays.stream(out).allMatch(value -> value >= 0));
+        assertEquals(1L, java.util.Arrays.stream(out).asLongStream().sum());
+    }
+
+    @Test
     void fallbackForMissingLogitsClampsNegativeBudgetToZero() {
         SimpleRiskKAllocator allocator = new SimpleRiskKAllocator();
 
