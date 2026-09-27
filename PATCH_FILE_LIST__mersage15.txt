@@ -1,8 +1,0 @@
-src/main/java/com/example/lms/service/rag/pre/CognitiveState.java
-src/main/java/com/example/lms/domain/Role.java
-src/main/java/com/example/lms/ai/moe/MoeRoutingProperties.java
-src/main/java/com/example/lms/service/reinforcement/RewardScoringEngine.java
-src/main/java/_abandonware_backup/ai/example/lms/cfvm/RawSlot.java
-src/main/java/com/example/lms/service/ChatService__backup_pre_interface.java
-BUILD_PATTERN_SUMMARY__mersage15.md
-PATCH_NOTES_src111_mersage15.md

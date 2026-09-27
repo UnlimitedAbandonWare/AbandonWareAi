@@ -1,2 +1,0 @@
-# PATCH: Add this line to settings.gradle to include the new module
-# include("tools-scorecard")

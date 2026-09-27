@@ -1,3 +1,0 @@
-src/main/java/com/example/lms/service/ChatService__backup_pre_interface.java
-BUILD_PATTERN_SUMMARY__merge15.md
-PATCH_NOTES_src111_merge15.md
