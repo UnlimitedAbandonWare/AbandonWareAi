@@ -1,6 +1,0 @@
-*** a/service/NaverSearchService.java
---- b/service/NaverSearchService.java
-@@
--  // TODO hedge/retry
-+  // Hedge + retry with simple backoff (configured by naver.*)
-+  // Respect error budget to downshift webTopK when failing continuously.

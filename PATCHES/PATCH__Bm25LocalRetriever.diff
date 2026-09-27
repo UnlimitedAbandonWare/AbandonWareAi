@@ -1,8 +1,0 @@
---- a/Bm25LocalRetriever.java+++ b/Bm25LocalRetriever.java@@ -23,7 +23,7 @@         this.holder = holder;
-     }
- 
--    @Override
-+    
-     public List<ContextSlice> retrieve(String query, int k) {
-         try {
-             if (!props.isEnabled() || holder.searcher() == null) return java.util.List.of();
