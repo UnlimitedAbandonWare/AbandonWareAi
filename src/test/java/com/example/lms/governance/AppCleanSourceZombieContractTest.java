@@ -38,10 +38,13 @@ class AppCleanSourceZombieContractTest {
 
     @Test
     void appCleanSourceDoesNotKeepUnreferencedRagCompatibilityAdapters() {
+        assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/AnalyzeWebSearchRetriever.java");
         assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/fusion/BodeClamp.java");
         assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/fusion/CvarAggregator.java");
         assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/fusion/ScoreCalibrator.java");
+        assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/fusion/WeightedPowerMeanFuser.java");
         assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/model/ContextSlice.java");
+        assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/overdrive/AngerOverdriveNarrower.java");
         assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/overdrive/ExtremeZSystemHandler.java");
         assertAbsent("app/src/main/java_clean/com/example/lms/service/rag/planner/SelfAskPlanner.java");
     }
