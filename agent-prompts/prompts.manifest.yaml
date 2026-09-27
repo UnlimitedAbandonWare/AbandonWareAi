@@ -81,6 +81,15 @@ agents:
     output:
       path: out/demo1_dynamic_rag_autonomous_patch_directive.prompt
       encoding: utf-8
+  - id: demo1_spire_debug_operator_9h
+    system: agents/demo1_spire_debug_operator_9h/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_spire_debug_operator_9h.prompt
+      encoding: utf-8
   - id: demo1_orchestration_feature_expansion_plan
     system: agents/demo1_orchestration_feature_expansion_plan/system_ko.md
     traits: []
@@ -162,6 +171,33 @@ agents:
     output:
       path: out/demo1_context_contamination_scout_directive.prompt
       encoding: utf-8
+  - id: demo1_macsrc_defect_intake
+    system: agents/demo1_macsrc_defect_intake/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_macsrc_defect_intake.prompt
+      encoding: utf-8
+  - id: demo1_macsrc_guarded_patch_session
+    system: agents/demo1_macsrc_guarded_patch_session/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_macsrc_guarded_patch_session.prompt
+      encoding: utf-8
+  - id: demo1_macsrc_patch_postprocess
+    system: agents/demo1_macsrc_patch_postprocess/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_macsrc_patch_postprocess.prompt
+      encoding: utf-8
   - id: demo1_ai_debug_metrics_ledger
     system: agents/demo1_ai_debug_metrics_ledger/system_ko.md
     traits: []
@@ -179,6 +215,24 @@ agents:
       conflict: project_overrides_global
     output:
       path: out/demo1_three_node_smb_codex.prompt
+      encoding: utf-8
+  - id: demo1_notebook_desktop_goal_handoff
+    system: agents/demo1_notebook_desktop_goal_handoff/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_notebook_desktop_goal_handoff.prompt
+      encoding: utf-8
+  - id: demo1_desktop_canonical_goal_intake
+    system: agents/demo1_desktop_canonical_goal_intake/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_desktop_canonical_goal_intake.prompt
       encoding: utf-8
   - id: demo1_mcp_control_tower
     system: agents/demo1_mcp_control_tower/system.md
@@ -261,6 +315,46 @@ agents:
       conflict: project_overrides_global
     output:
       path: out/demo1_agent_tools_library_patch_9h.prompt
+      encoding: utf-8
+  - id: demo1_claude_peers_web_probe_agent_upgrade_5h
+    system: agents/demo1_claude_peers_web_probe_agent_upgrade_5h/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_claude_peers_web_probe_agent_upgrade_5h.prompt
+      encoding: utf-8
+  - id: demo1_three_perspective_chat_postprocess
+    system: agents/demo1_three_perspective_chat_postprocess/system_ko.md
+    traits:
+      - agents/demo1_three_perspective_chat_postprocess/positive_scenarios_ko.md
+      - agents/demo1_three_perspective_chat_postprocess/negative_counter_ko.md
+      - agents/demo1_three_perspective_chat_postprocess/neutral_judge_ko.md
+      - agents/demo1_three_perspective_chat_postprocess/scenario_matrix_ko.md
+    merge:
+      order: [system, trait]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_three_perspective_chat_postprocess.prompt
+      encoding: utf-8
+  - id: demo1_stuff3_sapa_command_router
+    system: agents/demo1_stuff3_sapa_command_router/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_stuff3_sapa_command_router.prompt
+      encoding: utf-8
+  - id: demo1_artifact_trace_integrity_harness
+    system: agents/demo1_artifact_trace_integrity_harness/system_ko.md
+    traits: []
+    merge:
+      order: [system]
+      conflict: project_overrides_global
+    output:
+      path: out/demo1_artifact_trace_integrity_harness.prompt
       encoding: utf-8
 
 probe:
