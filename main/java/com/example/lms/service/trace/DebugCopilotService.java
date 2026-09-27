@@ -1,5 +1,9 @@
 package com.example.lms.service.trace;
 
+import com.example.lms.debug.DebugEventLevel;
+import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugProbeType;
+import com.example.lms.ensemble.EvidenceGroundedTriadicDebugAdjudicator;
 import com.example.lms.llm.LocalLlmSmokeHistoryDiagnosticsService;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
@@ -17,6 +21,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -33,22 +39,192 @@ public class DebugCopilotService {
     private static final int MAX_COMMANDS = 24;
 
     private final Supplier<Map<String, Object>> localLlmSmokeSnapshotSupplier;
+    private final EvidenceGroundedTriadicDebugAdjudicator triadicAdjudicator;
+    private final DebugEventStore debugEventStore;
+    private final AtomicReference<EvidenceGroundedTriadicDebugAdjudicator.Adjudication> latestTriadicResult =
+            new AtomicReference<>();
 
     public DebugCopilotService() {
-        this(() -> Map.of());
+        this(() -> Map.of(), null, null);
     }
 
-    @Autowired
     public DebugCopilotService(LocalLlmSmokeHistoryDiagnosticsService localLlmSmokeHistoryDiagnosticsService) {
         this(() -> localLlmSmokeHistoryDiagnosticsService == null
                 ? Map.of()
-                : localLlmSmokeHistoryDiagnosticsService.snapshot(1));
+                : localLlmSmokeHistoryDiagnosticsService.snapshot(1),
+                null,
+                null);
+    }
+
+    @Autowired
+    public DebugCopilotService(
+            LocalLlmSmokeHistoryDiagnosticsService localLlmSmokeHistoryDiagnosticsService,
+            EvidenceGroundedTriadicDebugAdjudicator triadicAdjudicator,
+            DebugEventStore debugEventStore) {
+        this(() -> localLlmSmokeHistoryDiagnosticsService == null
+                        ? Map.of()
+                        : localLlmSmokeHistoryDiagnosticsService.snapshot(1),
+                triadicAdjudicator,
+                debugEventStore);
     }
 
     DebugCopilotService(Supplier<Map<String, Object>> localLlmSmokeSnapshotSupplier) {
+        this(localLlmSmokeSnapshotSupplier, null, null);
+    }
+
+    DebugCopilotService(
+            Supplier<Map<String, Object>> localLlmSmokeSnapshotSupplier,
+            EvidenceGroundedTriadicDebugAdjudicator triadicAdjudicator,
+            DebugEventStore debugEventStore) {
         this.localLlmSmokeSnapshotSupplier = localLlmSmokeSnapshotSupplier == null
                 ? () -> Map.of()
                 : localLlmSmokeSnapshotSupplier;
+        this.triadicAdjudicator = triadicAdjudicator;
+        this.debugEventStore = debugEventStore;
+    }
+
+    /**
+     * Explicit admin action. This is intentionally separate from
+     * {@link #maybeEnrichTrace()} so ordinary chat requests never incur the
+     * triadic model calls.
+     */
+    public EvidenceGroundedTriadicDebugAdjudicator.Adjudication adjudicateLatestPatchCandidate() {
+        return adjudicateLatestPatchCandidate(null);
+    }
+
+    public EvidenceGroundedTriadicDebugAdjudicator.Adjudication adjudicateLatestPatchCandidate(
+            EvidenceGroundedTriadicDebugAdjudicator.PatchCandidate patchCandidate) {
+        if (triadicAdjudicator == null || debugEventStore == null) {
+            return rememberTriadicResult(EvidenceGroundedTriadicDebugAdjudicator.Adjudication.hold(
+                    "triadic_service_unavailable", "none", 0, 0, 0.0d, 0.0d, 0));
+        }
+        try {
+            String rid = firstNonBlank(
+                    MDC.get("requestId"),
+                    MDC.get("traceId"),
+                    asString(TraceStore.get("trace.id")),
+                    "debug-admin");
+            var result = rememberTriadicResult(triadicAdjudicator.adjudicate(
+                    triadicFingerprintEvidence(), patchCandidate, rid));
+            try {
+                debugEventStore.emit(
+                        DebugProbeType.ORCHESTRATION,
+                        result.decision() == com.example.lms.ensemble.EnsembleJudgeService.DebugPatchDecision.HOLD
+                                ? DebugEventLevel.INFO
+                                : DebugEventLevel.WARN,
+                        "triadic-debug-adjudication",
+                        "triadic debug adjudication",
+                        "DebugCopilotService#adjudicateLatestPatchCandidate",
+                        result.toSafeMap(),
+                        null);
+            } catch (CancellationException cancellation) {
+                throw cancellation;
+            } catch (RuntimeException publicationFailure) {
+                CancellationException cancellation = cancellationFrom(publicationFailure);
+                if (cancellation != null) {
+                    throw cancellation;
+                }
+                log.debug("[DebugCopilot] triadic event publication failed (fail-soft). errorHash={} errorLength={}",
+                        SafeRedactor.hashValue(messageOf(publicationFailure)),
+                        messageLength(publicationFailure));
+            }
+            return result;
+        } catch (CancellationException cancellation) {
+            throw cancellation;
+        } catch (RuntimeException failure) {
+            CancellationException cancellation = cancellationFrom(failure);
+            if (cancellation != null) {
+                throw cancellation;
+            }
+            log.debug("[DebugCopilot] triadic adjudication failed (fail-soft). errorHash={} errorLength={}",
+                    SafeRedactor.hashValue(messageOf(failure)),
+                    messageLength(failure));
+            return rememberTriadicResult(EvidenceGroundedTriadicDebugAdjudicator.Adjudication.hold(
+                    "copilot_fail_soft", "none", 0, 0, 0.0d, 0.0d, 0));
+        }
+    }
+
+    private List<Map<String, Object>> triadicFingerprintEvidence() {
+        List<Map<String, Object>> evidence = new ArrayList<>();
+        try {
+            Map<String, Object> snapshot = localLlmSmokeSnapshotSupplier.get();
+            if (snapshot != null && !truthy(snapshot.get("reportStale"))) {
+                Map<String, Object> latest = mapValue(snapshot.get("latest"));
+                Map<String, Object> attempts = mapValue(latest.get("attemptScores"));
+                Map<String, Object> openAi = mapValue(attempts.get("openAiCompatible"));
+                Map<String, Object> nativeOllama = mapValue(attempts.get("nativeOllama"));
+                int openAiStatus = asInt(openAi.get("status"), 0);
+                int nativeStatus = asInt(nativeOllama.get("status"), 0);
+                boolean openAiBlank = "blank_response".equals(openAi.get("verdict"))
+                        && openAiStatus >= 200 && openAiStatus < 300;
+                boolean nativeSuccess = "native_ollama".equals(latest.get("recommendedRoute"))
+                        && nativeStatus >= 200 && nativeStatus < 300
+                        && asInt(nativeOllama.get("score"), 0) > asInt(openAi.get("score"), 0)
+                        && (asInt(nativeOllama.get("contentLength"), 0) > 0
+                                || "usable".equals(nativeOllama.get("verdict")));
+                if (openAiBlank && nativeSuccess) {
+                    evidence.add(Map.of(
+                            "fingerprint", "local-llm-smoke-native-success",
+                            "routeFamily", "NATIVE_OLLAMA",
+                            "routeOutcome", "SUCCESS",
+                            "windowCount", 1L,
+                            "total", 1L));
+                    evidence.add(Map.of(
+                            "fingerprint", "local-llm-smoke-openai-blank",
+                            "routeFamily", "OPENAI_COMPATIBLE",
+                            "routeOutcome", "BLANK",
+                            "windowCount", 1L,
+                            "total", 1L));
+                }
+            }
+        } catch (RuntimeException failure) {
+            traceSuppressed("triadicSmokeEvidence", failure);
+        }
+        evidence.addAll(debugEventStore.listFingerprints(12));
+        return List.copyOf(evidence);
+    }
+
+    private static CancellationException cancellationFrom(RuntimeException failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof CancellationException cancellation) {
+                return cancellation;
+            }
+            if (current instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                CancellationException cancellation = new CancellationException("triadic_adjudication_interrupted");
+                cancellation.initCause(failure);
+                return cancellation;
+            }
+            current = current.getCause();
+        }
+        if (Thread.currentThread().isInterrupted()) {
+            CancellationException cancellation = new CancellationException("triadic_adjudication_interrupted");
+            cancellation.initCause(failure);
+            return cancellation;
+        }
+        return null;
+    }
+
+    public EvidenceGroundedTriadicDebugAdjudicator.Adjudication latestTriadicAdjudication() {
+        var remembered = latestTriadicResult.get();
+        if (remembered != null) {
+            return remembered;
+        }
+        return triadicAdjudicator == null
+                ? EvidenceGroundedTriadicDebugAdjudicator.Adjudication.hold(
+                        "triadic_service_unavailable", "none", 0, 0, 0.0d, 0.0d, 0)
+                : triadicAdjudicator.latest();
+    }
+
+    private EvidenceGroundedTriadicDebugAdjudicator.Adjudication rememberTriadicResult(
+            EvidenceGroundedTriadicDebugAdjudicator.Adjudication result) {
+        var safe = result == null
+                ? EvidenceGroundedTriadicDebugAdjudicator.Adjudication.hold(
+                "adjudication_missing", "none", 0, 0, 0.0d, 0.0d, 0)
+                : result;
+        latestTriadicResult.set(safe);
+        return safe;
     }
 
     public void maybeEnrichTrace() {
@@ -407,6 +583,16 @@ public class DebugCopilotService {
     private void publishLocalLlmSmokeOperatorAction() {
         try {
             Map<String, Object> snapshot = localLlmSmokeSnapshotSupplier.get();
+            if (snapshot == null || snapshot.isEmpty()) {
+                return;
+            }
+            if (truthy(snapshot.get("reportStale"))
+                    || "supporting_stale".equalsIgnoreCase(asString(snapshot.get("evidenceMode")))) {
+                TraceStore.put("llm.localSmoke.operatorAction.stale", true);
+                TraceStore.put("llm.localSmoke.operatorAction.evidenceMode", "supporting_stale");
+                TraceStore.put("llm.localSmoke.operatorAction.staleReason", "smoke_report_stale");
+                return;
+            }
             Map<String, Object> latest = mapValue(snapshot.get("latest"));
             Map<String, Object> operatorAction = mapValue(latest.get("operatorAction"));
             if (operatorAction.isEmpty()) {
@@ -561,6 +747,54 @@ public class DebugCopilotService {
                                 cmdGrepTrace(traceId, "disabledReason")
                         )));
             }
+
+            Object components = TraceStore.get("ml.risk.rewrite.components");
+            double contradictionPressure = Math.max(
+                    componentValue(components, "contradiction"),
+                    asDouble(TraceStore.get("overdrive.contradiction.mean"), 0.0d));
+            if ("contradiction".equalsIgnoreCase(primary) || contradictionPressure > 0.0d) {
+                causes.add(Cause.of(
+                        "rewrite_contradiction_pressure",
+                        "Self-Ask rewrite risk is driven by contradiction-check pressure",
+                        Math.max(0.56d, Math.min(0.86d, Math.max(score, contradictionPressure))),
+                        List.of(
+                                "primaryFactor=" + primary,
+                                "ml.risk.rewrite.components.contradiction="
+                                        + round3(componentValue(components, "contradiction")),
+                                "overdrive.contradiction.mean="
+                                        + round3(asDouble(TraceStore.get("overdrive.contradiction.mean"), 0.0d)),
+                                "selfask.3way.requery.confirmed="
+                                        + asString(TraceStore.get("selfask.3way.requery.confirmed"))
+                        ),
+                        List.of(
+                                "# Inspect contradiction and 3-way Self-Ask confirmation",
+                                cmdGrepTrace(traceId, "contradiction"),
+                                cmdGrepTrace(traceId, "selfask.3way")
+                        )));
+            }
+
+            double latencyComponent = componentValue(components, "latencyPressure");
+            double timeoutCount = asDouble(TraceStore.get("web.await.events.timeout.count"), 0.0d);
+            boolean latencyPressure = "latencyPressure".equalsIgnoreCase(primary)
+                    || latencyComponent > 0.0d
+                    || timeoutCount > 0.0d;
+            if (latencyPressure) {
+                causes.add(Cause.of(
+                        "rewrite_latency_pressure",
+                        "Self-Ask rewrite risk is cooling search because latency pressure is present",
+                        Math.max(0.54d, Math.min(0.84d, Math.max(score, latencyComponent))),
+                        List.of(
+                                "primaryFactor=" + primary,
+                                "ml.risk.rewrite.components.latencyPressure=" + round3(latencyComponent),
+                                "web.await.events.count=" + asString(TraceStore.get("web.await.events.count")),
+                                "web.await.events.timeout.count=" + asString(TraceStore.get("web.await.events.timeout.count"))
+                        ),
+                        List.of(
+                                "# Inspect latency pressure and cooled rewrite temperature",
+                                cmdGrepTrace(traceId, "web.await"),
+                                cmdGrepTrace(traceId, "ml.risk.rewrite.temperature")
+                        )));
+            }
         } catch (Throwable ignore) {
             traceSuppressed("providerFailureCause", ignore);
         }
@@ -568,6 +802,13 @@ public class DebugCopilotService {
 
     private static Object firstNonNull(Object first, Object second) {
         return first != null ? first : second;
+    }
+
+    private static double componentValue(Object components, String key) {
+        if (!(components instanceof Map<?, ?> map) || key == null) {
+            return 0.0d;
+        }
+        return asDouble(map.get(key), 0.0d);
     }
 
     private static String safeRequerySummary(Object summary) {

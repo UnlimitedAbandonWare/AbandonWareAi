@@ -5,6 +5,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.springframework.stereotype.Component;
 
 
 /**
@@ -20,6 +21,7 @@ import java.util.regex.Pattern;
  * The validator can be toggled or extended in the future to use a more
  * sophisticated NER service.
  */
+@Component
 public class NamedEntityValidator {
 
     public static class ValidationResult {

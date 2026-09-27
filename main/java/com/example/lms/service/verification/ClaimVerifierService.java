@@ -2,14 +2,23 @@
 
 package com.example.lms.service.verification;
 
+import ai.abandonware.nova.orch.llm.ExpectedFailureChatModel;
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
+import com.example.lms.llm.TimedChatModelCaller;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
-import lombok.RequiredArgsConstructor;
+import com.example.lms.search.TraceStore;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
 import com.example.lms.service.scoring.AdaptiveScoringService;
 import com.example.lms.trace.SafeRedactor;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -29,9 +38,9 @@ import org.slf4j.Logger;
  * </p>
  */
 @Service
-@RequiredArgsConstructor
 public class ClaimVerifierService {
     private static final Logger log = LoggerFactory.getLogger(ClaimVerifierService.class);
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     private static final Pattern UNSUPPORTED_SECRET_ASSIGNMENT = Pattern.compile(
             "(?i)\\b(?:owner[-_]?token|authorization|cookie|api[-_]?key|apikey|client[-_]?(?:secret|id)|subscription[-_]?token|password|secret|token)\\s*[:=]\\s*\\S+");
     private static final Pattern UNSUPPORTED_BEARER_TOKEN = Pattern.compile("(?i)\\bBearer\\s+\\S+");
@@ -41,27 +50,64 @@ public class ClaimVerifierService {
     private final KnowledgeBaseService kb;
     private final TemporalConsistencyVerifier temporalVerifier;
 
+    public ClaimVerifierService(@Qualifier("judgeChatModel") ChatModel chatModel,
+            AdaptiveScoringService scoring,
+            KnowledgeBaseService kb,
+            TemporalConsistencyVerifier temporalVerifier) {
+        this.chatModel = chatModel;
+        this.scoring = scoring;
+        this.kb = kb;
+        this.temporalVerifier = temporalVerifier;
+    }
+
     /** 검증 결과를 담는 레코드. 검증된 답변과 지원되지 않은 주장 목록을 포함합니다. */
-    public record VerificationResult(String verifiedAnswer, List<String> unsupportedClaims) {}
+    public record VerificationResult(
+            String verifiedAnswer,
+            List<String> unsupportedClaims,
+            boolean outcomeKnown,
+            boolean acceptedForMemory) {
+
+        public VerificationResult(String verifiedAnswer, List<String> unsupportedClaims) {
+            this(verifiedAnswer, unsupportedClaims, false, false);
+        }
+
+        public VerificationResult(
+                String verifiedAnswer,
+                List<String> unsupportedClaims,
+                boolean outcomeKnown) {
+            this(verifiedAnswer, unsupportedClaims, outcomeKnown, false);
+        }
+    }
 
     private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=\\.|!|\\?|\\n)");
 
     public VerificationResult verifyClaims(String context, String draftAnswer, String model) {
         if (draftAnswer == null || draftAnswer.isBlank()) {
-            return new VerificationResult("정보 없음", List.of());
+            return new VerificationResult("정보 없음", List.of(), false, false);
         }
         try {
-            List<String> claims = extractClaims(draftAnswer, model);
-            if (claims.isEmpty()) {
-                return new VerificationResult(draftAnswer, List.of());
+            ClaimExtraction extraction = extractClaimsDetailed(draftAnswer, model);
+            if (!extraction.outcomeKnown()) {
+                return new VerificationResult(draftAnswer, List.of(), false, false);
             }
-
-            List<Boolean> verdicts = judgeClaims(context, claims, model);
+            List<String> claims = extraction.claims();
+            List<Boolean> verdicts = List.of();
+            if (claims.isEmpty()) {
+                traceJudgeFailSoft("judge_no_claims_extracted");
+            } else {
+                ClaimJudgment judgment = judgeClaimsDetailed(context, claims, model);
+                if (!judgment.outcomeKnown()) {
+                    return new VerificationResult(draftAnswer, List.of(), false, false);
+                }
+                verdicts = judgment.verdicts();
+            }
 
             List<String> unsupportedClaims = new ArrayList<>();
             String filteredAnswer = rebuildAnswer(draftAnswer, claims, verdicts, unsupportedClaims);
 
             String finalAnswer = filteredAnswer.isBlank() ? "정보를 찾을 수 없습니다." : filteredAnswer;
+            boolean temporalOutcomeKnown = !claims.isEmpty();
+            boolean temporalAcceptedForMemory = !claims.isEmpty();
 
 // --- 시간 정합성 검증 (TemporalConsistencyVerifier) ---
 try {
@@ -77,12 +123,16 @@ try {
             String safeTemporalReason = SafeRedactor.traceLabelOrFallback(temporalResult.reason(), "unknown");
             log.warn("[ClaimVerifier] Temporal mismatch detected: {}", safeTemporalReason);
             finalAnswer = finalAnswer + "\n\n[시간 정합성 경고] " + safeTemporalReason;
+            temporalAcceptedForMemory = false;
         }
     }
 } catch (Exception ignore) {
     // Temporal checker failures must never break the chat flow
     log.debug("[ClaimVerifier] temporal verification failed. errorHash={} errorLength={}",
             SafeRedactor.hashValue(messageOf(ignore)), messageLength(ignore));
+    traceJudgeFailSoft("temporal_verification_failed");
+    temporalOutcomeKnown = false;
+    temporalAcceptedForMemory = false;
 }
 
             // --- 암묵 피드백(시너지 확신도) 반영 ---
@@ -105,15 +155,20 @@ try {
                         SafeRedactor.hashValue(messageOf(ignore)), messageLength(ignore));
             }
 
-            return new VerificationResult(finalAnswer, unsupportedClaims);
+            return new VerificationResult(
+                    finalAnswer,
+                    unsupportedClaims,
+                    temporalOutcomeKnown,
+                    temporalOutcomeKnown && temporalAcceptedForMemory);
         } catch (Exception e) {
             log.error("Claim verification failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return new VerificationResult(draftAnswer, List.of());
+            traceJudgeFailSoft("judge_processing_failed");
+            return new VerificationResult(draftAnswer, List.of(), false, false);
         }
     }
 
-    private List<String> extractClaims(String draft, String model) {
+    private ClaimExtraction extractClaimsDetailed(String draft, String model) {
         // /* ... */ (내용 동일) /* ... */
         String claimExtractionPrompt = """
           Extract the core factual claims from the ANSWER as a JSON array of strings (max 8).
@@ -125,11 +180,15 @@ try {
         // Use the ChatModel to execute the prompt directly.  Temperature and top-p
         // parameters cannot be tuned per call; the ChatModel bean should
         // already be configured with appropriate defaults.
-        String json = callChatModel(claimExtractionPrompt);
-        return parseJsonArray(json);
+        JudgeCallResult response = callChatModelDetailed(claimExtractionPrompt);
+        ParsedStringArray parsed = parseJsonArray(response.text());
+        if (response.outcomeKnown() && !parsed.valid()) {
+            traceJudgeFailSoft("judge_malformed_response");
+        }
+        return new ClaimExtraction(parsed.values(), response.outcomeKnown() && parsed.valid());
     }
 
-    private List<Boolean> judgeClaims(String context, List<String> claims, String model) {
+    private ClaimJudgment judgeClaimsDetailed(String context, List<String> claims, String model) {
         // /* ... */ (내용 동일) /* ... */
         String claimJudgmentPrompt = """
           For each CLAIM[i], answer STRICTLY "true" or "false" if it is directly supported by CONTEXT.
@@ -143,8 +202,14 @@ try {
           CLAIMS:
           %s
           """.formatted(context, claims.toString());
-        String json = callChatModel(claimJudgmentPrompt);
-        return parseJsonBooleans(json, claims.size());
+        JudgeCallResult response = callChatModelDetailed(claimJudgmentPrompt);
+        ParsedBooleanArray parsed = parseJsonBooleans(response.text(), claims.size());
+        if (response.outcomeKnown() && !parsed.valid()) {
+            traceJudgeFailSoft("judge_malformed_response");
+        }
+        return new ClaimJudgment(
+                parsed.values(),
+                response.outcomeKnown() && parsed.valid());
     }
 
     private String rebuildAnswer(String draft, List<String> claims, List<Boolean> verdicts, List<String> unsupportedClaims) {
@@ -211,50 +276,62 @@ try {
 
     // --- JSON Parsing Helper Methods ---
 
-    private List<String> parseJsonArray(String raw) {
+    private ParsedStringArray parseJsonArray(String raw) {
         // /* ... */ (내용 동일) /* ... */
-        if (raw == null) return Collections.emptyList();
+        if (raw == null) return new ParsedStringArray(List.of(), false);
         try {
-            String s = raw.trim();
-            if (!s.startsWith("[") || !s.endsWith("]")) return List.of();
-            s = s.substring(1, s.length() - 1);
-            if (s.isBlank()) return Collections.emptyList();
-
-            return Arrays.stream(s.split("\\s*,\\s*(?=\")"))
-                    .map(item -> item.replaceAll("^\\s*\"|\"\\s*$", "").trim())
-                    .filter(item -> !item.isEmpty())
-                    .collect(Collectors.toList());
+            JsonNode root = JSON_MAPPER.reader()
+                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .readTree(raw);
+            if (root == null || !root.isArray()) {
+                return new ParsedStringArray(List.of(), false);
+            }
+            List<String> values = new ArrayList<>();
+            for (JsonNode item : root) {
+                if (!item.isTextual()) {
+                    return new ParsedStringArray(List.of(), false);
+                }
+                String value = item.textValue() == null ? "" : item.textValue().trim();
+                if (value.isEmpty()) {
+                    return new ParsedStringArray(List.of(), false);
+                }
+                values.add(value);
+            }
+            return new ParsedStringArray(List.copyOf(values), true);
         } catch (Exception e) {
             log.warn("JSON array of strings parse failed rawHash={} rawLength={} errorHash={} errorLength={}",
                     SafeRedactor.hashValue(raw), raw == null ? 0 : raw.length(),
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return Collections.emptyList();
+            return new ParsedStringArray(List.of(), false);
         }
     }
 
-    private List<Boolean> parseJsonBooleans(String raw, int expectedSize) {
+    private ParsedBooleanArray parseJsonBooleans(String raw, int expectedSize) {
         // /* ... */ (내용 동일) /* ... */
-        if (raw == null) return Collections.nCopies(expectedSize, false);
-        List<Boolean> out = new ArrayList<>();
+        if (raw == null || expectedSize < 0) {
+            return new ParsedBooleanArray(List.of(), false);
+        }
         try {
-            String s = raw.replaceAll("[^a-zA-Z,\\[\\]]", "").trim();
-            if (!s.startsWith("[") || !s.endsWith("]")) return Collections.nCopies(expectedSize, false);
-
-            s = s.substring(1, s.length() - 1);
-            if (s.isBlank()) return Collections.nCopies(expectedSize, false);
-
-            Arrays.stream(s.split(","))
-                    .map(item -> item.trim().toLowerCase(Locale.ROOT))
-                    .forEach(item -> out.add("true".equals(item)));
+            JsonNode root = JSON_MAPPER.reader()
+                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .readTree(raw);
+            if (root == null || !root.isArray() || root.size() != expectedSize) {
+                return new ParsedBooleanArray(List.of(), false);
+            }
+            List<Boolean> values = new ArrayList<>(expectedSize);
+            for (JsonNode item : root) {
+                if (!item.isBoolean()) {
+                    return new ParsedBooleanArray(List.of(), false);
+                }
+                values.add(item.booleanValue());
+            }
+            return new ParsedBooleanArray(List.copyOf(values), true);
         } catch (Exception e) {
             log.warn("JSON array of booleans parse failed rawHash={} rawLength={} errorHash={} errorLength={}",
                     SafeRedactor.hashValue(raw), raw == null ? 0 : raw.length(),
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+            return new ParsedBooleanArray(List.of(), false);
         }
-        while (out.size() < expectedSize) {
-            out.add(false);
-        }
-        return out;
     }
 
     /**
@@ -268,15 +345,77 @@ try {
      * @return the AI response text or an empty string
      */
     private String callChatModel(String claimVerifierPrompt) {
+        return callChatModelDetailed(claimVerifierPrompt).text();
+    }
+
+    private JudgeCallResult callChatModelDetailed(String claimVerifierPrompt) {
+        if (chatModel == null || chatModel instanceof ExpectedFailureChatModel) {
+            traceJudgeFailSoft("judge_model_unavailable");
+            return new JudgeCallResult("", false);
+        }
         try {
-            var res = chatModel.chat(UserMessage.from(claimVerifierPrompt));
-            if (res == null || res.aiMessage() == null) return "";
-            var ai = res.aiMessage();
-            return ai.text() == null ? "" : ai.text();
+            TimeBudget requestBudget = TimeBudgetContext.get();
+            if (requestBudget != null && requestBudget.expired()) {
+                traceJudgeFailSoft("request_budget_exhausted");
+                return new JudgeCallResult("", false);
+            }
+            var userMessage = UserMessage.from(claimVerifierPrompt);
+            dev.langchain4j.data.message.AiMessage ai;
+            if (requestBudget == null) {
+                var res = chatModel.chat(userMessage);
+                ai = res == null ? null : res.aiMessage();
+            } else {
+                long remainingMs = requestBudget.remainingMillis();
+                if (remainingMs <= 0L) {
+                    traceJudgeFailSoft("request_budget_exhausted");
+                    return new JudgeCallResult("", false);
+                }
+                ai = TimedChatModelCaller.chat(
+                        chatModel,
+                        List.of(userMessage),
+                        Duration.ofMillis(remainingMs),
+                        "claim_verifier_judge",
+                        chatModel.getClass().getName());
+            }
+            if (ai == null) {
+                traceJudgeFailSoft("judge_empty_response");
+                return new JudgeCallResult("", false);
+            }
+            String text = ai.text() == null ? "" : ai.text().trim();
+            if (text.isBlank()) {
+                traceJudgeFailSoft("judge_empty_response");
+                return new JudgeCallResult("", false);
+            }
+            return new JudgeCallResult(text, true);
         } catch (Exception e) {
+            traceJudgeFailSoft("judge_call_failed");
             log.debug("[ClaimVerifier] ChatModel call failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return "";
+            return new JudgeCallResult("", false);
+        }
+    }
+
+    private record JudgeCallResult(String text, boolean outcomeKnown) {
+    }
+
+    private record ClaimExtraction(List<String> claims, boolean outcomeKnown) {
+    }
+
+    private record ClaimJudgment(List<Boolean> verdicts, boolean outcomeKnown) {
+    }
+
+    private record ParsedStringArray(List<String> values, boolean valid) {
+    }
+
+    private record ParsedBooleanArray(List<Boolean> values, boolean valid) {
+    }
+
+    private static void traceJudgeFailSoft(String reason) {
+        try {
+            TraceStore.put("claimVerifier.judge.path", "judgeChatModel");
+            TraceStore.put("claimVerifier.judge.disabledReason", SafeRedactor.traceLabelOrFallback(reason, "unknown"));
+        } catch (RuntimeException ignore) {
+            log.debug("[ClaimVerifier] fail-soft stage={}", "judge.trace");
         }
     }
 

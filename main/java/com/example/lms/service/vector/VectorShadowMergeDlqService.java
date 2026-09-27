@@ -42,6 +42,8 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class VectorShadowMergeDlqService {
+    @Autowired(required = false)
+    private com.example.lms.service.rag.graph.GeneralGraphVectorGate generalGraphVectorGate;
     private static final Logger log = LoggerFactory.getLogger(VectorShadowMergeDlqService.class);
 
     private final VectorShadowMergeDlqRepository repo;
@@ -258,6 +260,9 @@ public class VectorShadowMergeDlqService {
             if (!d.allow()) throw new BlockedException("scope_guard:" + safe(d.reason()));
         }
 
+        if (!com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
+                generalGraphVectorGate, targetSid, meta, () -> {}))
+            throw new BlockedException("graph_source_invalidated");
         Embedding emb = embeddingModel.embed(payload).content();
         if (emb == null || emb.vector() == null || emb.vector().length == 0) {
             throw new RuntimeException("empty_embedding");
@@ -267,7 +272,10 @@ public class VectorShadowMergeDlqService {
         TextSegment seg = TextSegment.from(payload, dev.langchain4j.data.document.Metadata.from(metaForLc));
 
         // Upsert stable vector id into the main store (metadata carries sid).
-        embeddingStore.addAll(List.of(stableVectorId), List.of(emb), List.of(seg));
+        if (!com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
+                generalGraphVectorGate, targetSid, meta,
+                () -> embeddingStore.addAll(List.of(stableVectorId), List.of(emb), List.of(seg))))
+            throw new BlockedException("graph_source_invalidated");
     }
 
     private Map<String, Object> parseMeta(String json) {

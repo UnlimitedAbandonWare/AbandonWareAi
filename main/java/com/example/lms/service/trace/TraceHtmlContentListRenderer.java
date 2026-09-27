@@ -215,8 +215,13 @@ final class TraceHtmlContentListRenderer {
 
     private static void traceSuppressed(String stage, Throwable failure) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
+        String errorType = errorType(safeStage, failure);
+        TraceStore.put("traceHtml.contentList.suppressed.stage", safeStage);
+        TraceStore.put("traceHtml.contentList.suppressed.errorType", errorType);
+        TraceStore.inc("traceHtml.contentList.suppressed.count");
         TraceStore.put("traceHtml.contentList.suppressed." + safeStage, true);
-        TraceStore.put("traceHtml.contentList.suppressed." + safeStage + ".errorType", errorType(safeStage, failure));
+        TraceStore.put("traceHtml.contentList.suppressed." + safeStage + ".errorType", errorType);
+        TraceStore.inc("traceHtml.contentList.suppressed." + safeStage + ".count");
     }
 
     private static String errorType(String stage, Throwable failure) {

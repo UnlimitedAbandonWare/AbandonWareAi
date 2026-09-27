@@ -45,9 +45,14 @@ public final class CloudPointerClient {
                 post(url, body);
             }
         } catch (Exception e) {
+            String safeErrorType = SafeRedactor.traceLabelOrFallback(errorType(e), "unknown");
+            TraceStore.inc("trace.cloudPointer.suppressed.dispatch.count");
+            TraceStore.put("trace.cloudPointer.suppressed.stage", "event_dispatch");
+            TraceStore.put("trace.cloudPointer.suppressed.errorType", safeErrorType);
+            TraceStore.put("trace.cloudPointer.suppressed.eventDispatch", true);
+            TraceStore.put("trace.cloudPointer.suppressed.eventDispatch.errorType", safeErrorType);
             LOG.log(System.Logger.Level.DEBUG,
-                    "Cloud pointer send skipped stage=event_dispatch errorType="
-                            + SafeRedactor.traceLabelOrFallback(errorType(e), "unknown"));
+                    "Cloud pointer send skipped stage=event_dispatch errorType=" + safeErrorType);
         }
     }
 
@@ -78,10 +83,16 @@ public final class CloudPointerClient {
             int code = conn.getResponseCode();
             // ignore code
         } catch (Exception e) {
+            String safeErrorType = SafeRedactor.traceLabelOrFallback(errorType(e), "unknown");
+            TraceStore.inc("trace.cloudPointer.suppressed.httpPost.count");
+            TraceStore.put("trace.cloudPointer.suppressed.stage", "http_post");
+            TraceStore.put("trace.cloudPointer.suppressed.errorType", safeErrorType);
+            TraceStore.put("trace.cloudPointer.suppressed.httpPost", true);
+            TraceStore.put("trace.cloudPointer.suppressed.httpPost.errorType", safeErrorType);
             LOG.log(System.Logger.Level.DEBUG,
                     "Cloud pointer post skipped stage=http_post endpointHash=" + SafeRedactor.hashValue(url)
                             + " endpointLength=" + safeLength(url)
-                            + " errorType=" + SafeRedactor.traceLabelOrFallback(errorType(e), "unknown"));
+                            + " errorType=" + safeErrorType);
         } finally {
             if (conn != null) conn.disconnect();
         }

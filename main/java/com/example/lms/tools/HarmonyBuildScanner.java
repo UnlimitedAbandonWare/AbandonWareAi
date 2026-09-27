@@ -1,11 +1,20 @@
 package com.example.lms.tools;
 
+import com.example.lms.harmony.HarmonyEvidenceContract;
+
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -136,6 +145,13 @@ public class HarmonyBuildScanner {
 
     static HarmonyReport scan(Path root) throws IOException {
         Path normalizedRoot = root.toAbsolutePath().normalize();
+        HarmonyEvidenceContract contract;
+        try {
+            contract = HarmonyEvidenceContract.loadClasspath();
+        } catch (RuntimeException error) {
+            return HarmonyReport.blockedContract(normalizedRoot, error.getClass().getSimpleName());
+        }
+        SourceFingerprint sourceFingerprint = sourceFingerprint(normalizedRoot, contract);
         String mainJava = readTree(normalizedRoot.resolve("main/java"), ".java")
                 + readTree(normalizedRoot.resolve("app/src/main/java_clean"), ".java");
         String resources = readTree(normalizedRoot.resolve("main/resources"), ".yml", ".yaml", ".properties")
@@ -145,7 +161,9 @@ public class HarmonyBuildScanner {
         String secretScanText = mainJava + "\n" + resources;
 
         Map<String, Boolean> traceCoverage = new LinkedHashMap<>();
-        for (String key : TRACE_KEYS) {
+        LinkedHashSet<String> traceKeys = new LinkedHashSet<>(TRACE_KEYS);
+        traceKeys.addAll(contract.requiredTraceKeys());
+        for (String key : traceKeys) {
             traceCoverage.put(key, containsTraceKey(mainJava, key));
         }
 
@@ -156,43 +174,43 @@ public class HarmonyBuildScanner {
 
         int exactEmptyCatchMatches = countMatches(EMPTY_CATCH, mainJava);
         int secretPatternHits = countMatches(SECRET_PATTERN, secretScanText);
-        int duplicateFqcnCount = duplicateFqcnCount(normalizedRoot);
+        DuplicateFqcnSummary duplicateFqcnSummary = duplicateFqcnSummary(normalizedRoot);
 
         List<HarmonyBreak> breaks = List.of(
-                hb("HB-01", "silent catch contamination",
+                hb(contract, "HB-01",
                         exactEmptyCatchMatches <= 45 && lowerMainJava.contains("failsoft")),
-                hb("HB-02", "retrieval order authority",
+                hb(contract, "HB-02",
                         traceCoverage.get("retrievalOrder.lastSetBy")
                                 && containsAll(mainJava, "class RetrievalOrderService")),
-                hb("HB-03", "booster mutual exclusion",
+                hb(contract, "HB-03",
                         traceCoverage.get("boosterMode.active")
                                 && traceCoverage.get("boosterMode.excludedModes")
                                 && traceCoverage.get("boosterMode.exclusionReason")),
-                hb("HB-04", "DPP in HYPERNOVA",
+                hb(contract, "HB-04",
                         traceCoverage.get("hypernova.dppApplied")
                                 && containsAll(mainJava, "DppDiversityReranker")),
-                hb("HB-05", "TWPM canonical path",
+                hb(contract, "HB-05",
                         containsTraceKey(mainJava, "hypernova.twpmP")
                                 && containsAll(mainJava, "TailWeightedPowerMeanFuser")),
-                hb("HB-06", "source score scale normalization",
+                hb(contract, "HB-06",
                         traceCoverage.get("hypernova.sourceScoreScaleMismatchCount")
                                 || containsTraceKey(mainJava, "fusion.scoreNormalized")),
-                hb("HB-07", "CancelShield interrupt hygiene",
+                hb(contract, "HB-07",
                         traceCoverage.get("extremeZ.cancelShieldWrapped")
                                 && traceCoverage.get("extremeZ.timeBudgetConsumedMs")
                                 && mainJava.contains("cancel(false)")),
-                hb("HB-08", "CFVM Boltzmann temperature ownership",
+                hb(contract, "HB-08",
                         traceCoverage.get("cfvm.boltzmannTemp") && traceCoverage.get("cfvm.tempSource")),
-                hb("HB-09", "CFVM raw tile builder enabled path",
+                hb(contract, "HB-09",
                         containsAny(mainJava, "cfvm.rawTileId", "cfvm.rawTile.enabled",
                                 "cfvm.rawTileBuilderDisabled")),
-                hb("HB-10", "MoE evolver PromptBuilder boundary",
+                hb(contract, "HB-10",
                         traceCoverage.get("moe.evolverPlateRegistered")
                                 && !lowerMainJava.contains("setprompttemplate(\"")),
-                hb("HB-11", "TimeBudgetGuard trace",
+                hb(contract, "HB-11",
                         traceCoverage.get("extremeZ.timeBudgetConsumedMs")
                                 || containsTraceKey(mainJava, "timeBudget.firstExhaustedStage")),
-                hb("HB-12", "ZCA whitening provider ownership",
+                hb(contract, "HB-12",
                         traceCoverage.get("hypernova.whitening.provider"))
         );
 
@@ -201,13 +219,27 @@ public class HarmonyBuildScanner {
                 traceCoverage,
                 testCoverage,
                 breaks,
+                contract,
+                "",
+                sourceFingerprint,
                 exactEmptyCatchMatches,
-                duplicateFqcnCount,
+                duplicateFqcnSummary,
                 secretPatternHits);
     }
 
-    private static HarmonyBreak hb(String id, String label, boolean done) {
-        return new HarmonyBreak(id, label, done ? "DONE" : "OPEN");
+    private static HarmonyBreak hb(
+            HarmonyEvidenceContract contract,
+            String id,
+            boolean done) {
+        HarmonyEvidenceContract.HarmonyBreakDefinition definition = contract.breaks().stream()
+                .filter(candidate -> id.equals(candidate.id()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("missing contract break " + id));
+        return new HarmonyBreak(
+                id,
+                definition.label(),
+                done ? contract.verifiedStatus() : contract.blockedStatus(),
+                definition.weight());
     }
 
     private static boolean containsTraceKey(String content, String key) {
@@ -239,6 +271,88 @@ public class HarmonyBuildScanner {
             count++;
         }
         return count;
+    }
+
+    private static SourceFingerprint sourceFingerprint(
+            Path root,
+            HarmonyEvidenceContract contract) {
+        List<SourceRootFingerprint> roots = new ArrayList<>();
+        List<String> aggregateRows = new ArrayList<>();
+        int errorCount = 0;
+        int totalFiles = 0;
+        for (HarmonyEvidenceContract.SourceRoot sourceRoot : contract.activeSourceRoots()) {
+            Path absoluteRoot = root.resolve(sourceRoot.path());
+            boolean exists = Files.isDirectory(absoluteRoot);
+            List<String> fileRows = new ArrayList<>();
+            if (exists) {
+                try (Stream<Path> paths = Files.walk(absoluteRoot)) {
+                    List<Path> files = paths
+                            .filter(Files::isRegularFile)
+                            .sorted(Comparator.comparing(
+                                    path -> absoluteRoot.relativize(path).toString().replace('\\', '/')))
+                            .toList();
+                    for (Path path : files) {
+                        try {
+                            String relative = absoluteRoot.relativize(path).toString().replace('\\', '/');
+                            fileRows.add(relative + "\0" + sha256(path));
+                        } catch (IOException error) {
+                            errorCount++;
+                        }
+                    }
+                } catch (IOException error) {
+                    errorCount++;
+                }
+            }
+            String rootSha256 = sha256(String.join("\n", fileRows));
+            int fileCount = fileRows.size();
+            totalFiles += fileCount;
+            roots.add(new SourceRootFingerprint(
+                    sourceRoot.id(),
+                    sourceRoot.path(),
+                    exists,
+                    fileCount,
+                    rootSha256));
+            aggregateRows.add(sourceRoot.id()
+                    + "\0" + Boolean.toString(exists)
+                    + "\0" + fileCount
+                    + "\0" + rootSha256);
+        }
+        String status = errorCount == 0
+                ? contract.verifiedStatus()
+                : contract.blockedStatus();
+        return new SourceFingerprint(
+                status,
+                totalFiles,
+                errorCount,
+                sha256(String.join("\n", aggregateRows)),
+                roots);
+    }
+
+    private static String sha256(Path path) throws IOException {
+        MessageDigest digest = sha256Digest();
+        try (InputStream input = Files.newInputStream(path)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static String sha256(String value) {
+        MessageDigest digest = sha256Digest();
+        return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static MessageDigest sha256Digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException error) {
+            throw new IllegalStateException("SHA-256 unavailable", error);
+        }
     }
 
     private static String readTree(Path root, String... suffixes) throws IOException {
@@ -281,9 +395,14 @@ public class HarmonyBuildScanner {
         return out;
     }
 
-    private static int duplicateFqcnCount(Path root) throws IOException {
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        for (Path javaRoot : List.of(root.resolve("main/java"), root.resolve("app/src/main/java_clean"))) {
+    private static DuplicateFqcnSummary duplicateFqcnSummary(Path root) throws IOException {
+        Map<String, Map<String, Integer>> counts = new LinkedHashMap<>();
+        Map<String, Path> javaRoots = new LinkedHashMap<>();
+        javaRoots.put("main/java", root.resolve("main/java"));
+        javaRoots.put("app/src/main/java_clean", root.resolve("app/src/main/java_clean"));
+        for (Map.Entry<String, Path> entry : javaRoots.entrySet()) {
+            String rootLabel = entry.getKey();
+            Path javaRoot = entry.getValue();
             if (!Files.isDirectory(javaRoot)) {
                 continue;
             }
@@ -296,18 +415,28 @@ public class HarmonyBuildScanner {
                     Matcher type = TYPE_PATTERN.matcher(text);
                     if (pkg.find() && type.find()) {
                         String fqcn = pkg.group(1) + "." + type.group(1);
-                        counts.put(fqcn, counts.getOrDefault(fqcn, 0) + 1);
+                        counts.computeIfAbsent(fqcn, ignored -> new LinkedHashMap<>())
+                                .merge(rootLabel, 1, Integer::sum);
                     }
                 }
             }
         }
         int duplicates = 0;
-        for (int count : counts.values()) {
-            if (count > 1) {
+        int sameSourceRootDuplicates = 0;
+        int crossSourceRootDuplicates = 0;
+        for (Map<String, Integer> byRoot : counts.values()) {
+            int total = byRoot.values().stream().mapToInt(Integer::intValue).sum();
+            if (total > 1) {
                 duplicates++;
             }
+            if (byRoot.values().stream().anyMatch(count -> count > 1)) {
+                sameSourceRootDuplicates++;
+            }
+            if (byRoot.size() > 1) {
+                crossSourceRootDuplicates++;
+            }
         }
-        return duplicates;
+        return new DuplicateFqcnSummary(duplicates, sameSourceRootDuplicates, crossSourceRootDuplicates);
     }
 
     record Args(Path root, Path output) {
@@ -340,20 +469,105 @@ public class HarmonyBuildScanner {
         }
     }
 
-    record HarmonyBreak(String id, String label, String status) {
+    record HarmonyBreak(String id, String label, String status, double weight) {
+    }
+
+    record SourceRootFingerprint(
+            String id,
+            String path,
+            boolean exists,
+            int fileCount,
+            String sha256) {
+    }
+
+    record SourceFingerprint(
+            String status,
+            int fileCount,
+            int errorCount,
+            String sha256,
+            List<SourceRootFingerprint> roots) {
+        SourceFingerprint {
+            roots = List.copyOf(roots);
+        }
+    }
+
+    record DuplicateFqcnSummary(int duplicateCount,
+                                int sameSourceRootDuplicateCount,
+                                int crossSourceRootDuplicateCount) {
     }
 
     record HarmonyReport(Path root, Map<String, Boolean> traceCoverage,
-                         Map<TestGroup, Boolean> testCoverage,
-                         List<HarmonyBreak> breaks,
-                         int exactEmptyCatchMatches,
-                         int duplicateFqcnCount,
-                         int secretPatternHits) {
+                          Map<TestGroup, Boolean> testCoverage,
+                          List<HarmonyBreak> breaks,
+                          HarmonyEvidenceContract contract,
+                          String contractErrorType,
+                          SourceFingerprint sourceFingerprint,
+                          int exactEmptyCatchMatches,
+                          DuplicateFqcnSummary duplicateFqcnSummary,
+                          int secretPatternHits) {
+        static HarmonyReport blockedContract(Path root, String errorType) {
+            return new HarmonyReport(
+                    root,
+                    Map.of(),
+                    Map.of(),
+                    List.of(new HarmonyBreak(
+                            "HB-CONTRACT",
+                            "Harmony evidence contract integrity",
+                            "BLOCKED_EVIDENCE",
+                            100.0d)),
+                    null,
+                    errorType,
+                    new SourceFingerprint(
+                            "BLOCKED_EVIDENCE",
+                            0,
+                            1,
+                            sha256(""),
+                            List.of()),
+                    0,
+                    new DuplicateFqcnSummary(0, 0, 0),
+                    0);
+        }
+
         String render() {
             StringBuilder report = new StringBuilder();
             report.append("=== Dynamic RAG Harmony Build Report ===\n");
             report.append("root=").append(root).append('\n');
-            report.append("[harmony][sourceset] activeRoots=main/java,main/resources,src/test/java,app/src/main/java_clean,app/src/main/resources\n");
+            report.append("[harmony][contract] status=")
+                    .append(contract == null ? "BLOCKED_EVIDENCE" : contract.verifiedStatus())
+                    .append(" schemaVersion=")
+                    .append(contract == null ? "" : contract.schemaVersion())
+                    .append(" contractId=")
+                    .append(contract == null ? "" : contract.contractId())
+                    .append(" sha256=")
+                    .append(contract == null ? "" : contract.sha256())
+                    .append(" errorType=")
+                    .append(contractErrorType == null ? "" : contractErrorType)
+                    .append('\n');
+            report.append("[harmony][sourceset] activeRoots=main/java,main/resources,src/test/java,src/test/resources,app/src/main/java_clean,app/src/main/resources\n");
+            report.append("[harmony][fingerprint] status=")
+                    .append(sourceFingerprint.status())
+                    .append(" roots=")
+                    .append(sourceFingerprint.roots().size())
+                    .append(" fileCount=")
+                    .append(sourceFingerprint.fileCount())
+                    .append(" errorCount=")
+                    .append(sourceFingerprint.errorCount())
+                    .append(" sha256=")
+                    .append(sourceFingerprint.sha256())
+                    .append('\n');
+            for (SourceRootFingerprint item : sourceFingerprint.roots()) {
+                report.append("[harmony][fingerprint-root] id=")
+                        .append(item.id())
+                        .append(" path=")
+                        .append(item.path())
+                        .append(" exists=")
+                        .append(item.exists())
+                        .append(" fileCount=")
+                        .append(item.fileCount())
+                        .append(" sha256=")
+                        .append(item.sha256())
+                        .append('\n');
+            }
             for (Map.Entry<String, Boolean> entry : traceCoverage.entrySet()) {
                 report.append("[harmony][trace] ")
                         .append(entry.getKey())
@@ -377,13 +591,30 @@ public class HarmonyBuildScanner {
                         .append(item.status())
                         .append(" label=")
                         .append(item.label())
+                        .append(" weight=")
+                        .append(item.weight())
                         .append('\n');
             }
+            report.append("[harmony][runtime-evidence] status=BLOCKED_EVIDENCE reason=static_scanner_has_no_typed_trace_frame\n");
+            boolean promotionAllowed = false;
+            report.append("[harmony][score] score=")
+                    .append(promotionAllowed ? "100.0" : "0.0")
+                    .append(" promotionAllowed=")
+                    .append(promotionAllowed)
+                    .append(" status=")
+                    .append(promotionAllowed ? "DONE" : "BLOCKED_EVIDENCE")
+                    .append('\n');
             report.append("[harmony][catch] exactEmptyCatchMatches=")
                     .append(exactEmptyCatchMatches)
                     .append('\n');
             report.append("[harmony][duplicate-fqcn] duplicateCount=")
-                    .append(duplicateFqcnCount)
+                    .append(duplicateFqcnSummary.duplicateCount())
+                    .append(" sameSourceRootDuplicateCount=")
+                    .append(duplicateFqcnSummary.sameSourceRootDuplicateCount())
+                    .append(" crossSourceRootDuplicateCount=")
+                    .append(duplicateFqcnSummary.crossSourceRootDuplicateCount())
+                    .append(" compileBlockingDuplicateCount=")
+                    .append(duplicateFqcnSummary.sameSourceRootDuplicateCount())
                     .append('\n');
             report.append("[harmony][security] secretPatternHits=")
                     .append(secretPatternHits)

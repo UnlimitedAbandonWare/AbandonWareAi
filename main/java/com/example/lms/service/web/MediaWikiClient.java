@@ -112,6 +112,7 @@ public class MediaWikiClient {
             return out;
         } catch (Exception e) {
             TraceStore.put("web.mediawiki.suppressed.query", true);
+            TraceStore.inc("web.mediawiki.suppressed.query.count");
             TraceStore.put("web.mediawiki.suppressed.query.errorType",
                     SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
             log.warn("[AWX][search][mediawiki] query failed failureReason={} errorType={} queryHash12={} queryLength={}",
@@ -131,6 +132,7 @@ public class MediaWikiClient {
             return java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
             TraceStore.put("web.mediawiki.suppressed.urlEncode", true);
+            TraceStore.inc("web.mediawiki.suppressed.urlEncode.count");
             TraceStore.put("web.mediawiki.suppressed.urlEncode.errorType",
                     SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
             return s;

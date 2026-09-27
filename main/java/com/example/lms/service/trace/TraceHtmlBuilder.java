@@ -51,20 +51,35 @@ public class TraceHtmlBuilder {
             List<Content> webTopK,
             List<Content> vectorTopK,
             Map<String, Object> extraMeta) {
-        if (rawTrace == null) {
+        return buildSplitPanel(rawTrace, rawSnippets, webTopK, vectorTopK, extraMeta, null);
+    }
+
+    public String buildSplitPanel(
+            NaverSearchService.SearchTrace rawTrace,
+            List<String> rawSnippets,
+            List<Content> webTopK,
+            List<Content> vectorTopK,
+            Map<String, Object> extraMeta,
+            Boolean webSearchAttempted) {
+        if (rawTrace == null && (rawSnippets == null || rawSnippets.isEmpty())
+                && webTopK == null && vectorTopK == null
+                && (extraMeta == null || extraMeta.isEmpty())) {
             return "";
         }
 
         int rawCount = (rawSnippets == null) ? 0 : rawSnippets.size();
         boolean webEnabled = webTopK != null;
         boolean vectorEnabled = vectorTopK != null;
+        boolean webTraceUnavailable = Boolean.TRUE.equals(webSearchAttempted) || rawCount > 0
+                || (webTopK != null && !webTopK.isEmpty());
         Map<String, Object> safeExtraMeta = sanitizeMeta(extraMeta);
 
         RiskLevel risk = evaluateRisk(safeExtraMeta);
         String riskClass = cssRiskClass(risk);
         boolean autoOpen = risk != RiskLevel.OK;
 
-        String summaryLine = buildSummaryLine(rawTrace, rawCount, webTopK, vectorTopK, safeExtraMeta, risk);
+        String summaryLine = buildSummaryLine(rawTrace, rawCount, webTopK, vectorTopK,
+                safeExtraMeta, risk, webTraceUnavailable);
 
         StringBuilder sb = new StringBuilder();
         sb.append("<details data-trace-redacted=\"1\" class=\"search-trace ").append(riskClass).append("\"");
@@ -77,7 +92,7 @@ public class TraceHtmlBuilder {
         sb.append("</summary>");
         sb.append("<div class='trace-body'>");
 
-        sb.append(renderRawSearchPanel(rawTrace, rawSnippets, safeExtraMeta));
+        sb.append(renderRawSearchPanel(rawTrace, rawSnippets, safeExtraMeta, webTraceUnavailable));
         sb.append(renderTopKPanel("B) Final Context (LLM Input)",
                 webEnabled ? webTopK : null,
                 vectorEnabled ? vectorTopK : null));
@@ -194,11 +209,17 @@ public class TraceHtmlBuilder {
     }
 
     private String renderRawSearchPanel(NaverSearchService.SearchTrace rawTrace, List<String> rawSnippets,
-            Map<String, Object> extraMeta) {
+            Map<String, Object> extraMeta, boolean webTraceUnavailable) {
         StringBuilder sb = new StringBuilder();
+        String missingWebTrace = webTraceUnavailable ? "Web trace_unavailable" : "Web not_requested";
         sb.append("<div class='trace-section'>");
         sb.append(TraceHtmlLayout.renderPanelHeader("A) Raw Snippets",
-                "Search engine raw results (" + (rawSnippets == null ? 0 : rawSnippets.size()) + " items)"));
+                rawTrace == null ? missingWebTrace
+                        : "Search engine raw results (" + (rawSnippets == null ? 0 : rawSnippets.size()) + " items)"));
+        if (rawTrace == null) {
+            sb.append("<div class='trace-kv'><code>web</code>: ")
+                    .append(escape(missingWebTrace)).append("</div>");
+        }
 
         // Web trace detail/steps are shown only when dbgSearch is enabled (request flag
         // or boost).
@@ -627,11 +648,19 @@ public class TraceHtmlBuilder {
     }
 
     private String buildSummaryLine(NaverSearchService.SearchTrace rawTrace, int rawCount, List<Content> webTopK,
-            List<Content> vectorTopK, Map<String, Object> extraMeta, RiskLevel risk) {
+            List<Content> vectorTopK, Map<String, Object> extraMeta, RiskLevel risk,
+            boolean webTraceUnavailable) {
         boolean webEnabled = webTopK != null;
         boolean vecEnabled = vectorTopK != null;
         int webSz = webEnabled ? webTopK.size() : 0;
         int vecSz = vecEnabled ? vectorTopK.size() : 0;
+        if (rawTrace == null) {
+            String missingWebTrace = webTraceUnavailable ? "Web trace_unavailable" : "Web not_requested";
+            return "Execution Trace - " + missingWebTrace + " - final context (web "
+                    + (webEnabled ? webSz : "disabled") + ", vector "
+                    + (vecEnabled ? vecSz : "disabled") + ") - "
+                    + riskBadgeHtml(risk) + renderPills(extraMeta);
+        }
         String query = (rawTrace.query() == null) ? "" : rawTrace.query().replace("\n", " ").trim();
         if (query.isBlank()) {
             // Fallback: some pipelines store "effective query" in extraMeta
@@ -686,7 +715,6 @@ public class TraceHtmlBuilder {
         appendKvGroup(sb, extraMeta, shown, "Mode",
                 java.util.List.of("orch.mode", "orch.strike", "orch.compression", "orch.bypass", "orch.reason",
                         "orch.webRateLimited", "orch.auxLlmDown", "orch.highRisk", "orch.irregularity",
-                        "orch.userFrustration",
                         "orch.noiseEscape.bypassSilentFailure",
                         "orch.noiseEscape.bypassSilentFailure.escapeP",
                         "orch.noiseEscape.bypassSilentFailure.roll",
@@ -757,6 +785,12 @@ public class TraceHtmlBuilder {
                         "nightmare.breaker.openUntilMs",
                         "nightmare.breaker.openUntilMs.last",
                         "nightmare.mode"));
+        // Already-produced query diagnostics only; rendering never invokes transformation.
+        appendKvGroup(sb, extraMeta, shown, "Query Transformation",
+                java.util.List.of("qtx.stagePolicy.enabled", "qtx.stagePolicy.clamped",
+                        "qtx.suppressed.minLiveBudget", "qtx.minLiveBudgetMs",
+                        "qtx.timeoutMs.cappedByMinLiveBudget", "qtx.timeoutMs.before", "qtx.timeoutMs.after",
+                        "qtx.bypass.reason", "qtx.constraints.rejectedCount", "qtx.constraints.reason"));
         appendKvGroup(sb, extraMeta, shown, "Guard",
                 java.util.List.of("guard.final.action", "guard.final.coverageScore", "guard.inconsistentTemplate",
                         "guard.escalated",
@@ -786,6 +820,8 @@ public class TraceHtmlBuilder {
         appendPromptEvents(sb, extraMeta, shown);
 
         appendKvPrefixGroup(sb, extraMeta, shown, "Prompt", "prompt.", 24);
+        appendKvGroup(sb, extraMeta, shown, "Memory",
+                java.util.List.of("memory.session.tokenEstimate"));
 
         // LLM endpoint/model routing + model-guard (OpenAI chat vs responses mismatch)
         // breadcrumbs
@@ -798,6 +834,8 @@ public class TraceHtmlBuilder {
         appendMlRouterEvents(sb, extraMeta, shown);
 
         // Merge-boundary / stage-handoff breadcrumbs (safe, compact)
+        appendKvPrefixGroup(sb, extraMeta, shown, "Stage Boundary", "stageBoundary.", 24);
+        appendKvPrefixGroup(sb, extraMeta, shown, "MLA Breadcrumb Step", "mla.breadcrumb.step.", 24);
         appendKvPrefixGroup(sb, extraMeta, shown, "ML", "ml.", 24);
         appendKvPrefixGroup(sb, extraMeta, shown, "Embedding", "embed.", 24);
 
@@ -1098,7 +1136,8 @@ public class TraceHtmlBuilder {
         for (Map.Entry<String, Object> e : meta.entrySet()) {
             if (e == null || e.getKey() == null) continue;
             String key = e.getKey();
-            String displayKey = safeMetaKey(key);
+            String displayKey = SafeRedactor.isTypedDiagnostic(key, e.getValue())
+                    ? key : safeMetaKey(key);
             if ("rag.evidence.public".equals(key)) {
                 out.put(displayKey, sanitizePublicEvidence(e.getValue()));
             } else {
@@ -1432,7 +1471,7 @@ public class TraceHtmlBuilder {
         }
         sb.append("</summary>");
 
-        sb.append("<table class='trace-table small'>");
+        sb.append("<table class='trace-table small trace-pipeline-events-table'>");
         sb.append("<thead><tr>")
                 .append("<th>#</th><th>phase</th><th>stage</th><th>step</th><th>status</th><th>counts</th><th>failure</th><th>control</th>")
                 .append("</tr></thead><tbody>");

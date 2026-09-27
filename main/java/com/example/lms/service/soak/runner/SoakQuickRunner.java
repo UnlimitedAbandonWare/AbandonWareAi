@@ -122,56 +122,62 @@ public class SoakQuickRunner implements ApplicationRunner {
                 String providerTraceId = traceId + "." + provider.toLowerCase(Locale.ROOT);
 
                 try (AutoCloseable __p = TraceContext.attach(providerSid, providerTraceId)) {
-                    if (metricRegistry != null) {
-                        metricRegistry.resetForSid(providerSid);
-                    }
-
-                    SoakQuickBundleReport.ProviderRun pr = new SoakQuickBundleReport.ProviderRun();
-                    pr.provider = provider;
-
-                    GuardContext prev = GuardContextHolder.get();
-                    GuardContext ctx = GuardContext.defaultContext();
-                    ctx.setPlanId("soak.quick.v3");
-                    ctx.setHeaderMode("BRAVE".equals(provider) ? "brave" : "S1");
-                    ctx.setMode("BRAVE".equals(provider) ? "BRAVE" : "SAFE");
-                    ctx.setWebPrimary(provider);
-
                     try {
-                        GuardContextHolder.set(ctx);
-                        SoakQuickReport report = soakTestService.runQuick(props.getK(), props.getTopic());
-                        pr.report = report;
-                        pr.gate = evaluateGate(report, bundle.gate);
-                    } catch (Exception e) {
-                        TraceStore.put("soak.quickRunner.suppressed.providerRun", true);
-                        TraceStore.put("soak.quickRunner.suppressed.providerRun.errorType", quickFailureClass(e));
-                        pr.report = null;
-                        pr.gate = new SoakQuickBundleReport.GateDecision();
-                        pr.gate.status = "FAIL";
-                        pr.gate.hitRate = 0.0;
-                        pr.gate.evidenceRate = 0.0;
-                        pr.gate.reasons.add("exception:" + quickFailureClass(e));
+                        if (metricRegistry != null) {
+                            metricRegistry.resetForSid(providerSid);
+                        }
+
+                        SoakQuickBundleReport.ProviderRun pr = new SoakQuickBundleReport.ProviderRun();
+                        pr.provider = provider;
+
+                        GuardContext prev = GuardContextHolder.get();
+                        GuardContext ctx = GuardContext.defaultContext();
+                        ctx.setPlanId("soak.quick.v3");
+                        ctx.setHeaderMode("BRAVE".equals(provider) ? "brave" : "S1");
+                        ctx.setMode("BRAVE".equals(provider) ? "BRAVE" : "SAFE");
+                        ctx.setWebPrimary(provider);
+
+                        try {
+                            GuardContextHolder.set(ctx);
+                            SoakQuickReport report = soakTestService.runQuick(props.getK(), props.getTopic());
+                            pr.report = report;
+                            pr.gate = evaluateGate(report, bundle.gate);
+                        } catch (Exception e) {
+                            TraceStore.put("soak.quickRunner.suppressed.providerRun", true);
+                            TraceStore.put("soak.quickRunner.suppressed.providerRun.errorType", quickFailureClass(e));
+                            pr.report = null;
+                            pr.gate = new SoakQuickBundleReport.GateDecision();
+                            pr.gate.status = "FAIL";
+                            pr.gate.hitRate = 0.0;
+                            pr.gate.evidenceRate = 0.0;
+                            pr.gate.reasons.add("exception:" + quickFailureClass(e));
+                        } finally {
+                            if (prev != null) {
+                                GuardContextHolder.set(prev);
+                            } else {
+                                GuardContextHolder.clear();
+                            }
+                        }
+
+                        if (metricRegistry != null) {
+                            SoakMetricRegistry.Snapshot snap = metricRegistry.snapshot(providerSid);
+                            SoakQuickBundleReport.ProviderMetrics pm = new SoakQuickBundleReport.ProviderMetrics();
+                            pm.fpFilterLegacyBypassCount = snap.fpFilterLegacyBypassCount;
+                            pm.webCalls = snap.webCalls;
+                            pm.webCallsWithNaver = snap.webCallsWithNaver;
+                            pm.webMergedTotal = snap.webMergedTotal;
+                            pm.webMergedFromNaver = snap.webMergedFromNaver;
+                            pm.naverCallInclusionRate = snap.naverCallInclusionRate;
+                            pm.naverMergedShare = snap.naverMergedShare;
+                            pr.metrics = pm;
+                        }
+
+                        bundle.providers.add(pr);
                     } finally {
-                        if (prev != null) {
-                            GuardContextHolder.set(prev);
-                        } else {
-                            GuardContextHolder.clear();
+                        if (metricRegistry != null) {
+                            metricRegistry.removeForSid(providerSid);
                         }
                     }
-
-                    if (metricRegistry != null) {
-                        SoakMetricRegistry.Snapshot snap = metricRegistry.snapshot(providerSid);
-                        SoakQuickBundleReport.ProviderMetrics pm = new SoakQuickBundleReport.ProviderMetrics();
-                        pm.fpFilterLegacyBypassCount = snap.fpFilterLegacyBypassCount;
-                        pm.webCalls = snap.webCalls;
-                        pm.webCallsWithNaver = snap.webCallsWithNaver;
-                        pm.webMergedTotal = snap.webMergedTotal;
-                        pm.webMergedFromNaver = snap.webMergedFromNaver;
-                        pm.naverCallInclusionRate = snap.naverCallInclusionRate;
-                        pm.naverMergedShare = snap.naverMergedShare;
-                        pr.metrics = pm;
-                    }
-
-                    bundle.providers.add(pr);
                 }
             }
 

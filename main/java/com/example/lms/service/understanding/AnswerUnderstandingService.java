@@ -153,7 +153,16 @@ public class AnswerUnderstandingService {
         if (end > 0) {
             tldr = trimmed.substring(0, Math.min(end + 1, trimmed.length())).strip();
         } else {
-            tldr = trimmed.length() > 200 ? trimmed.substring(0, 200) : trimmed;
+            if (trimmed.length() > 200) {
+                int tldrEnd = 200;
+                if (Character.isHighSurrogate(trimmed.charAt(tldrEnd - 1))
+                        && Character.isLowSurrogate(trimmed.charAt(tldrEnd))) {
+                    tldrEnd--;
+                }
+                tldr = trimmed.substring(0, tldrEnd);
+            } else {
+                tldr = trimmed;
+            }
         }
         // Key points: collect bullet lines or first 3 sentences
         List<String> keyPoints = new ArrayList<>();

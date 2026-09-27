@@ -68,6 +68,9 @@ public class UpstashVectorStoreAdapter implements EmbeddingStore<TextSegment> {
     @Value("${upstash.vector.api-key:${vector.upstash.token:}}")
     private String apiKey;
 
+    @Value("${upstash.vector.enabled:${vector.upstash.enabled:true}}")
+    private boolean enabled = true;
+
     /** Upstash namespace. Default namespace in Upstash is empty string "". */
     @Value("${upstash.vector.namespace:${vector.upstash.namespace:${vector.upstash.index:}}}")
     private String namespace;
@@ -146,7 +149,7 @@ public class UpstashVectorStoreAdapter implements EmbeddingStore<TextSegment> {
     }
 
     public boolean isConfigured() {
-        return !ConfigValueGuards.isMissing(restUrl) && !ConfigValueGuards.isMissing(apiKey);
+        return enabled && !ConfigValueGuards.isMissing(restUrl) && !ConfigValueGuards.isMissing(apiKey);
     }
 
     public boolean isWriteEnabled() {
@@ -162,6 +165,7 @@ public class UpstashVectorStoreAdapter implements EmbeddingStore<TextSegment> {
     public Map<String, Object> effectiveMode() {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("configured", isConfigured());
+        out.put("disabledReason", !enabled ? "disabled_by_config" : isConfigured() ? "none" : "missing_endpoint_or_key");
         out.put("readEnabled", isConfigured());
         out.put("writeRequested", writeEnabled);
         out.put("readOnly", readOnly);
@@ -381,7 +385,8 @@ public class UpstashVectorStoreAdapter implements EmbeddingStore<TextSegment> {
                         text,
                         dev.langchain4j.data.document.Metadata.from(md));
 
-                out.add(new EmbeddingMatch<>(score, id, request.queryEmbedding(), seg));
+                // includeVectors=false: the matched document vector is unavailable.
+                out.add(new EmbeddingMatch<>(score, id, null, seg));
             }
 
             return new EmbeddingSearchResult<>(out);

@@ -42,7 +42,7 @@ public class SubjectResolver {
     }
 
     private static final Pattern QUOTED_PATTERN   = Pattern.compile("[\"“”'’`](.+?)[\"“”'’`]");
-    private static final Pattern COMPOUND_PATTERN = Pattern.compile("(?i)\\b([a-z]{1,4}\\d+[a-z]*|\\d+[a-z]{1,4}|[가-힣A-Za-z]{2,20}학원|아카데미|Academy)\\b");
+    private static final Pattern COMPOUND_PATTERN = Pattern.compile("(?i)\\b([a-z]{1,4}\\d+[a-z]*|\\d+[a-z]{1,4}|[가-힣A-Za-z]{2,20}학원|아카데미|Academy)(?=\\b|[은는]\\b)");
     private static final Pattern ACRONYM_PATTERN  = Pattern.compile("\\b[A-Z]{2,5}\\b");
 
     public Optional<String> resolve(String query, String domain) {

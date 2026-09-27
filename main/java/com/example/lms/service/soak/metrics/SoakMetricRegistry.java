@@ -48,6 +48,14 @@ public class SoakMetricRegistry {
         bySid.put(sid, new Counters());
     }
 
+    /** Remove a completed provider-scoped run without clearing the shared no-sid bucket. */
+    public void removeForSid(String sid) {
+        if (sid == null || sid.isBlank()) {
+            return;
+        }
+        bySid.remove(sid);
+    }
+
     /** Increment fp-filter legacy-bypass (metadata missing → writer fallback). */
     public void incFpFilterLegacyBypass() {
         String sid = sidOrNull();

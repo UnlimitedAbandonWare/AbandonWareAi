@@ -130,34 +130,36 @@ public class VectorIngestProtectionService {
         long now = System.currentTimeMillis();
         State st = states.computeIfAbsent(base, k -> new State());
 
-        // Reset if idle for long enough.
-        if (st.lastAtMs > 0 && (now - st.lastAtMs) > resetMs) {
-            st.hits = 0;
-            st.firstAtMs = 0L;
-        }
+        synchronized (st) {
+            // Reset if idle for long enough.
+            if (st.lastAtMs > 0 && (now - st.lastAtMs) > resetMs) {
+                st.hits = 0;
+                st.firstAtMs = 0L;
+            }
 
-        // Start new window if needed.
-        if (st.firstAtMs == 0L || (now - st.firstAtMs) > windowMs) {
-            st.hits = 0;
-            st.firstAtMs = now;
-        }
+            // Start new window if needed.
+            if (st.firstAtMs == 0L || (now - st.firstAtMs) > windowMs) {
+                st.hits = 0;
+                st.firstAtMs = now;
+            }
 
-        st.hits++;
-        st.lastAtMs = now;
-        st.lastStage = safe(stage);
-        st.lastReason = classifyReason(error);
+            st.hits++;
+            st.lastAtMs = now;
+            st.lastStage = safe(stage);
+            st.lastReason = classifyReason(error);
 
-        // Already quarantined.
-        if (st.quarantineUntilMs > now) {
-            return;
-        }
+            // Already quarantined.
+            if (st.quarantineUntilMs > now) {
+                return;
+            }
 
-        int th = Math.max(1, threshold);
-        if (st.hits >= th) {
-            long until = now + Math.max(5_000L, quarantineMs);
-            st.quarantineUntilMs = until;
-            log.warn("[IngestProtection] OPEN sidBase={} untilMs={} reason={} stage={} hits={}",
-                    base, until, st.lastReason, st.lastStage, st.hits);
+            int th = Math.max(1, threshold);
+            if (st.hits >= th) {
+                long until = now + Math.max(5_000L, quarantineMs);
+                st.quarantineUntilMs = until;
+                log.warn("[IngestProtection] OPEN sidBase={} untilMs={} reason={} stage={} hits={}",
+                        base, until, st.lastReason, st.lastStage, st.hits);
+            }
         }
     }
 

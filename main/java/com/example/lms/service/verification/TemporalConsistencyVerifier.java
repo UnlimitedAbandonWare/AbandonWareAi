@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * [시선1 핵심] 시간 정합성 검증기.
@@ -17,6 +18,13 @@ import java.util.Locale;
  */
 @Component
 public class TemporalConsistencyVerifier {
+    private static final Pattern ENGLISH_PAST_RELEASE =
+            Pattern.compile("\\b(?:was|were|has\\s+been)\\s+released\\b");
+    private static final Pattern SENTENCE_BOUNDARY = Pattern.compile("(?<=[.!?])\\s+|[\\r\\n]+");
+    private static final Pattern RELEASE_QUALIFIER =
+            Pattern.compile("\\b(?:if|whether|unless|would|could|might)\\b");
+    private static final Pattern RELEASE_DENIAL =
+            Pattern.compile("\\b(?:false|incorrect|untrue)\\b|\\bnot\\s+true\\b");
 
     /**
      * 단순한 시간 정합성 검증 결과.
@@ -68,7 +76,8 @@ public class TemporalConsistencyVerifier {
                 return false;
             }
             String lower = ev.toLowerCase(Locale.ROOT);
-            return (lower.contains("출시") || lower.contains("발매") || lower.contains("released"))
+            return hasUnqualifiedEnglishPastRelease(lower)
+                    || (lower.contains("출시") || lower.contains("발매") || lower.contains("released"))
                     && (lower.contains("되었") || lower.contains("됐") || lower.contains("완료")
                             || lower.contains("했다") || lower.contains("했습니다"));
         });
@@ -79,6 +88,18 @@ public class TemporalConsistencyVerifier {
         }
 
         return VerificationResult.success();
+    }
+
+    private boolean hasUnqualifiedEnglishPastRelease(String text) {
+        for (String sentence : SENTENCE_BOUNDARY.split(text)) {
+            var release = ENGLISH_PAST_RELEASE.matcher(sentence);
+            if (release.find() && !sentence.contains("?")
+                    && !RELEASE_QUALIFIER.matcher(sentence.substring(0, release.start())).find()
+                    && !RELEASE_DENIAL.matcher(sentence.substring(release.end())).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean containsAny(String text, String... tokens) {

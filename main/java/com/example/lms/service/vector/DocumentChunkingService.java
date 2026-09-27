@@ -41,7 +41,9 @@ public class DocumentChunkingService {
         Map<String, Object> base = baseMeta == null ? new LinkedHashMap<>() : new LinkedHashMap<>(baseMeta);
         int chunkSize = Math.max(128, chunkSizeChars);
         int overlap = Math.max(0, Math.min(overlapChars, chunkSize - 1));
-        if (!enabled || text.length() < Math.max(chunkSize + 1, minSplitChars)) {
+        // The configured chunk size is a hard ceiling. A larger legacy
+        // min-split threshold must never permit an oversized single chunk.
+        if (!enabled || text.length() <= chunkSize) {
             Map<String, Object> md = new LinkedHashMap<>(base);
             md.putIfAbsent(VectorMetaKeys.META_CHUNK_COUNT, 1);
             md.putIfAbsent(VectorMetaKeys.META_CHUNK_INDEX, 0);
@@ -49,19 +51,33 @@ public class DocumentChunkingService {
             return List.of(new Chunk(text, md));
         }
 
-        String parentDocId = String.valueOf(base.getOrDefault(
-                VectorMetaKeys.META_DOC_ID,
-                base.getOrDefault(VectorMetaKeys.META_ORIGINAL_ID, "doc-" + DigestUtils.sha256Hex(text))));
+        Object parentId = base.get(VectorMetaKeys.META_DOC_ID);
+        if (parentId == null || !StringUtils.hasText(String.valueOf(parentId))) {
+            parentId = base.get(VectorMetaKeys.META_ORIGINAL_ID);
+        }
+        String parentDocId = parentId != null && StringUtils.hasText(String.valueOf(parentId))
+                ? String.valueOf(parentId) : "doc-" + DigestUtils.sha256Hex(text);
         List<String> pieces = new ArrayList<>();
         int start = 0;
         while (start < text.length()) {
             int hardEnd = Math.min(text.length(), start + chunkSize);
             int end = semanticEnd(text, start, hardEnd, chunkSize);
+            if (end > start && end < text.length()
+                    && Character.isHighSurrogate(text.charAt(end - 1))
+                    && Character.isLowSurrogate(text.charAt(end))) {
+                end--;
+            }
             pieces.add(text.substring(start, end));
             if (end >= text.length()) {
                 break;
             }
-            start = Math.max(start + 1, end - overlap);
+            int nextStart = Math.max(start + 1, end - overlap);
+            if (nextStart > 0 && nextStart < text.length()
+                    && Character.isHighSurrogate(text.charAt(nextStart - 1))
+                    && Character.isLowSurrogate(text.charAt(nextStart))) {
+                nextStart++;
+            }
+            start = nextStart;
         }
 
         List<Chunk> chunks = new ArrayList<>(pieces.size());

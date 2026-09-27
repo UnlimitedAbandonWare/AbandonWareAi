@@ -37,6 +37,8 @@ import java.util.*;
 @ConditionalOnBean(VectorQuarantineDlqRepository.class)
 @Service
 public class VectorQuarantineDlqService {
+    @Autowired(required = false)
+    private com.example.lms.service.rag.graph.GeneralGraphVectorGate generalGraphVectorGate;
 
     private static final Logger log = LoggerFactory.getLogger(VectorQuarantineDlqService.class);
 
@@ -74,6 +76,9 @@ public class VectorQuarantineDlqService {
 
     @Value("${vector.dlq.enabled:false}")
     private boolean enabled;
+
+    @Value("${vector.dlq.redrive.enabled:false}")
+    private boolean redriveEnabled;
 
     @Value("${vector.dlq.batch-size:50}")
     private int batchSize;
@@ -200,6 +205,10 @@ public class VectorQuarantineDlqService {
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("enabled", true);
+        out.put("redriveEnabled", redriveEnabled);
+        if (!redriveEnabled) {
+            out.put("disabledReason", "redrive_disabled");
+        }
         try {
             out.put("pending", repo.countByStatus(VectorQuarantineDlq.Status.PENDING));
             out.put("inflight", repo.countByStatus(VectorQuarantineDlq.Status.INFLIGHT));
@@ -409,6 +418,9 @@ public class VectorQuarantineDlqService {
         }
 
         Map<String, Object> metaForLc = sanitizeForLangChainMeta(meta);
+        if (!com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
+                generalGraphVectorGate, targetSid, meta, () -> {}))
+            throw new BlockedRedrive("graph_source_invalidated");
         TextSegment seg = TextSegment.from(payload, Metadata.from(metaForLc));
 
         var resp = embeddingModel.embedAll(List.of(seg));
@@ -421,7 +433,10 @@ public class VectorQuarantineDlqService {
         }
 
         String id = computeTargetId(targetSid, row.getOriginalVectorId(), payload);
-        embeddingStore.addAll(List.of(id), List.of(embeds.get(0)), List.of(seg));
+        if (!com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
+                generalGraphVectorGate, targetSid, meta,
+                () -> embeddingStore.addAll(List.of(id), List.of(embeds.get(0)), List.of(seg))))
+            throw new BlockedRedrive("graph_source_invalidated");
     }
 
     private static String computeTargetId(String targetSid, String originalVectorId, String payload) {
