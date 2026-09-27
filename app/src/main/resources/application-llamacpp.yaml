@@ -19,7 +19,7 @@ llm:
   provider: local
   base-url: http://localhost:11434/v1
   api-key: dummy
-  chat-model: gemma3:27b
+  chat-model: gemma4:26b
   # MERGED_DUP llm.engine :: engine: llamacpp
   model-path: ${LLM_MODEL_PATH:./models/default.gguf}
   # MERGED_DUP llm.preload :: preload: true

@@ -35,7 +35,7 @@ autolearn:
 llm:
   provider: local
   base-url: ${LLM_BASE_URL:http://localhost:11434/v1}
-  chat-model: ${LLM_CHAT_MODEL:gemma3:27b}
+  chat-model: ${LLM_CHAT_MODEL:gemma4:26b}
   api-key: ${LLM_API_KEY:}
 fallback:
   enabled: false
@@ -53,7 +53,7 @@ zsys:
     max-concurrency: ${ZSYS_ONNX_MAX_CONCURRENCY:1}
 jammini:
   guard:
-    mode: aggressive
+    mode: soft
     profile: PROFILE_MEMORY
     evidence:
       mode: RELAXED
@@ -101,3 +101,4 @@ gpt-search:
     enabled: true
   hybrid:
     primary: BRAVE
+

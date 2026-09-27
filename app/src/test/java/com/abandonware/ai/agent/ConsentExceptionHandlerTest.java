@@ -31,10 +31,10 @@ public class ConsentExceptionHandlerTest {
     @Test
     void returnsBasicCardJsonAnd403() {
         ConsentExceptionHandler handler = new ConsentExceptionHandler(new ConsentCardRenderer(), new ContextBridge());
-        ConsentRequiredException ex = new ConsentRequiredException(java.util.List.of(ToolScope.KAKAO_PUSH));
+        ConsentRequiredException ex = new ConsentRequiredException(java.util.List.of(ToolScope.MESSAGE_SEND));
         MockHttpServletRequest req = new MockHttpServletRequest();
         req.addHeader("X-Session-Id", "sess-1");
-        req.addHeader("X-Kakao-Room-Id", "room-1");
+        req.addHeader("X-Channel-Room-Id", "room-1");
 
         ResponseEntity<String> resp = handler.handle(ex, req);
         assertEquals(403, resp.getStatusCode().value());

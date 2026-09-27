@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.example.lms.infra.budget.ExecutionBudget;
 
@@ -14,6 +16,8 @@ import com.example.lms.infra.budget.ExecutionBudget;
  * - Does not depend on ONNX runtime here (wired elsewhere)
  */
 public class OnnxCrossEncoderReranker {
+    private static final Logger log = Logger.getLogger(OnnxCrossEncoderReranker.class.getName());
+
     private final Semaphore gate;
     private final boolean enabled;
     private final long acquireTimeoutMs;
@@ -71,7 +75,9 @@ public class OnnxCrossEncoderReranker {
             if (v != null && !v.isBlank()) return Integer.parseInt(v.trim());
             v = System.getProperty(prop);
             if (v != null && !v.isBlank()) return Integer.parseInt(v.trim());
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            logFailSoft("parseIntEnv", e);
+        }
         return def;
     }
 
@@ -81,7 +87,16 @@ public class OnnxCrossEncoderReranker {
             if (v != null && !v.isBlank()) return Boolean.parseBoolean(v.trim());
             v = System.getProperty(prop);
             if (v != null && !v.isBlank()) return Boolean.parseBoolean(v.trim());
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            logFailSoft("parseBoolEnv", e);
+        }
         return def;
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isLoggable(Level.FINE)) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.fine("[AWX][onnx][reranker] failSoft stage=" + stage + " errorType=" + errorType);
+        }
     }
 }

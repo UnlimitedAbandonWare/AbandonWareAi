@@ -35,7 +35,6 @@ public class OrchestratorFlowHappyTest {
     void fullFlowWithTools() {
         ToolRegistry reg = new ToolRegistry();
         // Register stub tools
-        reg.register(new KakaoPushTool(new com.abandonware.ai.agent.integrations.KakaoMessageService()));
         reg.register(new N8nNotifyTool(new com.abandonware.ai.agent.integrations.N8nNotifier()));
         reg.register(new RagRetrieveTool(new com.abandonware.ai.agent.integrations.HybridRetriever()));
         reg.register(new WebSearchTool(new com.abandonware.ai.agent.integrations.TavilyWebSearchRetriever()));
@@ -45,10 +44,10 @@ public class OrchestratorFlowHappyTest {
                 new FlowDefinitionLoader(), new AgentTracer(), new AgentMetrics());
 
         var ctx = new ToolContext("sess", Map.of("roomId","room-123"));
-        var out = orch.execute("kakao_ask", Map.of("text","오늘 공지 보내줘"), ctx);
+        var out = orch.execute("channel_ask", Map.of("text","오늘 공지 보내줘"), ctx);
 
         assertNotNull(out);
-        // Expect answer synthesized and kakao tool potentially invoked (stubbed) and n8n tool present in state
-        assertTrue(out.containsKey("answer") || out.containsKey("kakao.push"));
+        // Expect answer synthesized and message tool potentially invoked (stubbed) and n8n tool present in state
+        assertTrue(out.containsKey("answer") || out.containsKey("message.send"));
     }
 }

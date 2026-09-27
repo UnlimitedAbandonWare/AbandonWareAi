@@ -32,7 +32,7 @@ public class OrchestratorFlowTest {
         Orchestrator orch = new Orchestrator(new ToolRegistry(), new BasicConsentService(),
                 new FlowDefinitionLoader(), new AgentTracer(), new AgentMetrics());
         var ctx = new ToolContext("sess", Map.of());
-        var out = orch.execute("kakao_ask", Map.of("text","테스트"), ctx);
+        var out = orch.execute("channel_ask", Map.of("text","테스트"), ctx);
         assertNotNull(out);
     }
 }

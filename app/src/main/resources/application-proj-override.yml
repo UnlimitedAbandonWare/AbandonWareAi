@@ -5,7 +5,7 @@ llm:
   provider: local
   base-url: ${LLM_BASE_URL:http://localhost:11434/v1}
   api-key: ${LLM_API_KEY:}
-  chat-model: ${LLM_CHAT_MODEL:gemma3:27b}
+  chat-model: ${LLM_CHAT_MODEL:gemma4:26b}
   high:
     model: ${LLM_HIGH_MODEL:${llm.chat-model}}
 

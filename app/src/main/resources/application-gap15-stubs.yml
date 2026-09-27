@@ -148,7 +148,7 @@ upstash:
 llm:
   base-url: http://localhost:11434/v1
   api-key: ${LLM_API_KEY:}
-  chat-model: gemma3:27b
+  chat-model: gemma4:26b
 
   provider: local
 train_idle:

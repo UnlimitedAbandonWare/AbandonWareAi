@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
+import com.example.lms.search.TraceStore;
 import com.example.lms.service.rag.model.ContextSlice;
 
 /**
@@ -30,9 +31,19 @@ public class KnowledgeGraphHandler {
             return Collections.emptyList();
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
+            traceSuppressed("tryAcquire.interrupted", ie);
             return Collections.emptyList();
         } finally {
             if (acquired) limiter.release();
         }
+    }
+
+    private static void traceSuppressed(String stage, Throwable failure) {
+        String safeStage = stage == null || stage.isBlank() ? "unknown" : stage;
+        TraceStore.put("retrieval.kg.javaClean.suppressed", true);
+        TraceStore.put("retrieval.kg.javaClean.suppressed.stage", safeStage);
+        TraceStore.put("retrieval.kg.javaClean.suppressed.errorType",
+                failure == null ? "unknown" : failure.getClass().getSimpleName());
+        TraceStore.inc("retrieval.kg.javaClean.suppressed.count");
     }
 }

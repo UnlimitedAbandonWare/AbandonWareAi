@@ -1,6 +1,8 @@
 package com.example.lms.service.rag.auth;
 
 import com.example.lms.service.rag.detector.RiskBand;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -19,6 +21,8 @@ import com.example.lms.guard.rulebreak.RuleBreakContext;
 @Component
 @ConfigurationProperties(prefix = "naver.filters")
 public class DomainWhitelist {
+
+    private static final Logger log = LoggerFactory.getLogger(DomainWhitelist.class);
 
     /** When true the whitelist is enforced; otherwise all domains pass. */
     private boolean enableDomainFilter = false;
@@ -131,7 +135,15 @@ public class DomainWhitelist {
             // 일반적인 http/https URL을 가정. 스키마가 없으면 host가 null일 수 있다.
             return URI.create(url).getHost();
         } catch (Exception e) {
+            logFailSoft("extractHost", e);
             return null;
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][rag][domain-whitelist] failSoft stage={} errorType={}", stage, errorType);
         }
     }
 

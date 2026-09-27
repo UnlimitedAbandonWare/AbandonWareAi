@@ -53,7 +53,7 @@ upstash:
 llm:
   base-url: http://localhost:11434/v1
   api-key: dummy
-  chat-model: gemma3:27b
+  chat-model: gemma4:26b
 
   provider: local
   # MERGED_DUP llm.base-url :: base-url: http://localhost:11434/v1   # 3090-only endpoint
