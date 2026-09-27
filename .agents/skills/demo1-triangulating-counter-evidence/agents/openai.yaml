@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Counter Evidence Triangulation"
+  short_description: "Triangulate hypotheses and counter-evidence"
+  default_prompt: "Use $demo1-triangulating-counter-evidence to route only the needed hypothesis, three-query retrieval, and coherence stages for an anchored claim."

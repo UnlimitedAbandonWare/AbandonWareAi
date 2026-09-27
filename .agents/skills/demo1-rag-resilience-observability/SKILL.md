@@ -1,6 +1,6 @@
 ---
 name: demo1-rag-resilience-observability
-description: Work on demo-1 resilience, failure learning, and observability: Failure Pattern Analysis, CFVM RawTile/RawMatrixBuffer, Silent Failure Pattern, Error Break, NovaErrorBreakGuard, ablation contribution decomposition, M1~M9 observability vector/matrix axes, virtual points, autolearn metrics, vector quarantine, DebugEventStore, TraceStore, SSE breadcrumbs, soak/probe diagnostics, and redacted runtime evidence.
+description: "Use when working on demo-1 resilience, failure learning"
 ---
 
 # Demo1 RAG Resilience Observability

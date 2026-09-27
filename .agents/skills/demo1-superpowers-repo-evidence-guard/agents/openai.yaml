@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Superpowers Guard"
+  short_description: "Keep Superpowers below repo evidence"
+  default_prompt: "Use $demo1-superpowers-repo-evidence-guard to use Superpowers process skills without overriding demo-1 source proof."

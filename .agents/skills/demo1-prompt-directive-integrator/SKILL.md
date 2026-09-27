@@ -1,134 +1,54 @@
 ---
 name: demo1-prompt-directive-integrator
-description: Use when an uploaded, pasted, or Mac/Notebook-produced demo-1 patch directive, backlog, scorecard, or prior completion report must be reconciled into agent-prompts, prompt manifest output, AGENTS pointers, or prompt-only handoff artifacts.
+description: Use when an uploaded, pasted, or Mac/Notebook-produced demo-1 patch directive
 ---
 
 # Demo1 Prompt Directive Integrator
 
-## Overview
-
-Use this for prompt-pack/governance work, not runtime Java patching. The invariant is: attached directives are risk maps, Desktop live files are authority, and any prompt-pack edit must end with rebuilt output plus proof.
+Use this skill for prompt-pack and governance artifacts, not runtime Java
+patching. Attached directives are risk maps; live Desktop files and generated
+prompt output are authority.
 
 ## Trigger Boundary
 
-Use this skill for:
-- `codex_patch_directive_*.md`, 9-hour prompt packs, P0/P1/P2 backlog overlays, scorecards, or previous "done" reports that need to be folded into `agent-prompts`.
-- Updates to `agent-prompts/agents/**/system*.md`, `agent-prompts/prompts.manifest.yaml`, generated `agent-prompts/out/**`, or short AGENTS pointers.
-- Prompt-only handoff artifacts where source/output equality, manifest parsing, queue counts, or no-op/evidence-needed wording are the acceptance criteria.
+Use this for `codex_patch_directive_*` files, 9-hour prompt packs, backlog
+overlays, scorecards, previous reports, prompt-only handoff artifacts,
+`agent-prompts/**`, generated prompt output, manifest changes, or short AGENTS
+pointers. Switch to runtime Safe Patch skills for `main/java`, resources,
+Gradle, or application behavior.
 
-Do not use this skill as the main workflow for active runtime source patches. Use `demo1-rag-platform`, `patchdrop-safe-patch-orchestrator`, or the subsystem skills when editing `main/java`, `main/resources`, or Gradle runtime code.
+## Reference Routing
 
-## Intake
+Read `references/prompt-directive-integrator-reference.md` only for UTF-8
+intake, requirement extraction, prompt seam search, patch rules, verification
+commands, completion reporting, or common mistake checks.
 
-1. Read the attachment as UTF-8. If PowerShell output is mojibake, reread bytes explicitly:
+## Operating Contract
 
-```powershell
-python -X utf8 -c "from pathlib import Path; print(Path(r'<attachment>').read_text(encoding='utf-8', errors='replace')[:4000])"
-```
+1. Read attachments as UTF-8 before searching source.
+2. Extract only durable requirements: prompt id, backlog IDs, target files,
+   trace keys, focused gates, non-goals, `no_patch_needed`, and
+   `evidence_needed`.
+3. Confirm the repo-owned prompt seam before editing.
+4. Patch the smallest prompt source file that owns the behavior. Keep long
+   workflows in `agent-prompts`; update `AGENTS.md` only as a short pointer.
+5. Compare generated output through the manifest merge order when traits are
+   involved.
+6. Keep runtime claims out of prompt packs unless the directive includes exact
+   verification gates.
+7. Report a proof-backed no-op when live prompt source and generated output
+   already contain the directive contract.
 
-2. Extract only durable requirements:
-- target agent or prompt id,
-- backlog IDs such as `P0-AP0-F`, `P1-AP1-C`, or `P2-*`,
-- target file list,
-- required trace keys,
-- focused test gates,
-- `no_patch_needed` and `evidence_needed` rules,
-- explicit non-goals such as DB/DDL, GUI, or live provider proof.
+## Evidence Boundaries
 
-3. Confirm the repo-owned prompt seam before editing:
+- Mac mini, Notebook, Browser, Computer, and Supabase proof remains supporting
+  evidence unless current Desktop output proves the lane.
+- Prompt rebuild proof does not prove the full 9-hour runtime source goal.
+- Use count-only secret scans and artifact paths, never raw prompts, raw
+  external payloads, auth headers, cookies, DB URLs, or environment dumps.
 
-```powershell
-rg -n "<agent_id>|<directive_id>|Attached Runtime Patch Directive|evidence_needed|no_patch_needed" agent-prompts AGENTS.md .agents/skills
-```
+## Common Verification
 
-4. Treat stale prior reports as evidence only. If current prompt source already contains the directive contract and generated output is current, produce a proof-backed no-op instead of duplicating sections.
-
-## Patch Rules
-
-- Patch the smallest prompt source file that owns the behavior. Usually this is `agent-prompts/agents/<agent_id>/system_ko.md` or `system.md`.
-- Update `AGENTS.md` only as a short pointer. Keep long operational workflows in `agent-prompts`.
-- Do not edit active Java/resources, secret files, `.mcp.json`, DB/DDL, or GUI automation for prompt-only tasks.
-- Preserve Desktop final-proof wording: Mac mini, Notebook, Supabase, and Computer Use evidence is supporting evidence unless current Desktop output proves it.
-- Keep runtime claims out of the prompt pack unless the directive includes exact verification gates. Prefer explicit `evidence_needed` over implied success.
-- If an agent uses traits in `prompts.manifest.yaml`, compare output against the manifest merge order, not only the raw system file.
-
-## Verification
-
-Run available checks from the Desktop canonical root.
-
-Build the changed prompt:
-
-```powershell
-python -X utf8 agent-prompts\build.py --manifest agent-prompts\prompts.manifest.yaml --agent <agent_id>
-```
-
-Check manifest parsing and duplicate IDs:
-
-```powershell
-python -X utf8 -c "import yaml, pathlib, collections; m=yaml.safe_load(pathlib.Path('agent-prompts/prompts.manifest.yaml').read_text(encoding='utf-8')); ids=[a['id'] for a in m.get('agents',[])]; dup=[k for k,v in collections.Counter(ids).items() if v>1]; assert not dup, dup; assert '<agent_id>' in ids; print('YAML_OK agents=%d duplicate_ids=NONE' % len(ids))"
-```
-
-Check generated output equals the manifest merge result:
-
-```powershell
-@'
-from pathlib import Path
-import os, yaml
-agent_id = "<agent_id>"
-root = Path("agent-prompts")
-m = yaml.safe_load((root / "prompts.manifest.yaml").read_text(encoding="utf-8"))
-agent = next(a for a in m["agents"] if a["id"] == agent_id)
-parts = []
-for item in agent.get("merge", {}).get("order", ["trait", "system"]):
-    if item == "trait":
-        for trait in agent.get("traits", []):
-            parts.append((root / trait).read_text(encoding="utf-8").replace("\r\n", "\n"))
-    elif item == "system":
-        parts.append((root / agent["system"]).read_text(encoding="utf-8").replace("\r\n", "\n"))
-expected = "\n\n".join(parts)
-out = (root / agent["output"]["path"]).read_text(encoding=agent["output"].get("encoding", "utf-8")).replace("\r\n", "\n")
-print("manifest_merge_eq_out", expected == out)
-raise SystemExit(0 if expected == out else 1)
-'@ | python -X utf8 -
-```
-
-Run prompt secret tests when available:
-
-```powershell
-python -X utf8 scripts\test_agent_prompt_secret_patterns.py
-```
-
-For broad prompt/governance changes, add Desktop cache isolation before Gradle:
-
-```powershell
-$env:AWX_AGENT_HOST = "desktop"
-$env:AWX_SPLIT_BUILD_OUTPUTS = "1"
-$env:AWX_BUILD_HOST_ID = "desktop"
-$env:GRADLE_USER_HOME = "$env:USERPROFILE\.gradle-awx-desktop"
-$pcd = "$env:USERPROFILE\.awx-gradle-project-cache\desktop"
-New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME,$pcd | Out-Null
-.\gradlew.bat sourceScoreReport checkLangchain4jVersionPurity checkSourceSetHygiene --no-daemon --project-cache-dir $pcd
-```
-
-## Completion Report
-
-Report:
-- prompt source path and generated output path,
-- directive IDs integrated or proven already present,
-- manifest parse result,
-- generated-output comparison result,
-- secret-scan result as counts only,
-- Gradle/governance result or exact `evidence_needed`,
-- whether the long goal remains open.
-
-Never claim the full 9-hour source patch is complete from a prompt-pack rebuild alone.
-
-## Common Mistakes
-
-| Mistake | Correction |
-| --- | --- |
-| Treating a prior completion report as current truth | Re-read live prompt source and generated output. |
-| Editing `main/java` during a prompt-only directive task | Stop and switch to runtime safe-patch skills only if a concrete source blocker is requested. |
-| Comparing `system_ko.md` directly to output when traits exist | Compare the manifest merge result to output. |
-| Marking Supabase, DB/DDL, GUI, or Mac mini proof complete without live Desktop evidence | Report `evidence_needed` or supporting evidence only. |
-| Rebuilding output but skipping manifest/secret checks | Run the prompt build, manifest parse, output comparison, and count-only secret scan before completion. |
+Use `Verification Commands` in the reference for skill validation, prompt
+build, manifest parse, output comparison, secret checks, and Gradle governance
+gates.

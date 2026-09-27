@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Triad Deliberation"
+  short_description: "긍정·부정·중립 짧은 교차검증 후 판정 우선"
+  default_prompt: "Use $demo1-triad-deliberation only for non-trivial/ambiguous decisions: affirmative then adversarial then calm judge, judgment first, agreement is not proof, skip on trivial or token-save stops, no paid multi-model fanout, no temperature-2 creative leaps into code."

@@ -1,6 +1,6 @@
 ---
 name: demo1-rag-strategy-orchestration
-description: Design, audit, or patch demo-1 RAG orchestration strategies: Plan DSL, MoE Strategy Selector, Self-Ask 3-way query decomposition, QueryBurst, Massive Parallel Query Expansion, Anchor-Based Context Compression, Brave mode, RuleBreak, FullScaleSearchStrategy, Hypernova TWPM/CVaR/Risk-K, GRANDAS fusion, DPP diversity reranking, K allocation, tree/scenario analysis, and prompt-context handoff.
+description: "Use when designing or patching demo-1 RAG strategies: MoE, Self-Ask, Hypernova"
 ---
 
 # Demo1 RAG Strategy Orchestration

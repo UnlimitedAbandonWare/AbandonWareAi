@@ -115,6 +115,17 @@
 | CIH-RAG iqrMaxIter | `cih-rag.iqr-max-iter` | 3 |
 | CIH-RAG breadcrumbLowThr | `cih-rag.breadcrumb-low-threshold` | 0.3 |
 
+## Runtime Boundary And Non-Strategy Canonical Seams
+
+- Active sourceSets: backend `main/java` + `main/resources`; `:app` `app/src/main/java_clean` + `app/src/main/resources`. `project/src/main/java`, `app/src/main/java`, `demo-1`, `lms-core`, backups, archives, generated outputs = inactive/reference unless Gradle evidence proves otherwise.
+- Application entry: `main/java/com/example/lms/LmsApplication.java`. Non-web boot must stay valid: servlet request helpers tolerate no current `HttpServletRequest`; servlet `SecurityFilterChain` beans guarded `@ConditionalOnWebApplication(type = SERVLET)`.
+- Final prompt assembly: `main/java/com/example/lms/prompt/PromptBuilder.java` — keep final prompt construction on the builder/context boundary.
+- CFVM failure-pattern memory: `main/java/com/example/lms/cfvm` (`RawMatrixBuffer`, `RawSlotExtractor`, `CfvmFailureRecorder`).
+- Time-budget surfaces split: addon request budget context `main/java/com/abandonware/ai/addons/budget` vs orchestration decisions `main/java/ai/abandonware/nova/orch/timebudget/TimeBudgetGuard.java`; similarly named `TimeBudget` stubs elsewhere are local adapters until live call evidence proves otherwise.
+- PII guard naming is case-sensitive: `main/java/com/example/lms/service/guard/PIISanitizer.java` (service-layer) vs `main/java/com/example/lms/guard/PiiSanitizer.java` (legacy) — do not merge by class name.
+- Fail-soft/provider seams: `HybridWebSearchProvider`, `NaverSearchService`, `BraveSearchService`, `SerpApiProvider`, `NightmareBreaker`, `QueryTransformer`, `TraceStore`, `DebugEventStore` — patch only after live failure evidence.
+- Alias warnings: files under `com/example/lms/extreme`, `com/example/lms/nova/extremez`, `com/abandonware/ai/service/rag/**` are aliases/adapters unless live evidence proves otherwise — never Spring components.
+
 ## Cross-Reference
 
 For implementation-level trigger logic, code snippets, and per-subsystem trace keys,

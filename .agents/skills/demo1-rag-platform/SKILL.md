@@ -1,6 +1,6 @@
 ---
 name: demo1-rag-platform
-description: Work on the Dynamic RAG Orchestration Platform backend in this demo-1 checkout. Use when changing or auditing Java 17, Spring Boot 3, Gradle Kotlin/Groovy build ownership, LangChain4j 1.0.1 purity, PromptBuilder-only prompt construction, /api/chat or /api/rag runtime flow, sourceSet boundaries, safe patch policy, search provider fail-soft behavior, or repository verification commands.
+description: "Use when changing the Dynamic RAG Orchestration Platform backend in demo-1"
 ---
 
 # Demo1 RAG Platform
