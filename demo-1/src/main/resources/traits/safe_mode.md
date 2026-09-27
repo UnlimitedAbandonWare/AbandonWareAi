@@ -1,1 +1,0 @@
-# Safe Mode\nFollow strict safety and official-sources-only policy.

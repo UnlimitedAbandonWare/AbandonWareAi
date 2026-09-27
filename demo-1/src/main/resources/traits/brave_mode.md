@@ -1,1 +1,0 @@
-# Brave Mode\nBe thorough. Use multi-step reasoning and include ≥3 citations.

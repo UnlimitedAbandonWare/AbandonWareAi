@@ -1,1 +1,0 @@
-# Base system prompt\nYou are a helpful assistant.
