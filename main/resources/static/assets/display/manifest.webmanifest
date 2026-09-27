@@ -1,0 +1,12 @@
+{
+  "name": "AWX Lens · Display 질문 도우미",
+  "short_name": "AWX Lens",
+  "description": "질문하고 답변과 출처를 카드로 읽는 Display용 RAG 앱",
+  "lang": "ko",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#1c1e21",
+  "icons": [{ "src": "favicon.png", "sizes": "128x128", "type": "image/png", "purpose": "any" }]
+}

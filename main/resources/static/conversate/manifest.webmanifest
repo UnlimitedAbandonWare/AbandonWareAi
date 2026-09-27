@@ -1,0 +1,13 @@
+{
+  "name": "Conversate · 한국어 대화 보조",
+  "short_name": "Conversate",
+  "description": "휴대폰에서 입력하고 Display에서 답변 카드를 읽는 대화 보조",
+  "lang": "ko",
+  "id": "/conversate",
+  "start_url": "/conversate?display",
+  "scope": "/conversate",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [{ "src": "favicon.png", "sizes": "128x128", "type": "image/png", "purpose": "any" }]
+}

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="질문에서 검색, 근거, 답변까지. 곁 RAG Studio에서 AI의 답변 과정을 직접 살펴보세요.">
+  <meta name="referrer" content="no-referrer"><meta name="theme-color" content="#153e35">
+  <title>곁 — RAG Studio</title>
+  <link rel="icon" href="/assets/display/favicon.png"><link rel="stylesheet" href="/assets/interview/studio.css">
+  <script src="/assets/display/display-core.js" defer></script>
+  <script src="/assets/interview/rag-inspector.js" defer></script>
+  <script src="/assets/interview/studio-voice.js" defer></script>
+  <script src="/assets/interview/studio.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#question">질문 입력으로 이동</a>
+  <div class="studio-shell">
+    <aside class="sidebar" aria-label="워크스페이스">
+      <a class="brand" href="/assets/interview/studio.html">곁<span>RAG STUDIO</span></a>
+      <button id="new-conversation" class="new-chat" type="button"><span>＋</span> 새 대화</button>
+      <div class="nav-label">WORKSPACE</div>
+      <a class="nav-item selected" href="#workspace"><span>◈</span> RAG 탐색 <b>01</b></a>
+      <a class="nav-item" href="/assets/interview/index.html"><span>▣</span> Display 스튜디오 <span>↗</span></a>
+      <a class="nav-item" href="/assets/display/index.html"><span>⌁</span> 안경용 화면 <span>↗</span></a>
+      <div class="nav-label history-label">이번 대화</div><ol id="history" class="history"><li class="history-empty">질문을 보내면 기록이 쌓입니다.</li></ol>
+      <div class="sidebar-bottom"><span class="engine-dot"></span><b>하나의 RAG 엔진</b><p>웹의 깊이 있는 답변부터<br>Display의 짧은 힌트까지.</p><span class="version">WEB + META DISPLAY</span></div>
+    </aside>
+    <main id="workspace" class="workspace">
+      <header class="topbar"><div><span class="breadcrumb">워크스페이스</span><span class="slash">/</span><b>RAG 탐색</b></div><span class="access-badge"><i></i> 로그인 없이 체험</span></header>
+      <div class="main-grid">
+        <section class="conversation" aria-label="질의응답">
+          <div class="conversation-head"><span class="eyebrow">ANSWERS, WITH EVIDENCE</span><span class="edition">PORTFOLIO / LIVE DEMO</span></div>
+          <section id="welcome" class="welcome">
+            <div class="orbit" aria-hidden="true">✳</div><h1>답변 너머의<br><em>근거까지</em> 살펴보세요.</h1>
+            <p>질문을 던지고, 검색된 문서와 답변이 연결되는<br class="desktop-only"> 과정을 확인하세요. 같은 엔진이 안경에서도 함께합니다.</p>
+            <div class="suggestions" aria-label="시작할 질문">
+              <button type="button" data-preset="RAG와 일반 LLM의 차이, 그리고 RAG에서도 환각이 발생할 수 있는 이유를 공개 출처와 함께 설명해 줘."><span>개념부터 깊이 있게</span><strong>RAG는 어떻게 답을 찾나요?</strong><b>↗</b></button>
+              <button type="button" data-preset="하이브리드 검색에서 키워드 검색과 벡터 검색의 차이 및 검색 품질을 평가하는 방법을 공개 출처와 함께 설명해 줘."><span>검색 품질 살펴보기</span><strong>좋은 검색은 어떻게 측정하나요?</strong><b>↗</b></button>
+              <button type="button" data-preset="RAG 서비스에서 검색 실패와 LLM 장애를 구분하고, 각 상황의 대체 처리 방법과 한계를 설명해 줘."><span>장애 대응 이해하기</span><strong>모델이 응답하지 않는다면?</strong><b>↗</b></button>
+            </div>
+          </section>
+          <div id="messages" class="messages" aria-label="대화 메시지"></div>
+          <div id="request-notice" class="notice" role="status" hidden></div>
+          <form id="question-form" class="composer">
+            <label class="sr-only" for="question">질문 입력</label><textarea id="question" rows="3" maxlength="2000" placeholder="무엇이 궁금한가요? 근거를 함께 찾아볼게요."></textarea>
+            <div class="composer-actions"><div class="input-tools"><button id="voice" type="button" class="voice-button" aria-label="음성으로 질문 입력" aria-pressed="false">♩ <span>음성 입력</span></button><span id="char-count">0 / 2,000</span></div><div><button id="cancel" type="button" class="cancel" hidden>대기 중단</button><button id="ask" type="submit" class="send" disabled aria-label="질문 보내기">질문하기 <span>↑</span></button></div></div>
+          </form>
+          <p id="voice-status" class="composer-note">Ctrl / ⌘ + Enter로 전송 · 답변의 근거와 한계를 함께 확인하세요.</p>
+          <details class="voice-note"><summary>음성 입력 안내</summary>지원 브라우저에서 마이크를 허용하면 음성을 글로 바꿉니다. 브라우저 제공자의 전사 서비스가 사용될 수 있습니다. 전사된 질문을 확인한 뒤 직접 전송하세요.</details>
+        </section>
+        <aside class="inspector" aria-label="RAG 실행 과정">
+          <div class="inspector-heading"><div><span class="eyebrow">BEHIND THE ANSWER</span><h2>답변이 만들어지는 과정</h2></div><span id="run-status" class="run-status">대기</span></div>
+          <p class="inspector-description">질문에서 근거를 거쳐 답변까지.<br>마지막 응답의 실행 정보를 살펴보세요.</p>
+          <ol class="pipeline" aria-label="RAG 처리 단계">
+            <li id="stage-input"><span class="step-number">01</span><div><b>질문</b><small id="detail-input">텍스트 또는 음성으로 시작</small></div><span class="stage-icon">↗</span></li>
+            <li id="stage-retrieval"><span class="step-number">02</span><div><b>검색 · Retrieval</b><small id="detail-retrieval">웹 · 벡터 검색 근거 확인</small></div><span class="stage-icon">⌕</span></li>
+            <li id="stage-evidence"><span class="step-number">03</span><div><b>문서 근거</b><small id="detail-evidence">출처와 검색 점수 확인</small></div><span class="stage-icon">▤</span></li>
+            <li id="stage-context"><span class="step-number">04</span><div><b>RAG 조합</b><small id="detail-context">최종 컨텍스트 구성</small></div><span class="stage-icon">◇</span></li>
+            <li id="stage-answer"><span class="step-number">05</span><div><b>LLM 답변</b><small id="detail-answer">응답과 대체 처리 확인</small></div><span class="stage-icon">✳</span></li>
+          </ol>
+          <p id="snapshot-note" class="snapshot-note">단계별 실시간 이벤트 대신 서버의 최종 응답 근거를 표시합니다.</p>
+          <div class="inspector-tabs" role="tablist" aria-label="실행 상세"><button id="tab-evidence" type="button" role="tab" aria-selected="true" aria-controls="panel-evidence" data-tab="evidence">근거 <span id="source-count">0</span></button><button id="tab-routing" type="button" role="tab" aria-selected="false" aria-controls="panel-routing" tabindex="-1" data-tab="routing">라우팅</button><button id="tab-metrics" type="button" role="tab" aria-selected="false" aria-controls="panel-metrics" tabindex="-1" data-tab="metrics">측정</button></div>
+          <section id="panel-evidence" role="tabpanel" aria-labelledby="tab-evidence"><div id="evidence-list" class="evidence-list"><div class="inspector-empty"><span>▤</span><b>근거를 기다리고 있습니다</b><p>검색된 문서의 출처, 순위와<br>서버가 제공한 점수가 여기에 표시됩니다.</p></div></div></section>
+          <section id="panel-routing" role="tabpanel" aria-labelledby="tab-routing" hidden><dl id="routing-values" class="metric-list"></dl><p class="field-note">검색 경로와 모델 실행 경로는 다를 수 있습니다. 모델명만으로 로컬/API 실행이나 실제 provider 호출을 추정하지 않습니다.</p></section>
+          <section id="panel-metrics" role="tabpanel" aria-labelledby="tab-metrics" hidden><dl id="metric-values" class="metric-list"></dl><p class="field-note">왕복 시간은 브라우저 측정값입니다. 검색·모델 지연시간은 서버의 단계 측정값이 있을 때만 표시합니다. Confidence는 확률이 아닌 원본 점수입니다.</p></section>
+          <div class="shared-engine"><span>⌁</span><div><b>같은 엔진, 다른 경험</b><p>Display에서는 음성·전사와 짧은 힌트.<br>웹에서는 답변과 근거를 자세히.</p><a href="/assets/interview/index.html">Display 연결 스튜디오 열기 ↗</a></div></div>
+        </aside>
+      </div>
+      <details class="diagnostics"><summary>세션 디버깅 <span id="session-summary">응답 0 · fallback 0</span><b>＋</b></summary><div class="diagnostic-body"><p>최근 50개 요청의 수치만 유지합니다. Fallback은 확인된 대체 응답 수이며 내부 재시도 횟수는 미관측입니다. 질문·답변·문서·쿠키는 콘솔에 기록하지 않습니다.</p><button id="clear-metrics" type="button">측정 기록 비우기</button><pre id="metric-log" aria-label="요청별 측정 기록">아직 요청이 없습니다.</pre></div></details>
+    </main>
+  </div>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite"></div><noscript>질의응답을 사용하려면 JavaScript를 켜 주세요.</noscript>
+</body>
+</html>

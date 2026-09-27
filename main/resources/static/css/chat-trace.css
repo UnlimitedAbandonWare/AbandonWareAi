@@ -1,0 +1,65 @@
+.chat-app .awx-trace-slot {
+  box-sizing: border-box;
+  min-width: 0;
+  width: min(100%, 78ch);
+  max-width: 100%;
+  align-self: stretch;
+}
+
+.chat-app .awx-trace-panel {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  max-height: min(62vh, 640px);
+  overflow: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  align-self: start;
+}
+
+.chat-app .awx-trace-panel > summary,
+.chat-app .awx-trace-panel .search-trace summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.chat-app .awx-trace-panel .search-trace > summary {
+  display: block;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+.chat-app .awx-trace-panel .search-trace > summary::before { content: "▸ "; }
+.chat-app .awx-trace-panel .search-trace[open] > summary::before { content: "▾ "; }
+
+.chat-app .awx-trace-panel .awx-trace-meta dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 6px 0;
+}
+
+.chat-app .awx-trace-panel .awx-trace-meta dd { margin: 0; }
+.chat-app .awx-trace-panel .awx-trace-status { margin: 8px 0; color: #53676d; }
+.chat-app .awx-trace-panel .trace-section { margin: 10px 0; padding: 8px; border: 1px solid #d5dedb; border-radius: 6px; }
+.chat-app .awx-trace-panel .trace-body { display: grid; gap: 8px; }
+.chat-app .awx-trace-panel .trace-kv { display: grid; gap: 4px; }
+.chat-app .awx-trace-panel .trace-mono,
+.chat-app .awx-trace-panel code,
+.chat-app .awx-trace-panel pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.chat-app .awx-trace-panel pre { white-space: pre-wrap; }
+.chat-app .awx-trace-panel table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.chat-app .awx-trace-panel th,
+.chat-app .awx-trace-panel td { padding: 3px 6px; border: 1px solid #d5dedb; text-align: left; vertical-align: top; }
+.chat-app .awx-trace-panel .trace-fold { margin: 6px 0; }
+.chat-app .awx-trace-panel .trace-pipeline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 6px 0;
+}
+.chat-app .awx-trace-panel .trace-pipeline-controls select { max-width: 100%; }
+.chat-app .awx-trace-panel [class*="trace-risk-"] { font-weight: 700; }
+.chat-app .chat-trace-toggle { display: flex; align-items: center; gap: 7px; margin: 8px 0; font-size: 13px; }
