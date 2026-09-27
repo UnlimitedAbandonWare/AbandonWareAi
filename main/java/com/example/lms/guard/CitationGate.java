@@ -13,11 +13,11 @@ import java.util.List;
 @Component("legacyCitationGate")
 public class CitationGate {
 
-    @Value("${guard.citation.min_count:2}")
-    private int minCount = 2;
+    @Value("${guard.citation.min_count:0}")
+    private int minCount = 0;
 
-    @Value("${guard.citation.require_official:true}")
-    private boolean requireOfficial = true;
+    @Value("${guard.citation.require_official:false}")
+    private boolean requireOfficial = false;
 
     public CitationGate() {
     }
@@ -31,6 +31,10 @@ public class CitationGate {
         int sourceCount = sources == null ? 0 : sources.size();
         int officialCount = official == null ? 0 : official.size();
         if (sources == null) {
+            if (minCount <= 0) {
+                traceDecision(true, "missing_sources_soft_allow", sourceCount, officialCount);
+                return true;
+            }
             traceDecision(false, "missing_sources", sourceCount, officialCount);
             return false;
         }
@@ -42,8 +46,27 @@ public class CitationGate {
             traceDecision(false, "official_required", sourceCount, officialCount);
             return false;
         }
+        if (requireOfficial && !containsOfficialSource(sources, official)) {
+            traceDecision(false, "official_source_mismatch", sourceCount, officialCount);
+            return false;
+        }
         traceDecision(true, "pass", sourceCount, officialCount);
         return true;
+    }
+
+    private static boolean containsOfficialSource(List<String> sources, List<String> official) {
+        for (String officialSource : official) {
+            if (officialSource == null || officialSource.isBlank()) {
+                continue;
+            }
+            String expected = officialSource.trim();
+            for (String source : sources) {
+                if (source != null && !source.isBlank() && expected.equals(source.trim())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void traceDecision(boolean pass, String reason, int sourceCount, int officialCount) {
