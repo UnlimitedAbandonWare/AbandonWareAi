@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * SidRotationAdvisor
@@ -60,6 +61,7 @@ public class SidRotationAdvisor {
     private final ConcurrentHashMap<String, Deque<Long>> quarantineEvents = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> recommendedAt = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> lastReason = new ConcurrentHashMap<>();
+    private final AtomicLong nextPruneAt = new AtomicLong();
 
     public void recordPoison(String sid, String reason) {
         record(sid, reason, poisonEvents, poisonThreshold, "poison");
@@ -71,6 +73,10 @@ public class SidRotationAdvisor {
 
     /** Return a small snapshot safe to expose on admin endpoints. */
     public Map<String, Object> snapshot() {
+        long now = System.currentTimeMillis();
+        long win = effectiveWindowMs();
+        pruneExpiredState(now, win);
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("enabled", enabled);
         out.put("windowMs", windowMs);
@@ -80,20 +86,27 @@ public class SidRotationAdvisor {
 
         Map<String, Object> per = new LinkedHashMap<>();
         for (String sid : unionKeys()) {
-            per.put(sid, snapshotFor(sid));
+            per.put(sid, snapshotFor(sid, now, win));
         }
         out.put("sids", per);
         return out;
     }
 
     public Map<String, Object> snapshotFor(String sid) {
+        long now = System.currentTimeMillis();
+        long win = effectiveWindowMs();
+        pruneExpiredState(now, win);
+        return snapshotFor(sid, now, win);
+    }
+
+    private Map<String, Object> snapshotFor(String sid, long now, long win) {
         String base = sidBase(sid);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("sid", base);
-        out.put("poisonCount", countAndTrim(poisonEvents.get(base)));
-        out.put("quarantineCount", countAndTrim(quarantineEvents.get(base)));
+        out.put("poisonCount", countAndTrim(poisonEvents.get(base), now, win));
+        out.put("quarantineCount", countAndTrim(quarantineEvents.get(base), now, win));
         Long at = recommendedAt.get(base);
-        out.put("rotateRecommended", at != null && at > 0);
+        out.put("rotateRecommended", isRecommendationActive(at, now));
         out.put("recommendedAtEpochMs", at);
         out.put("lastReason", lastReason.get(base));
         return out;
@@ -104,7 +117,10 @@ public class SidRotationAdvisor {
         Long at = recommendedAt.get(base);
         if (at == null || at <= 0) return false;
         long now = System.currentTimeMillis();
-        return (cooldownMs <= 0) || (now - at) <= cooldownMs;
+        if (isRecommendationActive(at, now)) return true;
+        recommendedAt.remove(base, at);
+        pruneLastReason(base);
+        return false;
     }
 
     public void clearRecommendation(String sid) {
@@ -128,15 +144,21 @@ public class SidRotationAdvisor {
         }
 
         long now = System.currentTimeMillis();
-        long win = Math.max(5_000L, windowMs);
+        long win = effectiveWindowMs();
+        pruneExpiredStateIfDue(now, win);
 
-        Deque<Long> q = bucket.computeIfAbsent(base, k -> new ArrayDeque<>());
-        synchronized (q) {
-            q.addLast(now);
-            trimLocked(q, now, win);
-        }
+        int[] count = new int[1];
+        bucket.compute(base, (key, current) -> {
+            Deque<Long> q = current == null ? new ArrayDeque<>() : current;
+            synchronized (q) {
+                q.addLast(now);
+                trimLocked(q, now, win);
+                count[0] = q.size();
+            }
+            return q;
+        });
 
-        int cnt = countAndTrim(q, now, win);
+        int cnt = count[0];
         if (reason != null && !reason.isBlank()) {
             lastReason.put(base, limitLen(SafeRedactor.traceLabelOrFallback(reason, "unknown"), 240));
         }
@@ -149,13 +171,6 @@ public class SidRotationAdvisor {
                         SafeRedactor.hashValue(base), kind, cnt, threshold, win, lastReason.get(base));
             }
         }
-    }
-
-    private int countAndTrim(Deque<Long> q) {
-        if (q == null) return 0;
-        long now = System.currentTimeMillis();
-        long win = Math.max(5_000L, windowMs);
-        return countAndTrim(q, now, win);
     }
 
     private int countAndTrim(Deque<Long> q, long now, long win) {
@@ -176,6 +191,59 @@ public class SidRotationAdvisor {
         }
         // prevent unbounded growth even if trimming misbehaves
         while (q.size() > 1024) q.pollFirst();
+    }
+
+    private long effectiveWindowMs() {
+        return Math.max(5_000L, windowMs);
+    }
+
+    private void pruneExpiredStateIfDue(long now, long win) {
+        long due = nextPruneAt.get();
+        if (now < due) return;
+        long next = now > Long.MAX_VALUE - win ? Long.MAX_VALUE : now + win;
+        if (nextPruneAt.compareAndSet(due, next)) {
+            pruneExpiredState(now, win);
+        }
+    }
+
+    private void pruneExpiredState(long now, long win) {
+        pruneEventBucket(poisonEvents, now, win);
+        pruneEventBucket(quarantineEvents, now, win);
+
+        for (String sid : recommendedAt.keySet()) {
+            recommendedAt.computeIfPresent(sid,
+                    (key, at) -> isRecommendationActive(at, now) ? at : null);
+        }
+        for (String sid : lastReason.keySet()) {
+            pruneLastReason(sid);
+        }
+    }
+
+    private static void pruneEventBucket(ConcurrentHashMap<String, Deque<Long>> bucket,
+                                         long now,
+                                         long win) {
+        for (String sid : bucket.keySet()) {
+            bucket.computeIfPresent(sid, (key, q) -> {
+                synchronized (q) {
+                    trimLocked(q, now, win);
+                    return q.isEmpty() ? null : q;
+                }
+            });
+        }
+    }
+
+    private boolean isRecommendationActive(Long at, long now) {
+        return at != null && at > 0
+                && (cooldownMs <= 0 || (now - at) <= cooldownMs);
+    }
+
+    private void pruneLastReason(String sid) {
+        lastReason.computeIfPresent(sid, (key, reason) ->
+                poisonEvents.containsKey(key)
+                        || quarantineEvents.containsKey(key)
+                        || recommendedAt.containsKey(key)
+                        ? reason
+                        : null);
     }
 
     private Iterable<String> unionKeys() {
