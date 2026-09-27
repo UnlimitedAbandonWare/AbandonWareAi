@@ -9,18 +9,22 @@ import com.example.lms.service.guard.GuardContext;
 import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.trace.SafeRedactor;
 import org.springframework.http.HttpHeaders;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.http.HttpTimeoutException;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -92,6 +96,36 @@ public class NightmareBreaker {
         CLOSED, OPEN, HALF_OPEN
     }
 
+    public enum SignalType {
+        OPENED, OPEN_EXTENDED, HALF_OPEN_ENTERED, ADMISSION_BLOCKED, ADMISSION_BYPASSED, CLOSED
+    }
+
+    /** Public transition/observation event; every text field is a fixed label or redacted key. */
+    public record StateSignal(
+            NightmareBreaker sourceBreaker,
+            String diagnosticKey,
+            boolean webSearchKey,
+            SignalType signalType,
+            BreakerMode mode,
+            FailureKind lastKind,
+            long openSinceMs,
+            long openUntilMs) {
+    }
+
+    /** Immutable policy captured at admission to prevent completion-time property tearing. */
+    private record PolicySnapshot(
+            NightmareBreakerProperties.EffectivePolicy effective,
+            boolean tripOnInterrupt,
+            boolean rateLimitCountsAsFailure,
+            boolean timeoutCountsAsFailure,
+            Duration rateLimitOpenDuration,
+            Duration rateLimitMaxOpenDuration,
+            Duration timeoutOpenDuration,
+            Duration timeoutMaxOpenDuration,
+            Duration configOpenDuration,
+            double backoffBase) {
+    }
+
     private final NightmareBreakerProperties props;
 
     // Optional: when the breaker opens, force dbgSearch console tracing for a short window
@@ -102,11 +136,22 @@ public class NightmareBreaker {
     /** Structured observability for NightmareBreaker (DebugEventStore is optional). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DebugEventStore debugEventStore;
-    private final ConcurrentHashMap<String, State> states = new ConcurrentHashMap<>();
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ApplicationEventPublisher eventPublisher;
+    /** The sole mutable breaker state owner. */
+    private final ConcurrentHashMap<String, Gate> states = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, NightmareBreakerProperties.EffectivePolicy> policyCache = new ConcurrentHashMap<>();
+    private final Clock clock;
+    private final LongSupplier ticker;
 
     public NightmareBreaker(NightmareBreakerProperties props) {
+        this(props, Clock.systemUTC(), System::nanoTime);
+    }
+
+    NightmareBreaker(NightmareBreakerProperties props, Clock clock, LongSupplier ticker) {
         this.props = props;
+        this.clock = clock == null ? Clock.systemUTC() : clock;
+        this.ticker = ticker == null ? System::nanoTime : ticker;
     }
 
     @Scheduled(fixedDelayString = "${nightmare.breaker.evict-interval-ms:300000}")
@@ -114,14 +159,21 @@ public class NightmareBreaker {
         if (!props.isEnabled()) {
             return;
         }
-        long now = System.currentTimeMillis();
-        long cutoff = now - 300_000L;
+        long now = nowMs();
+        long cutoffTick = ticker.getAsLong() - Duration.ofMinutes(5).toNanos();
         int before = states.size();
-        states.entrySet().removeIf(entry -> {
-            State state = entry.getValue();
-            return state != null
-                    && state.lastActivityMs() < cutoff
-                    && !(state.mode == BreakerMode.OPEN && state.openUntilMs > now);
+        states.forEach((key, gate) -> {
+            if (gate == null) return;
+            for (;;) {
+                GateState state = gate.state.get();
+                if (state.retired || state.mode != BreakerMode.CLOSED || state.inFlight != 0
+                        || state.lastActivityTick >= cutoffTick) return;
+                GateState retired = state.retired(now, ticker.getAsLong());
+                if (gate.state.compareAndSet(state, retired)) {
+                    states.remove(key, gate);
+                    return;
+                }
+            }
         });
         policyCache.keySet().removeIf(k -> !states.containsKey(k));
         int removed = Math.max(0, before - states.size());
@@ -198,12 +250,26 @@ public class NightmareBreaker {
         return policyCache.computeIfAbsent(key, props::policyFor);
     }
 
+    private PolicySnapshot policySnapshot(String key) {
+        return new PolicySnapshot(
+                policy(key),
+                props.isTripOnInterrupt(),
+                props.isRateLimitCountsAsFailure(),
+                props.isTimeoutCountsAsFailure(),
+                props.getRateLimitOpenDuration(),
+                props.getRateLimitMaxOpenDuration(),
+                props.getTimeoutOpenDuration(),
+                props.getTimeoutMaxOpenDuration(),
+                props.getConfigOpenDuration(),
+                props.getBackoffBase());
+    }
+
     public boolean isOpen(String key) {
         return remainingOpenMs(key) > 0;
     }
 
     public boolean isOpen(String key, String stage) {
-        return isOpen(stageKey(key, stage));
+        return isOpen(key);
     }
 
     /**
@@ -213,16 +279,17 @@ public class NightmareBreaker {
     public boolean isOpenOrHalfOpen(String key) {
         if (!props.isEnabled())
             return false;
-        State s = states.get(key);
-        if (s == null)
-            return false;
-        if (s.mode == BreakerMode.OPEN && remainingOpenMs(key) > 0)
-            return true;
-        return s.mode == BreakerMode.HALF_OPEN;
+        Gate gate = states.get(normalizeKey(key));
+        if (gate != null) {
+            GateState gateState = gate.state.get();
+            return (gateState.mode == BreakerMode.OPEN && gateState.openUntilMs > nowMs())
+                    || gateState.mode == BreakerMode.HALF_OPEN;
+        }
+        return false;
     }
 
     public boolean isOpenOrHalfOpen(String key, String stage) {
-        return isOpenOrHalfOpen(stageKey(key, stage));
+        return isOpenOrHalfOpen(key);
     }
 
     /**
@@ -282,6 +349,7 @@ public class NightmareBreaker {
     /**
      * Record HTTP 429 / rate-limit style failures in a uniform way.
      */
+    @Deprecated(forRemoval = false)
     public void recordRateLimit(String key, String context, String reason) {
         recordRateLimit(key, context, null, reason, null);
     }
@@ -292,6 +360,7 @@ public class NightmareBreaker {
      * <p>This is used to avoid breaker-poisoning (429 counted as generic failure) and to honor
      * Retry-After cooldowns when available.</p>
      */
+    @Deprecated(forRemoval = false)
     public void recordRateLimit(String key, String context, String reason, Long retryAfterMs) {
         recordRateLimit(key, context, null, reason, retryAfterMs);
     }
@@ -299,6 +368,7 @@ public class NightmareBreaker {
     /**
      * Record a RATE_LIMIT (ex: HTTP 429) with an optional retry-after / cooldown hint, preserving the original error.
      */
+    @Deprecated(forRemoval = false)
     public void recordRateLimit(String key, String context, Throwable error, String reason, Long retryAfterMs) {
         // Normalize early to keep trace keys stable.
         String k = (key == null) ? "" : key.trim();
@@ -351,6 +421,7 @@ public class NightmareBreaker {
     /**
      * Record HTTP 403 / rejected-style failures (bot detection, quota, etc).
      */
+    @Deprecated(forRemoval = false)
     public void recordRejected(String key, String context, String reason) {
         recordFailure(key, FailureKind.REJECTED,
                 (reason == null ? null : new RuntimeException(reason)), context);
@@ -359,6 +430,7 @@ public class NightmareBreaker {
     /**
      * Record timeout-style failures.
      */
+    @Deprecated(forRemoval = false)
     public void recordTimeout(String key, String context, String reason) {
         recordFailure(key, FailureKind.TIMEOUT,
                 (reason == null ? null : new RuntimeException(reason)), context);
@@ -367,41 +439,24 @@ public class NightmareBreaker {
     public long remainingOpenMs(String key) {
         if (!props.isEnabled())
             return 0;
-        State s = states.get(key);
-        if (s == null)
-            return 0;
-        if (s.mode != BreakerMode.OPEN)
-            return 0;
-        long now = System.currentTimeMillis();
-        long remain = s.openUntilMs - now;
-
-        // NOTE: When a breaker was opened by a previous request, we still want to surface the *global*
-        // open-since timestamp for this request (used by AuxBlockTracker's breakerOpenAt field).
-        if (remain > 0) {
-            long openSince = s.openSinceMs;
-            if (openSince <= 0) {
-                // Best-effort fallback (should be rare): approximate openSince from openUntil - openDuration.
-                try {
-                    NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
-                    long dur = (cfg != null && cfg.openDuration() != null)
-                            ? cfg.openDuration().toMillis()
-                            : 0L;
-                    openSince = (dur > 0) ? Math.max(0L, s.openUntilMs - dur) : now;
-                } catch (Throwable ignore) {
-                    traceSuppressed("nightmare.openSincePolicy", ignore);
-                    openSince = now;
-                }
+        String base = normalizeKey(key);
+        Gate gate = states.get(base);
+        if (gate != null) {
+            GateState gateState = gate.state.get();
+            long remaining = gateState.mode == BreakerMode.OPEN
+                    ? Math.max(0L, gateState.openUntilMs - nowMs()) : 0L;
+            if (remaining > 0L) {
+                recordOpenAtForTrace(base, gateState.openSinceMs, gateState.openUntilMs);
+                recordOpenMetaForTrace(base, gateState.lastKind, gateState.lastErrorSummary);
             }
-            recordOpenAtForTrace(key, openSince, s.openUntilMs);
-            recordOpenMetaForTrace(key, s.lastKind,
-                    (s.lastError != null ? SafeRedactor.traceLabelOrFallback(s.lastError.getMessage(), "") : ""));
+            return remaining;
         }
+        return 0L;
 
-        return Math.max(0, remain);
     }
 
     public long remainingOpenMs(String key, String stage) {
-        return remainingOpenMs(stageKey(key, stage));
+        return remainingOpenMs(key);
     }
 
     private static String stageKey(String key, String stage) {
@@ -427,51 +482,20 @@ public class NightmareBreaker {
             return new StateView(null, null, false, 0L, 0L, 0L, null,
                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null);
         }
-        State s = states.get(key);
-        if (s == null) {
-            return new StateView(key, BreakerMode.CLOSED, false, 0L, 0L, 0L, null,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null);
+        String base = normalizeKey(key);
+        Gate gate = states.get(base);
+        if (gate != null) {
+            GateState s = gate.state.get();
+            long remain = s.mode == BreakerMode.OPEN ? Math.max(0L, s.openUntilMs - nowMs()) : 0L;
+            return new StateView(key, s.mode, remain > 0L, s.openSinceMs, s.openUntilMs, remain,
+                    s.lastKind, s.consecutiveFailures, s.consecutiveTimeouts,
+                    s.consecutiveRateLimits, s.consecutiveRejected, s.consecutiveInterrupts,
+                    s.consecutiveBlanks, s.consecutiveSilentFailures, s.consecutiveSlowCalls,
+                    s.consecutiveSuccesses, s.halfOpenIssued, s.lastErrorSummary);
         }
-        long now = System.currentTimeMillis();
-        long remain = Math.max(0L, s.openUntilMs - now);
-        boolean open = (s.mode == BreakerMode.OPEN && remain > 0L);
-        long openSince = s.openSinceMs;
-        if (open && openSince <= 0L) {
-            try {
-                NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
-                if (cfg != null && cfg.openDuration() != null) {
-                    long durMs = cfg.openDuration().toMillis();
-                    if (durMs > 0L) {
-                        openSince = Math.max(0L, s.openUntilMs - durMs);
-                    }
-                }
-            } catch (Throwable ignore) {
-                traceSuppressed("nightmare.inspectOpenSincePolicy", ignore);
-            }
-        }
-        String lastMsg = (s.lastError == null) ? null
-                : SafeRedactor.traceLabelOrFallback(s.lastError.getMessage(), "");
-        return new StateView(
-                key,
-                s.mode,
-                open,
-                openSince,
-                s.openUntilMs,
-                remain,
-                s.lastKind,
-                s.consecutiveFailures.get(),
-                s.consecutiveTimeouts.get(),
-                s.consecutiveRateLimits.get(),
-                s.consecutiveRejected.get(),
-                s.consecutiveInterrupts.get(),
-                s.consecutiveBlanks.get(),
-                s.consecutiveSilentFailures.get(),
-                s.consecutiveSlowCalls.get(),
-                s.consecutiveSuccesses.get(),
-                s.trialCalls.get(),
-                lastMsg);
+        return new StateView(key, BreakerMode.CLOSED, false, 0L, 0L, 0L, null,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null);
     }
-
     /**
      * Debug/진단용 전체 스냅샷.
      * <p>
@@ -556,483 +580,499 @@ public class NightmareBreaker {
         }
     }
 
-    public void checkOpenOrThrow(String key) {
-        if (!props.isEnabled())
-            return;
-        State s = states.get(key);
-        if (s != null) {
-            s.touch();
-            long now = System.currentTimeMillis();
-            long remain = s.openUntilMs - now;
-            if (s.mode == BreakerMode.OPEN && remain > 0) {
-                long openAt = s.openSinceMs;
-                if (openAt <= 0) {
-                    try {
-                        NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
-                        long dur = (cfg != null && cfg.openDuration() != null) ? cfg.openDuration().toMillis() : 0L;
-                        openAt = (dur > 0) ? Math.max(0L, s.openUntilMs - dur) : now;
-                    } catch (Throwable ignored) {
-                        traceSuppressed("nightmare.openAtPolicy", ignored);
-                        openAt = now;
-                    }
-                }
-                recordOpenAtForTrace(key, openAt, s.openUntilMs);
-                recordOpenMetaForTrace(key, s.lastKind,
-                        (s.lastError != null ? SafeRedactor.traceLabelOrFallback(s.lastError.getMessage(), "") : ""));
-
-                try {
-                    String diagnosticKey = safeBreakerKey(key);
-                    java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-                    dd.put("key", diagnosticKey);
-                    dd.put("remainingMs", remain);
-                    dd.put("openSinceMs", openAt);
-                    dd.put("openUntilMs", s.openUntilMs);
-                    dd.put("kind", String.valueOf(s.lastKind));
-                    emitEvent(
-                            DebugEventLevel.INFO,
-                            "nightmare.open.block." + diagnosticKey,
-                            "NightmareBreaker open-circuit: blocked call",
-                            "NightmareBreaker.checkOpenOrThrow",
-                            dd,
-                            null);
-                } catch (Throwable ignore) {
-                    traceSuppressed("nightmare.openBlockEvent", ignore);
-                }
-                if (isRequestFailSoftBypassEnabled(key, remain, openAt, s.openUntilMs, s.lastKind)) {
-                    return;
-                }
-                throw new OpenCircuitException(key, Duration.ofMillis(remain), s.lastKind);
-            }
-
-            // OPEN time elapsed → HALF_OPEN trial
-            if (s.mode == BreakerMode.OPEN && remain <= 0) {
-                if (props.isHalfOpenEnabled()) {
-                    String diagnosticKey = safeBreakerKey(key);
-                    log.info("[NightmareBreaker] HALF_OPEN trial start: key={}", diagnosticKey);
-                    s.mode = BreakerMode.HALF_OPEN;
-                    s.trialCalls.set(0);
-                    s.consecutiveSuccesses.set(0);
-
-                    try {
-                        java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-                        dd.put("key", diagnosticKey);
-                        dd.put("mode", "HALF_OPEN");
-                        emitEvent(
-                                DebugEventLevel.INFO,
-                                "nightmare.half_open.start." + diagnosticKey,
-                                "NightmareBreaker HALF_OPEN trial start",
-                                "NightmareBreaker.checkOpenOrThrow",
-                                dd,
-                                null);
-                    } catch (Throwable ignore) {
-                        traceSuppressed("nightmare.halfOpenStartEvent", ignore);
-                    }
-                } else {
-                    // legacy: just close
-                    s.mode = BreakerMode.CLOSED;
-                    s.openUntilMs = 0;
-                    s.openSinceMs = 0;
-                }
-            }
-
-            // HALF_OPEN: limit number of trial calls
-            if (s.mode == BreakerMode.HALF_OPEN && props.isHalfOpenEnabled()) {
-                int maxCalls = props.getHalfOpenMaxCalls();
-                if (maxCalls > 0 && s.trialCalls.incrementAndGet() > maxCalls) {
-                    throw new OpenCircuitException(key, Duration.ZERO, s.lastKind);
-                }
-            }
-        }
-    }
-
     /**
-     * 성공 기록:
-     * - OPEN 상태였다면 닫고
-     * - 연속 카운터는 항상 리셋
-     * - slow-call 옵션이 켜져 있으면 느린 응답을 누적해서 OPEN
+     * An admission capability bound to one Gate identity and generation.  It intentionally
+     * exposes no key or generation and can be completed exactly once from any thread.
      */
-    public void recordSuccess(String key, long latencyMs) {
-        if (!props.isEnabled())
-            return;
-        State s = states.computeIfAbsent(key, k -> new State());
-        s.touch();
-        NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
+    public final class CallPermit {
+        private final String key;
+        private final Gate gate;
+        private final long generation;
+        private final boolean admitted;
+        private final boolean trial;
+        private final PolicySnapshot policySnapshot;
+        private final AtomicBoolean terminal = new AtomicBoolean();
 
-        if (s.mode == BreakerMode.HALF_OPEN && props.isHalfOpenEnabled()) {
-            int succ = s.consecutiveSuccesses.incrementAndGet();
-            int threshold = props.getHalfOpenSuccessThreshold();
-            if (threshold > 0 && succ >= threshold) {
-                String diagnosticKey = safeBreakerKey(key);
-                log.info("[NightmareBreaker] CLOSED (HALF_OPEN success) key={} latencyMs={}", diagnosticKey, latencyMs);
-                s.mode = BreakerMode.CLOSED;
-                s.openUntilMs = 0;
-                s.openSinceMs = 0;
-                s.trialCalls.set(0);
+        private CallPermit(String key, Gate gate, long generation, boolean admitted, boolean trial,
+                PolicySnapshot policySnapshot) {
+            this.key = key;
+            this.gate = gate;
+            this.generation = generation;
+            this.admitted = admitted;
+            this.trial = trial;
+            this.policySnapshot = policySnapshot;
+        }
 
-                try {
-                    java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-                    dd.put("key", diagnosticKey);
-                    dd.put("latencyMs", latencyMs);
-                    emitEvent(
-                            DebugEventLevel.INFO,
-                            "nightmare.closed.half_open." + diagnosticKey,
-                            "NightmareBreaker CLOSED (HALF_OPEN success)",
-                            "NightmareBreaker.recordSuccess",
-                            dd,
-                            null);
-                } catch (Throwable ignore) {
-                    traceSuppressed("nightmare.halfOpenCloseEvent", ignore);
+        public void completeSuccess(long latencyMs) {
+            finish(PermitOutcome.SUCCESS, null, null, latencyMs, null);
+        }
+
+        public void completeBlank(String context) {
+            finish(PermitOutcome.BLANK, FailureKind.EMPTY_RESPONSE, null, 0L, null);
+        }
+
+        public void completeSilentFailure(String context, String reason) {
+            finish(PermitOutcome.SILENT, FailureKind.EMPTY_RESPONSE, null, 0L, null);
+        }
+
+        public void completeFailure(FailureKind kind, Throwable error, String context) {
+            completeFailure(kind, error, context, null);
+        }
+
+        public void completeFailure(FailureKind kind, Throwable error, String context, Long openDurationHintMs) {
+            finish(PermitOutcome.FAILURE, normalizePermitKind(kind, error), error, 0L, openDurationHintMs);
+        }
+
+        public void completeRateLimit(String context, String reason, Long retryAfterMs) {
+            completeRateLimit(context, null, reason, retryAfterMs);
+        }
+
+        public void completeRateLimit(String context, Throwable error, String reason, Long retryAfterMs) {
+            finish(PermitOutcome.FAILURE, FailureKind.RATE_LIMIT, error, 0L, retryAfterMs);
+        }
+
+        public void completeRejected(String context, String reason) {
+            finish(PermitOutcome.FAILURE, FailureKind.REJECTED, null, 0L, null);
+        }
+
+        public void completeTimeout(String context, String reason) {
+            finish(PermitOutcome.FAILURE, FailureKind.TIMEOUT, null, 0L, null);
+        }
+
+        public void completeCancelled(Throwable error, String context) {
+            finish(PermitOutcome.NEUTRAL, FailureKind.INTERRUPTED, error, 0L, null);
+        }
+
+        public void completeAbandoned(String context, String reason) {
+            finish(PermitOutcome.NEUTRAL, null, null, 0L, null);
+        }
+
+        private void finish(PermitOutcome outcome, FailureKind kind, Throwable error,
+                long latencyMs, Long hintMs) {
+            if (!terminal.compareAndSet(false, true)) {
+                try { TraceStore.inc("nightmare.permit.duplicateTerminal"); }
+                catch (Throwable ignore) { traceSuppressed("nightmare.permitDuplicateTrace", ignore); }
+                return;
+            }
+            finishPermit(this, outcome, kind, error, latencyMs, hintMs);
+        }
+
+        @Override
+        public String toString() {
+            return "CallPermit[opaque]";
+        }
+    }
+
+    public CallPermit acquire(String key) {
+        return acquire(key, null);
+    }
+
+    /** Stage is redacted diagnostics only; breaker ownership always remains on the base key. */
+    public CallPermit acquire(String key, String stage) {
+        String base = normalizeKey(key);
+        if (!props.isEnabled() || base.isEmpty()) {
+            return new CallPermit(null, null, -1L, false, false, null);
+        }
+        for (;;) {
+            long now = nowMs();
+            PolicySnapshot admissionPolicy = policySnapshot(base);
+            Gate gate = states.computeIfAbsent(base,
+                    ignored -> new Gate(GateState.closed(now, ticker.getAsLong())));
+            GateState before = gate.state.get();
+            if (before.retired) {
+                states.remove(base, gate);
+                continue;
+            }
+            NightmareBreakerProperties.EffectivePolicy cfg = admissionPolicy.effective();
+            if (before.mode == BreakerMode.OPEN) {
+                long remaining = before.openUntilMs - now;
+                if (remaining > 0L) {
+                    recordOpenAtForTrace(base, before.openSinceMs, before.openUntilMs);
+                    recordOpenMetaForTrace(base, before.lastKind, before.lastErrorSummary);
+                    if (isRequestFailSoftBypassEnabled(base, remaining, before.openSinceMs,
+                            before.openUntilMs, before.lastKind)) {
+                        publishSignal(base, SignalType.ADMISSION_BYPASSED, before);
+                        return new CallPermit(base, gate, before.generation, false, false, admissionPolicy);
+                    }
+                    publishSignal(base, SignalType.ADMISSION_BLOCKED, before);
+                    throw new OpenCircuitException(base, Duration.ofMillis(remaining), before.lastKind);
                 }
+                GateState after;
+                if (cfg.halfOpenEnabled()) {
+                    after = before.halfOpenFirstTrial(now, ticker.getAsLong(), admissionPolicy);
+                } else {
+                    after = before.closedAdmission(now, ticker.getAsLong(), true);
+                }
+                if (gate.state.compareAndSet(before, after)) {
+                    if (after.mode == BreakerMode.HALF_OPEN) {
+                        publishSignal(base, SignalType.HALF_OPEN_ENTERED, after);
+                    }
+                    return new CallPermit(base, gate, after.generation, true,
+                            after.mode == BreakerMode.HALF_OPEN,
+                            after.mode == BreakerMode.HALF_OPEN ? after.halfOpenPolicy : admissionPolicy);
+                }
+                continue;
             }
-        } else if (s.mode == BreakerMode.OPEN) {
-            String diagnosticKey = safeBreakerKey(key);
-            log.info("[NightmareBreaker] CLOSED key={} latencyMs={}", diagnosticKey, latencyMs);
-            s.mode = BreakerMode.CLOSED;
-            s.openUntilMs = 0;
-            s.openSinceMs = 0;
-            s.trialCalls.set(0);
-            s.consecutiveSuccesses.set(0);
-
-            try {
-                java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-                dd.put("key", diagnosticKey);
-                dd.put("latencyMs", latencyMs);
-                emitEvent(
-                        DebugEventLevel.INFO,
-                        "nightmare.closed." + diagnosticKey,
-                        "NightmareBreaker CLOSED",
-                        "NightmareBreaker.recordSuccess",
-                        dd,
-                        null);
-            } catch (Throwable ignore) {
-                traceSuppressed("nightmare.closeEvent", ignore);
+            if (before.mode == BreakerMode.HALF_OPEN) {
+                PolicySnapshot cohortPolicy = before.halfOpenPolicy == null
+                        ? admissionPolicy : before.halfOpenPolicy;
+                int max = cohortPolicy.effective().halfOpenMaxCalls();
+                if (before.halfOpenSealed || (max > 0 && before.halfOpenIssued >= max)) {
+                    throw new OpenCircuitException(base, Duration.ZERO, before.lastKind);
+                }
+                GateState after = before.halfOpenAdmission(now, ticker.getAsLong());
+                if (gate.state.compareAndSet(before, after)) {
+                    return new CallPermit(base, gate, after.generation, true, true, cohortPolicy);
+                }
+                continue;
             }
-        }
-
-        // ✅ 핵심: 성공이면 항상 연속 카운터를 초기화(비연속 blank 누적 방지)
-        s.consecutiveFailures.set(0);
-        s.consecutiveTimeouts.set(0);
-        s.consecutiveRateLimits.set(0);
-        s.consecutiveRejected.set(0);
-        s.consecutiveInterrupts.set(0);
-        s.consecutiveBlanks.set(0);
-        s.consecutiveSilentFailures.set(0);
-
-        if (cfg.tripOnSlowCall() && latencyMs >= cfg.slowCallThresholdMs()) {
-            int n = s.consecutiveSlowCalls.incrementAndGet();
-            if (n >= cfg.slowCallThreshold()) {
-                tripOpen(key, s, FailureKind.REJECTED, null,
-                        "slow_call " + latencyMs + "ms", "slow-call");
+            GateState after = before.closedAdmission(now, ticker.getAsLong(), false);
+            if (gate.state.compareAndSet(before, after)) {
+                return new CallPermit(base, gate, after.generation, true, false, admissionPolicy);
             }
-        } else {
-            s.consecutiveSlowCalls.set(0);
         }
     }
 
+    public void signalFailure(String key, FailureKind kind, Throwable error, String context) {
+        signalFailure(key, kind, error, context, null);
+    }
+
+    public void signalFailure(String key, FailureKind kind, Throwable error, String context, Long hintMs) {
+        signalOutcome(key, PermitOutcome.FAILURE, normalizePermitKind(kind, error), error, 0L, hintMs);
+    }
+
+    public void signalBlank(String key, String context) {
+        signalOutcome(key, PermitOutcome.BLANK, FailureKind.EMPTY_RESPONSE, null, 0L, null);
+        traceExternalSignal("blank", key, context, null);
+    }
+
+    public void signalSilentFailure(String key, String context, String reason) {
+        signalOutcome(key, PermitOutcome.SILENT, FailureKind.EMPTY_RESPONSE, null, 0L, null);
+        traceExternalSignal("silent", key, context, reason);
+    }
+
+    public void signalRateLimit(String key, String context, String reason, Long retryAfterMs) {
+        signalRateLimit(key, context, null, reason, retryAfterMs);
+    }
+
+    public void signalRateLimit(String key, String context, Throwable error, String reason, Long retryAfterMs) {
+        signalOutcome(key, PermitOutcome.FAILURE, FailureKind.RATE_LIMIT, error, 0L, retryAfterMs);
+    }
+
+    private void signalOutcome(String key, PermitOutcome outcome, FailureKind kind, Throwable error,
+            long latencyMs, Long hintMs) {
+        if (!props.isEnabled()) return;
+        String base = normalizeKey(key);
+        if (base.isEmpty()) return;
+        long now = nowMs();
+        PolicySnapshot snapshot = policySnapshot(base);
+        for (;;) {
+            Gate gate = states.computeIfAbsent(base,
+                    ignored -> new Gate(GateState.closed(now, ticker.getAsLong())));
+            FinishResult result = finishGate(base, gate, -1L, false, false, snapshot,
+                    outcome, kind, error, latencyMs, hintMs);
+            if (result != FinishResult.OWNER_LOST) return;
+        }
+    }
+
+    private void traceExternalSignal(String signal, String key, String context, String reason) {
+        if (!props.isEnabled() || signal == null) return;
+        String base = normalizeKey(key);
+        if (base.isEmpty()) return;
+        try {
+            String diagnosticKey = safeBreakerKey(base);
+            Map<String, Object> event = new java.util.LinkedHashMap<>();
+            event.put("ts", nowMs());
+            event.put("key", diagnosticKey);
+            event.put("ctxLen", context == null ? 0 : context.length());
+            if (reason != null && !reason.isBlank()) {
+                event.put("reason", safeExternalSignalReason(reason));
+            }
+            TraceStore.put("nightmare." + signal + ".lastKey", diagnosticKey);
+            TraceStore.put("nightmare." + signal + ".last", event);
+            TraceStore.append("nightmare." + signal + ".events", event);
+        } catch (Throwable ignore) {
+            traceSuppressed("nightmare.externalSignalTrace", ignore);
+        }
+    }
+
+    private void finishPermit(CallPermit permit, PermitOutcome outcome, FailureKind kind,
+            Throwable error, long latencyMs, Long hintMs) {
+        if (permit.gate == null || permit.key == null) return;
+        finishGate(permit.key, permit.gate, permit.generation, permit.admitted,
+                permit.trial, permit.policySnapshot, outcome, kind, error, latencyMs, hintMs);
+    }
+
+    private FinishResult finishGate(String key, Gate gate, long generation, boolean admitted, boolean trial,
+            PolicySnapshot completionPolicy, PermitOutcome outcome, FailureKind kind,
+            Throwable error, long latencyMs, Long hintMs) {
+        for (;;) {
+            if (states.get(key) != gate) return FinishResult.OWNER_LOST;
+            GateState before = gate.state.get();
+            if (before.retired) {
+                states.remove(key, gate);
+                return FinishResult.OWNER_LOST;
+            }
+            if (generation >= 0L && before.generation != generation) return FinishResult.IGNORED;
+            PolicySnapshot snapshot = completionPolicy != null
+                    ? completionPolicy
+                    : (before.halfOpenPolicy != null ? before.halfOpenPolicy : policySnapshot(key));
+            GateState after = evolve(before, snapshot, admitted, trial, outcome, kind,
+                    error, latencyMs, hintMs);
+            if (after == before) return FinishResult.IGNORED;
+            if (gate.state.compareAndSet(before, after)) {
+                if (before.mode != BreakerMode.OPEN && after.mode == BreakerMode.OPEN) {
+                    emitOpenTransition(key, after);
+                    publishSignal(key, SignalType.OPENED, after);
+                } else if (before.mode == BreakerMode.OPEN && after.mode == BreakerMode.OPEN
+                        && after.openUntilMs > before.openUntilMs) {
+                    publishSignal(key, SignalType.OPEN_EXTENDED, after);
+                } else if (before.mode == BreakerMode.HALF_OPEN && after.mode == BreakerMode.CLOSED) {
+                    publishSignal(key, SignalType.CLOSED, after);
+                }
+                return FinishResult.APPLIED;
+            }
+        }
+    }
+
+    private GateState evolve(GateState before, PolicySnapshot policySnapshot,
+            boolean admitted, boolean trial, PermitOutcome outcome, FailureKind kind,
+            Throwable error, long latencyMs, Long hintMs) {
+        NightmareBreakerProperties.EffectivePolicy cfg = policySnapshot.effective();
+        long now = nowMs();
+        GateState.Mutable next = before.mutable(now, ticker.getAsLong());
+        if (admitted && next.inFlight > 0) next.inFlight--;
+        if (outcome == PermitOutcome.NEUTRAL) {
+            if (trial && next.mode == BreakerMode.HALF_OPEN && next.halfOpenIssued > 0) {
+                next.halfOpenIssued--;
+            }
+            if (next.mode == BreakerMode.HALF_OPEN && next.halfOpenSealed && next.inFlight == 0) {
+                next.closeFromHalfOpen();
+            }
+            return next.freeze();
+        }
+        if (outcome == PermitOutcome.SUCCESS) {
+            if (!admitted || before.mode == BreakerMode.OPEN) return before;
+            if (before.mode == BreakerMode.HALF_OPEN) {
+                next.halfOpenSuccesses++;
+                next.consecutiveSuccesses++;
+                int target = Math.max(1, cfg.halfOpenSuccessThreshold());
+                if (cfg.halfOpenMaxCalls() > 0) target = Math.min(target, cfg.halfOpenMaxCalls());
+                if (next.halfOpenSuccesses >= target) next.halfOpenSealed = true;
+                if (next.halfOpenSealed && next.inFlight == 0) next.closeFromHalfOpen();
+                return next.freeze();
+            }
+            next.resetAdverse();
+            if (cfg.tripOnSlowCall() && latencyMs >= cfg.slowCallThresholdMs()) {
+                next.consecutiveSlowCalls++;
+                if (next.consecutiveSlowCalls >= cfg.slowCallThreshold()) {
+                    next.open(cfg.openDuration(), FailureKind.REJECTED, now);
+                }
+            } else next.consecutiveSlowCalls = 0;
+            return next.freeze();
+        }
+
+        kind = kind == null ? FailureKind.UNKNOWN : kind;
+        next.lastKind = kind;
+        next.lastErrorSummary = redactedErrorSummary(error);
+        boolean blank = outcome == PermitOutcome.BLANK;
+        boolean silent = outcome == PermitOutcome.SILENT;
+        if (blank) next.consecutiveBlanks++;
+        else if (silent) next.consecutiveSilentFailures++;
+        else {
+            next.consecutiveBlanks = 0;
+            next.consecutiveSilentFailures = 0;
+            next.consecutiveSlowCalls = 0;
+            if (countsAsFailureForThreshold(kind, policySnapshot)) next.consecutiveFailures++;
+            if (kind == FailureKind.TIMEOUT) next.consecutiveTimeouts++;
+            if (kind == FailureKind.RATE_LIMIT) next.consecutiveRateLimits++;
+            if (kind == FailureKind.REJECTED || kind == FailureKind.CONFIG) next.consecutiveRejected++;
+            if (kind == FailureKind.INTERRUPTED) next.consecutiveInterrupts++;
+        }
+        boolean trip = (blank && cfg.tripOnBlank() && next.consecutiveBlanks >= cfg.blankThreshold())
+                || (silent && cfg.tripOnSilentFailure()
+                        && next.consecutiveSilentFailures >= cfg.silentFailureThreshold())
+                || (!blank && !silent && permitThresholdReached(next, policySnapshot, kind));
+        if (before.mode == BreakerMode.HALF_OPEN
+                && !(kind == FailureKind.INTERRUPTED && !policySnapshot.tripOnInterrupt())) trip = true;
+        if (trip) {
+            Duration duration = computePermitOpenDuration(policySnapshot, kind, next, hintMs);
+            next.open(duration, kind, now);
+        }
+        return next.freeze();
+    }
+
+    private boolean permitThresholdReached(GateState.Mutable s,
+            PolicySnapshot policySnapshot, FailureKind kind) {
+        NightmareBreakerProperties.EffectivePolicy cfg = policySnapshot.effective();
+        return (kind == FailureKind.TIMEOUT && s.consecutiveTimeouts >= cfg.timeoutThreshold())
+                || (kind == FailureKind.RATE_LIMIT && s.consecutiveRateLimits >= cfg.rateLimitThreshold())
+                || ((kind == FailureKind.REJECTED || kind == FailureKind.CONFIG)
+                        && s.consecutiveRejected >= cfg.rejectedThreshold())
+                || (policySnapshot.tripOnInterrupt() && kind == FailureKind.INTERRUPTED
+                        && s.consecutiveInterrupts >= cfg.interruptThreshold())
+                || (countsAsFailureForThreshold(kind, policySnapshot)
+                        && s.consecutiveFailures >= cfg.failureThreshold());
+    }
+
+    private Duration computePermitOpenDuration(PolicySnapshot policySnapshot,
+            FailureKind kind, GateState.Mutable state, Long hintMs) {
+        NightmareBreakerProperties.EffectivePolicy cfg = policySnapshot.effective();
+        Duration fallback = cfg.openDuration() == null ? Duration.ofSeconds(15) : cfg.openDuration();
+        if (kind == FailureKind.RATE_LIMIT) {
+            long base = safeToMs(policySnapshot.rateLimitOpenDuration(), safeToMs(fallback, 15_000L));
+            if (hintMs != null && hintMs > 0L) base = Math.max(base, hintMs);
+            long cap = safeToMs(policySnapshot.rateLimitMaxOpenDuration(), Math.max(base, 15_000L));
+            return Duration.ofMillis(applyExponentialBackoff(base,
+                    Math.max(1, state.consecutiveRateLimits), policySnapshot.backoffBase(), cap));
+        }
+        if (kind == FailureKind.TIMEOUT) {
+            long base = safeToMs(policySnapshot.timeoutOpenDuration(), safeToMs(fallback, 15_000L));
+            long cap = safeToMs(policySnapshot.timeoutMaxOpenDuration(), Math.max(base, 15_000L));
+            if (hintMs != null && hintMs > 0L) { cap = Math.min(cap, hintMs); base = Math.min(base, cap); }
+            return Duration.ofMillis(applyExponentialBackoff(base,
+                    Math.max(1, state.consecutiveTimeouts), policySnapshot.backoffBase(), cap));
+        }
+        if (kind == FailureKind.CONFIG && policySnapshot.configOpenDuration() != null
+                && policySnapshot.configOpenDuration().compareTo(fallback) > 0) {
+            return policySnapshot.configOpenDuration();
+        }
+        return fallback;
+    }
+
+    private void emitOpenTransition(String key, GateState state) {
+        String diagnosticKey = SafeRedactor.hashValue(key);
+        recordOpenAtForTrace(key, state.openSinceMs, state.openUntilMs);
+        recordOpenMetaForTrace(key, state.lastKind, state.lastErrorSummary);
+        try {
+            Map<String, Object> data = new java.util.LinkedHashMap<>();
+            data.put("key", diagnosticKey);
+            data.put("kind", String.valueOf(state.lastKind));
+            // chat:draft:<modelTag> 키에서 모델 태그만 분리해 해시/길이로 남긴다 —
+            // 원문 모델명은 이벤트에 기록하지 않는다.
+            String modelTag = key != null && key.startsWith(NightmareKeys.CHAT_DRAFT + ":")
+                    ? key.substring(NightmareKeys.CHAT_DRAFT.length() + 1)
+                    : null;
+            if (modelTag != null) {
+                data.put("modelTagHash", SafeRedactor.hashValue(modelTag));
+                data.put("modelTagLength", modelTag.length());
+            }
+            data.put("openSinceMs", state.openSinceMs);
+            data.put("openUntilMs", state.openUntilMs);
+            emitEvent(DebugEventLevel.WARN, "nightmare.open." + diagnosticKey,
+                    "NightmareBreaker OPEN", "NightmareBreaker.CallPermit", data, null);
+        } catch (Throwable ignore) {
+            traceSuppressed("nightmare.permitOpenEvent", ignore);
+        }
+    }
+
+    private void publishSignal(String key, SignalType type, GateState state) {
+        ApplicationEventPublisher publisher = this.eventPublisher;
+        if (publisher == null || type == null || state == null) return;
+        try {
+            publisher.publishEvent(new StateSignal(
+                    this,
+                    stateSignalDiagnosticKey(key),
+                    isWebSearchBreakerKey(key),
+                    type,
+                    state.mode,
+                    state.lastKind,
+                    state.openSinceMs,
+                    state.openUntilMs));
+        } catch (Throwable ignore) {
+            traceSuppressed("nightmare.stateSignal", ignore);
+        }
+    }
+
+    private static boolean isWebSearchBreakerKey(String key) {
+        return NightmareKeys.WEBSEARCH_NAVER.equals(key)
+                || NightmareKeys.WEBSEARCH_BRAVE.equals(key)
+                || NightmareKeys.WEBSEARCH_SERPAPI.equals(key)
+                || NightmareKeys.WEBSEARCH_TAVILY.equals(key)
+                || NightmareKeys.WEBSEARCH_HYBRID.equals(key);
+    }
+
+    private static String stateSignalDiagnosticKey(String key) {
+        return SafeRedactor.hashValue(key);
+    }
+
+    private static String safeExternalSignalReason(String reason) {
+        if (reason == null || reason.isBlank()) return "unknown";
+        String value = reason.trim();
+        if (value.matches("handler_exception:[A-Za-z][A-Za-z0-9_$]{0,63}")) {
+            return value;
+        }
+        return switch (value) {
+            case "dev_community_unverified_selected",
+                    "official_only_starved",
+                    "evidence_guard_no_info_with_evidence",
+                    "definitive_failure_with_evidence",
+                    "final_rescue" -> value;
+            default -> SafeRedactor.hashValue(value);
+        };
+    }
+
+    private static FailureKind normalizePermitKind(FailureKind kind, Throwable error) {
+        if (kind != null && kind != FailureKind.UNKNOWN) return kind;
+        FailureKind classified = classify(error);
+        return classified == null ? FailureKind.UNKNOWN : classified;
+    }
+
+    private static String redactedErrorSummary(Throwable error) {
+        if (error == null) return null;
+        return error.getClass().getSimpleName() + ":" + SafeRedactor.hashValue(error.getMessage());
+    }
+
+    private long nowMs() {
+        return clock.millis();
+    }
+
+    private static String normalizeKey(String key) {
+        return key == null ? "" : key.trim();
+    }
+
+    private enum PermitOutcome { SUCCESS, BLANK, SILENT, FAILURE, NEUTRAL }
+
+    private enum FinishResult { APPLIED, IGNORED, OWNER_LOST }
+
+    @Deprecated(forRemoval = false)
+    public void checkOpenOrThrow(String key) {
+        CallPermit permit = acquire(key, "legacy-check");
+        permit.completeAbandoned("legacy-check", "split-lifecycle");
+    }
+
+    @Deprecated(forRemoval = false)
+    public void recordSuccess(String key, long latencyMs) {
+        try { TraceStore.inc("nightmare.legacy.success.telemetry"); }
+        catch (Throwable ignore) { traceSuppressed("nightmare.legacySuccessTrace", ignore); }
+    }
+
+    @Deprecated(forRemoval = false)
     public void recordBlank(String key, String context) {
-        if (!props.isEnabled())
-            return;
-        NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
-        if (!cfg.tripOnBlank())
-            return;
-        State s = states.computeIfAbsent(key, k -> new State());
-        s.touch();
-
-        int blanks = s.consecutiveBlanks.incrementAndGet();
-        s.lastKind = FailureKind.EMPTY_RESPONSE;
-
-        int ctxLen = (context == null) ? 0 : context.length();
-        String diagnosticKey = safeBreakerKey(key);
-
-        // TraceStore anchor (safe): do NOT store context text; only ctxLen.
-        try {
-            long ts = System.currentTimeMillis();
-            java.util.Map<String, Object> ev = new java.util.LinkedHashMap<>();
-            ev.put("ts", ts);
-            ev.put("key", diagnosticKey);
-            ev.put("ctxLen", ctxLen);
-            ev.put("n", blanks);
-            ev.put("threshold", cfg.blankThreshold());
-            TraceStore.put("nightmare.blank.lastKey", diagnosticKey);
-            TraceStore.put("nightmare.blank.last", ev);
-            TraceStore.append("nightmare.blank.events", ev);
-        } catch (Throwable ignore) {
-            traceSuppressed("nightmare.blankTrace", ignore);
-        }
-
-        try {
-            java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-            dd.put("key", diagnosticKey);
-            dd.put("ctxLen", ctxLen);
-            dd.put("blanks", blanks);
-            dd.put("threshold", cfg.blankThreshold());
-            emitEvent(
-                    DebugEventLevel.WARN,
-                    "nightmare.blank." + diagnosticKey,
-                    "NightmareBreaker blank-response",
-                    "NightmareBreaker.recordBlank",
-                    dd,
-                    null);
-        } catch (Throwable ignore) {
-            traceSuppressed("nightmare.blankEvent", ignore);
-        }
-
-        if (blanks >= cfg.blankThreshold()) {
-            tripOpen(key, s, FailureKind.EMPTY_RESPONSE, null, context, "blank-threshold");
-        } else {
-            log.warn("[NightmareBreaker] blank-response key={} blanks={}/{} contextHash={} contextLength={}",
-                    diagnosticKey, blanks, cfg.blankThreshold(), SafeRedactor.hashValue(context), ctxLen);
-        }
+        signalBlank(key, context);
     }
 
+    @Deprecated(forRemoval = false)
     public void recordSilentFailure(String key, String context, String reason) {
-        if (!props.isEnabled())
-            return;
-        NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
-        if (!cfg.tripOnSilentFailure())
-            return;
-        State s = states.computeIfAbsent(key, k -> new State());
-        s.touch();
-
-        int n = s.consecutiveSilentFailures.incrementAndGet();
-        s.lastKind = FailureKind.EMPTY_RESPONSE;
-
-        int ctxLen = (context == null) ? 0 : context.length();
-        String diagnosticKey = safeBreakerKey(key);
-        String safeReason = SafeRedactor.traceLabelOrFallback(reason, "unknown");
-        boolean hasReason = reason != null && !reason.isBlank();
-
-        // TraceStore anchor (safe): do NOT store context text; only ctxLen.
-        try {
-            long ts = System.currentTimeMillis();
-            java.util.Map<String, Object> ev = new java.util.LinkedHashMap<>();
-            ev.put("ts", ts);
-            ev.put("key", diagnosticKey);
-            ev.put("ctxLen", ctxLen);
-            ev.put("n", n);
-            ev.put("threshold", cfg.silentFailureThreshold());
-            if (hasReason) {
-                ev.put("reason", safeReason);
-            }
-            TraceStore.put("nightmare.silent.lastKey", diagnosticKey);
-            TraceStore.put("nightmare.silent.last", ev);
-            TraceStore.append("nightmare.silent.events", ev);
-        } catch (Throwable ignore) {
-            traceSuppressed("nightmare.silentTrace", ignore);
-        }
-
-        try {
-            java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-            dd.put("key", diagnosticKey);
-            dd.put("ctxLen", ctxLen);
-            dd.put("n", n);
-            dd.put("threshold", cfg.silentFailureThreshold());
-            if (hasReason) {
-                dd.put("reason", safeReason);
-            }
-            emitEvent(
-                    DebugEventLevel.WARN,
-                    "nightmare.silent." + diagnosticKey,
-                    "NightmareBreaker silent-failure",
-                    "NightmareBreaker.recordSilentFailure",
-                    dd,
-                    null);
-        } catch (Throwable ignore) {
-            traceSuppressed("nightmare.silentEvent", ignore);
-        }
-
-        if (n >= cfg.silentFailureThreshold()) {
-            tripOpen(key, s, FailureKind.EMPTY_RESPONSE, null,
-                    "silent-failure reason=" + safeReason
-                            + " contextHash=" + SafeRedactor.hashValue(context) + " contextLength=" + ctxLen,
-                    "silent-failure");
-        } else {
-            log.warn("[NightmareBreaker] silent-failure key={} n={}/{} reason={} contextHash={} contextLength={}",
-                    diagnosticKey, n, cfg.silentFailureThreshold(), safeReason,
-                    SafeRedactor.hashValue(context), ctxLen);
-        }
+        signalSilentFailure(key, context, reason);
     }
 
+    @Deprecated(forRemoval = false)
     public void recordFailure(String key, FailureKind kind, Throwable error, String context) {
         recordFailure(key, kind, error, context, null);
     }
 
-    /**
-     * Record a failure with an optional open-duration hint (milliseconds).
-     *
-     * <p>Primarily used for RATE_LIMIT (HTTP 429) where Retry-After / cooldown headers can suggest
-     * an appropriate open duration.</p>
-     */
+    @Deprecated(forRemoval = false)
     public void recordFailure(String key, FailureKind kind, Throwable error, String context, Long openDurationHintMs) {
-        if (!props.isEnabled())
-            return;
-        if (key == null || key.isBlank()) {
-            return;
-        }
-
-        // Normalize UNKNOWN failures: some call sites still pass UNKNOWN (legacy),
-        // but we can classify TIMEOUT/INTERRUPTED/RATE_LIMIT to avoid breaker poisoning.
-        FailureKind normalized = (kind == null) ? FailureKind.UNKNOWN : kind;
-        try {
-            if (normalized == FailureKind.UNKNOWN && error != null) {
-                FailureKind inferred = classify(error);
-                if (inferred != null && inferred != FailureKind.UNKNOWN) {
-                    normalized = inferred;
-                }
-            }
-            if (normalized == FailureKind.RATE_LIMIT && openDurationHintMs == null) {
-                openDurationHintMs = tryExtractRetryAfterMs(error);
-            }
-        } catch (Throwable ignore) {
-            traceSuppressed("nightmare.kindNormalize", ignore);
-        }
-        kind = normalized;
-
-        State s = states.computeIfAbsent(key, k -> new State());
-        s.touch();
-        NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
-
-        s.lastKind = kind;
-        s.lastError = error;
-
-        // 실패 유형이 바뀌면 blank/silent/slow 누적은 끊는 게 안전
-        s.consecutiveBlanks.set(0);
-        s.consecutiveSilentFailures.set(0);
-        s.consecutiveSlowCalls.set(0);
-
-        // Interrupted is frequently a cancellation/teardown signal, not a provider-side timeout.
-        // Do not let it pollute TIMEOUT aggregation or the generic failure threshold.
-        boolean countsAsFailure = countsAsFailureForThreshold(kind);
-
-        int total;
-        if (countsAsFailure) {
-            total = s.consecutiveFailures.incrementAndGet();
-        } else {
-            total = s.consecutiveFailures.get();
-            if (kind == FailureKind.INTERRUPTED) {
-                // Treat interrupt as a streak-breaker for TIMEOUT to avoid accidental threshold crossings.
-                s.consecutiveTimeouts.set(0);
-            }
-        }
-
-        if (kind == FailureKind.TIMEOUT)
-            s.consecutiveTimeouts.incrementAndGet();
-        if (kind == FailureKind.RATE_LIMIT)
-            s.consecutiveRateLimits.incrementAndGet();
-        if (kind == FailureKind.REJECTED || kind == FailureKind.CONFIG)
-            s.consecutiveRejected.incrementAndGet();
-        if (kind == FailureKind.INTERRUPTED)
-            s.consecutiveInterrupts.incrementAndGet();
-
-        // HALF_OPEN: any failure re-opens immediately (but still respects kind-specific open durations/backoff)
-        if (s.mode == BreakerMode.HALF_OPEN && props.isHalfOpenEnabled()) {
-            // Treat INTERRUPTED as a local cancellation signal; do not re-open unless explicitly configured.
-            if (kind == FailureKind.INTERRUPTED && !props.isTripOnInterrupt()) {
-                try {
-                    TraceStore.inc("nightmare.interrupt.halfOpen.ignored." + safeBreakerKey(key));
-                } catch (Exception ignore) {
-                    traceSuppressed("nightmare.halfOpenInterruptTrace", ignore);
-                }
-                return;
-            }
-
-            Duration openFor = computeOpenDurationForTrip(cfg, kind, s, openDurationHintMs);
-            tripOpen(key, s, kind, error, context, "half-open-failure", openFor);
-            return;
-        }
-
-        boolean tripTimeout = (kind == FailureKind.TIMEOUT && s.consecutiveTimeouts.get() >= cfg.timeoutThreshold());
-        boolean tripRateLimit = (kind == FailureKind.RATE_LIMIT && s.consecutiveRateLimits.get() >= cfg.rateLimitThreshold());
-        boolean tripRejected = ((kind == FailureKind.REJECTED || kind == FailureKind.CONFIG) && s.consecutiveRejected.get() >= cfg.rejectedThreshold());
-        boolean tripInterrupt = (props.isTripOnInterrupt()
-                && kind == FailureKind.INTERRUPTED
-                && s.consecutiveInterrupts.get() >= cfg.interruptThreshold());
-        boolean tripFailure = (countsAsFailure && total >= cfg.failureThreshold());
-
-        boolean shouldTrip = tripTimeout || tripRateLimit || tripRejected || tripInterrupt || tripFailure;
-
-        if (shouldTrip) {
-            String reason;
-            if (tripTimeout) {
-                reason = "timeout-threshold";
-            } else if (tripRateLimit) {
-                reason = "rate-limit-threshold";
-            } else if (tripRejected) {
-                reason = (kind == FailureKind.CONFIG) ? "config-threshold" : "rejected-threshold";
-            } else if (tripInterrupt) {
-                reason = "interrupt-threshold";
-            } else {
-                reason = "failure-threshold";
-            }
-
-            Duration openFor = computeOpenDurationForTrip(cfg, kind, s, openDurationHintMs);
-            tripOpen(key, s, kind, error, context, reason, openFor);
-        }
+        signalFailure(key, kind, error, context, openDurationHintMs);
     }
 
-    private boolean countsAsFailureForThreshold(FailureKind kind) {
-        if (kind == null) {
-            return true;
-        }
-        if (kind == FailureKind.INTERRUPTED) {
-            return false;
-        }
-        if (kind == FailureKind.RATE_LIMIT) {
-            return props.isRateLimitCountsAsFailure();
-        }
-        if (kind == FailureKind.TIMEOUT) {
-            return props.isTimeoutCountsAsFailure();
-        }
+    private static boolean countsAsFailureForThreshold(FailureKind kind, PolicySnapshot snapshot) {
+        if (kind == null) return true;
+        if (kind == FailureKind.INTERRUPTED) return false;
+        if (kind == FailureKind.RATE_LIMIT) return snapshot.rateLimitCountsAsFailure();
+        if (kind == FailureKind.TIMEOUT) return snapshot.timeoutCountsAsFailure();
         return true;
-    }
-
-    private Duration computeOpenDurationForTrip(
-            NightmareBreakerProperties.EffectivePolicy cfg,
-            FailureKind kind,
-            State s,
-            Long openDurationHintMs
-    ) {
-        Duration fallback = (cfg != null && cfg.openDuration() != null) ? cfg.openDuration() : Duration.ofSeconds(15);
-
-        // RATE_LIMIT: honor Retry-After / cooldown hint + exponential backoff
-        if (kind == FailureKind.RATE_LIMIT) {
-            long baseMs = safeToMs(props.getRateLimitOpenDuration(), safeToMs(fallback, 15_000L));
-            long capMs = safeToMs(props.getRateLimitMaxOpenDuration(), Math.max(baseMs, safeToMs(fallback, 15_000L)));
-            if (openDurationHintMs != null && openDurationHintMs > 0) {
-                baseMs = Math.max(baseMs, openDurationHintMs);
-            }
-            int n = Math.max(1, s != null ? s.consecutiveRateLimits.get() : 1);
-            long ms = applyExponentialBackoff(baseMs, n, props.getBackoffBase(), capMs);
-            return Duration.ofMillis(ms);
-        }
-
-        // TIMEOUT: exponential backoff (separate from generic failure threshold)
-        if (kind == FailureKind.TIMEOUT) {
-            long baseMs = safeToMs(props.getTimeoutOpenDuration(), safeToMs(fallback, 15_000L));
-            long capMs = safeToMs(props.getTimeoutMaxOpenDuration(), Math.max(baseMs, safeToMs(fallback, 15_000L)));
-            // Optional: allow call-site to cap TIMEOUT opens (useful for optional stages like QueryTransformer)
-            if (openDurationHintMs != null && openDurationHintMs > 0) {
-                capMs = Math.min(capMs, openDurationHintMs);
-                baseMs = Math.min(baseMs, capMs);
-            }
-            int n = Math.max(1, s != null ? s.consecutiveTimeouts.get() : 1);
-            long ms = applyExponentialBackoff(baseMs, n, props.getBackoffBase(), capMs);
-            return Duration.ofMillis(ms);
-        }
-
-        // CONFIG failures are usually non-transient (ex: missing model). Keep the breaker open longer.
-        if (kind == FailureKind.CONFIG) {
-            try {
-                Duration d = props.getConfigOpenDuration();
-                if (d != null && !d.isZero() && !d.isNegative() && d.compareTo(fallback) > 0) {
-                    return d;
-                }
-            } catch (Throwable ignore) {
-                traceSuppressed("nightmare.configDuration", ignore);
-            }
-        }
-
-        return fallback;
     }
 
     private static long safeToMs(Duration d, long defaultMs) {
@@ -1097,8 +1137,9 @@ public class NightmareBreaker {
             return call.get();
         }
 
+        final CallPermit permit;
         try {
-            checkOpenOrThrow(key);
+            permit = acquire(key, "execute");
         } catch (OpenCircuitException oce) {
             traceSuppressed("nightmare.executeOpenCircuitFallback", oce);
             return fallback != null ? fallback.get() : null;
@@ -1113,15 +1154,15 @@ public class NightmareBreaker {
             if (bad) {
                 if (out instanceof String s) {
                     if (s == null || s.isBlank()) {
-                        recordBlank(key, context);
+                        permit.completeBlank(context);
                     } else {
-                        recordSilentFailure(key, context, "bad_result");
+                        permit.completeSilentFailure(context, "bad_result");
                     }
                 } else {
-                    recordSilentFailure(key, context, "bad_result");
+                    permit.completeSilentFailure(context, "bad_result");
                 }
             } else {
-                recordSuccess(key, latencyMs);
+                permit.completeSuccess(latencyMs);
             }
 
             return out;
@@ -1133,7 +1174,7 @@ public class NightmareBreaker {
                 // Avoid poisoning pooled workers with lingering interrupt status.
                 // NOTE: Interrupted is frequently a cancellation/teardown signal; do NOT count as TIMEOUT.
                 Thread.interrupted();
-                recordFailure(key, kind, t, context);
+                permit.completeCancelled(t, context);
             } else if (kind == FailureKind.RATE_LIMIT) {
                 // Prefer recordRateLimit() so we can honor Retry-After hints and suppress duplicate 429 signals per request.
                 Long retryAfterMs = tryExtractRetryAfterMs(t);
@@ -1149,9 +1190,9 @@ public class NightmareBreaker {
                 } catch (Throwable ignore) {
                     traceSuppressed("nightmare.executeRateLimitReason", ignore);
                 }
-                recordRateLimit(key, context, t, reason, retryAfterMs);
+                permit.completeRateLimit(context, t, reason, retryAfterMs);
             } else {
-                recordFailure(key, kind, t, context);
+                permit.completeFailure(kind, t, context);
             }
 
             return fallback != null ? fallback.get() : null;
@@ -1164,107 +1205,6 @@ public class NightmareBreaker {
         return new NightmareBreakException(kind, cause);
     }
 
-    private void tripOpen(String key, State s, FailureKind kind, Throwable error, String context, String reason) {
-        tripOpen(key, s, kind, error, context, reason, null);
-    }
-
-    private void tripOpen(String key, State s, FailureKind kind, Throwable error, String context, String reason, Duration openForOverride) {
-        long now = System.currentTimeMillis();
-        boolean alreadyOpen = (s.mode == BreakerMode.OPEN) && (s.openUntilMs > now);
-        NightmareBreakerProperties.EffectivePolicy cfg = policy(key);
-        Duration openFor = (openForOverride != null ? openForOverride : cfg.openDuration());
-
-        // CONFIG failures are usually non-transient (ex: missing model). Keep the breaker open longer
-        // to avoid hot retry loops.
-        if (kind == FailureKind.CONFIG) {
-            try {
-                Duration d = props.getConfigOpenDuration();
-                if (d != null && !d.isZero() && !d.isNegative()) {
-                    if (d.compareTo(openFor) > 0) {
-                        openFor = d;
-                    }
-                }
-            } catch (Throwable ignore) {
-                traceSuppressed("nightmare.tripOpenConfigDuration", ignore);
-            }
-        }
-        long candidateUntil = now + Math.max(1L, openFor.toMillis());
-        long openUntil = alreadyOpen ? Math.max(s.openUntilMs, candidateUntil) : candidateUntil;
-
-        // Track the actual open-since time (global breaker state), not just the time we observed it
-        // in this particular request.
-        if (!alreadyOpen || s.openSinceMs <= 0L) {
-            s.openSinceMs = now;
-        }
-
-        s.openUntilMs = openUntil;
-        s.mode = BreakerMode.OPEN;
-        s.trialCalls.set(0);
-        s.consecutiveSuccesses.set(0);
-        s.lastKind = kind;
-        s.lastError = error;
-
-        String contextHash = SafeRedactor.hashValue(context);
-        int contextLength = (context == null) ? 0 : context.length();
-        String contextDiagnostic = "contextHash=" + (contextHash == null ? "" : contextHash)
-                + " contextLength=" + contextLength;
-        String msg = (error != null) ? SafeRedactor.traceLabelOrFallback(error.getMessage(), "") : "";
-        String safeReason = SafeRedactor.traceLabelOrFallback(reason, "unknown");
-        String diagnosticKey = safeBreakerKey(key);
-
-        if (cfg.logStackTrace() && error != null) {
-            log.warn("[NightmareBreaker] OPEN key={} kind={} reason={} openFor={} contextHash={} contextLength={}",
-                    diagnosticKey, kind, safeReason, openFor, contextHash, contextLength, error);
-        } else {
-            log.warn("[NightmareBreaker] OPEN key={} kind={} reason={} openFor={} err={} contextHash={} contextLength={}",
-                    diagnosticKey, kind, safeReason, openFor, msg, contextHash, contextLength);
-        }
-
-        // Best-effort: record open timestamp into the request TraceStore for later analysis
-        // (e.g., AuxBlockTracker can show breakerOpenAt).
-        recordOpenAtForTrace(key, (s.openSinceMs > 0L ? s.openSinceMs : now), openUntil);
-        recordOpenMetaForTrace(key, kind, msg);
-
-        try {
-            java.util.Map<String, Object> dd = new java.util.LinkedHashMap<>();
-            dd.put("key", diagnosticKey);
-            dd.put("kind", (kind != null ? kind.name() : "UNKNOWN"));
-            if (safeReason != null && !safeReason.isBlank()) {
-                dd.put("reason", safeReason);
-            }
-            dd.put("alreadyOpen", alreadyOpen);
-            dd.put("openForMs", openFor.toMillis());
-            dd.put("openSinceMs", (s.openSinceMs > 0L ? s.openSinceMs : now));
-            dd.put("openUntilMs", openUntil);
-            dd.put("ctxLen", contextLength);
-            dd.put("contextHash", contextHash);
-            emitEvent(
-                    DebugEventLevel.WARN,
-                    "nightmare.open." + diagnosticKey,
-                    "NightmareBreaker OPEN",
-                    "NightmareBreaker.tripOpen",
-                    dd,
-                    error);
-        } catch (Throwable ignore) {
-            traceSuppressed("nightmare.openEvent", ignore);
-        }
-
-        // [Auto Debug Boost] When the breaker opens, enable dbgSearch for N minutes
-        // so that the next requests have console diagnostics without per-request toggles.
-        try {
-            if (searchDebugBoost != null) {
-                searchDebugBoost.maybeBoostOnNightmareOpen(
-                        diagnosticKey,
-                        kind != null ? kind.name() : null,
-                        safeReason,
-                        openFor,
-                        contextDiagnostic
-                );
-            }
-        } catch (Throwable ignore) {
-            traceSuppressed("nightmare.searchDebugBoost", ignore);
-        }
-    }
 
     @SuppressWarnings("unchecked")
     /**
@@ -1333,7 +1273,9 @@ public class NightmareBreaker {
                 msgMap = new ConcurrentHashMap<>();
                 TraceStore.put(TRACE_OPEN_ERRMSG_KEY, msgMap);
             }
-            msgMap.put(traceKey, SafeRedactor.safeMessage(errorMessage, 220));
+            msgMap.put(traceKey, errorMessage == null
+                    ? "none"
+                    : SafeRedactor.hashValue(errorMessage));
         } catch (Throwable ignore) {
             traceSuppressed("nightmare.openMetaTrace", ignore);
         }
@@ -1341,7 +1283,32 @@ public class NightmareBreaker {
 
 
     private static String safeBreakerKey(String key) {
-        return SafeRedactor.traceLabelOrFallback(key, "unknown");
+        if (key == null || key.isBlank()) return "unknown";
+        return switch (key) {
+            case NightmareKeys.QUERY_TRANSFORMER_RUN_LLM,
+                    NightmareKeys.DISAMBIGUATION_CLARIFY,
+                    NightmareKeys.KEYWORD_SELECTION_SELECT,
+                    NightmareKeys.RAG_CONTRADICTION_SCORE,
+                    NightmareKeys.OVERDRIVE_CONTRADICTION_SCORER,
+                    NightmareKeys.RAG_CHAIN_HANDLER,
+                    NightmareKeys.RERANK_ONNX,
+                    NightmareKeys.FAST_LLM_COMPLETE,
+                    NightmareKeys.CHAT_DRAFT,
+                    NightmareKeys.SELFASK_SEED,
+                    NightmareKeys.SELFASK_FOLLOWUP,
+                    NightmareKeys.WEBSEARCH_NAVER,
+                    NightmareKeys.WEBSEARCH_BRAVE,
+                    NightmareKeys.WEBSEARCH_SERPAPI,
+                    NightmareKeys.WEBSEARCH_TAVILY,
+                    NightmareKeys.WEBSEARCH_HYBRID,
+                    NightmareKeys.WEB_FAILSOFT_STARVED,
+                    NightmareKeys.WEB_FAILSOFT_MISROUTE,
+                    NightmareKeys.RETRIEVAL_VECTOR,
+                    NightmareKeys.RETRIEVAL_VECTOR_POISON,
+                    NightmareKeys.BYPASS_ROUTING,
+                    NightmareKeys.STRIKE_MODE -> key;
+            default -> SafeRedactor.hashValue(key);
+        };
     }
 
     private static String clip(String s, int max) {
@@ -1508,7 +1475,7 @@ public class NightmareBreaker {
     }
 
     private static String safeLower(String s) {
-        return (s == null) ? "" : s.toLowerCase();
+        return (s == null) ? "" : s.toLowerCase(java.util.Locale.ROOT);
     }
 
     private static boolean isModelRequiredMsg(String lowerMsg) {
@@ -1523,33 +1490,227 @@ public class NightmareBreaker {
         return false;
     }
 
-    private static final class State {
-        AtomicInteger consecutiveFailures = new AtomicInteger();
-        AtomicInteger consecutiveTimeouts = new AtomicInteger();
-        AtomicInteger consecutiveRateLimits = new AtomicInteger();
-        AtomicInteger consecutiveRejected = new AtomicInteger();
-        AtomicInteger consecutiveInterrupts = new AtomicInteger();
-        AtomicInteger consecutiveBlanks = new AtomicInteger();
-        AtomicInteger consecutiveSilentFailures = new AtomicInteger();
-        AtomicInteger consecutiveSlowCalls = new AtomicInteger();
-        AtomicInteger consecutiveSuccesses = new AtomicInteger();
-        AtomicInteger trialCalls = new AtomicInteger();
-        volatile BreakerMode mode = BreakerMode.CLOSED;
-        /** When this breaker last transitioned into OPEN (epoch millis). */
-        volatile long openSinceMs = 0;
-        volatile long openUntilMs = 0;
-        volatile long lastActivityMs = System.currentTimeMillis();
-        volatile FailureKind lastKind = FailureKind.UNKNOWN;
-        volatile Throwable lastError = null;
+    private static final class Gate {
+        final AtomicReference<GateState> state;
 
-        void touch() {
-            lastActivityMs = System.currentTimeMillis();
-        }
-
-        long lastActivityMs() {
-            return lastActivityMs;
+        Gate(GateState initial) {
+            this.state = new AtomicReference<>(initial);
         }
     }
+
+    /** Immutable CAS payload. Mutable is a private, unshared copy builder only. */
+    private static final class GateState {
+        final long generation;
+        final BreakerMode mode;
+        final boolean retired;
+        final long openSinceMs;
+        final long openUntilMs;
+        final long lastActivityMs;
+        final long lastActivityTick;
+        final FailureKind lastKind;
+        final String lastErrorSummary;
+        final int consecutiveFailures;
+        final int consecutiveTimeouts;
+        final int consecutiveRateLimits;
+        final int consecutiveRejected;
+        final int consecutiveInterrupts;
+        final int consecutiveBlanks;
+        final int consecutiveSilentFailures;
+        final int consecutiveSlowCalls;
+        final int consecutiveSuccesses;
+        final int inFlight;
+        final int halfOpenIssued;
+        final int halfOpenSuccesses;
+        final boolean halfOpenSealed;
+        final PolicySnapshot halfOpenPolicy;
+
+        private GateState(Mutable m) {
+            this.generation = m.generation;
+            this.mode = m.mode;
+            this.retired = m.retired;
+            this.openSinceMs = m.openSinceMs;
+            this.openUntilMs = m.openUntilMs;
+            this.lastActivityMs = m.lastActivityMs;
+            this.lastActivityTick = m.lastActivityTick;
+            this.lastKind = m.lastKind;
+            this.lastErrorSummary = m.lastErrorSummary;
+            this.consecutiveFailures = m.consecutiveFailures;
+            this.consecutiveTimeouts = m.consecutiveTimeouts;
+            this.consecutiveRateLimits = m.consecutiveRateLimits;
+            this.consecutiveRejected = m.consecutiveRejected;
+            this.consecutiveInterrupts = m.consecutiveInterrupts;
+            this.consecutiveBlanks = m.consecutiveBlanks;
+            this.consecutiveSilentFailures = m.consecutiveSilentFailures;
+            this.consecutiveSlowCalls = m.consecutiveSlowCalls;
+            this.consecutiveSuccesses = m.consecutiveSuccesses;
+            this.inFlight = m.inFlight;
+            this.halfOpenIssued = m.halfOpenIssued;
+            this.halfOpenSuccesses = m.halfOpenSuccesses;
+            this.halfOpenSealed = m.halfOpenSealed;
+            this.halfOpenPolicy = m.halfOpenPolicy;
+        }
+
+        static GateState closed(long now, long tick) {
+            Mutable m = new Mutable();
+            m.lastActivityMs = now;
+            m.lastActivityTick = tick;
+            return m.freeze();
+        }
+
+        Mutable mutable(long now, long tick) {
+            Mutable m = new Mutable(this);
+            m.lastActivityMs = now;
+            m.lastActivityTick = tick;
+            return m;
+        }
+
+        GateState closedAdmission(long now, long tick, boolean nextGeneration) {
+            Mutable m = mutable(now, tick);
+            if (nextGeneration) m.generation++;
+            m.mode = BreakerMode.CLOSED;
+            m.openSinceMs = 0L;
+            m.openUntilMs = 0L;
+            m.inFlight++;
+            m.halfOpenIssued = 0;
+            m.halfOpenSuccesses = 0;
+            m.halfOpenSealed = false;
+            m.halfOpenPolicy = null;
+            return m.freeze();
+        }
+
+        GateState halfOpenFirstTrial(long now, long tick, PolicySnapshot cohortPolicy) {
+            Mutable m = mutable(now, tick);
+            m.generation++;
+            m.mode = BreakerMode.HALF_OPEN;
+            m.openSinceMs = 0L;
+            m.openUntilMs = 0L;
+            m.inFlight = 1;
+            m.halfOpenIssued = 1;
+            m.halfOpenSuccesses = 0;
+            m.halfOpenSealed = false;
+            m.halfOpenPolicy = cohortPolicy;
+            m.consecutiveSuccesses = 0;
+            return m.freeze();
+        }
+
+        GateState halfOpenAdmission(long now, long tick) {
+            Mutable m = mutable(now, tick);
+            m.inFlight++;
+            m.halfOpenIssued++;
+            return m.freeze();
+        }
+
+        GateState retired(long now, long tick) {
+            Mutable m = mutable(now, tick);
+            m.generation++;
+            m.retired = true;
+            return m.freeze();
+        }
+
+        private static final class Mutable {
+            long generation;
+            BreakerMode mode = BreakerMode.CLOSED;
+            boolean retired;
+            long openSinceMs;
+            long openUntilMs;
+            long lastActivityMs;
+            long lastActivityTick;
+            FailureKind lastKind = FailureKind.UNKNOWN;
+            String lastErrorSummary;
+            int consecutiveFailures;
+            int consecutiveTimeouts;
+            int consecutiveRateLimits;
+            int consecutiveRejected;
+            int consecutiveInterrupts;
+            int consecutiveBlanks;
+            int consecutiveSilentFailures;
+            int consecutiveSlowCalls;
+            int consecutiveSuccesses;
+            int inFlight;
+            int halfOpenIssued;
+            int halfOpenSuccesses;
+            boolean halfOpenSealed;
+            PolicySnapshot halfOpenPolicy;
+
+            Mutable() {}
+
+            Mutable(GateState s) {
+                generation = s.generation;
+                mode = s.mode;
+                retired = s.retired;
+                openSinceMs = s.openSinceMs;
+                openUntilMs = s.openUntilMs;
+                lastActivityMs = s.lastActivityMs;
+                lastActivityTick = s.lastActivityTick;
+                lastKind = s.lastKind;
+                lastErrorSummary = s.lastErrorSummary;
+                consecutiveFailures = s.consecutiveFailures;
+                consecutiveTimeouts = s.consecutiveTimeouts;
+                consecutiveRateLimits = s.consecutiveRateLimits;
+                consecutiveRejected = s.consecutiveRejected;
+                consecutiveInterrupts = s.consecutiveInterrupts;
+                consecutiveBlanks = s.consecutiveBlanks;
+                consecutiveSilentFailures = s.consecutiveSilentFailures;
+                consecutiveSlowCalls = s.consecutiveSlowCalls;
+                consecutiveSuccesses = s.consecutiveSuccesses;
+                inFlight = s.inFlight;
+                halfOpenIssued = s.halfOpenIssued;
+                halfOpenSuccesses = s.halfOpenSuccesses;
+                halfOpenSealed = s.halfOpenSealed;
+                halfOpenPolicy = s.halfOpenPolicy;
+            }
+
+            void resetAdverse() {
+                consecutiveFailures = 0;
+                consecutiveTimeouts = 0;
+                consecutiveRateLimits = 0;
+                consecutiveRejected = 0;
+                consecutiveInterrupts = 0;
+                consecutiveBlanks = 0;
+                consecutiveSilentFailures = 0;
+            }
+
+            void closeFromHalfOpen() {
+                generation++;
+                mode = BreakerMode.CLOSED;
+                openSinceMs = 0L;
+                openUntilMs = 0L;
+                inFlight = 0;
+                halfOpenIssued = 0;
+                halfOpenSuccesses = 0;
+                halfOpenSealed = false;
+                halfOpenPolicy = null;
+                resetAdverse();
+            }
+
+            void open(Duration duration, FailureKind kind, long now) {
+                boolean alreadyOpen = mode == BreakerMode.OPEN && openUntilMs > now;
+                if (!alreadyOpen) {
+                    generation++;
+                    openSinceMs = now;
+                }
+                mode = BreakerMode.OPEN;
+                long millis = duration == null ? 15_000L : Math.max(1L, duration.toMillis());
+                long candidate = saturatedAdd(now, millis);
+                openUntilMs = alreadyOpen ? Math.max(openUntilMs, candidate) : candidate;
+                lastKind = kind == null ? FailureKind.UNKNOWN : kind;
+                inFlight = 0;
+                halfOpenIssued = 0;
+                halfOpenSuccesses = 0;
+                halfOpenSealed = false;
+                halfOpenPolicy = null;
+                consecutiveSuccesses = 0;
+            }
+
+            GateState freeze() { return new GateState(this); }
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (right > 0L && left > Long.MAX_VALUE - right) return Long.MAX_VALUE;
+        return left + right;
+    }
+
 
     public static class NightmareBreakException extends RuntimeException {
         private final FailureKind kind;
