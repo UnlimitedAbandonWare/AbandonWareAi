@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -191,6 +192,27 @@ class QueryTransformerNeedleTraceTest {
         String trace = String.valueOf(TraceStore.getAll());
         assertFalse(trace.contains("raw-secret"), trace);
         assertFalse(trace.contains("ownerToken"), trace);
+    }
+
+    @Test
+    void suppressedTraceHelperCanStoreActualExceptionClassWithoutRawStageOrMessage() throws Exception {
+        Method helper = QueryTransformer.class.getDeclaredMethod("traceSuppressed", String.class, Throwable.class);
+        helper.setAccessible(true);
+
+        helper.invoke(null,
+                "ownerToken=raw-secret stage",
+                new IllegalStateException("api_key=" + "sk-" + "querytransformersecret1234567890"));
+
+        Object safeStage = TraceStore.get("queryTransformer.suppressed.stage");
+        assertEquals(Boolean.TRUE, TraceStore.get("queryTransformer.suppressed"));
+        assertTrue(String.valueOf(safeStage).startsWith("hash:"), String.valueOf(safeStage));
+        assertEquals("IllegalStateException", TraceStore.get("queryTransformer.suppressed.errorType"));
+        assertEquals("IllegalStateException", TraceStore.get("queryTransformer.suppressed." + safeStage + ".errorType"));
+        String trace = String.valueOf(TraceStore.getAll());
+        assertFalse(trace.contains("raw-secret"), trace);
+        assertFalse(trace.contains("ownerToken"), trace);
+        assertFalse(trace.contains("api_key="), trace);
+        assertFalse(trace.contains("querytransformersecret"), trace);
     }
 
     @Test
@@ -422,7 +444,7 @@ class QueryTransformerNeedleTraceTest {
             }
         };
         setPrivateField(transformer, "debugEventStore", throwingStore);
-        String rawSecret = "sk-" + "querytransformerdebugeventfailure1234567890";
+        String rawTokenValue = "sk-" + "querytransformerdebugeventfailure1234567890";
         Method emitQtx = QueryTransformer.class.getDeclaredMethod(
                 "emitQtx",
                 DebugEventLevel.class,
@@ -436,16 +458,16 @@ class QueryTransformerNeedleTraceTest {
         emitQtx.invoke(transformer,
                 DebugEventLevel.WARN,
                 "qtx.test",
-                "message " + rawSecret,
+                "message " + rawTokenValue,
                 "QueryTransformer.test",
-                Map.of("rawKey", rawSecret),
-                new RuntimeException("raw error " + rawSecret));
+                Map.of("rawKey", rawTokenValue),
+                new RuntimeException("raw error " + rawTokenValue));
 
         String trace = String.valueOf(TraceStore.getAll());
         assertTrue(trace.contains("qtx.debugEvent.emit.failed"), trace);
         assertTrue(trace.contains("qtx_debug_event_emit_failed"), trace);
         assertFalse(trace.contains("IllegalStateException"), trace);
-        assertFalse(trace.contains(rawSecret), trace);
+        assertFalse(trace.contains(rawTokenValue), trace);
         assertFalse(trace.contains("secret-qtx-event"), trace);
     }
 
@@ -500,9 +522,129 @@ class QueryTransformerNeedleTraceTest {
         assertFalse(trace.contains("upstream ownerToken"), trace);
     }
 
+    @Test
+    void hintTimeoutStartsSoftCooldownForSameTransformCall() throws Exception {
+        String rawQuery = "private qtx slow timeout query ownerToken=raw-secret";
+        SlowCountingModel slowModel = new SlowCountingModel(650L, "late qtx answer");
+        QueryTransformer transformer = transformer(slowModel);
+        setPrivateLong(transformer, "llmTimeoutMsHint", 25L);
+        setPrivateLong(transformer, "llmHintTimeoutFloorMs", 0L);
+        setPrivateLong(transformer, "qtxSoftCooldownBaseMs", 1000L);
+        setPrivateLong(transformer, "qtxSoftCooldownMaxMs", 5000L);
+
+        List<String> variants = transformer.transformEnhanced(rawQuery, null);
+
+        assertFalse(variants.isEmpty());
+        assertTrue(transformer.getSoftCooldownRemainingMs() > 0L);
+        assertEquals("hint_timeout", TraceStore.get("qtx.softCooldown.reason"));
+        assertEquals(Boolean.TRUE, TraceStore.get("qtx.softCooldown.active"));
+        assertTrue(slowModel.calls.get() <= 1,
+                () -> "hint-timeout should make later same-call aux prompts bypass; calls=" + slowModel.calls.get());
+        String trace = String.valueOf(TraceStore.getAll());
+        assertFalse(trace.contains(rawQuery), trace);
+        assertFalse(trace.contains("raw-secret"), trace);
+    }
+
+    @Test
+    void diagnosticSmokeQueryBypassesAuxLlmAndReturnsOriginal() throws Exception {
+        String rawQuery = "랜덤 UI 스모크: 현재 RAG/AUTO 설정으로 한 문장 답변하고, 사용한 경로를 짧게 말해줘.";
+        SlowCountingModel countingModel = new SlowCountingModel(0L, "should not be used");
+        QueryTransformer transformer = transformer(countingModel);
+
+        List<String> variants = transformer.transformEnhanced(rawQuery, null);
+
+        assertEquals(List.of(rawQuery), variants);
+        assertEquals(0, countingModel.calls.get());
+        assertEquals(Boolean.TRUE, TraceStore.get("aux.queryTransformer.skipped"));
+        assertEquals("diagnostic_smoke", TraceStore.get("aux.queryTransformer.skipReason"));
+        String trace = String.valueOf(TraceStore.getAll());
+        assertFalse(trace.contains(rawQuery), trace);
+    }
+
+    @Test
+    void diagnosticSmokeScopeBypassesFollowupAuxLlmCalls() throws Exception {
+        String rawQuery = "랜덤 UI 스모크: 현재 RAG/AUTO 설정으로 한 문장 답변하고, 사용한 경로를 짧게 말해줘.";
+        SlowCountingModel countingModel = new SlowCountingModel(0L, "should not be used");
+        QueryTransformer transformer = transformer(countingModel);
+
+        transformer.transformEnhanced(rawQuery, null);
+        List<String> followup = transformer.transform("", "경로");
+
+        assertEquals(List.of("경로"), followup);
+        assertEquals(0, countingModel.calls.get());
+        assertEquals(Boolean.TRUE, TraceStore.get("aux.queryTransformer.diagnosticSmokeScope"));
+        assertEquals(Boolean.TRUE, TraceStore.get("aux.queryTransformer.skipped"));
+    }
+
+    @Test
+    void cheapSearchModeBypassesAuxLlmAndReturnsOriginalQuery() throws Exception {
+        String rawQuery = "LIGHT mode route should not spend an auxiliary qtx call";
+        SlowCountingModel countingModel = new SlowCountingModel(0L, "should not be used");
+        QueryTransformer transformer = transformer(countingModel);
+        GuardContext ctx = GuardContext.defaultContext();
+        ctx.setCheapSearchMode(true);
+        GuardContextHolder.set(ctx);
+
+        List<String> variants = transformer.transformEnhanced(rawQuery, null);
+
+        assertFalse(variants.isEmpty());
+        assertEquals(rawQuery, variants.get(0));
+        assertEquals(0, countingModel.calls.get());
+        assertEquals(Boolean.TRUE, TraceStore.get("qtx.bypass"));
+        assertEquals("cheap-search-mode", TraceStore.get("qtx.bypass.reason"));
+        assertEquals(Boolean.TRUE, TraceStore.get("queryTransformer.bypassed"));
+        assertEquals("cheap-search-mode", TraceStore.get("queryTransformer.reason"));
+        assertEquals(Boolean.TRUE, TraceStore.get("queryTransformer.rawFallback"));
+        assertEquals(SafeRedactor.hash12(rawQuery), TraceStore.get("queryTransformer.rawFallback.queryHash12"));
+        assertEquals(rawQuery.length(), TraceStore.get("queryTransformer.rawFallback.queryLength"));
+    }
+
+    @Test
+    void forceLightTraceBypassesDirectTransformAuxLlmAndReturnsOriginalQuery() throws Exception {
+        String rawQuery = "LIGHT mode prefetch should not spend direct qtx transform calls";
+        SlowCountingModel countingModel = new SlowCountingModel(0L, "should not be used");
+        QueryTransformer transformer = transformer(countingModel);
+        TraceStore.put("search.mode.lightAuxBypass", Boolean.TRUE);
+
+        List<String> variants = transformer.transform("", rawQuery);
+
+        assertEquals(List.of(rawQuery), variants);
+        assertEquals(0, countingModel.calls.get());
+        assertEquals(Boolean.TRUE, TraceStore.get("aux.queryTransformer.skipped"));
+        assertEquals("cheap-search-mode", TraceStore.get("aux.queryTransformer.skipReason"));
+        assertEquals(Boolean.TRUE, TraceStore.get("queryTransformer.bypassed"));
+        assertEquals("cheap-search-mode", TraceStore.get("queryTransformer.reason"));
+        String trace = String.valueOf(TraceStore.getAll());
+        assertFalse(trace.contains(rawQuery), trace);
+    }
+
     private record StubModel(String text) implements ChatModel {
         @Override
         public ChatResponse chat(List<ChatMessage> messages) {
+            return ChatResponse.builder()
+                    .aiMessage(AiMessage.from(text))
+                    .build();
+        }
+    }
+
+    private static final class SlowCountingModel implements ChatModel {
+        final AtomicInteger calls = new AtomicInteger();
+        final long delayMs;
+        final String text;
+
+        SlowCountingModel(long delayMs, String text) {
+            this.delayMs = delayMs;
+            this.text = text;
+        }
+
+        @Override
+        public ChatResponse chat(List<ChatMessage> messages) {
+            calls.incrementAndGet();
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             return ChatResponse.builder()
                     .aiMessage(AiMessage.from(text))
                     .build();

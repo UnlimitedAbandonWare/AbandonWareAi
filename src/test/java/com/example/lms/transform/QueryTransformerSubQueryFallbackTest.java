@@ -119,4 +119,41 @@ class QueryTransformerSubQueryFallbackTest {
         assertEquals(List.of("definition", "alias", "relation"),
                 TraceStore.get("queryTransformer.subQueries.coverage.coveredAxes"));
     }
+
+    @Test
+    void threeAxisFallbackPromotesRequestedQueryRewriteProfileWithoutProviderTrace() {
+        TraceStore.put("web.query.rewrite.requestedTemperatureProfile", "balanced");
+        TraceStore.put("web.query.rewrite.requestedValidationTemperature", 0.15d);
+        TraceStore.put("web.query.rewrite.requestedExplorationTemperature", 0.7d);
+        TraceStore.put("web.query.rewrite.requestedExplorationRate", 0.35d);
+
+        QueryTransformerSubQueryFallback.threeAxisFallback(
+                "RAG query rewrite conservative validation creative exploration",
+                "diagnostic-smoke",
+                3);
+
+        assertEquals("balanced", TraceStore.get("web.query.rewrite.temperatureProfile"));
+        assertEquals(0.15d, (Double) TraceStore.get("web.query.rewrite.validationTemperature"), 1.0e-9);
+        assertEquals(0.7d, (Double) TraceStore.get("web.query.rewrite.explorationTemperature"), 1.0e-9);
+        assertEquals(0.35d, (Double) TraceStore.get("web.query.rewrite.explorationRate"), 1.0e-9);
+        assertEquals(1, TraceStore.get("web.query.rewrite.verificationLaneCount"));
+        assertEquals(2, TraceStore.get("web.query.rewrite.explorationLaneCount"));
+        assertEquals("verification:1 exploration:2 profile:balanced", TraceStore.get("web.query.rewrite.laneSummary"));
+        assertEquals(List.of("verification", "exploration", "exploration"), TraceStore.get("web.query.rewrite.laneLabels"));
+    }
+
+    @Test
+    void threeAxisFallbackUsesBalancedQueryRewriteProfileWhenRequestHintIsThreadLocalMissing() {
+        QueryTransformerSubQueryFallback.threeAxisFallback(
+                "RAG query rewrite without controller thread local hint",
+                "diagnostic-smoke",
+                3);
+
+        assertEquals("balanced", TraceStore.get("web.query.rewrite.temperatureProfile"));
+        assertEquals(0.15d, (Double) TraceStore.get("web.query.rewrite.validationTemperature"), 1.0e-9);
+        assertEquals(0.55d, (Double) TraceStore.get("web.query.rewrite.explorationTemperature"), 1.0e-9);
+        assertEquals(0.35d, (Double) TraceStore.get("web.query.rewrite.explorationRate"), 1.0e-9);
+        assertEquals(1, TraceStore.get("web.query.rewrite.verificationLaneCount"));
+        assertEquals(2, TraceStore.get("web.query.rewrite.explorationLaneCount"));
+    }
 }
