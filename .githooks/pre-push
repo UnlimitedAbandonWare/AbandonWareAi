@@ -1,16 +1,43 @@
 #!/bin/sh
+# AWX pre-push: staged secret guard + publish-review of the real transmission.
+# Push stays disabled by default: this hook exits non-zero unless the
+# configured `publish.allowTarget` matches the effective push URL, the
+# AWX_PUBLISH_APPROVED env is set for this invocation, the candidate tree and
+# outgoing history scan clean, and the pushed ref is a single fast-forward.
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$ROOT" ]; then
   exit 0
 fi
+REMOTE="$1"
+REVIEW_STDIN="$(cat)"
 
 if command -v pwsh >/dev/null 2>&1; then
-  exec pwsh -NoProfile -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push
+  pwsh -NoProfile -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push
+elif command -v powershell.exe >/dev/null 2>&1; then
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push
+else
+  echo "[AWX][git-guard] BLOCK: PowerShell is required for the secret guard hook." >&2
+  exit 1
+fi
+GUARD_RC=$?
+if [ "$GUARD_RC" -ne 0 ]; then
+  exit "$GUARD_RC"
 fi
 
-if command -v powershell.exe >/dev/null 2>&1; then
-  exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push
+ALLOW_TARGET="$(git config --get publish.allowTarget 2>/dev/null)"
+ALLOW_REF="$(git config --get publish.allowRef 2>/dev/null)"
+PYBIN=""
+if command -v python >/dev/null 2>&1; then
+  PYBIN="python"
+elif command -v py >/dev/null 2>&1; then
+  PYBIN="py -3"
 fi
-
-echo "[AWX][git-guard] BLOCK: PowerShell is required for the secret guard hook." >&2
-exit 1
+if [ -z "$PYBIN" ]; then
+  echo "[AWX][publish-review] BLOCK: python is required for the publish review." >&2
+  exit 1
+fi
+printf '%s\n' "$REVIEW_STDIN" | $PYBIN -B "$ROOT/scripts/git_publish_review.py" \
+  --root "$ROOT" --hook-stdin --remote "$REMOTE" \
+  ${ALLOW_TARGET:+--allow-target "$ALLOW_TARGET"} \
+  ${ALLOW_REF:+--allow-ref "$ALLOW_REF"}
+exit $?
