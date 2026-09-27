@@ -6,7 +6,6 @@ import com.abandonware.ai.agent.tool.annotations.RequiresScopes;
 import com.abandonware.ai.agent.tool.request.ToolRequest;
 import com.abandonware.ai.agent.tool.response.ToolResponse;
 import com.example.lms.artplate.ArtPlateRegistry;
-import com.example.lms.artplate.ArtPlateSpec;
 import com.example.lms.artplate.NineArtPlateGate;
 import com.example.lms.moe.RgbStrategySelector;
 import com.example.lms.search.TraceStore;
@@ -20,14 +19,12 @@ import java.util.Map;
 @RequiresScopes({ToolScope.INTERNAL_READ})
 public class MoEStrategyQueryTool implements AgentTool {
     private final ObjectProvider<RgbStrategySelector> selectorProvider;
-    private final ObjectProvider<NineArtPlateGate> plateGateProvider;
     private final ObjectProvider<ArtPlateRegistry> plateRegistryProvider;
 
     public MoEStrategyQueryTool(ObjectProvider<RgbStrategySelector> selectorProvider,
                                 ObjectProvider<NineArtPlateGate> plateGateProvider,
                                 ObjectProvider<ArtPlateRegistry> plateRegistryProvider) {
         this.selectorProvider = selectorProvider;
-        this.plateGateProvider = plateGateProvider;
         this.plateRegistryProvider = plateRegistryProvider;
     }
 
@@ -44,17 +41,16 @@ public class MoEStrategyQueryTool implements AgentTool {
     @Override
     public ToolResponse execute(ToolRequest request) {
         RgbStrategySelector selector = selectorProvider == null ? null : selectorProvider.getIfAvailable();
-        NineArtPlateGate plateGate = plateGateProvider == null ? null : plateGateProvider.getIfAvailable();
         ArtPlateRegistry registry = plateRegistryProvider == null ? null : plateRegistryProvider.getIfAvailable();
         RgbStrategySelector.Decision decision = selector == null ? null : selector.getLastDecision();
-        ArtPlateSpec selected = plateGate == null ? null : plateGate.getLastSelected();
+        String selectedPlate = SafeRedactor.traceLabelOrFallback(
+                TraceStore.get("artplate.selector.selected"), "not_observed");
         int plateCount = registry == null ? 0 : registry.all().size();
 
         TraceStore.put("tool.moe.strategy.query.available", selector != null);
         TraceStore.put("tool.moe.strategy.query.hasDecision", decision != null);
         TraceStore.put("tool.moe.strategy.query.plateCount", plateCount);
-        TraceStore.put("tool.moe.strategy.query.selectedPlate",
-                selected == null ? "none" : SafeRedactor.traceLabelOrFallback(selected.id(), "unknown"));
+        TraceStore.put("tool.moe.strategy.query.selectedPlate", selectedPlate);
         TraceStore.put("tool.moe.strategy.query.status", selector == null ? "SKIPPED" : "OK");
         if (selector == null) {
             TraceStore.put("tool.moe.strategy.query.skipped.reason", "MOE_SELECTOR_UNAVAILABLE");
@@ -68,7 +64,7 @@ public class MoEStrategyQueryTool implements AgentTool {
         out.put("available", selector != null);
         out.put("hasDecision", decision != null);
         out.put("plateCount", plateCount);
-        out.put("selectedPlate", selected == null ? "none" : SafeRedactor.traceLabelOrFallback(selected.id(), "unknown"));
+        out.put("selectedPlate", selectedPlate);
         if (decision != null) {
             out.put("primaryStrategy", decision.primaryStrategy() == null ? "unknown" : decision.primaryStrategy().name());
             out.put("fallbackStrategies", decision.fallbackStrategies() == null

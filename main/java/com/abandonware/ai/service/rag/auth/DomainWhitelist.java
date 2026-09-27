@@ -1,5 +1,7 @@
 package com.abandonware.ai.service.rag.auth;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -8,6 +10,8 @@ import java.util.List;
 
 @Component
 public class DomainWhitelist {
+    private static final Logger log = LoggerFactory.getLogger(DomainWhitelist.class);
+
     private final DomainProfileLoader loader;
 
     @Value("${filters.domain-allowlist.profile:default}")
@@ -27,7 +31,15 @@ public class DomainWhitelist {
             }
             return false;
         } catch (Exception e) {
+            logFailSoft("isAllowed", e);
             return false;
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][rag][domain-whitelist] failSoft stage={} errorType={}", stage, errorType);
         }
     }
 }

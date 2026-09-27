@@ -12,7 +12,7 @@ import java.util.List;
  * Admin listing endpoint. For now it is unsecured and should be protected
  * at the gateway/reverse proxy level if exposed publicly.
  */
-@RestController
+@RestController("agentAdminController")
 @RequestMapping("/api/admin")
 public class AdminController {
 

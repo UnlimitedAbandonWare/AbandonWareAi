@@ -1,11 +1,15 @@
 package com.abandonware.ai.service.rag.fusion;
 
 import com.abandonware.ai.service.rag.model.ContextSlice;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.util.*;
 
 public class LocaleBoostPolicy {
+    private static final Logger log = LoggerFactory.getLogger(LocaleBoostPolicy.class);
+
     private final List<String> boostDomains;
     private final double boost;
 
@@ -30,7 +34,15 @@ public class LocaleBoostPolicy {
             }
             return 1.0;
         }catch(Exception e){
+            logFailSoft("multiplier", e);
             return 1.0;
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][rag][locale-boost] failSoft stage={} errorType={}", stage, errorType);
         }
     }
 }

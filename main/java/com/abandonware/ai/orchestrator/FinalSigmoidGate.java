@@ -12,7 +12,7 @@ public class FinalSigmoidGate {
     @Value("${orchestrator.pass9x.x0:0.72}")
     private double x0;
 
-    @Value("${orchestrator.pass9x.threshold:0.90}")
+    @Value("${gate.finalSigmoid.threshold:0.70}")
     private double threshold;
 
     public boolean allow(double x) {

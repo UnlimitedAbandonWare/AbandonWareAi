@@ -1,5 +1,7 @@
 package com.abandonware.ai.service.rag.fusion;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import java.util.*;
 
@@ -9,6 +11,8 @@ import java.util.*;
  */
 @Component
 public class RrfFusion {
+
+    private static final Logger log = LoggerFactory.getLogger(RrfFusion.class);
 
     /**
      * Fuse N provider lists using uniform weights and return topK items.
@@ -79,7 +83,15 @@ public class RrfFusion {
             }
             return new java.net.URI(u.getScheme(), u.getAuthority(), u.getPath(), filtered, null).toString();
         } catch (Exception e) {
+            logFailSoft("canonicalUrl", e);
             return url;
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][rag][rrf] failSoft stage={} errorType={}", stage, errorType);
         }
     }
 }

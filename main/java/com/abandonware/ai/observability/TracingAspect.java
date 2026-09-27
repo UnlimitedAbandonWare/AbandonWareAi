@@ -5,6 +5,8 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 /**
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Component;
  * Does not require Micrometer; safe in environments without aop starter it simply won't be activated.
  */
 @Aspect
+@Order(Ordered.LOWEST_PRECEDENCE - 10)
 @Component
 public class TracingAspect {
 

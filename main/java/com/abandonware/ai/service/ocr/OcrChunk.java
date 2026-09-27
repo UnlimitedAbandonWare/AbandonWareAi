@@ -1,0 +1,17 @@
+package com.abandonware.ai.service.ocr;
+
+public class OcrChunk {
+    public final String text;
+    public final int x;
+    public final int y;
+    public final int w;
+    public final int h;
+
+    public OcrChunk(String text, int x, int y, int w, int h) {
+        this.text = text;
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+    }
+}

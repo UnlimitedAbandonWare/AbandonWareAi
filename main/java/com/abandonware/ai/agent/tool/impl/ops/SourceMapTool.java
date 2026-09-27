@@ -11,6 +11,8 @@ import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +20,14 @@ import java.util.TreeSet;
 
 @RequiresScopes({ToolScope.INTERNAL_READ})
 public class SourceMapTool implements AgentTool {
+    private static final int MAX_ROUTES = 250;
+    private static final Comparator<RequestMappingInfo> ROUTE_ORDER = Comparator
+            .comparing((RequestMappingInfo info) -> info.getPatternValues().stream()
+                    .sorted().toArray(String[]::new), Arrays::compare)
+            .thenComparing(info -> info.getMethodsCondition().getMethods().stream()
+                    .map(Enum::name).sorted().toArray(String[]::new), Arrays::compare)
+            .thenComparing(info -> info.getName() == null ? "" : info.getName());
+
     private final ObjectProvider<RequestMappingHandlerMapping> mappings;
     private final ToolRegistry registry;
 
@@ -43,18 +53,16 @@ public class SourceMapTool implements AgentTool {
         out.put("duplicateToolIds", registry.duplicateToolIdCounts());
 
         RequestMappingHandlerMapping mapping = mappings == null ? null : mappings.getIfAvailable();
-        List<Map<String, Object>> routes = new ArrayList<>();
-        if (mapping != null) {
-            mapping.getHandlerMethods().forEach((info, handler) -> {
-                if (routes.size() >= 250) {
-                    return;
-                }
-                routes.add(route(info));
-            });
-        }
-        out.put("routeCount", mapping == null ? 0 : mapping.getHandlerMethods().size());
+        List<RequestMappingInfo> routeInfos = mapping == null
+                ? List.of() : new ArrayList<>(mapping.getHandlerMethods().keySet());
+        List<Map<String, Object>> routes = routeInfos.stream()
+                .sorted(ROUTE_ORDER)
+                .limit(MAX_ROUTES)
+                .map(SourceMapTool::route)
+                .toList();
+        out.put("routeCount", routeInfos.size());
         out.put("routes", routes);
-        out.put("routesTruncated", mapping != null && mapping.getHandlerMethods().size() > routes.size());
+        out.put("routesTruncated", routeInfos.size() > routes.size());
         return ToolResponse.ok().put("sourceMap", out);
     }
 

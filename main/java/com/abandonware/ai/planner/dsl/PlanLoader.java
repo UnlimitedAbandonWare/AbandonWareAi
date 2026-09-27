@@ -3,10 +3,14 @@ package com.abandonware.ai.planner.dsl;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
 
 /** Loads YAML plans from classpath: /plans/*.yaml */
 public class PlanLoader {
+    private static final Logger log = LoggerFactory.getLogger(PlanLoader.class);
+
     private final ClassLoader cl = Thread.currentThread().getContextClassLoader();
     public Plan load(String name) {
         try(InputStream in = cl.getResourceAsStream("plans/" + name)) {
@@ -18,7 +22,15 @@ public class PlanLoader {
             p.chain.addAll((List<String>)map.getOrDefault("chain", new ArrayList<>()));
             return p;
         } catch(Exception e) {
+            logFailSoft("load", e);
             return null;
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][planner][dsl-loader] failSoft stage={} errorType={}", stage, errorType);
         }
     }
 }

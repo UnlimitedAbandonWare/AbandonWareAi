@@ -5,8 +5,12 @@ import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class RerankCanonicalizer {
+    private static final Logger log = LoggerFactory.getLogger(RerankCanonicalizer.class);
+
     private static final Set<String> DROP = Set.of(
             "utm_source","utm_medium","utm_campaign","utm_term","utm_content",
             "gclid","fbclid","igshid","spm","clid","ref"
@@ -34,6 +38,7 @@ final class RerankCanonicalizer {
             String base = host + path;
             return (query == null) ? base : (base + "?" + query);
         } catch (IllegalArgumentException e) {
+            log.debug("[RerankCanonicalizer] fail-soft stage={}", "canonicalKey");
             int i = s.indexOf('#');
             return (i >= 0) ? s.substring(0, i) : s;
         }

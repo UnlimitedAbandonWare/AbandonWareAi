@@ -1,15 +1,11 @@
 package com.abandonware.ai.service.ocr;
 
-import net.sourceforge.tess4j.ITessAPI;
-import net.sourceforge.tess4j.Tesseract;
-import net.sourceforge.tess4j.Word;
 import com.example.lms.search.TraceStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
-import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.util.List;
@@ -50,22 +46,11 @@ public class BasicTesseractOcrService implements OcrService {
             if (buffered == null) {
                 return List.of();
             }
-            Tesseract tesseract = new Tesseract();
-            if (datapath != null && !datapath.isBlank()) {
-                tesseract.setDatapath(datapath.trim());
-            }
-            if (language != null && !language.isBlank()) {
-                tesseract.setLanguage(language.trim());
-            }
-            List<Word> words = tesseract.getWords(buffered, ITessAPI.TessPageIteratorLevel.RIL_WORD);
-            if (words == null || words.isEmpty()) {
-                return List.of();
-            }
-            return words.stream()
-                    .filter(w -> w != null && w.getText() != null && !w.getText().isBlank())
-                    .filter(w -> normalizeConfidence(w.getConfidence()) >= minConfidence)
-                    .map(BasicTesseractOcrService::toChunk)
-                    .toList();
+            TraceStore.put("ocr.basic.disabledReason", "tess4j_dependency_unavailable");
+            TraceStore.put("ocr.basic.inputReadable", buffered != null);
+            TraceStore.put("ocr.basic.languageConfigured", language != null && !language.isBlank());
+            TraceStore.put("ocr.basic.datapathConfigured", datapath != null && !datapath.isBlank());
+            return List.of();
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             traceSuppressed("interrupted", ie);
@@ -78,22 +63,6 @@ public class BasicTesseractOcrService implements OcrService {
                 limiter.release();
             }
         }
-    }
-
-    private static OcrChunk toChunk(Word word) {
-        Rectangle box = word.getBoundingBox();
-        int x = box == null ? 0 : box.x;
-        int y = box == null ? 0 : box.y;
-        int w = box == null ? 0 : box.width;
-        int h = box == null ? 0 : box.height;
-        return new OcrChunk(word.getText(), x, y, w, h);
-    }
-
-    private static double normalizeConfidence(float confidence) {
-        if (confidence > 1.0f) {
-            return Math.max(0.0d, Math.min(1.0d, confidence / 100.0d));
-        }
-        return Math.max(0.0d, Math.min(1.0d, confidence));
     }
 
     private static void traceSuppressed(String stage, Throwable error) {

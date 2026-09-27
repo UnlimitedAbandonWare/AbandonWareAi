@@ -2,6 +2,8 @@ package com.abandonware.ai.probe;
 
 import com.abandonware.ai.service.rag.AnalyzeWebSearchRetriever;
 import com.abandonware.ai.service.rag.handler.DynamicRetrievalHandlerChain;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -12,6 +14,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/probe")
 public class SearchProbeController {
+
+    private static final Logger log = LoggerFactory.getLogger(SearchProbeController.class);
 
     @Value("${probe.search.enabled:false}")
     private boolean enabled;
@@ -42,7 +46,9 @@ public class SearchProbeController {
         int webTopK = 8;
         try {
             webTopK = body != null ? Integer.parseInt(String.valueOf(body.getOrDefault("webTopK", "8"))) : 8;
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            logFailSoft("webTopK", e);
+        }
 
         if (!useWeb && !useRag) {
             return ResponseEntity.ok(Map.of(
@@ -53,5 +59,12 @@ public class SearchProbeController {
         }
         List<?> res = useRag ? chain.retrieve(q) : web.search(q, webTopK);
         return ResponseEntity.ok(Map.of("ok", true, "result", res));
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][search][probe] failSoft stage={} errorType={}", stage, errorType);
+        }
     }
 }
