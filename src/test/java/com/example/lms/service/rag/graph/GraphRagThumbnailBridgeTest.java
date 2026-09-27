@@ -2,19 +2,79 @@ package com.example.lms.service.rag.graph;
 
 import com.example.lms.search.TraceStore;
 import com.example.lms.uaw.thumbnail.UawThumbnailPersistedEvent;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class GraphRagThumbnailBridgeTest {
+
+    @AfterEach
+    void tearDown() {
+        TraceStore.clear();
+    }
+
+    @Test
+    void thumbnailEventsUseTheConfiguredApplicationExecutor() {
+        GraphRagChunkingService chunkingService = mock(GraphRagChunkingService.class);
+        AtomicInteger submissions = new AtomicInteger();
+        Executor directExecutor = command -> {
+            submissions.incrementAndGet();
+            command.run();
+        };
+
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(GraphRagChunkingService.class, () -> chunkingService);
+            context.registerBean("applicationTaskExecutor", Executor.class, () -> directExecutor);
+            context.registerBean(GraphRagThumbnailBridge.class);
+            context.refresh();
+
+            context.getBean(GraphRagThumbnailBridge.class).captureThumbnail(relationEvent());
+
+            verify(chunkingService, timeout(1_000)).ingestPreparedChunks(
+                    org.mockito.ArgumentMatchers.eq("__UAW_THUMBNAIL__"),
+                    org.mockito.ArgumentMatchers.eq("UAW_THUMBNAIL"),
+                    org.mockito.ArgumentMatchers.anyList(),
+                    org.mockito.ArgumentMatchers.anyString());
+            assertEquals(1, submissions.get());
+        }
+    }
+
+    @Test
+    void thumbnailSubmissionRejectionFailsSoftWithoutRunningIngest() {
+        GraphRagChunkingService chunkingService = mock(GraphRagChunkingService.class);
+        Executor rejectingExecutor = command -> {
+            throw new RejectedExecutionException("synthetic rejection");
+        };
+
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(GraphRagChunkingService.class, () -> chunkingService);
+            context.registerBean("applicationTaskExecutor", Executor.class, () -> rejectingExecutor);
+            context.registerBean(GraphRagThumbnailBridge.class);
+            context.refresh();
+
+            assertDoesNotThrow(() -> context.getBean(GraphRagThumbnailBridge.class)
+                    .captureThumbnail(relationEvent()));
+
+            assertEquals(1L, TraceStore.get("uaw.thumbnail.relationThumbnail.submit.rejectedCount"));
+            verifyNoInteractions(chunkingService);
+        }
+    }
 
     @Test
     void thumbnailEventIndexesRelationBreadcrumbsWithoutRawGraphText() {
@@ -220,5 +280,15 @@ class GraphRagThumbnailBridgeTest {
         assertTrue(!String.valueOf(TraceStore.getAll()).contains("caption-secret"));
         assertTrue(!String.valueOf(TraceStore.getAll()).contains("ownerToken"));
         TraceStore.clear();
+    }
+
+    private static UawThumbnailPersistedEvent relationEvent() {
+        return new UawThumbnailPersistedEvent(
+                "UAW_thumbnail.v1",
+                "UAW_THUMB",
+                "THUMBNAIL",
+                "Synthetic Alpha and Beta relation.",
+                List.of("Alpha", "Beta"),
+                0.8d);
     }
 }

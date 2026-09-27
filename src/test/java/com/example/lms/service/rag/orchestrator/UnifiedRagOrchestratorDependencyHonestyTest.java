@@ -1,6 +1,7 @@
 package com.example.lms.service.rag.orchestrator;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.rag.LangChainRAGService;
 import com.example.lms.service.rag.rerank.DppDiversityReranker;
 import com.nova.protocol.alloc.SimpleRiskKAllocator;
 import com.nova.protocol.fusion.NovaNextFusionService;
@@ -19,6 +20,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.ToDoubleFunction;
 
@@ -29,6 +31,49 @@ class UnifiedRagOrchestratorDependencyHonestyTest {
     @AfterEach
     void clearTrace() {
         TraceStore.clear();
+    }
+
+    /**
+     * Unified VECTOR axis resolves through LangChainRAGService.asContentRetriever
+     * (the pure leaf). Tests that need a controllable vector leg inject it here;
+     * the legacy 'vectorRetriever' hybrid bean is never consulted by this axis.
+     */
+    private static void wireVectorLeaf(UnifiedRagOrchestrator orchestrator, ContentRetriever retriever) {
+        LangChainRAGService ragService = org.mockito.Mockito.mock(LangChainRAGService.class);
+        org.mockito.Mockito.when(ragService.asContentRetriever(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(retriever);
+        ReflectionTestUtils.setField(orchestrator, "langChainRAGService", ragService);
+    }
+
+    @Test
+    void vectorFailurePreservesIndependentWebAndBm25Results() {
+        UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
+        ReflectionTestUtils.setField(orchestrator, "webRetriever", (ContentRetriever) query -> List.of(
+                Content.from(TextSegment.from("preserve web evidence", Metadata.from("url", "https://example.org/source")))));
+        wireVectorLeaf(orchestrator, query -> {
+            throw new IllegalStateException("embedding_space_unverified");
+        });
+        var index = new com.example.lms.service.service.rag.bm25.Bm25Index();
+        index.put(new com.example.lms.service.service.rag.bm25.Bm25Index.Doc("kept", "preserve"));
+        index.put(new com.example.lms.service.service.rag.bm25.Bm25Index.Doc("other-1", "unrelated"));
+        index.put(new com.example.lms.service.service.rag.bm25.Bm25Index.Doc("other-2", "different"));
+        ReflectionTestUtils.setField(orchestrator, "bm25Index", index);
+        var request = new UnifiedRagOrchestrator.QueryRequest();
+        request.query = "preserve";
+        request.useWeb = true;
+        request.useVector = true;
+        request.useKg = false;
+        request.useBm25 = true;
+        request.enableBiEncoder = false;
+        request.enableDiversity = false;
+        request.enableOnnx = false;
+
+        var response = orchestrator.query(request);
+
+        assertEquals("failed:vector_retrieval_failed", response.debug.get("stage.vector"));
+        assertEquals("ok:1", response.debug.get("stage.bm25"));
+        assertTrue(response.results.stream().anyMatch(doc -> "BM25".equals(doc.source)));
+        assertTrue(response.results.stream().anyMatch(doc -> "WEB".equals(doc.source)));
     }
 
     @Test
@@ -45,7 +90,7 @@ class UnifiedRagOrchestratorDependencyHonestyTest {
 
         assertNotNull(response);
         assertEquals("missing_webRetriever", response.debug.get("stage.web"));
-        assertEquals("missing_vectorRetriever", response.debug.get("stage.vector"));
+        assertEquals("unavailable_pure_vector_leaf", response.debug.get("stage.vector"));
         assertEquals("missing_kgRetriever", response.debug.get("stage.kg"));
         assertEquals("missing_bean", response.debug.get("retrieval.dependency.web.status"));
         assertEquals("missing_bean", response.debug.get("retrieval.dependency.vector.status"));
@@ -191,7 +236,7 @@ class UnifiedRagOrchestratorDependencyHonestyTest {
         ReflectionTestUtils.setField(orchestrator, "webRetriever", (ContentRetriever) query -> {
             throw new IllegalStateException("web timeout while reading provider");
         });
-        ReflectionTestUtils.setField(orchestrator, "vectorRetriever", (ContentRetriever) query -> {
+        wireVectorLeaf(orchestrator, query -> {
             throw new IllegalStateException("vector timeout while reading store");
         });
         ReflectionTestUtils.setField(orchestrator, "kgRetriever", (ContentRetriever) query -> {
@@ -236,10 +281,54 @@ class UnifiedRagOrchestratorDependencyHonestyTest {
     }
 
     @Test
+    void negativeWebTopKIsRejectedBeforeWebRetrieverExecution() {
+        UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
+        AtomicInteger webAttempts = new AtomicInteger();
+        ReflectionTestUtils.setField(orchestrator, "webRetriever", (ContentRetriever) query -> {
+            webAttempts.incrementAndGet();
+            return List.of(Content.from(TextSegment.from("must-not-retrieve")));
+        });
+
+        UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
+        request.query = "negative top-k admission";
+        request.webTopK = -1;
+        request.useWeb = true;
+        request.useVector = false;
+        request.useKg = false;
+        request.useBm25 = false;
+        request.enableBiEncoder = false;
+        request.enableDiversity = false;
+        request.enableOnnx = false;
+
+        assertThrows(IllegalArgumentException.class, () -> orchestrator.query(request));
+        assertEquals(0, webAttempts.get());
+    }
+
+    @Test
+    void seedOnlyWebTopKZeroReturnsNoCandidates() {
+        UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
+        UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
+        request.query = "seed zero";
+        request.topK = 3;
+        request.webTopK = 0;
+        request.seedOnly = true;
+        request.useWeb = false;
+        request.useVector = false;
+        request.useKg = false;
+        request.useBm25 = false;
+        request.enableBiEncoder = false;
+        request.enableDiversity = false;
+        request.enableOnnx = false;
+        request.seedWeb = List.of(Content.from(TextSegment.from("must-not-escape")));
+
+        assertTrue(orchestrator.query(request).results.isEmpty());
+    }
+
+    @Test
     void emptyWebAndVectorRetrieversUseStableEmptyResultLabels() {
         UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
         ReflectionTestUtils.setField(orchestrator, "webRetriever", (ContentRetriever) query -> List.of());
-        ReflectionTestUtils.setField(orchestrator, "vectorRetriever", (ContentRetriever) query -> List.of());
+        wireVectorLeaf(orchestrator, query -> List.of());
 
         UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
         request.query = "empty retrieval should not look like an exception";
@@ -266,7 +355,7 @@ class UnifiedRagOrchestratorDependencyHonestyTest {
     void vectorFallbackRecordsRedactedTraceBreadcrumbsWhenWebIsEmpty() {
         UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
         ReflectionTestUtils.setField(orchestrator, "webRetriever", (ContentRetriever) query -> List.of());
-        ReflectionTestUtils.setField(orchestrator, "vectorRetriever", (ContentRetriever) query ->
+        wireVectorLeaf(orchestrator, query ->
                 List.of(Content.from(TextSegment.from("fallback vector evidence"))));
 
         UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
@@ -348,6 +437,33 @@ class UnifiedRagOrchestratorDependencyHonestyTest {
     }
 
     @Test
+    void finalTopKTrimRunsAfterDiversityAugmentation() {
+        UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
+        ReflectionTestUtils.setField(orchestrator, "dppDiversityReranker", new AugmentingDppReranker());
+
+        UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
+        request.query = "post rerank trim";
+        request.topK = 2;
+        request.seedOnly = true;
+        request.useWeb = false;
+        request.useVector = false;
+        request.useKg = false;
+        request.useBm25 = false;
+        request.enableBiEncoder = false;
+        request.enableDiversity = true;
+        request.enableOnnx = false;
+        request.seedCandidates = List.of(
+                seedDoc("first", "first evidence", 1.0d),
+                seedDoc("second", "second evidence", 0.9d));
+
+        UnifiedRagOrchestrator.QueryResponse response = orchestrator.query(request);
+
+        assertEquals(Boolean.TRUE, TraceStore.get("test.dpp.augmented"));
+        assertEquals(List.of("first", "second"),
+                response.results.stream().map(doc -> doc.id).toList());
+    }
+
+    @Test
     void seedOnlyFusionPublishesHypernovaTraceWhenNovaNextIsInjected() {
         UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
         NovaNextProperties props = new NovaNextProperties();
@@ -405,9 +521,27 @@ class UnifiedRagOrchestratorDependencyHonestyTest {
                                   String query,
                                   int k,
                                   Function<? super T, String> textOf,
-                                  ToDoubleFunction<? super T> relevanceOf) {
+                                  ToDoubleFunction<? super T> relevanceOf,
+                                  Function<? super T, String> stableKeyOf) {
             TraceStore.put("test.dpp.injected", true);
             return in;
+        }
+    }
+
+    private static final class AugmentingDppReranker extends DppDiversityReranker {
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> List<T> rerank(Config callConfig,
+                                  List<T> in,
+                                  String query,
+                                  int k,
+                                  Function<? super T, String> textOf,
+                                  ToDoubleFunction<? super T> relevanceOf,
+                                  Function<? super T, String> stableKeyOf) {
+            TraceStore.put("test.dpp.augmented", true);
+            List<T> augmented = new java.util.ArrayList<>(in);
+            augmented.add((T) seedDoc("late", "post rerank augmentation", 0.8d));
+            return augmented;
         }
     }
 }

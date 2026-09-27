@@ -103,6 +103,8 @@ class CfvmKAllocationTunerTest {
         assertEquals("KG_HEAVY", decision.arm());
         assertEquals("cfvm_boltzmann_ucb1", decision.policy());
         assertEquals("boltzmann", TraceStore.get("cfvm.kalloc.selectionMode"));
+        assertEquals(0.0d, ((Number) TraceStore.get("cfvm.kalloc.epsilon")).doubleValue());
+        assertEquals("KG_HEAVY", TraceStore.get("cfvm.kalloc.chosenArm"));
         assertEquals("KG_HEAVY", TraceStore.get("cfvm.kalloc.boltzmann.bestArm"));
         assertEquals(1.0d, ((Number) TraceStore.get("cfvm.kalloc.boltzmann.chosenProbability")).doubleValue());
         assertEquals(0.0d, ((Number) TraceStore.get("cfvm.kalloc.boltzmann.temperature")).doubleValue());

@@ -43,6 +43,83 @@ class KnowledgeGraphHandlerNeo4jTest {
     }
 
     @Test
+    void realClientFailureCannotActivateUnscopedJpaFallback() {
+        var session = mock(org.neo4j.driver.Session.class);
+        when(session.<List<Neo4jKgEntry>>executeRead(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalStateException("SYNTHETIC_PRIVATE_ERROR"));
+        var client = realClient(session);
+        var kb = baseKnowledge();
+        when(kb.getAllRelationships("GENERAL", "Alpha"))
+                .thenReturn(Map.of("RELATIONSHIP_ASSOCIATED_WITH", Set.of("Beta")));
+        var handler = new KnowledgeGraphHandler(kb, client, new KgTailPowerMeanScorer(false, 2.0, 0.25));
+        TraceStore.put("fixture.unrelated", "preserve");
+
+        var out = handler.retrieve(new Query("Alpha relationship"));
+
+        assertTrue(out.isEmpty());
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
+        assertEquals("failed", TraceStore.get("retrieval.kg.neo4j.status"));
+        assertEquals(true, TraceStore.get("retrieval.kg.neo4j.failed"));
+        assertEquals("neo4j_query_failed", TraceStore.get("retrieval.kg.neo4j.disabledReason"));
+        assertEquals("failed", TraceStore.get("retrieval.dependency.kg.status"));
+        assertEquals("preserve", TraceStore.get("fixture.unrelated"));
+        assertFalse(TraceStore.getAll().toString().contains("SYNTHETIC_PRIVATE_ERROR"));
+        assertFalse(TraceStore.getAll().toString().contains("Alpha relationship"));
+        verify(session).close();
+    }
+
+    @Test
+    void realClientFailureDoesNotContaminateFollowingEmptyAndSuccessAttempts() {
+        var session = mock(org.neo4j.driver.Session.class);
+        var row = new Neo4jKgEntry("Alpha", "Concept", 0.9, Instant.now(),
+                Map.of("RELATIONSHIP_ASSOCIATED_WITH", Set.of("Gamma")), List.of("graphdb_manual_learning"));
+        when(session.<List<Neo4jKgEntry>>executeRead(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalStateException("synthetic"))
+                .thenReturn(List.of()).thenReturn(List.of(row));
+        var handler = new KnowledgeGraphHandler(baseKnowledge(), realClient(session), new KgTailPowerMeanScorer(false, 2.0, 0.25));
+        handler.retrieve(new Query("Alpha relationship"));
+        handler.retrieve(new Query("Alpha relationship"));
+        assertEquals("empty", TraceStore.get("retrieval.kg.neo4j.status"));
+        assertEquals(false, TraceStore.get("retrieval.kg.neo4j.failed"));
+        assertEquals(null, TraceStore.get("retrieval.kg.neo4j.failureClass"));
+        assertEquals(null, TraceStore.get("retrieval.kg.neo4j.fallback"));
+        assertEquals(1, handler.retrieve(new Query("Alpha relationship")).size());
+        assertEquals("success", TraceStore.get("retrieval.kg.neo4j.status"));
+        assertEquals(false, TraceStore.get("retrieval.kg.neo4j.failed"));
+    }
+
+    @Test
+    void disabledHandlerAndDirectClientEmptyAttemptClearOnlyPreviousLookupFailure() {
+        var session = mock(org.neo4j.driver.Session.class);
+        when(session.<List<Neo4jKgEntry>>executeRead(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalStateException("synthetic")).thenReturn(List.of());
+        var client = realClient(session);
+        client.lookup("GENERAL", Set.of("Alpha"), 8);
+        assertEquals(true, TraceStore.get("retrieval.kg.neo4j.failed"));
+        client.lookup("GENERAL", Set.of("Alpha"), 8);
+        assertEquals(false, TraceStore.get("retrieval.kg.neo4j.failed"));
+        TraceStore.put("retrieval.kg.neo4j.failed", true);
+        TraceStore.put("retrieval.kg.neo4j.failureClass", "synthetic");
+        TraceStore.put("fixture.unrelated", "preserve");
+        var handler = new KnowledgeGraphHandler(baseKnowledge(), new FakeNeo4j("disabled", List.of()), new KgTailPowerMeanScorer(false, 2.0, 0.25));
+        handler.retrieve(new Query("Alpha relationship"));
+        assertEquals("disabled", TraceStore.get("retrieval.kg.neo4j.status"));
+        assertEquals(false, TraceStore.get("retrieval.kg.neo4j.failed"));
+        assertEquals(null, TraceStore.get("retrieval.kg.neo4j.failureClass"));
+        assertEquals("preserve", TraceStore.get("fixture.unrelated"));
+    }
+
+    private static Neo4jKnowledgeGraphClient realClient(org.neo4j.driver.Session session) {
+        var properties = new Neo4jKnowledgeGraphProperties();
+        properties.setEnabled(true);properties.setUri("bolt://127.0.0.1:7687");
+        properties.setUser("fixture");properties.setPassword("loopback-contract-only");properties.setDatabase("");
+        var driver = mock(org.neo4j.driver.Driver.class);when(driver.session()).thenReturn(session);
+        var client = new Neo4jKnowledgeGraphClient(properties);ReflectionTestUtils.setField(client, "driver", driver);
+        return client;
+    }
+
+    @Test
     void neo4jDisabledReasonDiagnosticsUseTraceLabel() throws Exception {
         String source = Files.readString(
                 Path.of("main/java/com/example/lms/service/rag/handler/KnowledgeGraphHandler.java"),
@@ -138,7 +215,7 @@ class KnowledgeGraphHandlerNeo4jTest {
     }
 
     @Test
-    void fallsBackToJpaKgWhenNeo4jIsDisabled() {
+    void disabledNeo4jDoesNotReadUnscopedJpa() {
         KnowledgeBaseService kb = baseKnowledge();
         when(kb.getConfidenceScore("GENERAL", "Alpha")).thenReturn(Optional.of(0.8));
         when(kb.getLastAccessedAt("GENERAL", "Alpha"))
@@ -153,21 +230,13 @@ class KnowledgeGraphHandlerNeo4jTest {
 
         List<Content> out = handler.retrieve(new Query("Alpha relationship"));
 
-        assertEquals(1, out.size());
-        Content content = out.get(0);
-        assertTrue(content.textSegment().text().contains("Beta"));
-        assertTrue(content.textSegment().text().contains("relationBreadcrumbs:"));
-        assertEquals("jpa", content.textSegment().metadata().getString("kg_provider"));
-        assertEquals("relation_thumbnail_v1",
-                content.textSegment().metadata().getString("kg_relation_thumbnail_mode"));
-        assertEquals("jpa_relationships",
-                content.textSegment().metadata().getString("kg_relation_thumbnail_source"));
-        assertTrue(content.textSegment().metadata().getString("kg_relation_breadcrumb").contains("Beta"));
-        verify(kb, atLeastOnce()).getAllRelationships("GENERAL", "Alpha");
+        assertTrue(out.isEmpty());
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
     }
 
     @Test
-    void usesNeo4jRowsBeforeJpaKgWhenAvailable() {
+    void usesExplicitManualPublicNeo4jRows() {
         KnowledgeBaseService kb = baseKnowledge();
         Neo4jKgEntry row = new Neo4jKgEntry(
                 "Alpha",
@@ -175,7 +244,7 @@ class KnowledgeGraphHandlerNeo4jTest {
                 0.91,
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Map.of("RELATIONSHIP_ASSOCIATED_WITH", Set.of("Gamma")),
-                List.of("fixture"));
+                List.of("graphdb_manual_learning"));
 
         KnowledgeGraphHandler handler = new KnowledgeGraphHandler(
                 kb,
@@ -217,7 +286,7 @@ class KnowledgeGraphHandlerNeo4jTest {
     }
 
     @Test
-    void jpaEntityFailureDiagnosticsUseStableLabelsWithoutExceptionClassNames() {
+    void unscopedJpaFailuresCannotEnterPublicDiagnostics() {
         KnowledgeBaseService kb = mock(KnowledgeBaseService.class);
         when(kb.inferDomain("Alpha relationship")).thenReturn("GENERAL");
         when(kb.findMentionedEntities("GENERAL", "Alpha relationship")).thenReturn(Set.of("Alpha"));
@@ -232,8 +301,9 @@ class KnowledgeGraphHandlerNeo4jTest {
         List<Content> out = handler.retrieve(new Query("Alpha relationship"));
 
         assertTrue(out.isEmpty());
-        assertEquals("silent-failure", TraceStore.get("retrieval.kg.jpa.lastFailureClass"));
-        assertEquals("silent-failure", TraceStore.get("retrieval.kg.jpa.lastExceptionType"));
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
+        verify(kb, never()).getConfidenceScore(anyString(), anyString());
         String trace = String.valueOf(TraceStore.getAll());
         assertFalse(trace.contains("IllegalStateException"), trace);
         assertFalse(trace.contains("ownerToken"), trace);
@@ -241,7 +311,7 @@ class KnowledgeGraphHandlerNeo4jTest {
     }
 
     @Test
-    void addsAssociativePathInferenceContentForJpaKg() {
+    void unscopedJpaPathsCannotBecomeEvidence() {
         KnowledgeBaseService kb = baseKnowledge();
         when(kb.getConfidenceScore("GENERAL", "Alpha")).thenReturn(Optional.of(0.9));
         when(kb.getConfidenceScore("GENERAL", "Beta")).thenReturn(Optional.of(0.8));
@@ -260,29 +330,13 @@ class KnowledgeGraphHandlerNeo4jTest {
 
         List<Content> out = handler.retrieve(new Query("Alpha relationship"));
 
-        Content path = out.stream()
-                .filter(c -> "associative_path_inference".equals(
-                        c.textSegment().metadata().getString("kg_mode")))
-                .findFirst()
-                .orElseThrow();
-        assertTrue(path.textSegment().text()
-                .contains("Alpha --RELATIONSHIP_SEEDS--> Beta --RELATIONSHIP_POINTS_TO--> Gamma"));
-        assertTrue(path.textSegment().text().contains("relationBreadcrumbs:"));
-        assertEquals(2, path.textSegment().metadata().toMap().get("kg_path_depth"));
-        assertEquals("relation_thumbnail_v1",
-                path.textSegment().metadata().getString("kg_relation_thumbnail_mode"));
-        assertEquals("associative_path_inference",
-                path.textSegment().metadata().getString("kg_relation_thumbnail_source"));
-        assertEquals(path.textSegment().metadata().getString("kg_path_hash12"),
-                path.textSegment().metadata().getString("kg_relation_thumbnail_hash"));
-        assertTrue(path.textSegment().metadata().getString("kg_relation_breadcrumb").contains("Gamma"));
-        assertEquals("success", TraceStore.get("retrieval.kg.sparsePath.status"));
-        assertEquals(1, TraceStore.get("retrieval.kg.sparsePath.transitivePathCount"));
-        assertTrue(String.valueOf(TraceStore.get("retrieval.kg.sparsePath.queryHash12")).matches("[0-9a-f]{12}"));
+        assertTrue(out.isEmpty());
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
     }
 
     @Test
-    void usesBrainStateLocalOnlyFallbackWhenKgMentionsAreEmpty() {
+    void emptyMentionsCannotActivateUnscopedBrainFallback() {
         KnowledgeBaseService kb = mock(KnowledgeBaseService.class);
         when(kb.inferDomain("orphan query")).thenReturn("GENERAL");
         when(kb.findMentionedEntities("GENERAL", "orphan query")).thenReturn(Set.of());
@@ -315,42 +369,15 @@ class KnowledgeGraphHandlerNeo4jTest {
 
         List<Content> out = handler.retrieve(new Query("orphan query"));
 
-        assertEquals(1, out.size());
-        Content content = out.get(0);
-        assertTrue(content.textSegment().text().contains("Alpha --RELATIONSHIP_LINKS--> Beta"));
-        assertEquals("kg", content.textSegment().metadata().getString("retrieval_source"));
-        assertEquals("brain-state", content.textSegment().metadata().getString("kg_provider"));
-        assertEquals("brain_state_sparse_inference", content.textSegment().metadata().getString("kg_mode"));
-        assertTrue(content.textSegment().text().contains("relationBreadcrumbs:"));
-        assertEquals("relation_thumbnail_v1",
-                content.textSegment().metadata().getString("kg_relation_thumbnail_mode"));
-        assertEquals("brain_state_sparse_inference",
-                content.textSegment().metadata().getString("kg_relation_thumbnail_source"));
-        assertEquals(content.textSegment().metadata().getString("kg_relation_hash12"),
-                content.textSegment().metadata().getString("kg_relation_thumbnail_hash"));
-        assertTrue(content.textSegment().metadata().getString("kg_relation_breadcrumb").contains("Beta"));
-        assertEquals("no_mentioned_entities", content.textSegment().metadata().getString("kg_fallback_reason"));
-        assertEquals("true", content.textSegment().metadata().getString("kg_query_anchor_map"));
-        assertEquals(2L, content.textSegment().metadata().toMap().get("kg_query_anchor_map_seed_count"));
-        assertEquals("cue_seeded_landmark_anchors",
-                content.textSegment().metadata().getString("kg_query_anchor_map_reason"));
-        assertEquals("success", TraceStore.get("retrieval.kg.brainState.status"));
-        assertEquals(true, TraceStore.get("retrieval.kg.brainState.fallbackUsed"));
-        assertEquals(true, TraceStore.get("retrieval.kg.brainState.queryAnchorMap.applied"));
-        assertEquals(2L, TraceStore.get("retrieval.kg.brainState.queryAnchorMap.seedCount"));
-        assertEquals(List.of("111111111111", "222222222222"),
-                TraceStore.get("retrieval.kg.brainState.queryAnchorMap.seedHashes"));
-        assertEquals("cue_seeded_landmark_anchors",
-                TraceStore.get("retrieval.kg.brainState.queryAnchorMap.reason"));
-        assertTrue(String.valueOf(TraceStore.get("retrieval.kg.brainState.queryHash12")).matches("[0-9a-f]{12}"));
-        assertFalse(String.valueOf(TraceStore.get("retrieval.kg.brainState.events")).contains("orphan query"));
-        verify(brainStateService).querySparseInferenceLocalOnly("orphan query", "GENERAL");
-        verify(brainStateService, never()).querySparseInferenceLocalOnly("orphan query");
-        verify(brainStateService, never()).querySparseInference(anyString());
+        assertTrue(out.isEmpty());
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
+        org.mockito.Mockito.verifyNoInteractions(brainStateService);
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("cue seeded / raw"));
     }
 
     @Test
-    void hashesFreeTextQueryAnchorMapTraceReasonAndFiltersInvalidHashes() {
+    void unscopedAnchorMetadataIsNeverReadOrTraced() {
         KnowledgeBaseService kb = mock(KnowledgeBaseService.class);
         when(kb.inferDomain("route query")).thenReturn("GENERAL");
         when(kb.findMentionedEntities("GENERAL", "route query")).thenReturn(Set.of());
@@ -382,25 +409,15 @@ class KnowledgeGraphHandlerNeo4jTest {
 
         List<Content> out = handler.retrieve(new Query("route query"));
 
-        assertEquals(1, out.size());
-        Content content = out.get(0);
-        assertEquals(2L, content.textSegment().metadata().toMap().get("kg_query_anchor_map_seed_count"));
-        assertEquals("aaaaaaaaaaaa,bbbbbbbbbbbb",
-                content.textSegment().metadata().getString("kg_query_anchor_map_seed_hashes"));
-        String metadataReason = content.textSegment().metadata().getString("kg_query_anchor_map_reason");
-        assertTrue(metadataReason.startsWith("hash:"), metadataReason);
-        assertFalse(metadataReason.contains("cue_seeded"), metadataReason);
-        assertEquals(2L, TraceStore.get("retrieval.kg.brainState.queryAnchorMap.seedCount"));
-        assertEquals(List.of("aaaaaaaaaaaa", "bbbbbbbbbbbb"),
-                TraceStore.get("retrieval.kg.brainState.queryAnchorMap.seedHashes"));
-        String traceReason = String.valueOf(TraceStore.get("retrieval.kg.brainState.queryAnchorMap.reason"));
-        assertTrue(traceReason.startsWith("hash:"), traceReason);
-        assertFalse(traceReason.contains("cue_seeded"), traceReason);
-        assertFalse(String.valueOf(TraceStore.get("retrieval.kg.brainState.events")).contains("cue seeded / raw"));
+        assertTrue(out.isEmpty());
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
+        org.mockito.Mockito.verifyNoInteractions(brainStateService);
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("cue seeded / raw"));
     }
 
     @Test
-    void augmentsExistingNeo4jKgWhenQueryAnchorMapApplied() {
+    void publicNeo4jRowsAreNotAugmentedWithUnscopedAnchors() {
         KnowledgeBaseService kb = baseKnowledge();
         Neo4jKgEntry row = new Neo4jKgEntry(
                 "Alpha",
@@ -408,7 +425,7 @@ class KnowledgeGraphHandlerNeo4jTest {
                 0.91,
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Map.of("RELATIONSHIP_ASSOCIATED_WITH", Set.of("Gamma")),
-                List.of("fixture"));
+                List.of("graphdb_manual_learning"));
         BrainStateService brainStateService = mock(BrainStateService.class);
         when(brainStateService.querySparseInferenceLocalOnly("Alpha relationship", "GENERAL")).thenReturn(new InferenceResult(
                 true,
@@ -436,27 +453,18 @@ class KnowledgeGraphHandlerNeo4jTest {
 
         List<Content> out = handler.retrieve(new Query("Alpha relationship"));
 
-        assertEquals(2, out.size());
-        assertTrue(out.stream().anyMatch(content ->
-                "neo4j".equals(content.textSegment().metadata().getString("kg_provider"))));
-        Content anchor = out.stream()
-                .filter(content -> "brain-state".equals(content.textSegment().metadata().getString("kg_provider")))
-                .findFirst()
-                .orElseThrow();
-        assertTrue(anchor.textSegment().text().contains("Han River --LANDMARK_NEAR--> Riverside Park"));
-        assertEquals("query_anchor_map_augmentation",
-                anchor.textSegment().metadata().getString("kg_fallback_reason"));
-        assertEquals("success", TraceStore.get("retrieval.kg.brainState.status"));
-        assertEquals("success_anchor_augmented", TraceStore.get("retrieval.dependency.kg.status"));
-        assertEquals(true, TraceStore.get("retrieval.kg.brainState.queryAnchorMap.applied"));
-        assertEquals(List.of("111111111111"),
-                TraceStore.get("retrieval.kg.brainState.queryAnchorMap.seedHashes"));
-        verify(brainStateService).querySparseInferenceLocalOnly("Alpha relationship", "GENERAL");
+        assertEquals(1, out.size());
+        assertEquals("neo4j", out.get(0).textSegment().metadata().getString("kg_provider"));
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        assertEquals("success", TraceStore.get("retrieval.dependency.kg.status"));
+        assertEquals(0, TraceStore.get("retrieval.kg.private.returnedCount"));
+        assertEquals(1, TraceStore.get("retrieval.kg.public.returnedCount"));
+        org.mockito.Mockito.verifyNoInteractions(brainStateService);
         verify(kb, never()).getAllRelationships(anyString(), anyString());
     }
 
     @Test
-    void doesNotAugmentExistingKgWhenQueryAnchorMapDidNotApply() {
+    void publicNeo4jRowsDoNotProbeUnscopedBrainState() {
         KnowledgeBaseService kb = baseKnowledge();
         Neo4jKgEntry row = new Neo4jKgEntry(
                 "Alpha",
@@ -464,7 +472,7 @@ class KnowledgeGraphHandlerNeo4jTest {
                 0.91,
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Map.of("RELATIONSHIP_ASSOCIATED_WITH", Set.of("Gamma")),
-                List.of("fixture"));
+                List.of("graphdb_manual_learning"));
         BrainStateService brainStateService = mock(BrainStateService.class);
         when(brainStateService.querySparseInferenceLocalOnly("Alpha relationship", "GENERAL")).thenReturn(new InferenceResult(
                 true,
@@ -492,10 +500,11 @@ class KnowledgeGraphHandlerNeo4jTest {
 
         assertEquals(1, out.size());
         assertEquals("neo4j", out.get(0).textSegment().metadata().getString("kg_provider"));
-        assertEquals("not_applied", TraceStore.get("retrieval.kg.brainState.status"));
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
         assertEquals("success", TraceStore.get("retrieval.dependency.kg.status"));
-        assertEquals(false, TraceStore.get("retrieval.kg.brainState.queryAnchorMap.applied"));
-        verify(brainStateService).querySparseInferenceLocalOnly("Alpha relationship", "GENERAL");
+        assertEquals(0, TraceStore.get("retrieval.kg.private.returnedCount"));
+        assertEquals(1, TraceStore.get("retrieval.kg.public.returnedCount"));
+        org.mockito.Mockito.verifyNoInteractions(brainStateService);
         verify(kb, never()).getAllRelationships(anyString(), anyString());
     }
 

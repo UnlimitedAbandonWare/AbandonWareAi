@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class EvidenceRepairHandlerHonestyTest {
@@ -101,5 +102,28 @@ class EvidenceRepairHandlerHonestyTest {
         assertFalse(reason.contains("fake-token-critic-secret"));
         assertFalse(reason.contains(supabaseSecret));
         assertFalse(reason.contains("sb_secret_"));
+    }
+
+    @Test
+    void abstainDecisionDoesNotTriggerWebRepair() {
+        WebSearchRetriever web = mock(WebSearchRetriever.class);
+        AnswerQualityEvaluator evaluator = mock(AnswerQualityEvaluator.class);
+        when(evaluator.evaluateRetrieval(anyString(), anyList(), anyInt(), anyDouble(), anyInt()))
+                .thenReturn(new AnswerQualityEvaluator.RetrievalEvaluation(
+                        AnswerQualityEvaluator.Decision.ABSTAIN,
+                        0.25,
+                        1,
+                        1,
+                        "evaluation_unavailable"));
+        EvidenceRepairHandler handler = new EvidenceRepairHandler(web, null, "", "");
+        ReflectionTestUtils.setField(handler, "criticEnabled", true);
+        ReflectionTestUtils.setField(handler, "evaluator", evaluator);
+        List<Content> accumulator = new java.util.ArrayList<>(List.of(Content.from("draft evidence")));
+
+        handler.handle(new Query("critic repair query"), accumulator);
+
+        verifyNoInteractions(web);
+        assertEquals(1, accumulator.size());
+        assertEquals(0, TraceStore.get("rag.critic.retry.count"));
     }
 }

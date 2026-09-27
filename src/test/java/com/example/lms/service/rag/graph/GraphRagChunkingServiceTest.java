@@ -31,6 +31,66 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class GraphRagChunkingServiceTest {
+    private static GraphRagChunkingService.IngestReport ingestAuthorized(GraphRagChunkingService service, String text) {
+        var sessions = mock(com.example.lms.repository.ChatSessionRepository.class);
+        var messages = mock(ChatMessageRepository.class);
+        var session = new com.example.lms.domain.ChatSession("synthetic", "owner", "ANON");
+        session.setId(7L);
+        session.setMemoryProfile(com.example.lms.domain.enums.MemoryProfile.LIGHT);
+        var message = new com.example.lms.domain.ChatMessage(session, "user", text);
+        message.setId(11L);
+        when(sessions.findByIdForUpdate(7L)).thenReturn(java.util.Optional.of(session));
+        when(messages.findById(11L)).thenReturn(java.util.Optional.of(message));
+        var authority = new GeneralGraphSourceAuthority(sessions, messages, new com.fasterxml.jackson.databind.ObjectMapper());
+        var scope = GeneralGraphScope.authorize(session, null, "owner").orElseThrow().withPolicy(1, true);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "sourceAuthority", authority);
+        return service.ingestSource(scope, authority.source(scope, 11L).orElseThrow());
+    }
+
+
+    @Test
+    void verifiedShortCorrectionIsIndexedWithoutInventedEntities() {
+        var vector = mock(VectorStoreService.class);
+        var writer = mock(Neo4jKgChunkWriter.class);
+        var brain = mock(BrainStateService.class);
+        var service = new GraphRagChunkingService(new BrainStateProperties(),
+                new DocumentChunkingService(), text -> List.of(), writer,
+                new UniversalContextLexicon(), vector, brain, mock(ChatMessageRepository.class));
+        var report = ingestAuthorized(service, "그 조건은 취소했어.");
+        assertEquals(1, report.chunkCount());
+        assertEquals(0, report.entityCount());
+        assertEquals(0, report.relationCount());
+        assertEquals("source_verified", report.backend().get("meaningfulGate"));
+        verify(vector).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("7"),
+                org.mockito.ArgumentMatchers.contains("그 조건은 취소했어."), anyMap());
+        verify(brain).recordChunks(anyList());
+    }
+
+    @Test
+    void conversationTurnPropagatesAllDisabledChildState() {
+        BrainStateProperties props = new BrainStateProperties();
+        props.setEnabled(false);
+        GraphRagChunkingService service = new GraphRagChunkingService(
+                props,
+                new DocumentChunkingService(),
+                text -> List.of(),
+                mock(Neo4jKgChunkWriter.class),
+                new UniversalContextLexicon(),
+                mock(VectorStoreService.class),
+                mock(BrainStateService.class),
+                mock(ChatMessageRepository.class));
+
+        GraphRagChunkingService.IngestReport report = service.ingestConversationTurn(
+                "session-disabled",
+                "User text must not be ingested",
+                "Assistant text must not be ingested");
+
+        assertFalse(report.enabled());
+        assertEquals("disabled", report.status());
+        assertEquals("brain_state_disabled", report.disabledReason());
+        assertEquals(2, report.backend().get("reports"));
+        assertEquals(2, report.backend().get("disabledReports"));
+    }
 
     @Test
     void ingestTextChunksExtractsEntitiesAndQueuesVectorMetadata() {
@@ -52,15 +112,14 @@ class GraphRagChunkingServiceTest {
                 brain,
                 mock(ChatMessageRepository.class));
 
-        GraphRagChunkingService.IngestReport report = service.ingestText(
-                "s1", "Alpha helps Beta near the coast", "USER", "general");
+        GraphRagChunkingService.IngestReport report = ingestAuthorized(service, "Alpha helps Beta near the coast");
 
         assertTrue(report.enabled());
-        assertEquals(BrainStateText.hash12("s1"), report.sessionId());
+        assertEquals(BrainStateText.hash12("7"), report.sessionId());
         assertEquals(1, report.chunkCount());
         assertEquals(2, report.entityCount());
         assertEquals(1, report.relationCount());
-        assertEquals("passed", report.backend().get("meaningfulGate"));
+        assertEquals("source_verified", report.backend().get("meaningfulGate"));
         assertEquals(1, report.backend().get("persistedChunkCount"));
         assertEquals(0, report.backend().get("skippedLowSignalChunks"));
         assertEquals("disabled", report.backend().get("neo4jStatus"));
@@ -68,13 +127,16 @@ class GraphRagChunkingServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
         verify(vectorStoreService).enqueue(
-                org.mockito.ArgumentMatchers.startsWith("brain-chunk:"),
-                org.mockito.ArgumentMatchers.eq("s1"),
+                org.mockito.ArgumentMatchers.matches("[a-f0-9]{64}"),
+                org.mockito.ArgumentMatchers.eq("7"),
                 org.mockito.ArgumentMatchers.contains("Alpha"),
                 metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals("BRAIN_STATE", meta.get("doc_type"));
         assertEquals("USER", meta.get("source_tag"));
+        assertEquals("true", meta.get("general_graph_private"));
+        assertEquals("chat-message:11", meta.get("general_graph_source_id"));
+        assertEquals(1L, meta.get("general_graph_consent_epoch"));
         assertTrue(meta.containsKey("brain_text_hash"));
         assertEquals(1, meta.get("brain_port_mapping_count"));
         assertTrue(((List<?>) meta.get("brain_connector_hashes")).stream()
@@ -107,8 +169,7 @@ class GraphRagChunkingServiceTest {
                 brain,
                 mock(ChatMessageRepository.class));
 
-        GraphRagChunkingService.IngestReport report = service.ingestText(
-                "s1", "Alpha helps Beta near the coast", "USER", "general");
+        GraphRagChunkingService.IngestReport report = ingestAuthorized(service, "Alpha helps Beta near the coast");
 
         assertEquals("failed", report.backend().get("brainStateStatus"));
         assertEquals("cancelled", report.backend().get("failureClass"));
@@ -147,7 +208,7 @@ class GraphRagChunkingServiceTest {
     }
 
     @Test
-    void ingestTextRecordsQueryTimeAnchorFrequencySideChannel() {
+    void unscopedConversationCannotSeedGlobalAnchorFrequency() {
         BrainStateProperties props = new BrainStateProperties();
         NamedEntityExtractor extractor = text -> List.of("Alpha", "Beta");
         VectorStoreService vectorStoreService = mock(VectorStoreService.class);
@@ -173,14 +234,10 @@ class GraphRagChunkingServiceTest {
         QueryTimeAnchorMap.AnchorSlice slice = new QueryTimeAnchorMap(anchorFrequencyIndex, true, 5)
                 .slice("Alpha Beta", "GENERAL", List.of());
 
-        assertEquals("recorded", report.backend().get("anchorMapStatus"));
-        assertEquals(2, report.backend().get("anchorMapEntityCount"));
-        assertEquals(1, report.backend().get("anchorMapRelationCount"));
-        assertTrue(anchorFrequencyIndex.entities("GENERAL").stream()
-                .anyMatch(entity -> "Alpha".equals(entity.name())));
-        assertTrue(slice.applied());
-        assertFalse(slice.relations().isEmpty());
-        assertTrue(slice.seedHashes().stream().allMatch(hash -> hash.matches("[0-9a-f]{12}")));
+        assertEquals("source_authority_missing", report.disabledReason());
+        assertTrue(anchorFrequencyIndex.entities("GENERAL").isEmpty());
+        assertFalse(slice.applied());
+        org.mockito.Mockito.verifyNoInteractions(vectorStoreService, writer, brain);
     }
 
     @Test
@@ -208,11 +265,9 @@ class GraphRagChunkingServiceTest {
         GraphRagChunkingService.IngestReport report = service.ingestText(
                 "s1", "Alpha helps Beta near the coast", "USER", "general");
 
-        assertEquals("disabled", report.backend().get("anchorMapStatus"));
-        assertEquals("route_disabled", report.backend().get("anchorMapDisabledReason"));
-        assertEquals(0, report.backend().get("anchorMapEntityCount"));
+        assertEquals("source_authority_missing", report.disabledReason());
         assertTrue(anchorFrequencyIndex.entities("GENERAL").isEmpty());
-        assertEquals(0, anchorFrequencyIndex.recordedChunkIdCount());
+        org.mockito.Mockito.verifyNoInteractions(vectorStoreService, writer, brain);
     }
 
     @Test
@@ -329,7 +384,7 @@ class GraphRagChunkingServiceTest {
     }
 
     @Test
-    void ingestTextPreservesUawThumbnailSourceTagForBrainGraph() {
+    void unscopedUawThumbnailIsRefused() {
         BrainStateProperties props = new BrainStateProperties();
         NamedEntityExtractor extractor = text -> List.of("Alpha", "Beta");
         VectorStoreService vectorStoreService = mock(VectorStoreService.class);
@@ -348,21 +403,14 @@ class GraphRagChunkingServiceTest {
                 brain,
                 mock(ChatMessageRepository.class));
 
-        service.ingestText("thumb", "Alpha and Beta thumbnail", "UAW_THUMBNAIL", "UAW_THUMB");
+        var report = service.ingestText("thumb", "Alpha and Beta thumbnail", "UAW_THUMBNAIL", "UAW_THUMB");
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(
-                org.mockito.ArgumentMatchers.startsWith("brain-chunk:"),
-                org.mockito.ArgumentMatchers.eq("thumb"),
-                org.mockito.ArgumentMatchers.contains("Alpha"),
-                metaCaptor.capture());
-        assertEquals("UAW_THUMBNAIL", metaCaptor.getValue().get("source_tag"));
-        assertEquals("UAW_THUMB", metaCaptor.getValue().get("domain"));
+        assertEquals("source_authority_missing", report.disabledReason());
+        org.mockito.Mockito.verifyNoInteractions(vectorStoreService, writer, brain);
     }
 
     @Test
-    void ingestPreparedUawThumbnailQueuesRelationThumbnailVectorPayload() {
+    void unscopedPreparedThumbnailIsRefused() {
         BrainStateProperties props = new BrainStateProperties();
         VectorStoreService vectorStoreService = mock(VectorStoreService.class);
         Neo4jKgChunkWriter writer = mock(Neo4jKgChunkWriter.class);
@@ -407,35 +455,13 @@ class GraphRagChunkingServiceTest {
                 List.of(chunk),
                 BrainStateText.hash12(chunk.sourceText()));
 
-        assertEquals("indexed", report.status());
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        ArgumentCaptor<String> vectorTextCaptor = ArgumentCaptor.forClass(String.class);
-        verify(vectorStoreService).enqueue(
-                org.mockito.ArgumentMatchers.eq("uaw-thumb:abc123"),
-                org.mockito.ArgumentMatchers.eq("__UAW_THUMBNAIL__"),
-                vectorTextCaptor.capture(),
-                metaCaptor.capture());
-        String vectorText = vectorTextCaptor.getValue();
-        Map<String, Object> meta = metaCaptor.getValue();
-        assertTrue(vectorText.contains("relationBreadcrumbs:"));
-        assertTrue(vectorText.contains("Alpha --UAW_THUMBNAIL_RELATED_TO--> Beta"));
-        assertTrue(vectorText.contains("relationSummary: relation thumbnail anchors=2 relations=1"));
-        assertFalse(vectorText.contains("caption: Alpha and Beta route thumbnail"));
-        assertEquals("relation_thumbnail_v1", meta.get("kg_relation_thumbnail_mode"));
-        assertEquals("uaw_thumbnail_warmup", meta.get("kg_relation_thumbnail_source"));
-        assertEquals("Alpha --UAW_THUMBNAIL_RELATED_TO--> Beta", meta.get("kg_relation_breadcrumb"));
-        assertTrue(String.valueOf(meta.get("kg_relation_summary"))
-                .contains("relation thumbnail anchors=2 relations=1"));
-        assertTrue(String.valueOf(meta.get("kg_relation_thumbnail_hash")).matches("[0-9a-f]{12}"));
-        assertTrue(String.valueOf(meta.get("kg_relation_anchor_hash12")).matches("[0-9a-f]{12}"));
-        assertEquals(1, meta.get("brain_relation_count"));
-        assertFalse(meta.containsValue("uaw-thumbnail:fixture"));
+        assertEquals("disabled", report.status());
+        assertEquals("source_authority_missing", report.disabledReason());
+        org.mockito.Mockito.verifyNoInteractions(vectorStoreService, writer, brain);
     }
 
     @Test
-    void ingestTextPreservesKnowledgeDeltaSourceTagForBrainGraph() {
+    void unscopedKnowledgeDeltaIsRefused() {
         BrainStateProperties props = new BrainStateProperties();
         NamedEntityExtractor extractor = text -> List.of("GraphRAG", "Neo4j");
         VectorStoreService vectorStoreService = mock(VectorStoreService.class);
@@ -454,17 +480,10 @@ class GraphRagChunkingServiceTest {
                 brain,
                 mock(ChatMessageRepository.class));
 
-        service.ingestText("__KNOWLEDGE_DELTA__", "GraphRAG USES Neo4j", "KNOWLEDGE_DELTA", "GENERAL");
+        var report = service.ingestText("__KNOWLEDGE_DELTA__", "GraphRAG USES Neo4j", "KNOWLEDGE_DELTA", "GENERAL");
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(
-                org.mockito.ArgumentMatchers.startsWith("brain-chunk:"),
-                org.mockito.ArgumentMatchers.eq("__KNOWLEDGE_DELTA__"),
-                org.mockito.ArgumentMatchers.contains("GraphRAG"),
-                metaCaptor.capture());
-        assertEquals("KNOWLEDGE_DELTA", metaCaptor.getValue().get("source_tag"));
-        assertEquals("GENERAL", metaCaptor.getValue().get("domain"));
+        assertEquals("source_authority_missing", report.disabledReason());
+        org.mockito.Mockito.verifyNoInteractions(vectorStoreService, writer, brain);
     }
 
     @Test
@@ -603,8 +622,7 @@ class GraphRagChunkingServiceTest {
                 brain,
                 mock(ChatMessageRepository.class));
 
-        GraphRagChunkingService.IngestReport report = service.ingestText(
-                "s1", "Alpha helps Beta near the coast", "USER", "general");
+        GraphRagChunkingService.IngestReport report = ingestAuthorized(service, "Alpha helps Beta near the coast");
 
         assertEquals("indexed", report.status());
         assertEquals("failed", report.backend().get("vectorStatus"));

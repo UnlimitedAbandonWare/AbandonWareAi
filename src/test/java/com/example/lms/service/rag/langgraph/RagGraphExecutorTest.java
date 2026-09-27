@@ -1,5 +1,8 @@
 package com.example.lms.service.rag.langgraph;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
+import com.example.lms.config.SearchExecutorConfig;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.rag.handler.EvidenceRepairHandler;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator;
@@ -9,20 +12,27 @@ import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator.QueryResp
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator.QueryTrace;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.query.Query;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -30,6 +40,20 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RagGraphExecutorTest {
+
+    private final List<ExecutorService> ownedExecutors = new ArrayList<>();
+
+    @AfterEach
+    void tearDownOwnedGraphExecutors() throws Exception {
+        TimeBudgetContext.clear();
+        TraceStore.clear();
+        MDC.clear();
+        for (ExecutorService executor : ownedExecutors) {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(1, TimeUnit.SECONDS));
+        }
+        ownedExecutors.clear();
+    }
 
     @Test
     void langGraphFailSoftCatchesLeaveStageBreadcrumbs() throws Exception {
@@ -266,23 +290,53 @@ class RagGraphExecutorTest {
     }
 
     @Test
-    void retrieveCancellationUsesOperationalFailureClass() {
+    void retrieveCancellationIsTerminalAndNeverEntersFallbackOrRepair() {
         RagGraphProperties properties = new RagGraphProperties();
         properties.setTimeoutMs(0);
+        CancellingOrchestrator orchestrator = new CancellingOrchestrator();
+        CountingRepairHandler repairHandler = new CountingRepairHandler();
         RagGraphExecutor executor = new RagGraphExecutor(
-                new CancellingOrchestrator(),
-                new FixedProvider<>(null),
+                orchestrator,
+                new FixedProvider<>(repairHandler),
                 properties);
         QueryRequest request = new QueryRequest();
         request.query = "private cancellation query";
 
-        QueryResponse response = executor.execute(request);
+        CancellationException failure = assertThrows(CancellationException.class, () -> executor.execute(request));
 
-        assertEquals("retrieve_error:cancelled", response.debug.get("langgraph.node.retrieve"));
-        assertEquals("repair_unavailable", response.debug.get("langgraph.failureReason"));
-        assertFalse(String.valueOf(response.debug).contains("CancellationException"));
-        assertFalse(String.valueOf(response.debug).contains("ownerToken"));
-        assertFalse(String.valueOf(response.debug).contains("private cancellation query"));
+        assertEquals(1, orchestrator.traceCalls,
+                "a terminal cancellation must not re-enter retrieval through sequential fallback");
+        assertEquals(0, repairHandler.retrieveCalls,
+                "a terminal cancellation must not be converted into a repair candidate");
+        assertTrue(failure.getMessage().contains("cancelled"));
+    }
+
+    @Test
+    void retrieveInterruptionIsTerminalRestoresInterruptAndNeverEntersFallbackOrRepair() {
+        RagGraphProperties properties = new RagGraphProperties();
+        properties.setTimeoutMs(0);
+        InterruptingOrchestrator orchestrator = new InterruptingOrchestrator();
+        CountingRepairHandler repairHandler = new CountingRepairHandler();
+        RagGraphExecutor executor = new RagGraphExecutor(
+                orchestrator,
+                new FixedProvider<>(repairHandler),
+                properties);
+        QueryRequest request = new QueryRequest();
+        request.query = "private interruption query";
+
+        try {
+            CancellationException failure = assertThrows(CancellationException.class, () -> executor.execute(request));
+
+            assertTrue(Thread.currentThread().isInterrupted(),
+                    "InterruptedException must restore the caller interrupt flag before becoming terminal cancellation");
+            assertTrue(failure.getCause() instanceof InterruptedException);
+            assertEquals(1, orchestrator.traceCalls,
+                    "an interruption must not re-enter retrieval through sequential fallback");
+            assertEquals(0, repairHandler.retrieveCalls,
+                    "an interruption must not reach repair");
+        } finally {
+            Thread.interrupted();
+        }
     }
 
     @Test
@@ -568,7 +622,7 @@ class RagGraphExecutorTest {
     }
 
     @Test
-    void timeoutAsyncExecutionPropagatesTraceStoreAndMdc() {
+    void timeoutAsyncExecutionPropagatesTraceStoreAndMdc() throws Exception {
         TraceStore.clear();
         MDC.clear();
         try {
@@ -576,10 +630,10 @@ class RagGraphExecutorTest {
             MDC.put("sid", "sid-propagated");
             RagGraphProperties properties = new RagGraphProperties();
             properties.setTimeoutMs(2_000);
-            RagGraphExecutor executor = new RagGraphExecutor(
+            RagGraphExecutor executor = newAsyncGraphExecutor(
                     new ContextProbeOrchestrator(),
-                    new FixedProvider<>(null),
-                    properties);
+                    properties,
+                    newOwnedGraphRuntime(1, 0));
             QueryRequest request = new QueryRequest();
             request.query = "context propagation";
             request.planId = "safe_autorun.v1";
@@ -595,6 +649,130 @@ class RagGraphExecutorTest {
     }
 
     @Test
+    void asyncGraphRunsOnSpringOwnedNamedExecutor() throws Exception {
+        ThreadCapturingOrchestrator orchestrator = new ThreadCapturingOrchestrator();
+        RagGraphProperties properties = new RagGraphProperties();
+        properties.setTimeoutMs(2_000);
+        RagGraphExecutor executor = newAsyncGraphExecutor(
+                orchestrator,
+                properties,
+                newOwnedGraphRuntime(1, 0));
+        QueryRequest request = new QueryRequest();
+        request.query = "named graph runtime";
+
+        QueryResponse response = executor.execute(request);
+
+        assertEquals(1, response.results.size());
+        assertTrue(orchestrator.threadName.get().startsWith("awx-rag-graph-"));
+        assertFalse(orchestrator.threadName.get().contains("ForkJoinPool.commonPool"));
+    }
+
+    @Test
+    void legacyTimeoutDisabledConstructorRemainsSynchronousWithAmbientBudget() {
+        ThreadCapturingOrchestrator orchestrator = new ThreadCapturingOrchestrator();
+        RagGraphProperties properties = new RagGraphProperties();
+        properties.setTimeoutMs(0);
+        RagGraphExecutor executor = new RagGraphExecutor(
+                orchestrator,
+                new FixedProvider<>(null),
+                properties);
+        QueryRequest request = new QueryRequest();
+        request.query = "legacy synchronous graph";
+        TimeBudgetContext.set(new TimeBudget(5_000));
+
+        QueryResponse response = executor.execute(request);
+
+        assertEquals(1, response.results.size());
+        assertEquals(Thread.currentThread().getName(), orchestrator.threadName.get());
+    }
+
+    @Test
+    void workerCompletionObservationNeverReportsFinishedWithoutStarted() throws Exception {
+        AtomicBoolean started = new AtomicBoolean(false);
+        AtomicBoolean finished = new AtomicBoolean(true);
+        Method snapshotMethod = RagGraphExecutor.class.getDeclaredMethod(
+                "snapshotWorkerObservation",
+                AtomicBoolean.class,
+                AtomicBoolean.class);
+        snapshotMethod.setAccessible(true);
+
+        Object observation = snapshotMethod.invoke(null, started, finished);
+        Method startedAccessor = observation.getClass().getDeclaredMethod("started");
+        Method finishedAccessor = observation.getClass().getDeclaredMethod("finished");
+        startedAccessor.setAccessible(true);
+        finishedAccessor.setAccessible(true);
+
+        assertEquals(true, startedAccessor.invoke(observation));
+        assertEquals(true, finishedAccessor.invoke(observation));
+    }
+
+    @Test
+    void saturatedGraphExecutorFailsSoftWithoutRunningGraph() throws Exception {
+        ExecutorService runtime = newOwnedGraphRuntime(1, 0);
+        CountDownLatch occupied = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        runtime.execute(() -> {
+            occupied.countDown();
+            awaitReleaseIgnoringInterrupt(release);
+        });
+        assertTrue(occupied.await(1, TimeUnit.SECONDS));
+        CountingOrchestrator orchestrator = new CountingOrchestrator();
+        RagGraphProperties properties = new RagGraphProperties();
+        properties.setTimeoutMs(2_000);
+        RagGraphExecutor executor = newAsyncGraphExecutor(orchestrator, properties, runtime);
+        QueryRequest request = new QueryRequest();
+        request.query = "saturated graph runtime";
+
+        try {
+            QueryResponse response = executor.execute(request);
+
+            assertTrue(response.results.isEmpty());
+            assertEquals("graph_executor_saturated", response.debug.get("langgraph.failureClass"));
+            assertEquals("graph_executor_saturated", response.debug.get("langgraph.emptyReason"));
+            assertEquals(0, orchestrator.calls.get());
+            assertEquals("graph_executor_saturated", TraceStore.get("langgraph.executor.reason"));
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void requestBudgetClampsWaitWithoutClaimingWorkerTermination() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        BlockingOrchestrator orchestrator = new BlockingOrchestrator(started, release, finished);
+        RagGraphProperties properties = new RagGraphProperties();
+        properties.setTimeoutMs(2_000);
+        RagGraphExecutor executor = newAsyncGraphExecutor(
+                orchestrator,
+                properties,
+                newOwnedGraphRuntime(1, 0));
+        QueryRequest request = new QueryRequest();
+        request.query = "request budget graph";
+        TimeBudgetContext.set(new TimeBudget(100));
+
+        long startedNs = System.nanoTime();
+        try {
+            IllegalStateException failure = assertThrows(
+                    IllegalStateException.class,
+                    () -> executor.execute(request));
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNs);
+
+            assertTrue(failure.getMessage().contains("timed out"));
+            assertTrue(elapsedMs < 500L, "request budget must clamp the graph wait");
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            assertEquals(true, TraceStore.get("langgraph.cancelRequested"));
+            assertEquals(false, TraceStore.get("langgraph.workerFinished"));
+            assertEquals("unfinished", TraceStore.get("langgraph.workerTermination"));
+            assertEquals(1L, finished.getCount());
+        } finally {
+            release.countDown();
+            assertTrue(finished.await(1, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void langGraphTimeoutReportsNoInterruptCancelMode() throws Exception {
         TraceStore.clear();
         CountDownLatch started = new CountDownLatch(1);
@@ -602,10 +780,10 @@ class RagGraphExecutorTest {
         AtomicBoolean interrupted = new AtomicBoolean(false);
         RagGraphProperties properties = new RagGraphProperties();
         properties.setTimeoutMs(50);
-        RagGraphExecutor executor = new RagGraphExecutor(
+        RagGraphExecutor executor = newAsyncGraphExecutor(
                 new SlowOrchestrator(started, finished, interrupted),
-                new FixedProvider<>(null),
-                properties);
+                properties,
+                newOwnedGraphRuntime(1, 0));
         QueryRequest request = new QueryRequest();
         request.query = "timeout langgraph";
         request.threadId = "chat-timeout";
@@ -625,6 +803,34 @@ class RagGraphExecutorTest {
         }
     }
 
+    private ExecutorService newOwnedGraphRuntime(int workers, int queueCapacity) {
+        SearchExecutorConfig config = new SearchExecutorConfig();
+        ReflectionTestUtils.setField(config, "ragGraphWorkers", workers);
+        ReflectionTestUtils.setField(config, "ragGraphQueueCapacity", queueCapacity);
+        ExecutorService executor = ReflectionTestUtils.invokeMethod(config, "ragGraphWorkerExecutor");
+        assertTrue(executor != null);
+        ownedExecutors.add(executor);
+        return executor;
+    }
+
+    private static RagGraphExecutor newAsyncGraphExecutor(
+            UnifiedRagOrchestrator orchestrator,
+            RagGraphProperties properties,
+            ExecutorService runtime) throws Exception {
+        Constructor<RagGraphExecutor> constructor = RagGraphExecutor.class.getConstructor(
+                UnifiedRagOrchestrator.class,
+                ObjectProvider.class,
+                RagGraphProperties.class,
+                ObjectProvider.class,
+                ExecutorService.class);
+        return constructor.newInstance(
+                orchestrator,
+                new FixedProvider<>(null),
+                properties,
+                new FixedProvider<>(null),
+                runtime);
+    }
+
     private static final class ContextProbeOrchestrator extends UnifiedRagOrchestrator {
         @Override
         public QueryTrace queryWithTrace(QueryRequest req) {
@@ -635,6 +841,64 @@ class RagGraphExecutorTest {
             trace.response = response;
             trace.finalResults = response.results;
             return trace;
+        }
+    }
+
+    private static final class ThreadCapturingOrchestrator extends UnifiedRagOrchestrator {
+        private final AtomicReference<String> threadName = new AtomicReference<>("");
+
+        @Override
+        public QueryTrace queryWithTrace(QueryRequest req) {
+            threadName.set(Thread.currentThread().getName());
+            QueryResponse response = response("thread-capture", req);
+            QueryTrace trace = new QueryTrace();
+            trace.response = response;
+            trace.finalResults = response.results;
+            return trace;
+        }
+    }
+
+    private static final class CountingOrchestrator extends UnifiedRagOrchestrator {
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        public QueryTrace queryWithTrace(QueryRequest req) {
+            calls.incrementAndGet();
+            QueryResponse response = response("counting", req);
+            QueryTrace trace = new QueryTrace();
+            trace.response = response;
+            trace.finalResults = response.results;
+            return trace;
+        }
+    }
+
+    private static final class BlockingOrchestrator extends UnifiedRagOrchestrator {
+        private final CountDownLatch started;
+        private final CountDownLatch release;
+        private final CountDownLatch finished;
+
+        private BlockingOrchestrator(
+                CountDownLatch started,
+                CountDownLatch release,
+                CountDownLatch finished) {
+            this.started = started;
+            this.release = release;
+            this.finished = finished;
+        }
+
+        @Override
+        public QueryTrace queryWithTrace(QueryRequest req) {
+            started.countDown();
+            try {
+                awaitReleaseIgnoringInterrupt(release);
+                QueryResponse response = response("blocking", req);
+                QueryTrace trace = new QueryTrace();
+                trace.response = response;
+                trace.finalResults = response.results;
+                return trace;
+            } finally {
+                finished.countDown();
+            }
         }
     }
 
@@ -683,10 +947,42 @@ class RagGraphExecutorTest {
     }
 
     private static final class CancellingOrchestrator extends UnifiedRagOrchestrator {
+        private int traceCalls;
+
         @Override
         public QueryTrace queryWithTrace(QueryRequest req) {
+            traceCalls++;
             throw new CancellationException("cancelled ownerToken fake-token");
         }
+    }
+
+    private static final class InterruptingOrchestrator extends UnifiedRagOrchestrator {
+        private int traceCalls;
+
+        @Override
+        public QueryTrace queryWithTrace(QueryRequest req) {
+            traceCalls++;
+            return sneakyThrow(new InterruptedException("interrupted ownerToken fake-token"));
+        }
+    }
+
+    private static final class CountingRepairHandler extends EvidenceRepairHandler {
+        private int retrieveCalls;
+
+        private CountingRepairHandler() {
+            super(null, null, "", "");
+        }
+
+        @Override
+        public List<Content> retrieve(Query query) {
+            retrieveCalls++;
+            return List.of(Content.from("repair must not run"));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T, E extends Throwable> T sneakyThrow(Throwable throwable) throws E {
+        throw (E) throwable;
     }
 
     private static final class FixedRepairHandler extends EvidenceRepairHandler {
@@ -819,6 +1115,25 @@ class RagGraphExecutorTest {
             trace.response = response("slow", req);
             trace.finalResults = trace.response.results;
             return trace;
+        }
+    }
+
+    private static void awaitReleaseIgnoringInterrupt(CountDownLatch release) {
+        boolean interrupted = false;
+        try {
+            while (release.getCount() > 0L) {
+                try {
+                    if (release.await(1, TimeUnit.SECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

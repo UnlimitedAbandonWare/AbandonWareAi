@@ -14,8 +14,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UnifiedRagOrchestratorProviderTraceIntegrationTest {
 
+    private final java.util.concurrent.atomic.AtomicReference<dev.langchain4j.rag.query.Query> lastWebQuery = new java.util.concurrent.atomic.AtomicReference<>();
+
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withBean("analyzeWebSearchRetriever", ContentRetriever.class, () -> query -> {
+                lastWebQuery.set(query);
                 TraceStore.put("webSearch.returnedCount", 3);
                 TraceStore.put("webSearch.afterFilterCount", 0);
                 TraceStore.put("rag.returnedCount", 3);
@@ -27,6 +30,33 @@ class UnifiedRagOrchestratorProviderTraceIntegrationTest {
     @AfterEach
     void clearTraceStore() {
         TraceStore.clear();
+    }
+
+    @Test
+    void preclassifiedRequestSkipsExtraAnalysisWhileDefaultStillAnalyzes() {
+        var analyzer = org.mockito.Mockito.mock(com.example.lms.service.rag.query.QueryAnalysisService.class);
+        contextRunner.run(context -> {
+            var orchestrator = context.getBean(UnifiedRagOrchestrator.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(orchestrator, "queryAnalysisService", analyzer);
+            var request = new UnifiedRagOrchestrator.QueryRequest();
+            request.query = "synthetic preclassified question";
+            request.useVector = false; request.useKg = false; request.useBm25 = false;
+            request.enableBiEncoder = false; request.enableDiversity = false; request.enableOnnx = false;
+            var ordinary = orchestrator.query(request);
+            org.mockito.Mockito.verify(analyzer).analyze(request.query);
+            org.junit.jupiter.api.Assertions.assertEquals(false, ordinary.debug.get("analysis.skipped"));
+            org.mockito.Mockito.clearInvocations(analyzer);
+            request.enableQueryAnalysis = false;
+            request.webQueryAlreadyPlanned = true;
+            request.webTopK = 3;
+            var preclassified = orchestrator.query(request);
+            org.mockito.Mockito.verifyNoInteractions(analyzer);
+            org.junit.jupiter.api.Assertions.assertEquals(true, preclassified.debug.get("analysis.skipped"));
+            assertTrue(preclassified.debug.get("analysis.elapsedMs") instanceof Long);
+            var metadata = com.example.lms.service.rag.QueryUtils.metadata(lastWebQuery.get());
+            org.junit.jupiter.api.Assertions.assertEquals(true, metadata.get("webQueryAlreadyPlanned"));
+            org.junit.jupiter.api.Assertions.assertEquals(3, metadata.get("webTopK"));
+        });
     }
 
     @Test
@@ -47,6 +77,7 @@ class UnifiedRagOrchestratorProviderTraceIntegrationTest {
             request.topK = 5;
 
             UnifiedRagOrchestrator.QueryResponse response = orchestrator.query(request);
+            org.junit.jupiter.api.Assertions.assertEquals("other", response.debug.get("web.retriever"));
 
             @SuppressWarnings("unchecked")
             List<String> starvationSignals =

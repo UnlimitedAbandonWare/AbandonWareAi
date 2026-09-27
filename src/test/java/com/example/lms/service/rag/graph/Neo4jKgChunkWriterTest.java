@@ -227,7 +227,9 @@ class Neo4jKgChunkWriterTest {
         assertTrue(cypher.contains("textHash: $textHash"));
         assertTrue(cypher.contains("ingestLane: $ingestLane"));
         assertFalse(cypher.contains("MATCH (c:KgChunkNode {chunkId: $chunkId})"));
-        assertTrue(cypher.contains("MERGE (e:KgEntity {name: $name, domain: $domain})"));
+        assertTrue(cypher.contains("MERGE (e:KgEntity {name: $name, domain: $domain, scopeKey: $scopeKey})"));
+        assertTrue(cypher.contains("sourceId: $sourceId"));
+        assertTrue(cypher.contains("sourceRevision: $sourceRevision"));
         assertTrue(cypher.contains("MERGE (c)-[r:CONTAINS_ENTITY]->(e)"));
         assertFalse(cypher.contains("sourceText"));
         assertFalse(cypher.contains("com.example.lms.graphdb"));

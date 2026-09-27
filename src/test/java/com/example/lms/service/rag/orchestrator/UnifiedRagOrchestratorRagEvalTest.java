@@ -3,8 +3,12 @@ package com.example.lms.service.rag.orchestrator;
 import com.example.lms.debug.DebugEvent;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.DebugProbeType;
+import com.example.lms.infra.selection.SelectionDecisionLedger;
+import com.example.lms.infra.selection.SelectionEntropyFactory;
 import com.example.lms.moe.NormalizedRagMetrics;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.service.rag.query.QueryAnalysisResult;
 import com.example.lms.service.rag.query.QueryAnalysisService;
 import dev.langchain4j.data.document.Metadata;
@@ -16,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -27,11 +32,13 @@ class UnifiedRagOrchestratorRagEvalTest {
 
     @BeforeEach
     void setUp() {
+        GuardContextHolder.clear();
         TraceStore.clear();
     }
 
     @AfterEach
     void tearDown() {
+        GuardContextHolder.clear();
         TraceStore.clear();
     }
 
@@ -390,7 +397,7 @@ class UnifiedRagOrchestratorRagEvalTest {
                         && "pool".equals(row.get("fromStage"))
                         && "fused".equals(row.get("toStage"))
                         && Integer.valueOf(7).equals(row.get("beforeCount"))
-                        && Integer.valueOf(1).equals(row.get("afterCount"))),
+                        && Integer.valueOf(3).equals(row.get("afterCount"))),
                 () -> String.valueOf(thresholdBreaks));
 
         @SuppressWarnings("unchecked")
@@ -1503,6 +1510,57 @@ class UnifiedRagOrchestratorRagEvalTest {
         assertFalse(String.valueOf(response.debug).contains("sparse node diagnostic query"));
     }
 
+    @Test
+    void exactRrfTiesFollowStableDocumentKeyAcrossInputPermutationsWithoutADraw() {
+        List<UnifiedRagOrchestrator.Doc> forward = List.of(
+                doc("doc-c", "https://example.test/c", "same", "WEB", 0.5d, 1),
+                doc("doc-a", "https://example.test/a", "same", "WEB", 0.5d, 1),
+                doc("doc-b", "https://example.test/b", "same", "WEB", 0.5d, 1));
+        List<UnifiedRagOrchestrator.Doc> reverse =
+                List.of(forward.get(2), forward.get(1), forward.get(0));
+
+        RankingRun first = runSeedOnly(forward);
+        RankingRun second = runSeedOnly(reverse);
+
+        List<String> expected = List.of("doc-a", "doc-b", "doc-c");
+        assertEquals(expected, first.response().results.stream().map(doc -> doc.id).toList());
+        assertEquals(expected, second.response().results.stream().map(doc -> doc.id).toList());
+        assertEquals(1, first.snapshot().decisionCount());
+        assertEquals(1, first.snapshot().stableTieBreakCount());
+        assertEquals(0, first.snapshot().drawCount());
+        assertEquals(first.snapshot().decisionDigest(), second.snapshot().decisionDigest());
+    }
+
+    @Test
+    void stableDocumentKeyUsesIdCanonicalUrlSourceIdAndLengthFramedContent() {
+        UnifiedRagOrchestrator.Doc explicit =
+                doc(" explicit ", null, "body-a", "WEB", 0.5d, 1);
+        UnifiedRagOrchestrator.Doc url =
+                doc(null, "HTTPS://Example.Test/a/../b?Q=One#fragment", "body-b", "WEB", 0.5d, 1);
+        UnifiedRagOrchestrator.Doc source =
+                doc(null, "https://[malformed", "", "VECTOR", 0.5d, 1);
+        source.meta.put("sourceId", " Source-7 ");
+        UnifiedRagOrchestrator.Doc content =
+                doc(null, null, "  SAME\nCONTENT  ", null, 0.5d, 1);
+        UnifiedRagOrchestrator.Doc splitOne = doc(null, null, "ab", null, 0.5d, 1);
+        splitOne.snippet = "c";
+        UnifiedRagOrchestrator.Doc splitTwo = doc(null, null, "a", null, 0.5d, 1);
+        splitTwo.snippet = "bc";
+
+        assertEquals("id:explicit", UnifiedRagOrchestrator.stableDocumentKeyForTest(explicit));
+        assertEquals("url:https://example.test/b?Q=One",
+                UnifiedRagOrchestrator.stableDocumentKeyForTest(url));
+        assertEquals("source:vector:source-7",
+                UnifiedRagOrchestrator.stableDocumentKeyForTest(source));
+        String contentKey = UnifiedRagOrchestrator.stableDocumentKeyForTest(content);
+        assertTrue(contentKey.startsWith("content:"));
+        assertEquals(72, contentKey.length());
+        assertFalse(UnifiedRagOrchestrator.stableDocumentKeyForTest(splitOne)
+                .equals(UnifiedRagOrchestrator.stableDocumentKeyForTest(splitTwo)));
+        assertEquals(null, UnifiedRagOrchestrator.stableDocumentKeyForTest(
+                doc(null, null, "", null, 0.5d, 1)));
+    }
+
     private static UnifiedRagOrchestrator.Doc doc(String id) {
         UnifiedRagOrchestrator.Doc doc = new UnifiedRagOrchestrator.Doc();
         doc.id = id;
@@ -1510,6 +1568,136 @@ class UnifiedRagOrchestratorRagEvalTest {
         doc.snippet = "evidence " + id;
         doc.source = "WEB";
         return doc;
+    }
+
+    private static UnifiedRagOrchestrator.Doc doc(
+            String id,
+            String url,
+            String text,
+            String source,
+            double score,
+            int rank) {
+        UnifiedRagOrchestrator.Doc doc = new UnifiedRagOrchestrator.Doc();
+        doc.id = id;
+        doc.title = text;
+        doc.snippet = "";
+        doc.source = source;
+        doc.score = score;
+        doc.rank = rank;
+        doc.meta = url == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(Map.of("url", url));
+        return doc;
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "true,false,MEMORY,false", "true,true,MEMORY,false", "true,false,NONE,false",
+            "true,false,MEMORY,true", "true,true,MEMORY,true", "true,false,NONE,true",
+            "true,true,NONE,false", "true,true,NONE,true",
+            "false,true,MEMORY,false", "false,false,NONE,false"
+    })
+    void explicitWhitelistSurvivesModeFlagsWithoutRestoringRejectedSeeds(
+            boolean whitelistOnly, boolean aggressive, String memoryProfile, boolean allDenied) {
+        UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
+        com.example.lms.service.rag.auth.DomainWhitelist whitelist = new com.example.lms.service.rag.auth.DomainWhitelist();
+        whitelist.setDomainAllowlist(List.of("official.test"));
+        ReflectionTestUtils.setField(orchestrator, "domainWhitelist", whitelist);
+        UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
+        request.query = "Synthetic explicit whitelist fixture.";
+        request.topK = 2;
+        request.seedOnly = true;
+        request.seedMode = "candidates";
+        request.seedCandidates = List.of(
+                doc("first", allDenied ? "https://denied.test/a" : "https://official.test/a", "first document", "WEB", 1d, 1),
+                doc("second", "https://other.test/b", "second document", "VECTOR", .9d, 2));
+        request.useWeb = request.useVector = request.useKg = request.useBm25 = false;
+        request.enableOnnx = request.enableBiEncoder = request.enableDiversity = false;
+        request.whitelistOnly = whitelistOnly;
+        request.aggressive = aggressive;
+        request.memoryProfile = memoryProfile;
+
+        UnifiedRagOrchestrator.QueryResponse response = orchestrator.query(request);
+
+        assertEquals(Boolean.TRUE, response.debug.get("seed.only"));
+        if (whitelistOnly) {
+            assertEquals(allDenied ? List.of() : List.of("first"), response.results.stream().map(d -> d.id).toList());
+            assertEquals(allDenied ? 2 : 1, response.debug.get("stage.whitelist.filtered"));
+            assertEquals(allDenied ? 0 : 1, response.debug.get("stage.whitelist"));
+            assertFalse(response.debug.containsKey("stage.whitelist.skipped"));
+        } else {
+            assertEquals(java.util.Set.of("first", "second"), response.results.stream().map(d -> d.id).collect(java.util.stream.Collectors.toSet()));
+            assertFalse(response.debug.containsKey("stage.whitelist.filtered"));
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "https://official.test/a,official.test,true",
+            "https://docs.official.test/a,official.test,true",
+            "https://OFFICIAL.TEST/a,official.test,true",
+            "https://docs.OFFICIAL.TEST/a,official.test,true",
+            "https://official.test/a,OFFICIAL.TEST,true",
+            "https://notofficial.test/a,official.test,false",
+            "https://sub.notofficial.test/a,official.test,false",
+            "https://official.test.attacker.test/a,official.test,false",
+            "https://official.test@attacker.test/a,official.test,false",
+            "https://attacker.test/official.test,official.test,false",
+            "http://[invalid,official.test,false",
+            ",official.test,false"
+    })
+    void finalWhitelistUsesDnsHostBoundariesAndCanonicalCase(String url, String allowedHost, boolean allowed) {
+        UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
+        com.example.lms.service.rag.auth.DomainWhitelist whitelist = new com.example.lms.service.rag.auth.DomainWhitelist();
+        whitelist.setDomainAllowlist(List.of(" " + allowedHost + " "));
+        ReflectionTestUtils.setField(orchestrator, "domainWhitelist", whitelist);
+        UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
+        request.query = "Synthetic hostname admission fixture.";
+        request.topK = 1;
+        request.seedOnly = true;
+        request.seedMode = "candidates";
+        request.seedCandidates = List.of(doc("candidate", url, "synthetic document", "VECTOR", 1d, 1));
+        request.useWeb = request.useVector = request.useKg = request.useBm25 = false;
+        request.enableOnnx = request.enableBiEncoder = request.enableDiversity = false;
+        request.whitelistOnly = true;
+        request.memoryProfile = "MEMORY";
+
+        UnifiedRagOrchestrator.QueryResponse response = orchestrator.query(request);
+
+        assertEquals(Boolean.TRUE, response.debug.get("seed.only"));
+        assertEquals(allowed ? List.of("candidate") : List.of(), response.results.stream().map(d -> d.id).toList());
+        assertEquals(allowed ? 0 : 1, response.debug.get("stage.whitelist.filtered"));
+    }
+
+    private static RankingRun runSeedOnly(List<UnifiedRagOrchestrator.Doc> documents) {
+        SelectionDecisionLedger ledger = SelectionDecisionLedger.forStandard();
+        GuardContext context = new GuardContext();
+        context.attachSelectionEntropy(SelectionEntropyFactory.standard(), ledger);
+        GuardContextHolder.set(context);
+        try {
+            UnifiedRagOrchestrator orchestrator = new UnifiedRagOrchestrator();
+            UnifiedRagOrchestrator.QueryRequest request = new UnifiedRagOrchestrator.QueryRequest();
+            request.query = "fixed ranking fixture";
+            request.seedOnly = true;
+            request.seedMode = "candidates";
+            request.seedCandidates = documents;
+            request.topK = documents.size();
+            request.useWeb = false;
+            request.useVector = false;
+            request.useKg = false;
+            request.useBm25 = false;
+            request.enableOnnx = false;
+            request.enableBiEncoder = false;
+            request.enableDiversity = false;
+            return new RankingRun(orchestrator.query(request), ledger.snapshot(false));
+        } finally {
+            GuardContextHolder.clear();
+        }
+    }
+
+    private record RankingRun(
+            UnifiedRagOrchestrator.QueryResponse response,
+            SelectionDecisionLedger.Snapshot snapshot) {
     }
 
     private static Content relationThumbnail(String id, String left, String right, double score) {

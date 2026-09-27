@@ -13,6 +13,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 class OrchestratorHypernovaFusionBridgeTest {
 
@@ -40,6 +41,27 @@ class OrchestratorHypernovaFusionBridgeTest {
         assertFalse(String.valueOf(TraceStore.getAll()).contains("ownerToken"));
     }
 
+    @Test
+    void reorderedScoresStayAttachedToTheOriginalDocBySyntheticId() {
+        UnifiedRagOrchestrator.Doc a = doc("A", 0.20d, "WEB");
+        UnifiedRagOrchestrator.Doc b = doc("B", 0.90d, "VECTOR");
+        UnifiedRagOrchestrator.Doc c = doc("C", 0.50d, "KG");
+        ReorderingNovaNextFusionService service = new ReorderingNovaNextFusionService();
+
+        List<UnifiedRagOrchestrator.Doc> out = OrchestratorHypernovaFusionBridge.apply(
+                List.of(a, b, c),
+                Map.of(a, 0.01d, b, 0.02d, c, 0.03d),
+                service);
+
+        assertEquals(List.of("B", "C", "A"), out.stream().map(doc -> doc.id).toList());
+        assertSame(b, out.get(0));
+        assertSame(c, out.get(1));
+        assertSame(a, out.get(2));
+        assertEquals(0.90d, b.score, 1.0e-9d);
+        assertEquals(0.50d, c.score, 1.0e-9d);
+        assertEquals(0.20d, a.score, 1.0e-9d);
+    }
+
     private static UnifiedRagOrchestrator.Doc doc(String id, double score, String source) {
         UnifiedRagOrchestrator.Doc doc = new UnifiedRagOrchestrator.Doc();
         doc.id = id;
@@ -62,6 +84,22 @@ class OrchestratorHypernovaFusionBridgeTest {
         public List<ScoredResult> fuse(List<ScoredResult> in) {
             captured = new ArrayList<>(in);
             return in;
+        }
+    }
+
+    private static final class ReorderingNovaNextFusionService extends NovaNextFusionService {
+        private ReorderingNovaNextFusionService() {
+            super(new NovaNextProperties());
+        }
+
+        @Override
+        public List<ScoredResult> fuse(List<ScoredResult> in) {
+            for (ScoredResult result : in) {
+                if ("orch-fusion-0".equals(result.getId())) result.setAdjustedScore(0.20d);
+                if ("orch-fusion-1".equals(result.getId())) result.setAdjustedScore(0.90d);
+                if ("orch-fusion-2".equals(result.getId())) result.setAdjustedScore(0.50d);
+            }
+            return List.of(in.get(1), in.get(2), in.get(0));
         }
     }
 }

@@ -22,6 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class KnowledgeGraphHandlerHonestyTest {
@@ -32,7 +34,7 @@ class KnowledgeGraphHandlerHonestyTest {
     }
 
     @Test
-    void disabledNeo4jAndJpaSuccessAreDistinctTraceStates() {
+    void disabledNeo4jCannotPromoteUnscopedJpaSuccess() {
         KnowledgeBaseService kb = baseKnowledge();
         when(kb.getConfidenceScore("GENERAL", "Alpha")).thenReturn(Optional.of(0.8));
         when(kb.getLastAccessedAt("GENERAL", "Alpha"))
@@ -43,14 +45,16 @@ class KnowledgeGraphHandlerHonestyTest {
 
         List<Content> out = handler.retrieve(new Query("Alpha relationship"));
 
-        assertEquals(1, out.size());
+        assertTrue(out.isEmpty());
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
         assertEquals("disabled", TraceStore.get("retrieval.kg.neo4j.status"));
-        assertEquals("success", TraceStore.get("retrieval.kg.jpa.status"));
-        assertEquals("success", TraceStore.get("retrieval.dependency.kg.status"));
+        assertEquals(null, TraceStore.get("retrieval.kg.jpa.status"));
+        assertEquals("empty", TraceStore.get("retrieval.dependency.kg.status"));
     }
 
     @Test
-    void neo4jQueryFailureFallsBackToJpaAndRecordsFailure() {
+    void neo4jFailureStaysFailedWithoutUnscopedFallback() {
         KnowledgeBaseService kb = baseKnowledge();
         when(kb.getConfidenceScore("GENERAL", "Alpha")).thenReturn(Optional.of(0.8));
         when(kb.getLastAccessedAt("GENERAL", "Alpha"))
@@ -61,14 +65,16 @@ class KnowledgeGraphHandlerHonestyTest {
 
         List<Content> out = handler.retrieve(new Query("Alpha relationship"));
 
-        assertEquals(1, out.size());
+        assertTrue(out.isEmpty());
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
         assertEquals("failed", TraceStore.get("retrieval.kg.neo4j.status"));
         assertEquals("silent-failure", TraceStore.get("retrieval.kg.neo4j.failureClass"));
-        assertEquals("success", TraceStore.get("retrieval.kg.jpa.status"));
+        assertEquals("failed", TraceStore.get("retrieval.dependency.kg.status"));
     }
 
     @Test
-    void jpaEntityFailureIsNotReportedAsCleanEmpty() {
+    void excludedJpaIsNotAttemptedEvenWhenItsBackendWouldFail() {
         KnowledgeBaseService kb = baseKnowledge();
         when(kb.getConfidenceScore("GENERAL", "Alpha")).thenReturn(Optional.of(0.8));
         when(kb.getLastAccessedAt("GENERAL", "Alpha"))
@@ -80,10 +86,11 @@ class KnowledgeGraphHandlerHonestyTest {
         List<Content> out = handler.retrieve(new Query("Alpha relationship"));
 
         assertTrue(out.isEmpty());
-        assertEquals("failed", TraceStore.get("retrieval.kg.jpa.status"));
-        assertEquals(1L, TraceStore.getLong("retrieval.kg.jpa.failureCount"));
-        assertEquals("jpa_failed", TraceStore.get("retrieval.dependency.kg.status"));
-        assertEquals(Boolean.TRUE, TraceStore.get("retrieval.dependency.kg.fallbackUsed"));
+        assertEquals("unscoped_excluded", TraceStore.get("retrieval.kg.legacy.status"));
+        verify(kb, never()).getAllRelationships(anyString(), anyString());
+        assertEquals(null, TraceStore.get("retrieval.kg.jpa.status"));
+        assertEquals("empty", TraceStore.get("retrieval.dependency.kg.status"));
+        assertEquals(Boolean.FALSE, TraceStore.get("retrieval.dependency.kg.fallbackUsed"));
     }
 
     @Test
@@ -97,7 +104,7 @@ class KnowledgeGraphHandlerHonestyTest {
 
         assertTrue(out.isEmpty());
         assertEquals("failed", TraceStore.get("retrieval.dependency.kg.status"));
-        assertEquals(Boolean.TRUE, TraceStore.get("retrieval.dependency.kg.fallbackUsed"));
+        assertEquals(Boolean.FALSE, TraceStore.get("retrieval.dependency.kg.fallbackUsed"));
         assertEquals("IllegalStateException", TraceStore.get("retrieval.dependency.kg.errorType"));
         assertTrue(String.valueOf(TraceStore.get("retrieval.dependency.kg.queryHash12")).matches("[0-9a-f]{12}"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains(rawQuery));
