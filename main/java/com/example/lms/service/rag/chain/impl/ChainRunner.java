@@ -7,7 +7,9 @@ import com.example.lms.infra.resilience.FaultMaskingLayerMonitor;
 import com.example.lms.infra.resilience.NightmareBreaker;
 import com.example.lms.infra.resilience.NightmareKeys;
 import com.example.lms.service.rag.chain.*;
+import com.example.lms.service.AttachmentOwnerIdentity;
 import com.example.lms.service.chat.ChatStreamEmitter;
+import com.example.lms.service.chat.ChatRunExecutionContext;
 import com.example.lms.prompt.PromptContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,10 +39,36 @@ public class ChainRunner {
     private final ObjectProvider<NightmareBreaker> nightmareBreakerProvider;
 
     public ChainOutcome run(String sessionId, String userId, String userMessage, ChatStreamEmitter emitter) {
+        return run(sessionId, userId, userMessage, emitter, null);
+    }
+
+    public ChainOutcome run(
+            String sessionId,
+            String userId,
+            String userMessage,
+            ChatStreamEmitter emitter,
+            ChatRunExecutionContext runContext) {
+        return run(sessionId, userId, userMessage, emitter, runContext, null);
+    }
+
+    public ChainOutcome run(
+            String sessionId,
+            String userId,
+            String userMessage,
+            ChatStreamEmitter emitter,
+            ChatRunExecutionContext runContext,
+            AttachmentOwnerIdentity attachmentOwnerIdentity) {
         PromptContext ctx = com.example.lms.prompt.PromptContext.builder()
                 .userQuery(userMessage)
                 .build();
-        DefaultChainContext dctx = new DefaultChainContext(sessionId, userId, userMessage, ctx, emitter);
+        DefaultChainContext dctx = new DefaultChainContext(
+                sessionId,
+                userId,
+                userMessage,
+                ctx,
+                emitter,
+                runContext,
+                attachmentOwnerIdentity);
         DefaultChain chain = new DefaultChain(Arrays.asList(
                 locationInterceptHandler,
                 attachmentContextHandler,
@@ -80,7 +108,7 @@ public class ChainRunner {
                     ? null
                     : nightmareBreakerProvider.getIfAvailable();
             if (breaker != null) {
-                breaker.recordSilentFailure(NightmareKeys.RAG_CHAIN_HANDLER, SILENT_CONTEXT, reason);
+                breaker.signalSilentFailure(NightmareKeys.RAG_CHAIN_HANDLER, SILENT_CONTEXT, reason);
             }
         } catch (Exception ignored) {
             // Diagnostics must never change the chain's fail-soft behavior.

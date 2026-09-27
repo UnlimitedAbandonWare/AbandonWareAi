@@ -2,6 +2,7 @@ package com.example.lms.service.rag.chain;
 
 import com.example.lms.dto.AttachmentDto;
 import com.example.lms.prompt.PromptContext;
+import com.example.lms.service.AttachmentOwnerIdentity;
 import dev.langchain4j.data.document.Document;
 import java.util.List;
 
@@ -23,6 +24,11 @@ public interface ChainContext {
      * Logical identifier of the user.
      */
     String userId();
+
+    /** Hash-only attachment owner captured at the authorized request boundary. */
+    default AttachmentOwnerIdentity attachmentOwnerIdentity() {
+        return null;
+    }
 
     /**
      * The raw user message triggering the chain.

@@ -90,26 +90,51 @@ public class ContradictionScorer {
         }
 
         // 4) LLM score (fail-soft)
+        NightmareBreaker.CallPermit permit = null;
+        boolean permitCompleted = false;
+        long started = System.nanoTime();
         try {
-            Double out = (nightmareBreaker != null)
-                    ? nightmareBreaker.execute(
-                            NightmareKeys.RAG_CONTRADICTION_SCORE,
-                            "ContradictionScorer",
-                            () -> llmScore(aa, bb, heuristic),
-                            v -> v == null || Double.isNaN(v),
-                            () -> heuristic
-                    )
-                    : llmScore(aa, bb, heuristic);
-
-            double v = clamp(out == null ? heuristic : out, 0.0, 1.0);
+            permit = nightmareBreaker.acquire(NightmareKeys.RAG_CONTRADICTION_SCORE, "contradiction-score");
+            double parsed = llmScore(aa, bb, heuristic);
+            double v;
+            if (Double.isNaN(parsed)) {
+                permit.completeSilentFailure("contradiction-score", "non-numeric-or-blank");
+                permitCompleted = true;
+                TraceStore.append("aux.failures", "contradiction_non_numeric");
+                v = heuristic;
+            } else {
+                v = clamp(parsed, 0.0, 1.0);
+                permit.completeSuccess(Math.max(0L, (System.nanoTime() - started) / 1_000_000L));
+                permitCompleted = true;
+            }
             lru.put(key, v);
             TraceStore.put("rag.contradiction.score", v);
             return v;
         } catch (Exception e) {
+            if (permit != null && !permitCompleted) {
+                NightmareBreaker.FailureKind kind = NightmareBreaker.classify(e);
+                if (kind == NightmareBreaker.FailureKind.INTERRUPTED
+                        || e instanceof java.util.concurrent.CancellationException) {
+                    permit.completeCancelled(e, "contradiction-score");
+                } else {
+                    permit.completeFailure(kind, e, "contradiction-score");
+                }
+            }
             TraceStore.append("aux.failures", "contradiction_score_failed");
             lru.put(key, heuristic);
             return heuristic;
         }
+    }
+
+    /**
+     * Deterministic in-process score used by policy-constrained retrieval tools.
+     * This path never consults the optional ChatModel or NightmareBreaker.
+     */
+    public double scoreLocalOnly(String a, String b) {
+        if (a == null || b == null || a.isBlank() || b.isBlank()) {
+            return 0.0d;
+        }
+        return clamp(heuristicScore(a.trim(), b.trim()), 0.0d, 1.0d);
     }
 
     private Double llmScore(String a, String b, double heuristic) {
@@ -124,15 +149,7 @@ public class ContradictionScorer {
         String raw = chatModel.chat(List.of(UserMessage.from(contradictionScorePrompt))).aiMessage().text();
         double parsed = parseNumber0to1(raw);
         if (Double.isNaN(parsed)) {
-            if (nightmareBreaker != null) {
-                nightmareBreaker.recordSilentFailure(
-                        NightmareKeys.RAG_CONTRADICTION_SCORE,
-                        snippet(contradictionScorePrompt, 220),
-                        "non_numeric_or_blank"
-                );
-            }
-            TraceStore.append("aux.failures", "contradiction_non_numeric");
-            return heuristic;
+            return Double.NaN;
         }
         return parsed;
     }
@@ -245,13 +262,6 @@ public class ContradictionScorer {
             log.debug("[ContradictionScorer] fail-soft stage={}", "parseNumber0to1");
             return Double.NaN;
         }
-    }
-
-    private static String snippet(String s, int max) {
-        if (s == null) return "";
-        String t = s.replaceAll("\\s+", " ").trim();
-        if (t.length() <= max) return t;
-        return t.substring(0, max) + "...";
     }
 
     private static double clamp(double v, double lo, double hi) {

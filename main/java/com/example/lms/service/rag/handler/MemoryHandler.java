@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.trace.TraceMemoryFingerprintProbe;
 
 
 /**
@@ -29,6 +30,9 @@ public class MemoryHandler {
 
     private final ChatHistoryService historyService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TraceMemoryFingerprintProbe traceMemoryFingerprintProbe;
+
     @Value("${memory.read.max-turns:8}")
     private int maxTurns;
     /** 프롬프트 주입용: 세션의 최근 N턴을 bullet text로 묶어 반환(없으면 null) */
@@ -36,23 +40,37 @@ public class MemoryHandler {
         try {
             if (sessionId == null) {
                 traceRehydrate(false, 0, null, "missing_session");
+                traceMemoryCheckpoint("load", "memory_loader_assembled", null, "", null, List.of(),
+                        Map.of("reason", "missing_session"));
                 return null;
             }
             ChatHistoryService.ConversationMemorySnapshot snapshot =
                     historyService.getConversationMemorySnapshot(sessionId);
             String summary = snapshot.summary();
             List<String> hist = historyService.getFormattedRecentHistory(sessionId, Math.max(1, maxTurns));
+            traceMemoryCheckpoint("raw_snapshot", "memory_loader_raw", sessionId,
+                    rawMemoryText(snapshot, hist), snapshot, hist, Map.of());
+            int rawRecentCount = hist == null ? 0 : hist.size();
             if (hist != null && !hist.isEmpty()) {
                 hist = hist.stream()
                         .filter(line -> !isInjectedRollingSummaryLine(line))
                         .toList();
             }
             int recentCount = hist == null ? 0 : hist.size();
+            traceMemoryCheckpoint("first_refinement", "memory_loader_after_recent_filter", sessionId,
+                    rawMemoryText(snapshot, hist), snapshot, hist,
+                    Map.of("droppedRollingSummaryCount", Math.max(0, rawRecentCount - recentCount)));
             boolean summaryPresent = summary != null && !summary.isBlank();
             traceRehydrate(summaryPresent, recentCount, sessionId, null, snapshot);
             boolean anchorsPresent = snapshot.anchors() != null && !snapshot.anchors().isEmpty();
             boolean importantPresent = snapshot.importantSentences() != null && !snapshot.importantSentences().isEmpty();
-            if (!summaryPresent && !anchorsPresent && !importantPresent && recentCount == 0) return null;
+            if (!summaryPresent && !anchorsPresent && !importantPresent && recentCount == 0) {
+                traceMemoryCheckpoint("second_refinement", "memory_loader_after_section_assembly", sessionId,
+                        "", snapshot, hist, Map.of("empty", true, "sectionCount", 0));
+                traceMemoryCheckpoint("load", "memory_loader_assembled", sessionId, "", snapshot, hist,
+                        Map.of("empty", true));
+                return null;
+            }
             StringBuilder out = new StringBuilder();
             if (summaryPresent) {
                 out.append("Conversation summary:\n")
@@ -73,7 +91,23 @@ public class MemoryHandler {
                 out.append("Recent turns:\n")
                         .append(String.join("\n", hist));
             }
-            return out.toString().strip();
+            String assembled = out.toString().strip();
+            int sectionCount = (summaryPresent ? 1 : 0)
+                    + (anchorsPresent ? 1 : 0)
+                    + (importantPresent ? 1 : 0)
+                    + (recentCount > 0 ? 1 : 0);
+            traceMemoryCheckpoint("second_refinement", "memory_loader_after_section_assembly", sessionId,
+                    assembled, snapshot, hist,
+                    Map.of(
+                            "empty", assembled.isBlank(),
+                            "sectionCount", sectionCount,
+                            "summarySection", summaryPresent,
+                            "anchorSection", anchorsPresent,
+                            "importantSection", importantPresent,
+                            "recentSection", recentCount > 0));
+            traceMemoryCheckpoint("load", "memory_loader_assembled", sessionId, assembled, snapshot, hist,
+                    Map.of("empty", assembled.isBlank()));
+            return assembled;
         } catch (Exception e) {
             log.warn("[AWX][rag][handler] memory loadForSession failed failureReason={} errorType={} sessionHash={}",
                     "memory-load-session-error",
@@ -81,6 +115,64 @@ public class MemoryHandler {
                     SafeRedactor.hash12(String.valueOf(sessionId)));
             return null;
         }
+    }
+
+    private void traceMemoryCheckpoint(String stage,
+                                       String phase,
+                                       Long sessionId,
+                                       String memoryCtx,
+                                       ChatHistoryService.ConversationMemorySnapshot snapshot,
+                                       List<String> recentHistory,
+                                       Map<String, Object> extra) {
+        TraceMemoryFingerprintProbe probe = traceMemoryFingerprintProbe;
+        if (probe == null) {
+            return;
+        }
+        try {
+            Map<String, Object> raw = new LinkedHashMap<>();
+            raw.put("phase", SafeRedactor.traceLabelOrFallback(phase, "unknown"));
+            raw.put("memoryCtx", memoryCtx == null ? "" : memoryCtx);
+            raw.put("memoryLength", memoryCtx == null ? 0 : memoryCtx.length());
+            raw.put("sessionHash", sessionId == null ? "" : SafeRedactor.hashValue(String.valueOf(sessionId)));
+            raw.put("recentTurnCount", recentHistory == null ? 0 : recentHistory.size());
+            raw.put("summaryPresent", snapshot != null && snapshot.summary() != null && !snapshot.summary().isBlank());
+            raw.put("anchorCount", snapshot == null || snapshot.anchors() == null ? 0 : snapshot.anchors().size());
+            raw.put("sentenceCount", snapshot == null ? 0 : snapshot.sentenceCount());
+            raw.put("tokenEstimate", snapshot == null ? 0 : snapshot.tokenEstimate());
+            raw.put("promoted", snapshot != null && snapshot.promoted());
+            if (extra != null && !extra.isEmpty()) {
+                raw.putAll(extra);
+            }
+            probe.checkpoint(stage, "MemoryHandler.loadForSession", raw);
+        } catch (RuntimeException ex) {
+            TraceStore.put("memory.loader.checkpoint.suppressed", true);
+            TraceStore.put("memory.loader.checkpoint.suppressed.stage",
+                    SafeRedactor.traceLabelOrFallback(stage, "unknown"));
+            TraceStore.put("memory.loader.checkpoint.suppressed.errorHash",
+                    SafeRedactor.hashValue(messageOf(ex)));
+            RetrievalHandlerTraceSuppressions.traceSuppressed(log, "MemoryHandler",
+                    "memory.loader.checkpoint", ex);
+        }
+    }
+
+    private static String rawMemoryText(ChatHistoryService.ConversationMemorySnapshot snapshot,
+                                        List<String> recentHistory) {
+        StringBuilder out = new StringBuilder();
+        if (snapshot != null) {
+            if (snapshot.summary() != null && !snapshot.summary().isBlank()) {
+                out.append(snapshot.summary().strip()).append('\n');
+            }
+            if (snapshot.anchors() != null && !snapshot.anchors().isEmpty()) {
+                out.append(String.join("\n", snapshot.anchors())).append('\n');
+            }
+            if (snapshot.importantSentences() != null && !snapshot.importantSentences().isEmpty()) {
+                out.append(String.join("\n", snapshot.importantSentences())).append('\n');
+            }
+        }
+        if (recentHistory != null && !recentHistory.isEmpty()) {
+            out.append(String.join("\n", recentHistory));
+        }
+        return out.toString().strip();
     }
 
     public List<Content> loadRecoveryContents(Long sessionId, int maxItems) {
@@ -181,6 +273,10 @@ public class MemoryHandler {
         }
         int max = Math.max(128, maxChars);
         return text.length() <= max ? text : text.substring(0, max);
+    }
+
+    private static String messageOf(Throwable t) {
+        return t == null ? null : t.getMessage();
     }
 
     private static void traceRehydrate(boolean summaryPresent, int recentTurnCount, Long sessionId, String reason) {

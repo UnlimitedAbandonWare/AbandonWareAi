@@ -4,6 +4,8 @@ import com.example.lms.search.TraceStore;
 import com.example.lms.uaw.thumbnail.UawThumbnailPersistedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -13,7 +15,8 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 @Component
 public class GraphRagThumbnailBridge {
@@ -24,9 +27,18 @@ public class GraphRagThumbnailBridge {
     private static final int MAX_RELATION_THUMBNAIL_PAIRS = 16;
 
     private final GraphRagChunkingService chunkingService;
+    private final Executor thumbnailExecutor;
 
     public GraphRagThumbnailBridge(GraphRagChunkingService chunkingService) {
+        this(chunkingService, Runnable::run);
+    }
+
+    @Autowired
+    public GraphRagThumbnailBridge(
+            GraphRagChunkingService chunkingService,
+            @Qualifier("applicationTaskExecutor") Executor thumbnailExecutor) {
         this.chunkingService = chunkingService;
+        this.thumbnailExecutor = thumbnailExecutor;
     }
 
     @EventListener
@@ -34,7 +46,23 @@ public class GraphRagThumbnailBridge {
         if (event == null || event.graphText().isBlank()) {
             return;
         }
-        CompletableFuture.runAsync(() -> ingestNow(event));
+        try {
+            thumbnailExecutor.execute(() -> {
+                try {
+                    ingestNow(event);
+                } finally {
+                    TraceStore.inc("uaw.thumbnail.relationThumbnail.submit.completedCount");
+                }
+            });
+            TraceStore.inc("uaw.thumbnail.relationThumbnail.submit.acceptedCount");
+        } catch (RejectedExecutionException rejected) {
+            TraceStore.inc("uaw.thumbnail.relationThumbnail.submit.rejectedCount");
+            TraceStore.put("uaw.thumbnail.relationThumbnail.submit.failureClass",
+                    rejected.getClass().getSimpleName());
+            TraceStore.put("uaw.thumbnail.relationThumbnail.submit.fallback", "skip_thumbnail_ingest");
+            log.debug("[AWX][brain-state][thumbnail] submission rejected failureClass={} captionHash={}",
+                    rejected.getClass().getSimpleName(), BrainStateText.hash12(event.caption()));
+        }
     }
 
     void ingestNow(UawThumbnailPersistedEvent event) {

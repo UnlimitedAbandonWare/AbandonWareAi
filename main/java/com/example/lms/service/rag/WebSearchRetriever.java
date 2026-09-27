@@ -146,7 +146,12 @@ public class WebSearchRetriever implements ContentRetriever {
 
     @Override
     public List<Content> retrieve(Query query) {
+        return TraceStore.withSearchContext("retrievalExecutionId", () -> retrieveObserved(query));
+    }
+
+    private List<Content> retrieveObserved(Query query) {
         String normalized = normalize(query != null ? query.text() : "");
+        final String requestedIdentityQuery = normalized;
 
         java.util.Map<String, Object> meta = new java.util.HashMap<>(toMetaMap(query));
         meta.putIfAbsent("purpose", "WEB_SEARCH");
@@ -180,23 +185,43 @@ public class WebSearchRetriever implements ContentRetriever {
         // instead of triggering a new
         // external search call. This helps prevent "web=0" starvation loops when a base
         // SERP was already fetched.
-        final java.util.List<String> requestedSites = extractSiteFilters(normalized);
+        final java.util.List<String> requestedSites = extractSiteFilters(requestedIdentityQuery);
         final boolean hasSiteFilters = requestedSites != null && !requestedSites.isEmpty();
-        final String baseQueryKey = canonicalBaseQuery(normalized);
+        final String baseQueryKey = canonicalBaseQuery(requestedIdentityQuery);
         // 쿼리 도메인 추정: null 가능성을 고려하여 GENERAL 기본값 사용
         String domain = domainDetector != null ? domainDetector.detect(normalized) : "GENERAL";
         boolean isGeneral = "GENERAL".equalsIgnoreCase(domain);
 
         int reqTopK = metaInt(meta, "webTopK", this.topK);
         long webBudgetMs = metaLong(meta, "webBudgetMs", -1L);
+        long webStartedMs = System.currentTimeMillis();
+        TraceStore.put("webSearch.providerAttempts", 0);
         boolean allowWeb = metaBool(meta, "allowWeb", true);
         if (!allowWeb) {
+            com.example.lms.search.RequestTrace.emit("web.search", "skip", "reason=allowWeb_false");
             traceWebSearchCounts(normalized, reqTopK, 0, 0, "allowWeb_false");
             return java.util.Collections.emptyList();
         }
 
+        // Request-scoped deadline: when the caller's TimeBudget is present it
+        // caps webBudgetMs; once exhausted, no new provider call is started.
+        final com.abandonware.ai.addons.budget.TimeBudget requestBudget =
+                com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        if (requestBudget != null) {
+            long requestRemaining = requestBudget.remainingMillis();
+            if (requestRemaining <= 0L) {
+                com.example.lms.search.DeadlineProbe.skip("web.search", "request_budget_exhausted");
+                traceWebSearchCounts(normalized, reqTopK, 0, 0, "request_budget_exhausted");
+                return java.util.Collections.emptyList();
+            }
+            webBudgetMs = webBudgetMs > 0 ? Math.min(webBudgetMs, requestRemaining) : requestRemaining;
+        }
+        com.example.lms.search.DeadlineProbe.enter("web.search");
+
         int k = Math.max(reqTopK, MIN_SNIPPETS);
         int maxAttempts = (webBudgetMs > 0 ? (webBudgetMs <= 1500 ? 1 : (webBudgetMs <= 3000 ? 2 : 3)) : 3);
+        com.example.lms.search.RequestTrace.emit("web.search", "enter",
+                "k=" + k + ";webBudgetMs=" + webBudgetMs + ";maxAttempts=" + maxAttempts);
 
         // Extract a version token from the query. When present, enforce that
         // each snippet contains the exact version. This helps prevent
@@ -215,12 +240,17 @@ public class WebSearchRetriever implements ContentRetriever {
         List<String> first = null;
 
         Object pq = meta.get("prefetch.web.query");
+        Object pqh = meta.get("prefetch.web.queryHash");
         Object ps = meta.get("prefetch.web.snippets");
         java.util.List<String> prefetchSnips = java.util.Collections.emptyList();
         String prefetchKeyNorm = null;
+        boolean prefetchIdentityMatch = false;
+        String prefetchMismatchReason = "identity_missing";
+        TraceStore.put("webSearch.prefetch.present", false);
+        TraceStore.put("webSearch.prefetch.identityPresent", false);
+        TraceStore.put("webSearch.prefetch.identityMatch", false);
 
-        if (pq != null && ps instanceof java.util.List<?> raw) {
-            prefetchKeyNorm = normalize(String.valueOf(pq));
+        if (ps instanceof java.util.List<?> raw) {
             java.util.List<String> out = new java.util.ArrayList<>();
             for (Object o : raw) {
                 if (o == null)
@@ -231,11 +261,63 @@ public class WebSearchRetriever implements ContentRetriever {
             }
             prefetchSnips = out;
 
-            // Exact-match prefetch (unchanged behaviour)
-            if (!prefetchKeyNorm.isBlank() && prefetchKeyNorm.equalsIgnoreCase(normalized) && !out.isEmpty()) {
-                usedPrefetched = true;
-                first = out;
-                reusedBaseSerpSource = "prefetch.exact";
+            if (!out.isEmpty()) {
+                prefetchKeyNorm = pq == null ? null : normalize(String.valueOf(pq));
+                String suppliedHash = pqh == null ? null : String.valueOf(pqh);
+                String expectedHash = pq == null ? null : SafeRedactor.hashValue(String.valueOf(pq));
+                String prefetchBaseIdentity = canonicalQueryIdentity(prefetchKeyNorm);
+                String currentBaseIdentity = canonicalQueryIdentity(requestedIdentityQuery);
+                java.util.List<String> prefetchSites = canonicalScopeValues(extractSiteFilters(prefetchKeyNorm));
+                java.util.List<String> currentSites = canonicalScopeValues(requestedSites);
+                java.util.List<String> prefetchProviders = canonicalScopeValues(meta.get("prefetch.web.providerScope"));
+                java.util.List<String> currentProviders = canonicalScopeValues(meta.get("webProviders"));
+
+                boolean identityPresent = !prefetchBaseIdentity.isBlank()
+                        && suppliedHash != null
+                        && suppliedHash.equals(expectedHash);
+                boolean siteScopeMatches = prefetchSites.equals(currentSites);
+                boolean providerScopeMatches = prefetchProviders.equals(currentProviders);
+                boolean searchModeMatches = optionalScopeMatches(
+                        meta.get("prefetch.web.searchMode"), meta.get("searchMode"));
+                boolean filterScopeMatches = optionalScopeMatches(
+                        meta.get("prefetch.web.filterScope"), meta.get("webFilterScope"));
+
+                if (!identityPresent) {
+                    prefetchMismatchReason = suppliedHash == null || prefetchBaseIdentity.isBlank()
+                            ? "identity_missing"
+                            : "identity_invalid";
+                } else if (!siteScopeMatches) {
+                    prefetchMismatchReason = "site_scope_mismatch";
+                } else if (!providerScopeMatches) {
+                    prefetchMismatchReason = "provider_scope_mismatch";
+                } else if (!searchModeMatches) {
+                    prefetchMismatchReason = "search_mode_mismatch";
+                } else if (!filterScopeMatches) {
+                    prefetchMismatchReason = "filter_scope_mismatch";
+                } else if (!prefetchBaseIdentity.equals(currentBaseIdentity)) {
+                    prefetchMismatchReason = "query_mismatch";
+                } else {
+                    prefetchIdentityMatch = true;
+                    prefetchMismatchReason = "none";
+                }
+
+                TraceStore.put("webSearch.prefetch.present", true);
+                TraceStore.put("webSearch.prefetch.identityPresent", identityPresent);
+                TraceStore.put("webSearch.prefetch.identityMatch", prefetchIdentityMatch);
+                TraceStore.put("webSearch.prefetch.mismatchReason", prefetchMismatchReason);
+                String identityFingerprint = SafeRedactor.hash12(String.join("|",
+                        prefetchBaseIdentity,
+                        String.join(",", prefetchSites),
+                        String.join(",", prefetchProviders)));
+                if (identityFingerprint != null) {
+                    TraceStore.put("webSearch.prefetch.queryFingerprint12", identityFingerprint);
+                }
+
+                if (prefetchIdentityMatch && !hasSiteFilters) {
+                    usedPrefetched = true;
+                    first = out;
+                    reusedBaseSerpSource = "prefetch.canonical";
+                }
             }
         }
 
@@ -249,7 +331,8 @@ public class WebSearchRetriever implements ContentRetriever {
                 minSiteFilteredDocsToSkipSearch);
 
         // Base-key prefetch reuse for site: filters
-        if (first == null && hasSiteFilters && prefetchKeyNorm != null && !prefetchKeyNorm.isBlank()
+        if (first == null && prefetchIdentityMatch && hasSiteFilters
+                && prefetchKeyNorm != null && !prefetchKeyNorm.isBlank()
                 && !prefetchSnips.isEmpty()) {
             String prefetchBaseKey = canonicalBaseQuery(prefetchKeyNorm);
             if (!prefetchBaseKey.isBlank() && prefetchBaseKey.equalsIgnoreCase(baseQueryKey)) {
@@ -298,6 +381,9 @@ public class WebSearchRetriever implements ContentRetriever {
         }
 
         if (!usedPrefetched) {
+            if (!prefetchSnips.isEmpty()) {
+                TraceStore.put("webSearch.prefetch.decision", "fresh_search");
+            }
             java.util.List<String> searched = searchWithAggressiveRetry(
                     normalized,
                     k * 2,
@@ -319,6 +405,9 @@ public class WebSearchRetriever implements ContentRetriever {
             } else {
                 first = searched;
             }
+        }
+        if (usedPrefetched && !prefetchSnips.isEmpty()) {
+            TraceStore.put("webSearch.prefetch.decision", "reuse");
         }
 
         // Persist the base SERP snippets for later site-filter reuse within the same
@@ -348,9 +437,23 @@ public class WebSearchRetriever implements ContentRetriever {
                 var q = new com.acme.aicore.domain.model.WebSearchQuery(normalized);
                 // [Patch] Limit fanout to two providers (Naver, Brave) and
                 // allow up to 5 seconds to account for network variability.
+                // The block duration never exceeds the remaining request budget.
+                long multiBudgetMs = webBudgetMs > 0 ? Math.min(5000L, Math.max(600L, webBudgetMs)) : 5000L;
+                if (requestBudget != null) {
+                    multiBudgetMs = Math.min(multiBudgetMs, requestBudget.remainingMillis());
+                }
+                if (multiBudgetMs <= 0L) {
+                    TraceStore.put("webSearch.multiSearch.budgetExhausted", true);
+                    com.example.lms.search.DeadlineProbe.skip("web.multiSearch", "budget_exhausted");
+                } else {
+                // Provider-internal caching is not visible at this boundary:
+                // a returned bundle may be a cache hit — record it honestly.
+                com.example.lms.search.RequestTrace.emit("web.multi", "call",
+                        "bounded_ms=" + multiBudgetMs + ";cache_obs=not_observed");
                 var bundle = multiSearch.searchMulti(q, 2)
-                        .block(java.time.Duration
-                                .ofMillis(webBudgetMs > 0 ? Math.min(5000L, Math.max(600L, webBudgetMs)) : 5000L));
+                        .block(java.time.Duration.ofMillis(multiBudgetMs));
+                com.example.lms.search.RequestTrace.emit("web.multi", "result",
+                        "docs=" + (bundle != null && bundle.docs() != null ? bundle.docs().size() : 0));
                 if (bundle != null && bundle.docs() != null) {
                     supplemental = bundle.docs().stream()
                             .map(d -> {
@@ -359,6 +462,7 @@ public class WebSearchRetriever implements ContentRetriever {
                             })
                             .filter(s -> s != null && !s.isBlank())
                             .toList();
+                }
                 }
             } catch (Exception e) {
                 // ignore errors; supplemental remains empty
@@ -423,8 +527,29 @@ public class WebSearchRetriever implements ContentRetriever {
         }
 
         // 2) 폴백: 지나친 공손어/호칭 정리
-        List<String> fallback = (usedPrefetched || ranked.size() >= MIN_SNIPPETS) ? List.of()
-                : webSearchProvider.search(normalized.replace("교수님", "교수").replace("님", ""), k);
+        String courtesyQuery = normalized.replace("교수님", "교수").replace("님", "");
+        Object attemptsValue = TraceStore.get("webSearch.providerAttempts");
+        int attemptsUsed = attemptsValue instanceof Number n ? n.intValue() : 0;
+        String failureClass = canonicalWebFailureClass(first == null ? 0 : first.size(), ranked.size(), null);
+        List<String> fallback = List.of();
+        if (!usedPrefetched && ranked.size() < MIN_SNIPPETS && !courtesyQuery.equals(normalized)
+                && attemptsUsed < maxAttempts
+                && (requestBudget == null || requestBudget.remainingMillis() > 0L)
+                && (webBudgetMs <= 0 || System.currentTimeMillis() - webStartedMs < webBudgetMs)
+                && ("none".equals(failureClass) || "provider_empty".equals(failureClass)
+                    || "after_filter_starvation".equals(failureClass))) {
+            try {
+                TraceStore.put("webSearch.providerAttempts", attemptsUsed + 1);
+                com.example.lms.search.RequestTrace.emit("web.fallback", "call",
+                        "attempt=" + (attemptsUsed + 1) + ";reason=courtesy");
+                List<String> alternate = webSearchProvider.search(courtesyQuery, k);
+                fallback = alternate == null ? List.of() : alternate;
+            } catch (Exception failure) {
+                TraceStore.put("webSearch.providerFailureClass", webExceptionFailureClass(failure));
+                log.debug("[WebSearchRetriever] courtesy fallback failed; preserving prior results. errorType={}",
+                        SafeRedactor.traceLabelOrFallback(failure.getClass().getSimpleName(), "unknown"));
+            }
+        }
 
         List<String> finalSnippets = java.util.stream.Stream.of(ranked, fallback)
                 .flatMap(java.util.Collection::stream)
@@ -483,8 +608,23 @@ public class WebSearchRetriever implements ContentRetriever {
                 out.add(toWebContent(s, url, providerName)); // URL 없음 → 기존 스니펫 사용
                 continue;
             }
+            // Per-page scraping consumes the shared request budget: when it is
+            // exhausted, no new wire call is started and the snippet fallback
+            // is used for the remaining pages.
+            long scrapeBudgetMs = requestBudget != null
+                    ? requestBudget.remainingMillis()
+                    : Long.MAX_VALUE;
+            if (scrapeBudgetMs <= 0L) {
+                TraceStore.put("webSearch.scrape.budgetExhausted", true);
+                com.example.lms.search.DeadlineProbe.skip("web.scrape", "budget_exhausted");
+                out.add(toWebContent(s, url, providerName));
+                continue;
+            }
             try {
-                String body = pageScraper.fetchText(url, /* timeoutMs */6000);
+                com.example.lms.search.RequestTrace.emit("web.scrape", "page",
+                        "timeout_ms=" + (int) Math.min(6000L, scrapeBudgetMs));
+                String body = pageScraper.fetchText(url,
+                        (int) Math.min(6000L, scrapeBudgetMs));
                 // SnippetPruner는 (String, String) 시그니처만 존재 → 단일 결과로 처리
                 // 🔵 우리 쪽 간단 딥 스니펫 추출(임베딩 없이 키워드/길이 기반)
                 String picked = pickByHeuristic(query.text(), body, 480);
@@ -537,6 +677,8 @@ public class WebSearchRetriever implements ContentRetriever {
         }
         java.util.List<Content> limited = out.stream().limit(k).toList();
         traceWebSearchCounts(normalized, k, webSearchReturnedCount, limited.size(), null);
+        com.example.lms.search.DeadlineProbe.finish("web.search");
+        com.example.lms.search.RequestTrace.emit("web.search", "finish", "out=" + limited.size());
         return limited;
     }
 
@@ -553,9 +695,17 @@ public class WebSearchRetriever implements ContentRetriever {
             TraceStore.put("webSearch.timeoutMs", 0);
             TraceStore.put("webSearch.returnedCount", returned);
             TraceStore.put("webSearch.afterFilterCount", after);
+            ai.abandonware.nova.orch.trace.OrchEventEmitter.ragEvent(
+                    "rag.pipeline", "retrieve", "web_retrieval", "complete", "WebSearchRetriever",
+                    after > 0 ? "ok" : "empty",
+                    java.util.Map.of("queryHash", SafeRedactor.hashValue(query), "requestedTopK", requested,
+                            "mode", "all_selected_provider_and_cache_results"),
+                    java.util.Map.of("returnedCount", returned, "afterFilterCount", after, "selectedCount", after),
+                    java.util.Map.of(), java.util.Map.of());
             TraceStore.put("webSearch.zeroResults", returned == 0);
             TraceStore.put("webSearch.afterFilterStarved", returned > 0 && after == 0);
             TraceStore.put("webSearch.providerDisabled", disabledReason != null && !disabledReason.isBlank());
+            TraceStore.put("webSearch.failureClass", canonicalWebFailureClass(returned, after, disabledReason));
             TraceStore.put("webSearch.queryHash", query == null ? "" : org.apache.commons.codec.digest.DigestUtils.sha256Hex(query));
             TraceStore.put("webSearch.queryLength", query == null ? 0 : query.length());
             TraceStore.put("webSearch.queryTokenBucket", queryTokenBucket(query));
@@ -571,6 +721,77 @@ public class WebSearchRetriever implements ContentRetriever {
             // fail-soft telemetry only
             log.debug("[WebSearchRetriever] fail-soft stage={}", "traceWebSearchCounts");
         }
+    }
+
+    private static String canonicalWebFailureClass(int returned, int after, String disabledReason) {
+        if (after > 0) return "none";
+        if (returned > 0) return "after_filter_starvation";
+        if (disabledReason != null && !disabledReason.isBlank()) return "provider_disabled";
+        String statusCategory = webHttpFailureCategory(TraceStore.get("web.brave.httpStatus"));
+        if (statusCategory != null && !"provider_error".equals(statusCategory)) return statusCategory;
+        for (String key : List.of("web.failureClass", "web.naver.failureClass",
+                "web.brave.failureReason", "webSearch.providerFailureClass")) {
+            String category = webFailureCategory(TraceStore.get(key));
+            if (category != null) return category;
+        }
+        if (statusCategory != null) return statusCategory;
+        Object last = TraceStore.get("web.await.last");
+        if (last instanceof java.util.Map<?, ?> event) {
+            statusCategory = webHttpFailureCategory(event.get("httpStatus"));
+            if (statusCategory != null) return statusCategory;
+            for (String key : List.of("cause", "errorType", "timeoutCategory")) {
+                String category = webFailureCategory(event.get(key));
+                if (category != null) return category;
+            }
+        }
+        return "provider_empty";
+    }
+
+    private static String webFailureCategory(Object value) {
+        if (!(value instanceof String text)) return null;
+        return switch (text.toLowerCase(java.util.Locale.ROOT)) {
+            case "auth", "auth_or_config", "http-401", "http-403" -> "auth_or_config";
+            case "rate_limit", "rate-limit", "http-429" -> "rate_limit";
+            case "timeout", "timeout_or_budget", "soft_timeout", "hard_timeout",
+                    "budget-exhausted", "budget_exhausted" -> "timeout_or_budget";
+            case "parse_error", "parse-error", "jsonparseexception", "jsonmappingexception",
+                    "jsonprocessingexception", "decodingexception" -> "parse_error";
+            case "breaker_or_cooldown", "cooldown", "breaker-open" -> "breaker_or_cooldown";
+            case "cancelled", "canceled" -> "cancelled";
+            case "provider_error", "provider-exception", "exception", "http-error" -> "provider_error";
+            default -> null;
+        };
+    }
+
+    private static String webHttpFailureCategory(Object value) {
+        if (!(value instanceof Number number)) return null;
+        int status = number.intValue();
+        if (status == 401 || status == 403) return "auth_or_config";
+        if (status == 429) return "rate_limit";
+        if (status == 408 || status == 504) return "timeout_or_budget";
+        return status >= 400 ? "provider_error" : null;
+    }
+
+    private static String webExceptionFailureClass(Throwable failure) {
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < 20; depth++) {
+            if (current instanceof com.fasterxml.jackson.core.JsonProcessingException) return "parse_error";
+            if (current instanceof java.util.concurrent.TimeoutException
+                    || current instanceof java.net.SocketTimeoutException) return "timeout_or_budget";
+            if (current instanceof java.util.concurrent.CancellationException
+                    || current instanceof InterruptedException) return "cancelled";
+            String status = null;
+            if (current instanceof org.springframework.web.reactive.function.client.WebClientResponseException http) {
+                status = webHttpFailureCategory(http.getStatusCode().value());
+            } else if (current instanceof dev.langchain4j.exception.HttpException http) {
+                status = webHttpFailureCategory(http.statusCode());
+            }
+            if (status != null) return status;
+            Throwable next = current.getCause();
+            if (next == current) break;
+            current = next;
+        }
+        return "provider_error";
     }
 
     private static String queryTokenBucket(String query) {
@@ -761,6 +982,17 @@ public class WebSearchRetriever implements ContentRetriever {
     }
 
     /**
+     * True when a request-scoped {@link com.abandonware.ai.addons.budget.TimeBudget}
+     * exists and is exhausted or cancelled. Downstream stages consult this so a
+     * finished request cannot start new provider calls.
+     */
+    private static boolean requestBudgetExhausted() {
+        com.abandonware.ai.addons.budget.TimeBudget budget =
+                com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        return budget != null && budget.expired();
+    }
+
+    /**
      * [ECO-FIX v3.0] Aggressive Persistence Loop
      * 네이버/외부 검색이 타임아웃(3초) 또는 일시적 장애로 0건을 줄 때,
      * 포기하지 않고 최대 3회까지 재시도하여 결과를 확보하는 루프입니다.
@@ -777,7 +1009,8 @@ public class WebSearchRetriever implements ContentRetriever {
         final long deadlineMs = (budgetMs > 0 ? System.currentTimeMillis() + budgetMs : Long.MAX_VALUE);
 
         for (int attempt = 1; attempt <= attempts; attempt++) {
-            if (System.currentTimeMillis() > deadlineMs) {
+            if (System.currentTimeMillis() > deadlineMs || requestBudgetExhausted()) {
+                com.example.lms.search.DeadlineProbe.skip("web.retry", "budget_exhausted");
                 log.warn("⚠️ [WebSearch] budget exhausted ({}ms). Stop retrying. queryHash12={} queryLength={}",
                         budgetMs, SafeRedactor.hash12(query), query == null ? 0 : query.length());
                 break;
@@ -787,7 +1020,11 @@ public class WebSearchRetriever implements ContentRetriever {
             boolean hadRaw = false;
 
             try {
+                TraceStore.put("webSearch.providerAttempts", attempt);
+                com.example.lms.search.RequestTrace.emit("web.provider", "call", "attempt=" + attempt);
                 List<String> rawResults = webSearchProvider.search(query, k);
+                com.example.lms.search.RequestTrace.emit("web.provider", "result",
+                        "attempt=" + attempt + ";raw=" + (rawResults == null ? 0 : rawResults.size()));
 
                 if (rawResults != null && !rawResults.isEmpty()) {
                     hadRaw = true;
@@ -819,6 +1056,7 @@ public class WebSearchRetriever implements ContentRetriever {
                     log.warn("⚠️ [WebSearch] Attempt {}/{} returned 0 results.", attempt, attempts);
                 }
             } catch (Exception e) {
+                TraceStore.put("webSearch.providerFailureClass", webExceptionFailureClass(e));
                 log.warn("[AWX][search][web] attempt failed failureReason={} errorType={} attempt={}/{} queryHash12={} queryLength={}",
                         "provider-exception",
                         SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"),
@@ -1066,15 +1304,75 @@ public class WebSearchRetriever implements ContentRetriever {
         return String.join(" ", keep).trim();
     }
 
+    private static String canonicalQueryIdentity(String query) {
+        return canonicalBaseQuery(normalize(query))
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase(java.util.Locale.ROOT);
+    }
+
+    public static boolean matchesPrefetchQueryIdentity(String prefetchedQuery, String requestedQuery) {
+        String prefetchedBase = canonicalQueryIdentity(prefetchedQuery);
+        String requestedBase = canonicalQueryIdentity(requestedQuery);
+        return !prefetchedBase.isBlank()
+                && prefetchedBase.equals(requestedBase)
+                && canonicalScopeValues(extractSiteFilters(prefetchedQuery))
+                        .equals(canonicalScopeValues(extractSiteFilters(requestedQuery)));
+    }
+
+    public static String prefetchQueryFingerprint12(String query) {
+        String base = canonicalQueryIdentity(query);
+        if (base.isBlank()) {
+            return null;
+        }
+        return SafeRedactor.hash12(String.join("|",
+                base,
+                String.join(",", canonicalScopeValues(extractSiteFilters(query)))));
+    }
+
+    private static java.util.List<String> canonicalScopeValues(Object raw) {
+        if (raw == null) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.ArrayList<String> values = new java.util.ArrayList<>();
+        if (raw instanceof java.util.Collection<?> collection) {
+            for (Object value : collection) {
+                if (value != null) {
+                    values.add(String.valueOf(value));
+                }
+            }
+        } else {
+            values.addAll(java.util.Arrays.asList(String.valueOf(raw).split("[,;]")));
+        }
+        return values.stream()
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .map(value -> value.toLowerCase(java.util.Locale.ROOT))
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    private static boolean optionalScopeMatches(Object prefetchedScope, Object currentScope) {
+        if (prefetchedScope == null) {
+            return true;
+        }
+        return canonicalScopeValues(prefetchedScope).equals(canonicalScopeValues(currentScope));
+    }
+
     @SuppressWarnings("unchecked")
     private static java.util.List<String> serpCacheGet(String baseKey) {
         if (baseKey == null || baseKey.isBlank()) {
             return null;
         }
+        String cacheKey = com.example.lms.util.HashUtil.sha256(canonicalQueryIdentity(baseKey));
+        if (cacheKey == null) {
+            return null;
+        }
         Object o = com.example.lms.search.TraceStore.get(SERP_CACHE_TRACE_KEY);
         if (o instanceof java.util.Map<?, ?> m) {
             try {
-                return ((java.util.Map<String, java.util.List<String>>) m).get(baseKey);
+                return ((java.util.Map<String, java.util.List<String>>) m).get(cacheKey);
             } catch (ClassCastException ignore) {
                 log.debug("[WebSearchRetriever] fail-soft stage={}", "serpCache.getCast");
                 return null;
@@ -1091,6 +1389,10 @@ public class WebSearchRetriever implements ContentRetriever {
         if (snippets == null || snippets.isEmpty()) {
             return;
         }
+        String cacheKey = com.example.lms.util.HashUtil.sha256(canonicalQueryIdentity(baseKey));
+        if (cacheKey == null) {
+            return;
+        }
 
         java.util.Map<String, java.util.List<String>> cache;
         Object o = com.example.lms.search.TraceStore.get(SERP_CACHE_TRACE_KEY);
@@ -1099,15 +1401,14 @@ public class WebSearchRetriever implements ContentRetriever {
                 cache = (java.util.Map<String, java.util.List<String>>) m;
             } catch (ClassCastException e) {
                 cache = new java.util.concurrent.ConcurrentHashMap<>();
-                com.example.lms.search.TraceStore.put(SERP_CACHE_TRACE_KEY, cache);
             }
         } else {
             cache = new java.util.concurrent.ConcurrentHashMap<>();
-            com.example.lms.search.TraceStore.put(SERP_CACHE_TRACE_KEY, cache);
         }
+        com.example.lms.search.TraceStore.putInternal(SERP_CACHE_TRACE_KEY, cache);
 
         java.util.List<String> trimmed = snippets.stream().distinct().limit(SERP_CACHE_MAX).toList();
-        cache.put(baseKey, trimmed);
+        cache.put(cacheKey, trimmed);
     }
 
     private static java.util.List<String> filterSnippetsBySites(

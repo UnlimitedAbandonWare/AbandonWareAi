@@ -39,16 +39,20 @@ public class EvidenceGate {
     private final double followupThreshold;
     private final double memoryWeight;
     private final double kbWeight;
+    /** When true, totalEvidence==0 soft-allows (log + pass) instead of hard block. Prefer local profile override. */
+    private final boolean allowEmptyEvidence;
 
     public EvidenceGate(
             @Value("${verifier.coverage.threshold.default:0.05}") double defaultThreshold,
             @Value("${verifier.coverage.threshold.followup:0.02}") double followupThreshold,
             @Value("${verifier.coverage.weight.memory:0.6}") double memoryWeight,
-            @Value("${verifier.coverage.weight.kb:0.8}") double kbWeight) {
+            @Value("${verifier.coverage.weight.kb:0.8}") double kbWeight,
+            @Value("${gate.evidence.allow-empty:false}") boolean allowEmptyEvidence) {
         this.defaultThreshold = defaultThreshold;
         this.followupThreshold = followupThreshold;
         this.memoryWeight = memoryWeight;
         this.kbWeight = kbWeight;
+        this.allowEmptyEvidence = allowEmptyEvidence;
     }
 
     /**
@@ -112,8 +116,13 @@ public boolean hasSufficientCoverage(String question,
     int kbCount = safeSize(kbLines);
     int totalEvidence = ragCount + memCount + kbCount;
     GuardProfile profile = guardProfileProps.currentProfile();
-    // 1) 증거가 아예 없으면 둘 다 실패
+    // 1) 증거가 아예 없으면 기본은 실패. gate.evidence.allow-empty=true 이면 soft-allow (힌트/대화 유지).
     if (totalEvidence == 0) {
+        if (allowEmptyEvidence) {
+            log.info("[EVIDENCE_GATE] No evidence at all -> soft allow (gate.evidence.allow-empty=true) queryHash12={} queryLength={}",
+                    SafeRedactor.hash12(question), question.length());
+            return true;
+        }
         log.info("[EVIDENCE_GATE] No evidence at all -> block queryHash12={} queryLength={}",
                 SafeRedactor.hash12(question), question.length());
         return false;

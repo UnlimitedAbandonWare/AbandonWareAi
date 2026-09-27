@@ -1,6 +1,7 @@
 package com.example.lms.service.rag.chain;
 
 import com.example.lms.service.AttachmentService;
+import com.example.lms.service.AttachmentOwnerIdentity;
 import com.example.lms.service.rag.rerank.CrossEncoderReranker;
 import com.example.lms.service.rag.rerank.DppDiversityReranker;
 import com.example.lms.search.TraceStore;
@@ -51,8 +52,10 @@ public class AttachmentContextHandler implements ChainLink {
             // Look up any attachments associated with the current session.  When
             // attachments exist, invoke ctx.withAttachment for each so that
             // downstream prompt builders can incorporate summaries or previews.
-            var atts = attachmentService == null ? java.util.List.<com.example.lms.dto.AttachmentDto>of()
-                    : attachmentService.findBySession(ctx.sessionId());
+            AttachmentOwnerIdentity ownerIdentity = ctx == null ? null : ctx.attachmentOwnerIdentity();
+            var atts = attachmentService == null || ownerIdentity == null
+                    ? java.util.List.<com.example.lms.dto.AttachmentDto>of()
+                    : attachmentService.findBySession(ctx.sessionId(), ownerIdentity);
             int activeCount = 0;
             int skippedCount = 0;
             List<String> attachmentIds = new ArrayList<>();
@@ -74,7 +77,7 @@ public class AttachmentContextHandler implements ChainLink {
                     }
                 }
             }
-            CihPipelineTrace pipeline = runIqrPipeline(ctx, attachmentIds);
+            CihPipelineTrace pipeline = runIqrPipeline(ctx, attachmentIds, ownerIdentity);
             traceCihRag(activeCount, skippedCount, pipeline);
             return next.proceed(ctx);
         } catch (Exception e) {
@@ -87,15 +90,24 @@ public class AttachmentContextHandler implements ChainLink {
         }
     }
 
-    private CihPipelineTrace runIqrPipeline(ChainContext ctx, List<String> attachmentIds) {
+    private CihPipelineTrace runIqrPipeline(
+            ChainContext ctx,
+            List<String> attachmentIds,
+            AttachmentOwnerIdentity ownerIdentity) {
         if (attachmentService == null) {
             return CihPipelineTrace.disabled("attachment_service_unavailable");
         }
         if (attachmentIds == null || attachmentIds.isEmpty()) {
             return CihPipelineTrace.disabled("no_attachments");
         }
+        if (ownerIdentity == null) {
+            return CihPipelineTrace.disabled("missing_attachment_owner");
+        }
         try {
-            List<Document> docs = attachmentService.asDocumentsForSession(attachmentIds, ctx == null ? null : ctx.sessionId());
+            List<Document> docs = attachmentService.asDocumentsForSession(
+                    attachmentIds,
+                    ctx == null ? null : ctx.sessionId(),
+                    ownerIdentity);
             int iterations = 1;
             if (docs == null || docs.isEmpty()) {
                 return CihPipelineTrace.empty(iterations, "no_attachment_docs");

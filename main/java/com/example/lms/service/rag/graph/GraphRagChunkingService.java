@@ -45,6 +45,56 @@ public class GraphRagChunkingService {
     private final ChatMessageRepository chatMessageRepository;
     private final AnchorFrequencyIndex anchorFrequencyIndex;
 
+    @Autowired(required = false)
+    private GeneralGraphSourceAuthority sourceAuthority;
+
+    public IngestReport ingestFinalizedTurn(GeneralGraphScope scope, long assistantMessageId) {
+        return ingestFinalizedTurn(scope, null, assistantMessageId);
+    }
+
+    public IngestReport ingestFinalizedTurn(GeneralGraphScope scope, Long userMessageId, long assistantMessageId) {
+        String sid = scope == null ? "__TRANSIENT__" : Long.toString(scope.sessionId());
+        if (sourceAuthority == null || scope == null || !scope.memoryEnabled())
+            return IngestReport.disabled(sid, "source_authority_missing");
+        var finalSource = sourceAuthority.source(scope, assistantMessageId);
+        if (finalSource.isEmpty() || !"ASSISTANT".equals(finalSource.get().sourceRole()))
+            return IngestReport.disabled(sid, "final_source_unavailable");
+        List<IngestReport> reports = new ArrayList<>();
+        // Only this approved run's exact user row is eligible. A later answer must
+        // never retroactively authorize earlier OFF/denied conversation turns.
+        if (userMessageId != null) {
+            if (userMessageId <= 0 || userMessageId >= assistantMessageId)
+                return IngestReport.disabled(sid, "user_source_unavailable");
+            var userSource = sourceAuthority.source(scope, userMessageId);
+            if (userSource.isEmpty() || !"USER".equals(userSource.get().sourceRole()))
+                return IngestReport.disabled(sid, "user_source_unavailable");
+            if (Thread.currentThread().isInterrupted()) throw new CancellationException("graph_capture_cancelled");
+            reports.add(ingestSource(scope, userSource.get()));
+        }
+        reports.add(ingestSource(scope, finalSource.get()));
+        return IngestReport.merge(sid, "finalized-transcript", reports);
+    }
+
+    IngestReport ingestSource(GeneralGraphScope scope, com.example.lms.assist.MemoryEvidence evidence) {
+        String sid = Long.toString(scope.sessionId());
+        if (!properties.isEnabled() || !properties.getIndexing().isEnabled())
+            return IngestReport.disabled(sid, "brain_state_disabled");
+        var options = IngestOptions.defaults();
+        // A short correction or pronoun follow-up is still valid source evidence even
+        // when it has no named entities. Preserve it for the bounded recent-source window.
+        var chunks = chunkAndExtract(sid, evidence.text(), inferDomain(evidence.text(), null),
+                evidence.sourceRole(), options).stream().map(c -> c.withSource(scope, evidence)).toList();
+        if (chunks.isEmpty()) return new IngestReport(true, sid, "skipped", 0, 0, 0, 0,
+                BrainStateText.hash12(evidence.text()), "low_signal_chunks", Map.of());
+        var backend = new LinkedHashMap<String, Object>();
+        backend.put("meaningfulGate", "source_verified");
+        backend.put("skippedLowSignalChunks", 0);
+        backend.put("persistedChunkCount", chunks.size());
+        return sourceAuthority.withCurrentSource(scope, evidence, current ->
+                persistChunks(sid, current.sourceRole(), chunks, BrainStateText.hash12(current.text()), backend, options))
+                .orElseGet(() -> IngestReport.disabled(sid, "source_invalidated"));
+    }
+
     public GraphRagChunkingService(BrainStateProperties properties,
                                    DocumentChunkingService documentChunkingService,
                                    NamedEntityExtractor entityExtractor,
@@ -238,7 +288,14 @@ public class GraphRagChunkingService {
                                        IngestOptions options) {
         IngestOptions laneOptions = IngestOptions.safe(options);
         String normalizedSourceTag = normalizeSourceTag(sourceTag);
-        recordAnchorFrequency(persistedChunks, backend, laneOptions);
+        if (persistedChunks.stream().anyMatch(c -> c == null || (!c.hasPrivateSource() && !c.isPublicManual()))) {
+            return IngestReport.disabled(sessionId, "source_authority_missing");
+        }
+        if (persistedChunks.stream().anyMatch(KgChunk::hasPrivateSource)) {
+            backend.put("anchorMapStatus", "private_scope_excluded");
+        } else {
+            recordAnchorFrequency(persistedChunks, backend, laneOptions);
+        }
         String vectorStatus = "skipped";
         int vectorFailures = 0;
         int vectorAttempts = 0;
@@ -394,6 +451,14 @@ public class GraphRagChunkingService {
         meta.put(VectorMetaKeys.META_CHUNK_ID, chunk.chunkId());
         meta.put(VectorMetaKeys.META_SID_LOGICAL, chunk.sessionId());
         meta.put("ingest_lane", laneOptions.lane());
+        if (chunk.hasPrivateSource()) {
+            meta.put("general_graph_private", "true");
+            meta.put("general_graph_owner_namespace", chunk.privateScope().ownerNamespace());
+            meta.put("general_graph_session_id", chunk.privateScope().sessionId());
+            meta.put("general_graph_consent_epoch", chunk.privateScope().consentEpoch());
+            meta.put("general_graph_source_id", chunk.sourceId());
+            meta.put("general_graph_source_revision", chunk.sourceRevision());
+        }
         meta.put("brain_text_hash", BrainStateText.hash12(chunk.sourceText()));
         meta.put("brain_entity_count", chunk.entities().size());
         meta.put("brain_relation_count", chunk.relations().size());
@@ -1015,9 +1080,34 @@ public class GraphRagChunkingService {
                     reason, Map.of());
         }
 
+        /** Queue acceptance and partial backend writes are not completed indexing. */
+        public String captureOutcome() {
+            if (!enabled) return "disabled";
+            Object aggregate = backend.get("captureOutcome");
+            if (aggregate instanceof String outcome && List.of(
+                    "succeeded", "queued", "partial_indexed", "skipped", "disabled", "failed").contains(outcome)) {
+                return outcome;
+            }
+            if ("skipped".equals(status) || "dry_run".equals(status)) return "skipped";
+            if ("partial_indexed".equals(status)) return "partial_indexed";
+            if (!"indexed".equals(status)) return "failed";
+            String vector = String.valueOf(backend.getOrDefault("vectorStatus", "skipped"));
+            String brain = String.valueOf(backend.getOrDefault("brainStateStatus", "skipped"));
+            String neo4j = String.valueOf(backend.getOrDefault("neo4jStatus", "skipped"));
+            boolean accepted = "queued".equals(vector) || "partial_failure".equals(vector)
+                    || "recorded".equals(brain) || "written".equals(neo4j);
+            if (!accepted) return "failed";
+            if (List.of(vector, brain, neo4j).stream().anyMatch(value -> List.of(
+                    "failed", "partial_failure", "unavailable", "disabled", "no_report").contains(value))) {
+                return "partial_indexed";
+            }
+            return "queued".equals(vector) ? "queued" : "succeeded";
+        }
+
         static IngestReport merge(String sessionId, String status, List<IngestReport> reports) {
             if (reports == null || reports.isEmpty()) {
-                return new IngestReport(true, safeSession(sessionId), status, 0, 0, 0, 0, "", "", Map.of());
+                return new IngestReport(true, safeSession(sessionId), status, 0, 0, 0, 0, "", "",
+                        Map.of("captureOutcome", "skipped"));
             }
             int chunks = reports.stream().mapToInt(IngestReport::chunkCount).sum();
             int entities = reports.stream().mapToInt(IngestReport::entityCount).sum();
@@ -1025,8 +1115,35 @@ public class GraphRagChunkingService {
             int neo4j = reports.stream().mapToInt(IngestReport::neo4jWriteCount).sum();
             Map<String, Object> backend = new LinkedHashMap<>();
             backend.put("reports", reports.size());
+            List<String> outcomes = reports.stream().map(IngestReport::captureOutcome).toList();
+            boolean accepted = outcomes.stream().anyMatch(value -> List.of("succeeded", "queued", "partial_indexed").contains(value));
+            boolean incomplete = outcomes.stream().anyMatch(value -> List.of("failed", "disabled", "partial_indexed").contains(value));
+            String captureOutcome = accepted && incomplete ? "partial_indexed"
+                    : outcomes.contains("failed") ? "failed"
+                    : outcomes.contains("queued") ? "queued"
+                    : outcomes.contains("succeeded") ? "succeeded" : "skipped";
+            backend.put("captureOutcome", captureOutcome);
+            int disabledReports = (int) reports.stream().filter(report -> !report.enabled()).count();
+            if (disabledReports == reports.size()) {
+                backend.put("disabledReports", disabledReports);
+                return new IngestReport(false, safeSession(sessionId), "disabled", chunks, entities, relations, neo4j,
+                        "", commonDisabledReason(reports), backend);
+            }
             return new IngestReport(true, safeSession(sessionId), status, chunks, entities, relations, neo4j,
                     "", "", backend);
+        }
+
+        private static String commonDisabledReason(List<IngestReport> reports) {
+            String common = null;
+            for (IngestReport report : reports) {
+                String reason = com.example.lms.trace.SafeRedactor.traceLabelOrFallback(
+                        report.disabledReason(), "all_children_disabled");
+                if (common != null && !common.equals(reason)) {
+                    return "all_children_disabled";
+                }
+                common = reason;
+            }
+            return StringUtils.hasText(common) ? common : "all_children_disabled";
         }
     }
 

@@ -375,12 +375,12 @@ public class WeightedReciprocalRankFuser {
     }
 
     private static String canonicalMetadataValue(String key, String value) {
-        String normalized = value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
+        String normalized = value == null ? "" : value.trim();
         if (isUrlMetadataKey(key)) {
             String canonical = RerankCanonicalizer.canonicalKey(normalized);
             return canonical == null || canonical.isBlank() ? normalized : canonical;
         }
-        return normalized;
+        return normalized.toLowerCase(java.util.Locale.ROOT);
     }
 
     private static boolean isUrlMetadataKey(String key) {

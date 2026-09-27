@@ -33,13 +33,15 @@ public interface FusionCalibrator {
             return out;
         }
         double rng = mx - mn;
+        boolean scaleRange = !Double.isFinite(rng);
+        if (scaleRange) rng = mx / 2.0 - mn / 2.0;
         for (int i=0;i<out.length;i++) {
             double v = scores[i];
             if (!Double.isFinite(v)) {
                 out[i] = 0.0;
                 continue;
             }
-            out[i] = (v - mn) / rng;
+            out[i] = scaleRange ? (v / 2.0 - mn / 2.0) / rng : (v - mn) / rng;
         }
         return out;
     }

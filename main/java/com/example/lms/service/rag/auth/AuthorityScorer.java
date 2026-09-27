@@ -210,10 +210,9 @@ public class AuthorityScorer {
             return RerankSourceCredibility.UNVERIFIED;
         }
 
-        // OFFICIAL: vendor/government/education/documentation
+        // OFFICIAL: known vendor/project domains
         if (isMajorVendor
                 || h.equals("apache.org") || h.endsWith(".apache.org")
-                || h.startsWith("developer.") || h.contains(".docs.") || h.startsWith("docs.")
         ) {
             return RerankSourceCredibility.OFFICIAL;
         }

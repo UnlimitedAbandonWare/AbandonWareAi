@@ -210,6 +210,9 @@ public class Neo4jKgChunkWriter {
     Map<String, Object> chunkParameters(KgChunk chunk) {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("chunkId", safe(chunk.chunkId(), 128));
+        params.put("scopeKey", chunk.indexScopeKey());
+        params.put("sourceId", chunk.sourceId());
+        params.put("sourceRevision", chunk.sourceRevision());
         params.put("sessionHash", BrainStateText.hash12(chunk.sessionId()));
         params.put("textHash", BrainStateText.hash12(chunk.sourceText()));
         params.put("textLength", chunk.sourceText() == null ? 0 : chunk.sourceText().length());
@@ -235,6 +238,9 @@ public class Neo4jKgChunkWriter {
     static String chunkUpsertCypher() {
         return """
                 MERGE (c:KgChunkNode {
+                    scopeKey: $scopeKey,
+                    sourceId: $sourceId,
+                    sourceRevision: $sourceRevision,
                     sessionHash: $sessionHash,
                     textHash: $textHash,
                     ingestLane: $ingestLane
@@ -255,11 +261,14 @@ public class Neo4jKgChunkWriter {
     static String entityUpsertCypher() {
         return """
                 MATCH (c:KgChunkNode {
+                    scopeKey: $scopeKey,
+                    sourceId: $sourceId,
+                    sourceRevision: $sourceRevision,
                     sessionHash: $sessionHash,
                     textHash: $textHash,
                     ingestLane: $ingestLane
                 })
-                MERGE (e:KgEntity {name: $name, domain: $domain})
+                MERGE (e:KgEntity {name: $name, domain: $domain, scopeKey: $scopeKey})
                 ON CREATE SET e.firstSeenAt = datetime()
                 SET e.type = $type,
                     e.confidence = $confidence,
@@ -305,9 +314,12 @@ public class Neo4jKgChunkWriter {
 
     static String relationUpsertCypher() {
         return """
-                MATCH (a:KgEntity {name: $source, domain: $domain})
-                MATCH (b:KgEntity {name: $target, domain: $domain})
+                MATCH (a:KgEntity {name: $source, domain: $domain, scopeKey: $scopeKey})
+                MATCH (b:KgEntity {name: $target, domain: $domain, scopeKey: $scopeKey})
                 MERGE (a)-[r:RELATED_TO {
+                    scopeKey: $scopeKey,
+                    sourceId: $sourceId,
+                    sourceRevision: $sourceRevision,
                     kind: $kind,
                     connectorHash12: $connectorHash12,
                     source: $relationSource
@@ -364,6 +376,9 @@ public class Neo4jKgChunkWriter {
 
     Map<String, Object> relationParameters(KgChunk chunk, KgChunk.KgRelation relation) {
         Map<String, Object> params = new LinkedHashMap<>();
+        params.put("scopeKey", chunk.indexScopeKey());
+        params.put("sourceId", chunk.sourceId());
+        params.put("sourceRevision", chunk.sourceRevision());
         params.put("source", safe(relation.source(), 120));
         params.put("target", safe(relation.target(), 120));
         params.put("domain", normalizeDomain(chunk.domain()));

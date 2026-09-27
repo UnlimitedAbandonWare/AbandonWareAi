@@ -15,7 +15,44 @@ public record KgChunk(
         String sourceTag,
         String docType,
         String origin,
-        String ingestLane) {
+        String ingestLane,
+        GeneralGraphScope privateScope,
+        String sourceId,
+        long sourceRevision) {
+
+    public KgChunk(String chunkId, String sessionId, String sourceText, List<KgEntity> entities,
+                   List<KgRelation> relations, String domain, double confidence, Instant createdAt,
+                   String sourceTag, String docType, String origin, String ingestLane) {
+        this(chunkId, sessionId, sourceText, entities, relations, domain, confidence, createdAt,
+                sourceTag, docType, origin, ingestLane, null, "", 0);
+    }
+
+    public record SourceRef(String sourceId, long sourceRevision) {}
+
+    public boolean hasPrivateSource() {
+        return privateScope != null && privateScope.memoryEnabled() && privateScope.matchesSession(sessionId)
+                && GeneralGraphSourceAuthority.sourceMessageId(sourceId) > 0 && sourceRevision > 0;
+    }
+
+    public boolean isPublicManual() {
+        return privateScope == null && "graphdb_manual_learning".equals(ingestLane)
+                && "GRAPHDB_MANUAL_LEARNING".equals(docType);
+    }
+
+    public String indexScopeKey() {
+        return hasPrivateSource() ? privateScope.indexNamespace() : isPublicManual() ? "PUBLIC" : "UNSCOPED";
+    }
+
+    public SourceRef sourceRef() { return new SourceRef(sourceId, sourceRevision); }
+
+    KgChunk withSource(GeneralGraphScope scope, com.example.lms.assist.MemoryEvidence evidence) {
+        if (scope == null || evidence == null || !scope.ownerNamespace().equals(evidence.ownerNamespace())
+                || !scope.matchesSession(sessionId)) throw new IllegalArgumentException("graph_source_scope");
+        String scopedId = org.apache.commons.codec.digest.DigestUtils.sha256Hex(
+                scope.indexNamespace() + ":" + evidence.evidenceId() + ":" + chunkId);
+        return new KgChunk(scopedId, sessionId, sourceText, entities, relations, domain, confidence, createdAt,
+                sourceTag, docType, origin, ingestLane, scope, evidence.sourceId(), evidence.sourceRevision());
+    }
 
     public KgChunk(String chunkId,
                    String sessionId,
@@ -37,6 +74,11 @@ public record KgChunk(
         docType = safeMeta(docType);
         origin = safeMeta(origin);
         ingestLane = safeMeta(ingestLane);
+        sourceId = sourceId == null ? "" : sourceId;
+        if (privateScope != null && (!privateScope.matchesSession(sessionId) || !privateScope.memoryEnabled()
+                || GeneralGraphSourceAuthority.sourceMessageId(sourceId) <= 0 || sourceRevision <= 0)) {
+            throw new IllegalArgumentException("graph_source_scope");
+        }
     }
 
     private static String safeMeta(String value) {

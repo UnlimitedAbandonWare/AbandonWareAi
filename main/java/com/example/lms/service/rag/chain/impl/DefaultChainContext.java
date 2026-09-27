@@ -2,7 +2,9 @@ package com.example.lms.service.rag.chain.impl;
 
 import com.example.lms.dto.AttachmentDto;
 import com.example.lms.prompt.PromptContext;
+import com.example.lms.service.AttachmentOwnerIdentity;
 import com.example.lms.service.chat.ChatStreamEmitter;
+import com.example.lms.service.chat.ChatRunExecutionContext;
 import com.example.lms.service.rag.chain.ChainContext;
 import dev.langchain4j.data.document.Document;
 import org.slf4j.Logger;
@@ -27,17 +29,43 @@ public class DefaultChainContext implements ChainContext {
     private final String userMessage;
     private PromptContext promptContext;
     private final ChatStreamEmitter emitter;
+    private final ChatRunExecutionContext runContext;
+    private final AttachmentOwnerIdentity attachmentOwnerIdentity;
     private final Map<String, String> meta = new HashMap<>();
 
     public DefaultChainContext(String sessionId, String userId, String userMessage, PromptContext promptContext, ChatStreamEmitter emitter) {
+        this(sessionId, userId, userMessage, promptContext, emitter, null);
+    }
+
+    public DefaultChainContext(
+            String sessionId,
+            String userId,
+            String userMessage,
+            PromptContext promptContext,
+            ChatStreamEmitter emitter,
+            ChatRunExecutionContext runContext) {
+        this(sessionId, userId, userMessage, promptContext, emitter, runContext, null);
+    }
+
+    public DefaultChainContext(
+            String sessionId,
+            String userId,
+            String userMessage,
+            PromptContext promptContext,
+            ChatStreamEmitter emitter,
+            ChatRunExecutionContext runContext,
+            AttachmentOwnerIdentity attachmentOwnerIdentity) {
         this.sessionId = sessionId;
         this.userId = userId;
         this.userMessage = userMessage;
         this.promptContext = promptContext;
         this.emitter = emitter;
+        this.runContext = runContext;
+        this.attachmentOwnerIdentity = attachmentOwnerIdentity;
     }
     @Override public String sessionId() { return sessionId; }
     @Override public String userId() { return userId; }
+    @Override public AttachmentOwnerIdentity attachmentOwnerIdentity() { return attachmentOwnerIdentity; }
     @Override public String userMessage() { return userMessage; }
     @Override public PromptContext promptContext() { return promptContext; }
     @Override public ChainContext withSystemNote(String note) { return this; }
@@ -74,6 +102,16 @@ public class DefaultChainContext implements ChainContext {
         }
         return this;
     }
-    @Override public void emitAssistant(String text) { if (emitter != null && sessionId != null) { emitter.sendToken(sessionId, text); } }
+    @Override
+    public void emitAssistant(String text) {
+        if (emitter == null) {
+            return;
+        }
+        if (runContext != null) {
+            emitter.sendToken(runContext, text);
+        } else if (sessionId != null) {
+            emitter.sendToken(sessionId, text);
+        }
+    }
     public Map<String, String> meta() { return meta; }
 }

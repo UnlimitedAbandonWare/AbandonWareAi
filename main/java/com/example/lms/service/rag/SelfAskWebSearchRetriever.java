@@ -10,6 +10,8 @@ import com.example.lms.search.provider.WebSearchProvider;
 import com.example.lms.search.probe.BranchQualityProbe;
 import com.example.lms.search.TraceStore;
 import com.example.lms.nova.burst.QueryBurstExpander;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.service.reinforcement.SnippetPruner;
 import com.example.lms.service.rag.query.SelfAskRewriteRiskScorer;
 import com.example.lms.trace.SafeRedactor;
@@ -111,12 +113,12 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     @Value("${selfask.logic-dag.prune-duplicates:true}") private boolean logicDagPruneDuplicates;
     @Value("${selfask.risk-rewrite.enabled:true}")    private boolean riskRewriteEnabled;
     @Value("${selfask.risk-rewrite.min-temperature:0.12}") private double riskRewriteMinTemperature;
-    @Value("${selfask.risk-rewrite.max-temperature:0.55}") private double riskRewriteMaxTemperature;
+    @Value("${selfask.risk-rewrite.max-temperature:0.35}") private double riskRewriteMaxTemperature;
     @Value("${selfask.risk-rewrite.emergent.enabled:true}") private boolean riskEmergentEnabled;
-    @Value("${selfask.risk-rewrite.emergent.max-risk-delta:0.08}") private double riskEmergentMaxRiskDelta;
-    @Value("${selfask.risk-rewrite.emergent.max-temperature-delta:0.04}") private double riskEmergentMaxTemperatureDelta;
-    @Value("${selfask.risk-rewrite.emergent.max-lane-weight-delta:0.20}") private double riskEmergentMaxLaneWeightDelta;
-    @Value("${selfask.risk-rewrite.emergent.max-search-range-delta:0.20}") private double riskEmergentMaxSearchRangeDelta;
+    @Value("${selfask.risk-rewrite.emergent.max-risk-delta:0.06}") private double riskEmergentMaxRiskDelta;
+    @Value("${selfask.risk-rewrite.emergent.max-temperature-delta:0.03}") private double riskEmergentMaxTemperatureDelta;
+    @Value("${selfask.risk-rewrite.emergent.max-lane-weight-delta:0.12}") private double riskEmergentMaxLaneWeightDelta;
+    @Value("${selfask.risk-rewrite.emergent.max-search-range-delta:0.08}") private double riskEmergentMaxSearchRangeDelta;
     @Value("${selfask.branch-quality.enabled:true}") private boolean branchQualityEnabled;
     @Value("${selfask.branch-quality.retry.enabled:true}") private boolean branchQualityRetryEnabled;
     @Value("${selfask.branch-quality.retry.max-per-lane:1}") private int branchQualityRetryMaxPerLane;
@@ -291,6 +293,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         }
         double rewriteTemperature = metaDouble(meta, "resource.rewriteTemperatureWeighted",
                 metaDouble(meta, "resource.rewriteTemperature", 0.2d));
+        rewriteTemperature = creativeRequestedRewriteTemperature(rewriteTemperature);
         boolean allowWeb = metaBool(meta, "allowWeb", true);
         if (!allowWeb) {
             return java.util.List.of();
@@ -298,6 +301,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         boolean enableSelfAskHint = metaBool(meta, "enableSelfAsk", true);
         boolean nightmareMode = metaBool(meta, "nightmareMode", false);
         boolean auxLlmDown = metaBool(meta, "auxLlmDown", false);
+        boolean cheapSearchMode = isCheapSearchModeActive(meta);
 
         int reqPerRequestTimeoutMs = this.perRequestTimeoutMs;
         int reqSelfAskTimeoutSec = this.selfAskTimeoutSec;
@@ -308,9 +312,21 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
 
         /* 1) 빠른 1차 검색 */
         java.util.List<String> firstSnippets = safeSearch(qText, reqWebTopK);
+        if (Thread.currentThread().isInterrupted()) {
+            return List.of();
+        }
         SelfAskRewriteRiskScorer.Score rewriteRisk = refreshRewriteRisk(
                 qText, meta, firstSnippets.size(), Math.max(1, reqWebTopK), rewriteTemperature);
         rewriteTemperature = rewriteRisk.rewriteTemperatureWeighted();
+
+        if (cheapSearchMode && !explicitPlanSelfAskOverride) {
+            traceCheapSearchModeSelfAskSkip(qText, firstSnippets.size(), reqWebTopK);
+            if (firstSnippets.isEmpty()) {
+                return java.util.List.of();
+            }
+            return toSelfAskContents(firstSnippets, qText, "direct", qText,
+                    Math.max(1, Math.min(overallTopK, reqWebTopK)));
+        }
 
         // 질의 복잡도 간단 판정
         boolean enableSelfAsk = qText.length() > 25
@@ -459,7 +475,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 log.debug("[SelfAsk][d{}] queryHash={}", depth, SafeRedactor.hash12(kw));
                 log.debug("[SelfAsk][d{}] lane={}, qHash={}",
                         depth, laneForKw, SafeRedactor.hash12(kw));
-                Future<SearchAttempt> f = searchExecutor.submit(() -> safeSearchAttempt(kw, topKForKw));
+                Future<SearchAttempt> f = submitSearchAttempt(kw, topKForKw);
                 futures.add(f);
                 futureMeta.add(new SearchAttemptMeta(laneForKw, kw, laneWeightForKw, topKForKw,
                         zero100LaneTimeboxMs(laneForKw, reqPerRequestTimeoutMs)));
@@ -485,6 +501,10 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                         waitMs,
                         kw
                 );
+                if (Thread.currentThread().isInterrupted()) {
+                    cancelSearchAttempts(futures);
+                    return interruptedPartialContents(snippets, snippetLane, snippetQuery, qText);
+                }
                 List<String> results = attempt.results();
                 String kwCanon = canonicalKeyword(kw);
                 String lane = seedLaneByCanon.getOrDefault(kwCanon, attemptMeta.lane());
@@ -530,9 +550,14 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                         if (StringUtils.hasText(retryCanon)) {
                             visitedCanon.add(retryCanon);
                         }
-                        Future<SearchAttempt> retryFuture = searchExecutor.submit(() -> safeSearchAttempt(retryQuery, retryTopK));
+                        Future<SearchAttempt> retryFuture = submitSearchAttempt(retryQuery, retryTopK);
                         long retryWaitMs = zero100LaneTimeboxMs(lane, waitMs);
                         SearchAttempt retryAttempt = getWithHardTimeout(retryFuture, retryWaitMs, retryQuery);
+                        if (Thread.currentThread().isInterrupted()) {
+                            cancelSearchAttempt(retryFuture);
+                            cancelSearchAttempts(futures);
+                            return interruptedPartialContents(snippets, snippetLane, snippetQuery, qText);
+                        }
                         int retryBeforeSize = snippets.size();
                         for (String result : retryAttempt.results()) {
                             if (snippets.add(result)) {
@@ -581,12 +606,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             }
 
             // Cancel any straggling tasks once this depth budget is exhausted.
-            for (Future<SearchAttempt> f : futures) {
-                if (f != null && !f.isDone()) {
-                    // Interrupt Hygiene: never interrupt pooled workers (cancel(false) only).
-                    f.cancel(false);
-                }
-            }
+            cancelSearchAttempts(futures);
             depth++;
         }
 
@@ -703,6 +723,13 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             int observedEvidenceCount,
             int targetEvidenceK,
             double baseRewriteTemperature) {
+        boolean creative = creativeProfileActive();
+        double effectiveRiskMax = creative
+                ? Math.max(0.0d, Math.min(1.0d, baseRewriteTemperature))
+                : riskRewriteMaxTemperature;
+        double effectiveRiskMin = creative
+                ? Math.min(Math.max(0.0d, riskRewriteMinTemperature), effectiveRiskMax)
+                : riskRewriteMinTemperature;
         SelfAskRewriteRiskScorer.Score risk = SelfAskRewriteRiskScorer.score(
                 question,
                 meta,
@@ -710,16 +737,35 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 observedEvidenceCount,
                 targetEvidenceK,
                 baseRewriteTemperature,
-                riskRewriteMinTemperature,
-                riskRewriteMaxTemperature,
+                effectiveRiskMin,
+                effectiveRiskMax,
                 riskRewriteEnabled,
                 riskEmergentConfig());
+        if (creative) {
+            GuardContext context = GuardContextHolder.get();
+            if (context != null) {
+                double effective = risk.rewriteTemperatureWeighted();
+                context.putPlanOverride("creative.emergence.selfAsk.effectiveTemperature", effective);
+                String effectiveHash = SafeRedactor.hashValue(String.format(Locale.ROOT,
+                        "%s|selfAsk|%.2f",
+                        context.getPlanOverride("creative.emergence.profile"), effective));
+                context.putPlanOverride("creative.emergence.selfAsk.effectiveOptionsHash", effectiveHash);
+                TraceStore.put("creative.emergence.selfAsk.effectiveOptionsHash", effectiveHash);
+                double requested = creativeRequestedRewriteTemperature(baseRewriteTemperature);
+                if (effective + 0.000_001d < requested) {
+                    context.putPlanOverride("creative.emergence.suppressedReason", "selfask-risk-cap");
+                    TraceStore.put("creative.emergence.suppressedReason", "selfask-risk-cap");
+                }
+            }
+        }
         try {
             meta.put("resource.rewriteRiskScore", risk.rewriteRiskScore());
             meta.put("resource.rewriteRiskAccumulated", risk.accumulatedRiskScore());
             meta.put("resource.rewriteRiskBand", risk.rewriteRiskBand());
             meta.put("resource.rewriteRiskPrimaryFactor", risk.primaryFactor());
             meta.put("resource.rewriteTemperatureWeighted", risk.rewriteTemperatureWeighted());
+            meta.put("resource.rewriteValidationTemperature", risk.validationTemperature());
+            meta.put("resource.rewriteExplorationTemperature", risk.explorationTemperature());
             meta.put("selfask.rewrite.policy", risk.policy());
             meta.put("selfask.rewrite.weights", risk.laneWeights());
             meta.put("selfask.rewrite.honestyStatus", risk.rewriteHonestyStatus());
@@ -735,6 +781,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             TraceStore.put("resource.rewriteRiskBand", risk.rewriteRiskBand());
             TraceStore.put("resource.rewriteRiskPrimaryFactor", risk.primaryFactor());
             TraceStore.put("resource.rewriteTemperatureWeighted", String.valueOf(risk.rewriteTemperatureWeighted()));
+            TraceStore.put("resource.rewriteValidationTemperature", String.valueOf(risk.validationTemperature()));
+            TraceStore.put("resource.rewriteExplorationTemperature", String.valueOf(risk.explorationTemperature()));
             TraceStore.put("selfask.rewrite.policy", risk.policy());
             TraceStore.put("selfask.3way.weights", risk.laneWeights());
             TraceStore.put("selfask.rewrite.honestyStatus", risk.rewriteHonestyStatus());
@@ -749,6 +797,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             TraceStore.put("ml.risk.rewrite.evidence", String.valueOf(risk.evidenceRisk()));
             TraceStore.put("ml.risk.rewrite.components", risk.components());
             TraceStore.put("ml.risk.rewrite.temperature", String.valueOf(risk.rewriteTemperatureWeighted()));
+            TraceStore.put("ml.risk.rewrite.validationTemperature", String.valueOf(risk.validationTemperature()));
+            TraceStore.put("ml.risk.rewrite.explorationTemperature", String.valueOf(risk.explorationTemperature()));
             TraceStore.put("ml.risk.rewrite.policy", risk.policy());
             TraceStore.put("ml.risk.rewrite.primaryFactor", risk.primaryFactor());
             TraceStore.put("ml.risk.rewrite.honestyStatus", risk.rewriteHonestyStatus());
@@ -786,6 +836,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             data.put("overreachScore", risk.rewriteOverreachScore());
             data.put("sourceHash12", risk.rewriteSourceHash12());
             data.put("temperature", risk.rewriteTemperatureWeighted());
+            data.put("validationTemperature", risk.validationTemperature());
+            data.put("explorationTemperature", risk.explorationTemperature());
             data.put("softmaxTemperature", risk.softmaxTemperature());
             data.put("laneWeights", risk.laneWeights());
             data.put("observedEvidenceCount", Math.max(0, observedEvidenceCount));
@@ -814,6 +866,118 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             // Observability is best-effort.
         }
         return risk;
+    }
+
+    static double creativeRequestedRewriteTemperature(double fallback) {
+        GuardContext context = GuardContextHolder.get();
+        if (!creativeProfileActive(context)) {
+            return fallback;
+        }
+        double requested = context.planDouble("creative.emergence.selfAsk.temperature", Double.NaN);
+        String profile = String.valueOf(context.getPlanOverride("creative.emergence.profile"));
+        if (!validSelfAskBand(profile, requested)) {
+            return fallback;
+        }
+        Double mandatoryCap = effectiveSelfAskCap(context);
+        return mandatoryCap == null ? requested : Math.min(requested, mandatoryCap);
+    }
+
+    private static boolean creativeProfileActive() {
+        return creativeProfileActive(GuardContextHolder.get());
+    }
+
+    private static boolean creativeProfileActive(GuardContext context) {
+        return validCompleteCreativeProfile(context);
+    }
+
+    private static boolean validCompleteCreativeProfile(GuardContext context) {
+        if (context == null || context.isSensitiveTopic()
+                || context.planBool("privacy.boundary.enforce", false)
+                || !context.planBool("creative.emergence.active", false)
+                || !"explore".equals(context.getPlanOverride("promptPose.application.intentSlot"))) {
+            return false;
+        }
+        String requestedHash = String.valueOf(
+                context.getPlanOverride("creative.emergence.requestedOptionsHash"))
+                .toLowerCase(Locale.ROOT);
+        if (!requestedHash.matches("hash:[0-9a-f]{12}")) {
+            return false;
+        }
+        return switch (String.valueOf(context.getPlanOverride("creative.emergence.profile"))) {
+            case "VIVID" -> creativeProfileValuesInRange(context,
+                    0.85d, 0.90d, 0.70d, 0.76d,
+                    1.10d, 1.25d, 0.95d, 0.97d,
+                    1.05d, 1.20d, 0.95d, 0.97d,
+                    0.80d, 0.88d);
+            case "WILD" -> creativeProfileValuesInRange(context,
+                    0.91d, 0.97d, 0.77d, 0.83d,
+                    1.26d, 1.45d, 0.97d, 0.99d,
+                    1.21d, 1.40d, 0.97d, 0.99d,
+                    0.89d, 0.97d);
+            case "FERAL" -> creativeProfileValuesInRange(context,
+                    0.98d, 1.00d, 0.84d, 0.85d,
+                    1.46d, 1.50d, 0.99d, 1.00d,
+                    1.41d, 1.50d, 0.99d, 1.00d,
+                    0.98d, 1.00d);
+            default -> false;
+        };
+    }
+
+    private static boolean creativeProfileValuesInRange(
+            GuardContext context,
+            double searchTempMin, double searchTempMax,
+            double searchRateMin, double searchRateMax,
+            double candidateTempMin, double candidateTempMax,
+            double candidateTopPMin, double candidateTopPMax,
+            double finalTempMin, double finalTempMax,
+            double finalTopPMin, double finalTopPMax,
+            double selfAskMin, double selfAskMax) {
+        return creativeValueInRange(context, "creative.emergence.search.temperature", searchTempMin, searchTempMax)
+                && creativeValueInRange(context, "creative.emergence.search.rate", searchRateMin, searchRateMax)
+                && creativeValueInRange(context, "creative.emergence.candidate.temperature",
+                        candidateTempMin, candidateTempMax)
+                && creativeValueInRange(context, "creative.emergence.candidate.topP",
+                        candidateTopPMin, candidateTopPMax)
+                && creativeValueInRange(context, "creative.emergence.final.temperature",
+                        finalTempMin, finalTempMax)
+                && creativeValueInRange(context, "creative.emergence.final.topP",
+                        finalTopPMin, finalTopPMax)
+                && creativeValueInRange(context, "creative.emergence.selfAsk.temperature",
+                        selfAskMin, selfAskMax);
+    }
+
+    private static boolean creativeValueInRange(
+            GuardContext context, String key, double min, double max) {
+        double value = context.planDouble(key, Double.NaN);
+        return Double.isFinite(value) && value >= min && value <= max;
+    }
+
+    private static Double effectiveSelfAskCap(GuardContext context) {
+        if (context == null) {
+            return null;
+        }
+        Double selfAsk = finiteNonNegative(context.planDouble("llm.selfAsk.temperature.max"));
+        Double explore = finiteNonNegative(context.planDouble("llm.explore.temperature.max"));
+        if (selfAsk == null) {
+            return explore;
+        }
+        return explore == null ? selfAsk : Math.min(selfAsk, explore);
+    }
+
+    private static Double finiteNonNegative(Double value) {
+        return value != null && Double.isFinite(value) ? Math.max(0.0d, value) : null;
+    }
+
+    private static boolean validSelfAskBand(String profile, double value) {
+        if (!Double.isFinite(value)) {
+            return false;
+        }
+        return switch (profile) {
+            case "VIVID" -> value >= 0.80d && value <= 0.88d;
+            case "WILD" -> value >= 0.89d && value <= 0.97d;
+            case "FERAL" -> value >= 0.98d && value <= 1.00d;
+            default -> false;
+        };
     }
 
     private SelfAskRewriteRiskScorer.EmergentConfig riskEmergentConfig() {
@@ -1526,17 +1690,21 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 }
             }
             boolean confirmed = lanes.contains("BQ") && lanes.contains("ER") && lanes.contains("RC");
+            boolean required = branchSeeds != null && !branchSeeds.isEmpty();
             java.util.Map<String, Object> summary = new java.util.LinkedHashMap<>();
             summary.put("laneCoverage", lanes.size());
             summary.put("lanes", java.util.List.copyOf(lanes));
             summary.put("seedCount", branchSeeds == null ? 0 : branchSeeds.size());
             summary.put("uniqueSeedCount", Math.max(0, uniqueSeedCount));
+            summary.put("requeryRequired", required);
             summary.put("requeryConfirmed", confirmed);
             summary.put("primaryFactor", risk == null ? "" : risk.primaryFactor());
             summary.put("policy", risk == null ? "" : risk.policy());
             summary.put("honestyStatus", risk == null ? "" : risk.rewriteHonestyStatus());
             summary.put("overreachType", risk == null ? "" : risk.rewriteOverreachType());
             TraceStore.put("selfask.requery.summary", summary);
+            TraceStore.put("selfask.3way.requery.required", required);
+            TraceStore.put("selfask.3way.requery.confirmed", confirmed);
         } catch (Exception ignore) {
             log.debug("[SelfAskWebSearchRetriever] fail-soft stage={}", "traceRequerySummary");
             // Observability is best-effort.
@@ -1797,6 +1965,57 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         return def;
     }
 
+    private static boolean isCheapSearchModeActive(java.util.Map<String, Object> meta) {
+        if (metaBool(meta, "cheapSearchMode", false)
+                || metaBool(meta, "search.mode.lightAuxBypass", false)) {
+            return true;
+        }
+        Object searchMode = meta == null ? null : firstPresent(meta, "searchMode", "search_mode");
+        if (searchMode != null) {
+            String normalized = String.valueOf(searchMode).trim()
+                    .replace('-', '_')
+                    .toUpperCase(Locale.ROOT);
+            if ("FORCE_LIGHT".equals(normalized)) {
+                return true;
+            }
+        }
+        try {
+            GuardContext ctx = GuardContextHolder.get();
+            if (ctx != null && ctx.isCheapSearchMode()) {
+                return true;
+            }
+        } catch (Exception ignore) {
+            traceSuppressed("cheapSearchMode.contextRead", ignore);
+        }
+        return traceBool("search.mode.lightAuxBypass", false);
+    }
+
+    private static Object firstPresent(java.util.Map<String, Object> meta, String... keys) {
+        if (meta == null || meta.isEmpty() || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = meta.get(key);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static void traceCheapSearchModeSelfAskSkip(String query, int firstResultCount, int requestedTopK) {
+        try {
+            TraceStore.put("selfask.cheapSearchMode.skipped", Boolean.TRUE);
+            TraceStore.put("selfask.cheapSearchMode.skipReason", "cheap-search-mode");
+            TraceStore.put("selfask.cheapSearchMode.firstResultCount", Math.max(0, firstResultCount));
+            TraceStore.put("selfask.cheapSearchMode.requestedTopK", Math.max(0, requestedTopK));
+            TraceStore.put("selfask.cheapSearchMode.queryHash12", SafeRedactor.hash12(query));
+            TraceStore.put("selfask.cheapSearchMode.queryLength", query == null ? 0 : query.length());
+        } catch (Exception ignore) {
+            traceSuppressed("cheapSearchMode.skipTrace", ignore);
+        }
+    }
+
     private static boolean explicitPlanSelfAskOverride(java.util.Map<String, Object> meta) {
         if (meta == null || meta.isEmpty()) return false;
         if (metaBool(meta, "selfask.enabled", false)) return true;
@@ -1903,40 +2122,78 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
     /**
      * 질의별 API 호출 예산 관리
      */
+    private Future<SearchAttempt> submitSearchAttempt(String keyword, int topK) {
+        FutureTask<SearchAttempt> task = new FutureTask<>(() -> safeSearchAttempt(keyword, topK));
+        searchExecutor.execute(task);
+        return task;
+    }
+
+    private static boolean cancelSearchAttempt(Future<SearchAttempt> future) {
+        return future != null && !future.isDone() && future.cancel(true);
+    }
+
+    private static void cancelSearchAttempts(List<Future<SearchAttempt>> futures) {
+        if (futures == null) {
+            return;
+        }
+        for (Future<SearchAttempt> future : futures) {
+            cancelSearchAttempt(future);
+        }
+    }
+
+    private List<Content> interruptedPartialContents(
+            LinkedHashSet<String> snippets,
+            Map<String, String> snippetLane,
+            Map<String, String> snippetQuery,
+            String parentQuery) {
+        if (snippets == null || snippets.isEmpty()) {
+            return List.of();
+        }
+        return toSelfAskContents(
+                snippets,
+                snippetLane,
+                snippetQuery,
+                parentQuery,
+                Math.max(1, finalTopK > 0 ? finalTopK : overallTopK));
+    }
+
     /**
-     * Hard timeout: on timeout, mark the task cancelled without interrupting the worker.
+     * Hard timeout for the caller-owned Self-Ask task handle.
      */
     private SearchAttempt getWithHardTimeout(Future<SearchAttempt> future, long timeoutMs, String keyword) {
         if (future == null) {
             return new SearchAttempt(List.of(), "missing_future", true);
         }
-        if (timeoutMs <= 0) {
-            // Best-effort cancel without interrupt to avoid cancellation toxicity.
-            future.cancel(false); SelfAskTimeoutTrace.recordCancelSuppressed("deadline_exhausted", timeoutMs, keyword, false);
+        boolean completed = future.isDone();
+        if (timeoutMs <= 0 && !completed) {
+            boolean cancelled = cancelSearchAttempt(future);
+            SelfAskTimeoutTrace.recordCancellationRequested(
+                    "deadline_exhausted", timeoutMs, keyword, false, cancelled);
             return new SearchAttempt(List.of(), "timeout", true);
         }
         try {
-            SearchAttempt attempt = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            SearchAttempt attempt = completed ? future.get() : future.get(timeoutMs, TimeUnit.MILLISECONDS);
             return attempt == null ? new SearchAttempt(List.of(), "zero-results", false) : attempt;
         } catch (TimeoutException te) {
-            // Best-effort cancel without interrupt to avoid poisoning pooled workers.
-            future.cancel(false); SelfAskTimeoutTrace.recordCancelSuppressed("hard_timeout", timeoutMs, keyword, false);
+            boolean cancelled = cancelSearchAttempt(future);
+            SelfAskTimeoutTrace.recordCancellationRequested(
+                    "hard_timeout", timeoutMs, keyword, false, cancelled);
             log.debug("[SelfAsk] hard timeout ({}ms) qHash={}", timeoutMs, SafeRedactor.hash12(keyword));
             return new SearchAttempt(List.of(), "timeout", true);
         } catch (InterruptedException ie) {
-            // Interrupt Hygiene: consume interrupt flag (parry) and fail-soft.
-            Thread.interrupted();
-            future.cancel(false); SelfAskTimeoutTrace.recordCancelSuppressed("interrupted_wait", timeoutMs, keyword, true);
-            log.debug("[SelfAsk] interrupted while waiting qHash={} (interrupt consumed)", SafeRedactor.hash12(keyword));
+            Thread.currentThread().interrupt();
+            boolean cancelled = cancelSearchAttempt(future);
+            SelfAskTimeoutTrace.recordCancellationRequested(
+                    "interrupted_wait", timeoutMs, keyword, true, cancelled);
+            log.debug("[SelfAsk] interrupted while waiting qHash={} (interrupt restored)", SafeRedactor.hash12(keyword));
             return new SearchAttempt(List.of(), "interrupted", true);
         } catch (ExecutionException ee) {
-            future.cancel(false);
             Throwable cause = ee.getCause() == null ? ee : ee.getCause();
             String failureClass = classifySearchFailure(cause);
             log.debug("[SelfAsk] keyword search failed qHash={} failureClass={}", SafeRedactor.hash12(keyword), failureClass);
             return new SearchAttempt(List.of(), failureClass, true);
         } catch (Exception e) {
-            future.cancel(false);
+            cancelSearchAttempt(future);
             String failureClass = classifySearchFailure(e);
             log.debug("[SelfAsk] keyword search failed qHash={} failureClass={}", SafeRedactor.hash12(keyword), failureClass);
             return new SearchAttempt(List.of(), failureClass, true);
@@ -1952,10 +2209,16 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             if (!StringUtils.hasText(q)) {
                 return new SearchAttempt(List.of(), "zero-results", false);
             }
+            if (Thread.currentThread().isInterrupted()) {
+                return new SearchAttempt(List.of(), "cancelled", true);
+            }
             if (webSearchProvider == null || !webSearchProvider.isEnabled()) {
                 return new SearchAttempt(List.of(), "provider-disabled", true);
             }
             List<String> out = webSearchProvider.search(q, k);
+            if (Thread.currentThread().isInterrupted()) {
+                return new SearchAttempt(List.of(), "cancelled", true);
+            }
             return new SearchAttempt(out, out == null || out.isEmpty() ? "zero-results" : "none", false);
         } catch (Exception e) {
             String failureClass = classifySearchFailure(e);

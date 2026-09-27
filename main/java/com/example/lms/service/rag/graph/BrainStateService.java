@@ -101,14 +101,16 @@ public class BrainStateService {
         if (!properties.isEnabled() || input == null || input.isEmpty()) {
             return;
         }
-        recordAnchorFrequency(input);
+        recordAnchorFrequency(input.stream().filter(c -> c != null && c.isPublicManual()).toList());
         Instant now = Instant.now();
         for (KgChunk chunk : input) {
             if (chunk == null || chunk.chunkId() == null || chunk.chunkId().isBlank()) {
                 continue;
             }
             StoredChunk stored = StoredChunk.from(chunk, now);
-            chunks.put(stored.chunkId(), stored);
+            if (chunks.putIfAbsent(stored.chunkId(), stored) != null) continue;
+            // Private source projections never enter global entity/anchor/inference maps.
+            if (chunk.hasPrivateSource()) continue;
             for (KgChunk.KgEntity entity : chunk.entities()) {
                 if (entity == null || entity.name() == null || entity.name().isBlank()) {
                     continue;
@@ -160,6 +162,30 @@ public class BrainStateService {
 
     public BrainSnapshot getBrainSnapshot(String sessionId) {
         return getBrainSnapshot(sessionId, "", 20);
+    }
+
+    public List<KgChunk.SourceRef> privateSources(GeneralGraphScope scope, String query, int limit) {
+        if (!properties.isEnabled() || scope == null || !scope.memoryEnabled()) return List.of();
+        String namespace = scope.indexNamespace();
+        List<StoredChunk> candidates = chunks.values().stream()
+                .filter(c -> namespace.equals(c.scopeKey()))
+                .sorted(Comparator.comparingLong((StoredChunk c) ->
+                        GeneralGraphSourceAuthority.sourceMessageId(c.sourceRef().sourceId())).reversed())
+                .limit(256).toList();
+        String lower = query == null ? "" : query.toLowerCase(Locale.ROOT);
+        List<String> seeds = candidates.stream()
+                .filter(c -> c.entityNames().stream().anyMatch(e -> lower.contains(e.toLowerCase(Locale.ROOT))))
+                .map(c -> c.sourceRef().sourceId()).distinct().limit(8).toList();
+        Set<String> recentAndMatched = new LinkedHashSet<>();
+        candidates.stream().map(c -> c.sourceRef().sourceId()).distinct().limit(4).forEach(recentAndMatched::add);
+        recentAndMatched.addAll(seeds);
+        seeds = List.copyOf(recentAndMatched);
+        var facts = candidates.stream().map(c -> new PrivateFact(namespace, c.sourceRef().sourceId(),
+                new LinkedHashSet<>(c.entityNames()))).toList();
+        var expanded = expandPrivate(namespace, facts, seeds, () -> !Thread.currentThread().isInterrupted());
+        Set<String> selected = new LinkedHashSet<>(expanded.sources());
+        return candidates.stream().filter(c -> selected.contains(c.sourceRef().sourceId()))
+                .map(StoredChunk::sourceRef).distinct().limit(Math.max(1, Math.min(limit, 20))).toList();
     }
 
     public BrainSnapshot getBrainSnapshot(String sessionId, String domain, int recentLimit) {
@@ -883,7 +909,10 @@ public class BrainStateService {
             int textLength,
             int entityCount,
             int relationCount,
-            Instant capturedAt) {
+            Instant capturedAt,
+            String scopeKey,
+            KgChunk.SourceRef sourceRef,
+            List<String> entityNames) {
 
         static StoredChunk from(KgChunk chunk, Instant capturedAt) {
             String sessionId = BrainStateText.nonBlank(chunk.sessionId(), "__TRANSIENT__");
@@ -900,7 +929,11 @@ public class BrainStateService {
                     chunk.sourceText() == null ? 0 : chunk.sourceText().length(),
                     chunk.entities() == null ? 0 : chunk.entities().size(),
                     chunk.relations() == null ? 0 : chunk.relations().size(),
-                    capturedAt == null ? Instant.now() : capturedAt);
+                    capturedAt == null ? Instant.now() : capturedAt,
+                    chunk.indexScopeKey(), chunk.sourceRef(),
+                    chunk.hasPrivateSource() ? chunk.entities().stream()
+                            .filter(e -> e != null && e.name() != null && !e.name().isBlank())
+                            .map(KgChunk.KgEntity::name).distinct().limit(20).toList() : List.of());
         }
     }
 

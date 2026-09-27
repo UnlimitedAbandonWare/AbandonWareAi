@@ -69,6 +69,11 @@ public class EvidenceRepairHandler extends AbstractRetrievalHandler implements C
                 if (ev.decision() == AnswerQualityEvaluator.Decision.ACCEPT) {
                     return true;
                 }
+                if (ev.decision() != AnswerQualityEvaluator.Decision.REPAIR_WITH_WEB) {
+                    TraceStore.put("rag.critic.retry.count", 0);
+                    TraceStore.put("rag.critic.docs.after", accumulator.size());
+                    return true;
+                }
             }
             int before = accumulator.size();
             List<Content> repaired = retrieve(query);

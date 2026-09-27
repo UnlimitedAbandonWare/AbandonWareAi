@@ -38,7 +38,7 @@ public class GenericDocClassifier {
      */
     public boolean isGenericSnippet(String snippetLine, String domain) {
         if (domain != null) {
-            String d = domain.trim().toUpperCase();
+            String d = domain.trim().toUpperCase(Locale.ROOT);
             if ("GENERAL".equals(d) || "EDUCATION".equals(d)) {
                 return false;
             }
@@ -59,7 +59,7 @@ public class GenericDocClassifier {
      */
     public boolean isGenericText(String text, String domain) {
         if (domain != null) {
-            String d = domain.trim().toUpperCase();
+            String d = domain.trim().toUpperCase(Locale.ROOT);
             if ("GENERAL".equals(d) || "EDUCATION".equals(d)) {
                 return false;
             }

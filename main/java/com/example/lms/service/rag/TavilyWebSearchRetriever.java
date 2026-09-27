@@ -1,7 +1,9 @@
 package com.example.lms.service.rag;
 
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.guard.ProviderCredentialResolver;
 import com.example.lms.search.TraceStore;
+import com.example.lms.search.WebProviderTraceReasons;
 import com.example.lms.trace.SafeRedactor;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
@@ -10,6 +12,7 @@ import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -39,6 +42,9 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
 
     private final WebClient.Builder http;
 
+    @Autowired(required = false)
+    private ProviderCredentialResolver credentialResolver;
+
     @Value("${tavily.api.url:https://api.tavily.com/search}")
     private String baseUrl;
 
@@ -60,15 +66,33 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
             traceCounts(q, requested, 0, 0, "empty-query", false);
             return List.of();
         }
-        if (ConfigValueGuards.isMissing(apiKey)) {
+        String effectiveApiKey = apiKey;
+        ProviderCredentialResolver resolver = credentialResolver;
+        if (resolver != null) {
+            ProviderCredentialResolver.Resolution resolution = resolver.resolve(
+                    ProviderCredentialResolver.Provider.TAVILY);
+            effectiveApiKey = resolution.valueOrNull();
+            if (!resolution.enabled()) {
+                String reason = "missing-credential".equals(resolution.disabledReason())
+                        ? "missing_tavily_api_key"
+                        : resolution.disabledReason();
+                traceProviderDisabled(q, requested, reason);
+                return List.of();
+            }
+        }
+        if (ConfigValueGuards.isMissing(effectiveApiKey)) {
             traceProviderDisabled(q, requested, "missing_tavily_api_key");
             return List.of();
         }
 
+        TavilyAttemptObservation attempt = new TavilyAttemptObservation(q);
         try {
-            WebClient client = http.baseUrl(baseUrl).build();
+            WebClient client = http.clone().baseUrl(baseUrl)
+                    .filters(filters -> filters.add(0, (request, next) ->
+                            reactor.core.publisher.Mono.defer(() -> attempt.exchange(request, next))))
+                    .build();
             Map<String, Object> req = Map.of(
-                    "api_key", apiKey,
+                    "api_key", effectiveApiKey,
                     "query", q,
                     "max_results", requested
             );
@@ -88,6 +112,7 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
                     .block();
 
             if (resp == null) {
+                attempt.completed(0, 0, "provider-empty");
                 traceCounts(q, requested, 0, 0, "provider-empty", true);
                 return List.of();
             }
@@ -119,9 +144,12 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
                     }
                 }
             }
+            attempt.completed(rawCount, out.size(), rawCount == 0 ? "provider-empty"
+                    : out.isEmpty() ? "after-filter-starvation" : "none");
             traceCounts(q, requested, rawCount, out.size(), null, rawCount == 0);
             return out;
         } catch (Exception e) {
+            attempt.failed(e);
             traceException(q, requested, e, (System.nanoTime() - startedNs) / 1_000_000L);
             log.debug("[Tavily] retrieve failed failureReason={} errorType={} queryHash={} queryLength={}",
                     tavilyFailureReason(e),
@@ -129,6 +157,83 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
                     SafeRedactor.hashValue(q),
                     q.length());
             return List.of();
+        } finally {
+            attempt.close();
+        }
+    }
+
+
+    /** Carries immutable IDs into the client exchange without retaining ThreadLocal state across signals. */
+    private static final class TavilyAttemptObservation {
+        private final Map<String, Object> parent = TraceStore.context();
+        private final String queryHash;
+        private volatile Map<String, Object> attemptContext;
+        private volatile Integer httpStatus;
+        private long startedNs;
+        private long startedAtEpochMs;
+        private Object returnedCount = "unknown";
+        private Object afterFilterCount = "unknown";
+        private String outcome = "UNKNOWN";
+        private String failureReason = "unknown";
+
+        private TavilyAttemptObservation(String query) { queryHash = SafeRedactor.hashValue(query); }
+
+        private reactor.core.publisher.Mono<org.springframework.web.reactive.function.client.ClientResponse> exchange(
+                org.springframework.web.reactive.function.client.ClientRequest request,
+                org.springframework.web.reactive.function.client.ExchangeFunction next) {
+            Map<String, Object> previous = TraceStore.context();
+            try {
+                startedNs = System.nanoTime();
+                startedAtEpochMs = System.currentTimeMillis();
+                attemptContext = TraceStore.searchContext(parent, "providerAttemptId");
+                TraceStore.installContext(attemptContext);
+                return next.exchange(request).doOnNext(response -> httpStatus = response.statusCode().value());
+            } finally {
+                // Restore this same subscriber thread now, not from a later callback on another thread.
+                TraceStore.installContext(previous);
+            }
+        }
+
+        private void completed(int returned, int afterFilter, String reason) {
+            returnedCount = returned;
+            afterFilterCount = afterFilter;
+            outcome = afterFilter > 0 ? "OK" : "EMPTY";
+            failureReason = reason;
+        }
+
+        private void failed(Throwable error) {
+            outcome = "ERROR";
+            failureReason = tavilyFailureReason(error);
+        }
+
+        private void close() {
+            Map<String, Object> context = attemptContext;
+            if (context == null) return; // Disabled/blank/setup paths did not enter the exchange.
+            Map<String, Object> previous = TraceStore.context();
+            try {
+                Map<String, Object> row = new LinkedHashMap<>(TraceStore.searchCorrelation(context));
+                row.put("provider", "tavily");
+                row.put("queryHash", queryHash);
+                row.put("countScope", "raw_results_and_content_list");
+                row.put("clientAttemptObserved", true);
+                row.put("clientAttemptBoundary", "webclient_exchange");
+                row.put("providerReceiptObserved", false);
+                row.put("startedAtEpochMs", startedAtEpochMs);
+                row.put("finishedAtEpochMs", System.currentTimeMillis());
+                row.put("elapsedMs", Math.max(0L, (System.nanoTime() - startedNs) / 1_000_000L));
+                row.put("httpStatus", httpStatus == null ? "unknown" : httpStatus);
+                row.put("returnedCount", returnedCount);
+                row.put("afterFilterCount", afterFilterCount);
+                row.put("outcome", outcome);
+                row.put("failureReason", failureReason);
+                TraceStore.installContext(parent);
+                TraceStore.append("web.tavily.attempt.runs", Map.copyOf(row));
+            } catch (RuntimeException unavailableTraceSink) {
+                // Observation availability cannot replace the existing provider outcome.
+                return;
+            } finally {
+                TraceStore.installContext(previous);
+            }
         }
     }
 
@@ -151,6 +256,7 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
         TraceStore.put("web.tavily.timeout", false);
         TraceStore.put("web.tavily.cancelled", false);
         resetProviderHttpFailureFlags();
+        traceCommonWebProviderCounts(query, 0, 0, true, safeReason, "provider-disabled");
     }
 
     private void traceCounts(String query, int requested, int returned, int afterFilter, String failureReason,
@@ -165,26 +271,33 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
         TraceStore.put("web.tavily.timeout", false);
         TraceStore.put("web.tavily.cancelled", false);
         resetProviderHttpFailureFlags();
+        String effectiveFailureReason;
         if (failureReason != null && !failureReason.isBlank()) {
             TraceStore.put("web.tavily.failureReason", SafeRedactor.traceLabelOrFallback(failureReason, "unknown"));
+            effectiveFailureReason = String.valueOf(TraceStore.get("web.tavily.failureReason"));
         } else if (providerEmpty) {
-            TraceStore.put("web.tavily.failureReason", "provider-empty");
+            effectiveFailureReason = "provider-empty";
+            TraceStore.put("web.tavily.failureReason", effectiveFailureReason);
         } else if (afterFilterStarved) {
-            TraceStore.put("web.tavily.failureReason", "after-filter-starvation");
+            effectiveFailureReason = "after-filter-starvation";
+            TraceStore.put("web.tavily.failureReason", effectiveFailureReason);
         } else {
-            TraceStore.put("web.tavily.failureReason", "");
+            effectiveFailureReason = "";
+            TraceStore.put("web.tavily.failureReason", effectiveFailureReason);
         }
+        traceCommonWebProviderCounts(query, returned, afterFilter, false, null, effectiveFailureReason);
     }
 
     private void traceException(String query, int requested, Exception error, long tookMs) {
         traceBase(query, requested, 0, 0);
         String reason = tavilyFailureReason(error);
+        String finalFailureReason = SafeRedactor.traceLabelOrFallback(reason, "unknown");
         boolean cancelled = "cancelled".equals(reason);
         TraceStore.put("web.tavily.providerDisabled", false);
         TraceStore.put("web.tavily.zeroResults", true);
         TraceStore.put("web.tavily.providerEmpty", false);
         TraceStore.put("web.tavily.afterFilterStarved", false);
-        TraceStore.put("web.tavily.failureReason", SafeRedactor.traceLabelOrFallback(reason, "unknown"));
+        TraceStore.put("web.tavily.failureReason", finalFailureReason);
         TraceStore.put("web.tavily.exceptionType", tavilyErrorType(error));
         TraceStore.put("web.tavily.tookMs", Math.max(0L, tookMs));
         TraceStore.put("web.tavily.timeout", "timeout".equals(reason));
@@ -199,13 +312,16 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
             if (status == 429) {
                 TraceStore.put("web.rateLimited", true);
                 TraceStore.put("web.tavily.failureReason", "rate-limit");
+                finalFailureReason = "rate-limit";
                 traceRemoteCooldown("rate-limit", retryAfterToMs(webError.getHeaders()));
             } else {
                 TraceStore.put("web.tavily.failureReason", "http-error");
+                finalFailureReason = "http-error";
             }
             TraceStore.put("web.tavily.errorBodyHash", SafeRedactor.hashValue(body));
             TraceStore.put("web.tavily.errorBodyLength", body == null ? 0 : body.length());
         }
+        traceCommonWebProviderCounts(query, 0, 0, false, null, finalFailureReason);
     }
 
     private void traceBase(String query, int requested, int returned, int afterFilter) {
@@ -217,6 +333,41 @@ public class TavilyWebSearchRetriever implements ContentRetriever {
         TraceStore.put("web.tavily.queryTokenBucket", queryTokenBucket(query));
         TraceStore.put("web.tavily.timeoutMs", Math.max(0, timeoutMs));
         TraceStore.put("web.tavily.endpointHost", endpointHost());
+    }
+
+    private static void traceCommonWebProviderCounts(String query,
+                                                     int returned,
+                                                     int after,
+                                                     boolean providerDisabled,
+                                                     String disabledReason,
+                                                     String failureReason) {
+        TraceStore.put("web.provider.name", "tavily");
+        TraceStore.put("web.provider.enabled", !providerDisabled);
+        TraceStore.put("web.provider.resultCount", Math.max(0, returned));
+        TraceStore.put("web.provider.disabledReason", providerDisabled
+                ? WebProviderTraceReasons.disabledReason(disabledReason)
+                : null);
+        TraceStore.put("web.query.hash", query == null || query.isBlank()
+                ? null
+                : SafeRedactor.hashValue(query));
+        TraceStore.put("web.query.length", query == null ? 0 : query.length());
+        TraceStore.putIfAbsent("web.query.variantCount", 0);
+        if (returned > 0 && after <= 0) {
+            TraceStore.put("web.filter.starvationReason", "after-filter-starvation");
+        }
+        String commonReason = commonFailSoftReason(failureReason);
+        if (commonReason != null) {
+            TraceStore.put("web.failsoft.reason", commonReason);
+        }
+    }
+
+    private static String commonFailSoftReason(String reason) {
+        String safe = SafeRedactor.traceLabelOrFallback(reason, "none");
+        return switch (safe) {
+            case "none" -> null;
+            case "provider-empty" -> "empty-provider-output";
+            default -> safe;
+        };
     }
 
     private static void resetProviderHttpFailureFlags() {

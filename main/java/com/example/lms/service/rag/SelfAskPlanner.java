@@ -5,6 +5,8 @@ import com.example.lms.llm.DynamicChatModelFactory;
 import com.example.lms.llm.ModelCapabilities;
 import com.example.lms.prompt.pose.PromptPoseTrace;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.service.rag.query.SelfAskRewriteRiskScorer;
 import com.example.lms.trace.SafeRedactor;
 import dev.langchain4j.data.message.SystemMessage;
@@ -153,6 +155,10 @@ public class SelfAskPlanner {
     }
 
     private static double effectiveRewriteTemperature(double rewriteTemperature) {
+        Double creativeTemperature = creativeEffectiveSelfAskTemperature();
+        if (creativeTemperature != null) {
+            return sanitizeRewriteTemperature(creativeTemperature);
+        }
         if (Double.isFinite(rewriteTemperature) && rewriteTemperature > 0.0d) {
             return rewriteTemperature;
         }
@@ -279,6 +285,7 @@ public class SelfAskPlanner {
             double rewriteTemperature,
             double laneWeight) {
         if (query == null || query.isBlank() || lane == null) {
+            traceRegenerate(lane, "invalid_input", 0, Math.max(0L, timeoutMs), true);
             return java.util.Optional.empty();
         }
         double safeWeight = Math.max(0.25d, Math.min(2.50d, Double.isFinite(laneWeight) ? laneWeight : 1.0d));
@@ -290,13 +297,16 @@ public class SelfAskPlanner {
         try {
             String sub = generateLane(query, lane, modelId, laneTimeoutMs, laneTemperature, safeWeight);
             if (sub == null || sub.isBlank()) {
+                traceRegenerate(lane, "empty_output", 1, laneTimeoutMs, true);
                 return java.util.Optional.empty();
             }
+            traceRegenerate(lane, "single_lane_retry", 1, laneTimeoutMs, false);
             return java.util.Optional.of(new SubQuestion(lane, sub,
                     laneMeta(lane, modelId, "false", provider, "", safeWeight, laneTemperature, laneTimeoutMs)));
         } catch (Exception e) {
             log.debug("[SelfAskPlanner] fail-soft stage={}", "regenerateLane");
             String reason = classifyFailure(e);
+            traceRegenerate(lane, reason, 1, laneTimeoutMs, true);
             String sub = fallbackText(query, lane);
             traceLane(lane, modelId, provider, "true", reason,
                     safeWeight, laneTemperature, laneTimeoutMs);
@@ -645,6 +655,24 @@ public class SelfAskPlanner {
         }
     }
 
+    private static void traceRegenerate(SubQuestionType lane,
+            String reason,
+            int maxAttempts,
+            long timeoutMs,
+            boolean fallback) {
+        try {
+            TraceStore.put("selfask.regenerate.reason",
+                    SafeRedactor.traceLabelOrFallback(reason, "unknown"));
+            TraceStore.put("selfask.regenerate.maxAttempts", Math.max(0, maxAttempts));
+            TraceStore.put("selfask.regenerate.lane", lane == null ? "" : lane.name());
+            TraceStore.put("selfask.regenerate.timeoutMs", Math.max(0L, timeoutMs));
+            TraceStore.put("selfask.regenerate.fallback", fallback);
+        } catch (Throwable ignore) {
+            log.debug("[SelfAskPlanner] fail-soft stage={}", "regenerateLane");
+            // Trace is best-effort and must never affect retrieval.
+        }
+    }
+
     private static void traceRewriteHonesty(SubQuestionType lane,
             SelfAskRewriteRiskScorer.RewriteHonesty honesty,
             String rewrite) {
@@ -704,6 +732,9 @@ public class SelfAskPlanner {
     }
 
     private static double laneTemperature(double rewriteTemperature, double laneWeight) {
+        if (creativeEffectiveSelfAskTemperature() != null) {
+            return sanitizeRewriteTemperature(rewriteTemperature);
+        }
         double multiplier = 0.85d + 0.15d * laneWeight;
         return sanitizeRewriteTemperature(rewriteTemperature * multiplier);
     }
@@ -771,10 +802,126 @@ public class SelfAskPlanner {
     }
 
     private static double sanitizeRewriteTemperature(double requested) {
-        if (!Double.isFinite(requested)) {
-            return 0.2d;
+        double normalizedRequested = Double.isFinite(requested) ? requested : 0.2d;
+        Double creative = creativeEffectiveSelfAskTemperature();
+        double max = creative == null ? 0.55d : 1.0d;
+        GuardContext context = GuardContextHolder.get();
+        Double mandatoryCap = effectiveSelfAskCap(context);
+        if (mandatoryCap != null) {
+            max = Math.min(max, mandatoryCap);
         }
-        return Math.max(0.12d, Math.min(0.55d, requested));
+        double boundedMax = Math.max(0.0d, max);
+        double effectiveFloor = Math.min(0.12d, boundedMax);
+        return Math.max(effectiveFloor, Math.min(boundedMax, normalizedRequested));
+    }
+
+    private static Double creativeEffectiveSelfAskTemperature() {
+        GuardContext context = GuardContextHolder.get();
+        if (!validCompleteCreativeProfile(context)) {
+            return null;
+        }
+        String profile = String.valueOf(context.getPlanOverride("creative.emergence.profile"));
+        double requested = context.planDouble("creative.emergence.selfAsk.temperature", Double.NaN);
+        if (!validCreativeSelfAskBand(profile, requested)) {
+            return null;
+        }
+        double effective = context.planDouble(
+                "creative.emergence.selfAsk.effectiveTemperature", requested);
+        if (!Double.isFinite(effective) || effective <= 0.0d) {
+            return null;
+        }
+        Double mandatoryCap = effectiveSelfAskCap(context);
+        return mandatoryCap == null ? Math.min(1.0d, effective) : Math.min(effective, mandatoryCap);
+    }
+
+    private static boolean validCompleteCreativeProfile(GuardContext context) {
+        if (context == null || context.isSensitiveTopic()
+                || context.planBool("privacy.boundary.enforce", false)
+                || !context.planBool("creative.emergence.active", false)
+                || !"explore".equals(context.getPlanOverride("promptPose.application.intentSlot"))) {
+            return false;
+        }
+        String requestedHash = String.valueOf(
+                context.getPlanOverride("creative.emergence.requestedOptionsHash"))
+                .toLowerCase(java.util.Locale.ROOT);
+        if (!requestedHash.matches("hash:[0-9a-f]{12}")) {
+            return false;
+        }
+        return switch (String.valueOf(context.getPlanOverride("creative.emergence.profile"))) {
+            case "VIVID" -> creativeProfileValuesInRange(context,
+                    0.85d, 0.90d, 0.70d, 0.76d,
+                    1.10d, 1.25d, 0.95d, 0.97d,
+                    1.05d, 1.20d, 0.95d, 0.97d,
+                    0.80d, 0.88d);
+            case "WILD" -> creativeProfileValuesInRange(context,
+                    0.91d, 0.97d, 0.77d, 0.83d,
+                    1.26d, 1.45d, 0.97d, 0.99d,
+                    1.21d, 1.40d, 0.97d, 0.99d,
+                    0.89d, 0.97d);
+            case "FERAL" -> creativeProfileValuesInRange(context,
+                    0.98d, 1.00d, 0.84d, 0.85d,
+                    1.46d, 1.50d, 0.99d, 1.00d,
+                    1.41d, 1.50d, 0.99d, 1.00d,
+                    0.98d, 1.00d);
+            default -> false;
+        };
+    }
+
+    private static boolean creativeProfileValuesInRange(
+            GuardContext context,
+            double searchTempMin, double searchTempMax,
+            double searchRateMin, double searchRateMax,
+            double candidateTempMin, double candidateTempMax,
+            double candidateTopPMin, double candidateTopPMax,
+            double finalTempMin, double finalTempMax,
+            double finalTopPMin, double finalTopPMax,
+            double selfAskMin, double selfAskMax) {
+        return creativeValueInRange(context, "creative.emergence.search.temperature", searchTempMin, searchTempMax)
+                && creativeValueInRange(context, "creative.emergence.search.rate", searchRateMin, searchRateMax)
+                && creativeValueInRange(context, "creative.emergence.candidate.temperature",
+                        candidateTempMin, candidateTempMax)
+                && creativeValueInRange(context, "creative.emergence.candidate.topP",
+                        candidateTopPMin, candidateTopPMax)
+                && creativeValueInRange(context, "creative.emergence.final.temperature",
+                        finalTempMin, finalTempMax)
+                && creativeValueInRange(context, "creative.emergence.final.topP",
+                        finalTopPMin, finalTopPMax)
+                && creativeValueInRange(context, "creative.emergence.selfAsk.temperature",
+                        selfAskMin, selfAskMax);
+    }
+
+    private static boolean creativeValueInRange(
+            GuardContext context, String key, double min, double max) {
+        double value = context.planDouble(key, Double.NaN);
+        return Double.isFinite(value) && value >= min && value <= max;
+    }
+
+    private static Double effectiveSelfAskCap(GuardContext context) {
+        if (context == null) {
+            return null;
+        }
+        Double selfAsk = finiteNonNegative(context.planDouble("llm.selfAsk.temperature.max"));
+        Double explore = finiteNonNegative(context.planDouble("llm.explore.temperature.max"));
+        if (selfAsk == null) {
+            return explore;
+        }
+        return explore == null ? selfAsk : Math.min(selfAsk, explore);
+    }
+
+    private static Double finiteNonNegative(Double value) {
+        return value != null && Double.isFinite(value) ? Math.max(0.0d, value) : null;
+    }
+
+    private static boolean validCreativeSelfAskBand(String profile, double value) {
+        if (!Double.isFinite(value)) {
+            return false;
+        }
+        return switch (profile) {
+            case "VIVID" -> value >= 0.80d && value <= 0.88d;
+            case "WILD" -> value >= 0.89d && value <= 0.97d;
+            case "FERAL" -> value >= 0.98d && value <= 1.00d;
+            default -> false;
+        };
     }
 
     private static double round4(double value) {
