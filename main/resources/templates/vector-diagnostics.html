@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vector Diagnostics</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f8f7f4; }
+    .card { background: white; border: 1px solid #eaddc7; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<div class="max-w-6xl mx-auto p-6">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold">Vector / Runtime Diagnostics</h1>
+      <p class="text-sm text-gray-600 mt-1">
+        체크포인트(진단용): FederatedEmbeddingStore storeIds + outbox/degraded storage 상태를 한 화면에서 확인합니다.
+      </p>
+      <p class="text-xs text-gray-500 mt-1">
+        JSON API: <span class="mono">/api/vector/diagnostics</span>, <span class="mono">/api/diagnostics/runtime</span>
+      </p>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <a href="/admin/dashboard" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        Dashboard
+      </a>
+      <a href="/admin/brain-state" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        Brain State
+      </a>
+      <a href="/admin/pipeline-status" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        Pipeline Status
+      </a>
+      <button id="btnRefresh" class="px-3 py-2 rounded-lg bg-[#8d7b68] text-white hover:bg-[#65451F]">
+        새로고침
+      </button>
+      <span id="status" class="text-sm text-gray-600"></span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+    <!-- Vector diagnostics -->
+    <section class="card rounded-xl p-5 shadow-sm">
+      <h2 class="text-lg font-semibold">Vector (/api/vector/diagnostics)</h2>
+
+      <div class="mt-4 space-y-2 text-sm">
+        <div>
+          <span class="text-gray-500">storeClass</span>
+          <div class="mono" id="storeClass">-</div>
+        </div>
+
+        <div>
+          <span class="text-gray-500">Federated storeIds</span>
+          <div class="flex items-center gap-2 mt-1">
+            <span class="mono" id="fedCount">-</span>
+            <span id="fedBadge" class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">unknown</span>
+          </div>
+          <pre class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-56" id="fedIds">-</pre>
+        </div>
+
+        <div>
+          <span class="text-gray-500">Upstash vector mode</span>
+          <div class="flex items-center gap-2 mt-1">
+            <span id="upstashBadge" class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">unknown</span>
+            <span class="mono" id="upstashMode">-</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+            <div>
+              <span class="text-xs text-gray-500">namespace</span>
+              <div class="mono" id="upstashNamespace">-</div>
+            </div>
+            <div>
+              <span class="text-xs text-gray-500">host</span>
+              <div class="mono" id="upstashHost">-</div>
+            </div>
+          </div>
+        </div>
+
+        <details class="mt-2">
+          <summary class="cursor-pointer text-gray-600">원본 JSON 보기</summary>
+          <pre class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[420px]" id="vectorJson">-</pre>
+        </details>
+      </div>
+    </section>
+
+    <!-- Runtime diagnostics -->
+    <section class="card rounded-xl p-5 shadow-sm">
+      <h2 class="text-lg font-semibold">Runtime (/api/diagnostics/runtime)</h2>
+
+      <div class="mt-4 space-y-2 text-sm">
+        <div>
+          <span class="text-gray-500">outbox</span>
+          <div class="flex items-center gap-2 mt-1">
+            <span id="outboxBadge" class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">unknown</span>
+            <span class="mono" id="outboxType">-</span>
+          </div>
+        </div>
+
+        <div>
+          <span class="text-gray-500">nightmareBreaker</span>
+          <div class="flex items-center gap-2 mt-1">
+            <span id="nightmareBreakerBadge" class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">unknown</span>
+            <span class="mono" id="nightmareBreakerState">-</span>
+            <span class="mono text-xs" id="nightmareBreakerOpenCount">0</span>
+          </div>
+        </div>
+
+        <div>
+          <span class="text-gray-500">vectorStore</span>
+          <div class="flex items-center gap-2 mt-1">
+            <span id="vectorStoreBadge" class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">unknown</span>
+            <span class="mono" id="vectorStoreBuffer">-</span>
+          </div>
+        </div>
+
+        <details class="mt-2" open>
+          <summary class="cursor-pointer text-gray-600">원본 JSON 보기</summary>
+          <pre class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[520px]" id="runtimeJson">-</pre>
+        </details>
+      </div>
+    </section>
+  </div>
+
+  <div class="mt-6 text-xs text-gray-500">
+    <p>
+      Tip: 콘솔에서 빠르게 확인하려면
+      <span class="mono">curl -sS /api/vector/diagnostics | jq '.vector.federatedStoreIds'</span>
+      같은 형태로 확인할 수 있습니다.
+    </p>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function setBadge(el, label, ok) {
+    if (!el) return;
+    el.textContent = label;
+    el.className = 'text-xs px-2 py-0.5 rounded-full ' + (ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700');
+  }
+
+  function scalar(value, fallback) {
+    return (value === null || value === undefined || value === '') ? fallback : value;
+  }
+
+  function breakerEntries(breaker) {
+    if (!breaker || typeof breaker !== 'object') return [];
+    return Object.entries(breaker).filter((entry) => {
+      const value = entry[1];
+      return value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'open');
+    });
+  }
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(url + ' -> ' + res.status + ' ' + txt);
+    }
+    return res.json();
+  }
+
+  async function refresh() {
+    $('status').textContent = '불러오는 중...';
+
+    try {
+      const [v, r] = await Promise.all([
+        fetchJson('/api/vector/diagnostics'),
+        fetchJson('/api/diagnostics/runtime'),
+      ]);
+
+      // Vector
+      const vector = (v && v.vector) ? v.vector : {};
+      $('storeClass').textContent = vector.storeClass || '-';
+
+      const ids = Array.isArray(vector.federatedStoreIds) ? vector.federatedStoreIds : [];
+      const n = (typeof vector.federatedStoreCount === 'number') ? vector.federatedStoreCount : ids.length;
+      $('fedCount').textContent = String(n);
+      $('fedIds').textContent = JSON.stringify(ids, null, 2);
+
+      if (n > 0) {
+        setBadge($('fedBadge'), 'OK', true);
+      } else {
+        setBadge($('fedBadge'), 'EMPTY (NO underlying stores)', false);
+      }
+
+      const upstash = (vector && vector.upstash) ? vector.upstash : {};
+      const upstashConfigured = upstash.configured === true;
+      const upstashReadOnly = upstash.readOnly === true;
+      const upstashWriteEnabled = upstash.writeEnabled === true;
+      const upstashMode = upstashConfigured
+        ? `configured readOnly:${upstashReadOnly} writeEnabled:${upstashWriteEnabled}`
+        : 'not-configured';
+      setBadge($('upstashBadge'), upstashConfigured ? (upstashWriteEnabled ? 'write-enabled' : 'read-only') : 'missing', upstashConfigured);
+      $('upstashMode').textContent = upstashMode;
+      $('upstashNamespace').textContent = scalar(upstash.namespace, '-');
+      $('upstashHost').textContent = scalar(upstash.restUrlHost, '-');
+
+      $('vectorJson').textContent = JSON.stringify(v, null, 2);
+
+      // Runtime
+      const outbox = (r && r.outbox) ? r.outbox : {};
+      const available = (outbox && outbox.available === true) || (outbox && outbox.enabled === true);
+      const outType = outbox.type || outbox.storageType || outbox.class || '-';
+      $('outboxType').textContent = outType;
+
+      if (available) {
+        setBadge($('outboxBadge'), 'available', true);
+      } else {
+        setBadge($('outboxBadge'), 'missing', false);
+      }
+
+      const breaker = (r && r.nightmareBreaker) ? r.nightmareBreaker : {};
+      const breakers = breakerEntries(breaker);
+      const openCount = breakers.filter((entry) => entry[1] && entry[1].open === true).length;
+      const breakerMissing = breaker && breaker.available === false;
+      $('nightmareBreakerState').textContent = breakerMissing
+        ? 'unavailable'
+        : `${breakers.length} tracked / ${openCount} open`;
+      $('nightmareBreakerOpenCount').textContent = String(openCount);
+      setBadge($('nightmareBreakerBadge'), breakerMissing ? 'missing' : (openCount > 0 ? 'open' : 'clear'), !breakerMissing && openCount === 0);
+
+      const vectorStore = (r && r.vectorStore) ? r.vectorStore : {};
+      const vectorAvailable = vectorStore && vectorStore.available !== false;
+      const queued = scalar(vectorStore.queued, 0);
+      const backoffMs = scalar(vectorStore.backoffRemainingMillis, 0);
+      const errorState = vectorStore.lastError ? ' error:present' : '';
+      $('vectorStoreBuffer').textContent = `queued:${queued} backoffMs:${backoffMs}${errorState}`;
+      setBadge($('vectorStoreBadge'), vectorAvailable ? 'available' : 'missing', vectorAvailable);
+
+      $('runtimeJson').textContent = JSON.stringify(r, null, 2);
+
+      const ts = new Date().toLocaleString();
+      $('status').textContent = '업데이트 완료: ' + ts;
+    } catch (e) {
+      console.error(e);
+      $('status').textContent = '실패: ' + (e && e.message ? e.message : String(e));
+    }
+  }
+
+  $('btnRefresh').addEventListener('click', refresh);
+  refresh();
+</script>
+
+</body>
+</html>

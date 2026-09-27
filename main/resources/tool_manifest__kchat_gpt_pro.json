@@ -145,6 +145,39 @@
       "returnsLargePayloadByReference": false
     },
     {
+      "id": "causal.probe.evaluate",
+      "enabled": true,
+      "description": "Evaluate current causal-probe signals and conditionally issue a bounded session authority for the local counter-evidence pass.",
+      "risk": "read_only",
+      "scopes": ["internal.read"],
+      "readOnly": true,
+      "ownerTokenRequired": true,
+      "maxOutputBytes": 16384,
+      "returnsLargePayloadByReference": false
+    },
+    {
+      "id": "counter.evidence.retrieve",
+      "enabled": true,
+      "description": "Consume matching operator authority and retrieve exactly three bounded local-RAG counter-evidence slots with hash-only query traces.",
+      "risk": "read_only",
+      "scopes": ["internal.read"],
+      "readOnly": true,
+      "ownerTokenRequired": true,
+      "maxOutputBytes": 16384,
+      "returnsLargePayloadByReference": false
+    },
+    {
+      "id": "evidence.coherence.verify",
+      "enabled": true,
+      "description": "Verify complete normalized evidence rows and record a deterministic confidence verdict.",
+      "risk": "read_only",
+      "scopes": ["internal.read"],
+      "readOnly": true,
+      "ownerTokenRequired": true,
+      "maxOutputBytes": 16384,
+      "returnsLargePayloadByReference": false
+    },
+    {
       "id": "web.search",
       "enabled": false,
       "description": "Legacy web search AgentTool reference; not exposed through the internal ops API in this pass.",

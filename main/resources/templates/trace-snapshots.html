@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trace Snapshots</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f8f7f4; }
+    .card { background: white; border: 1px solid #eaddc7; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .row:hover { background: #fff7ed; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<div class="max-w-7xl mx-auto p-6">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold">Trace Snapshots</h1>
+      <p class="text-sm text-gray-600 mt-1">
+        TraceStore(ThreadLocal) + MDC 스냅샷을 메모리 링버퍼에 저장하고, 필요할 때 웹에서 확인합니다.
+      </p>
+      <p class="text-xs text-gray-500 mt-1">
+        JSON API: <span class="mono">/api/diagnostics/trace/snapshots</span>
+      </p>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <a href="/admin/dashboard" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        Dashboard
+      </a>
+      <a href="/admin/pipeline-status" class="px-3 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300">
+        Pipeline Status
+      </a>
+      <button id="btnRefresh" class="px-3 py-2 rounded-lg bg-[#8d7b68] text-white hover:bg-[#65451F]">
+        새로고침
+      </button>
+      <span id="status" class="text-sm text-gray-600"></span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+    <section class="card rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="text-lg font-semibold">최근 스냅샷</h2>
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-gray-500">limit</label>
+          <input id="limit" type="number" min="1" max="500" value="50" class="mono text-xs px-2 py-1 border rounded" style="width:90px;" />
+        </div>
+      </div>
+
+      <div class="mt-3">
+        <input id="filter" placeholder="filter: sid / traceId / requestId / reason / path" class="w-full mono text-xs px-3 py-2 border rounded" />
+      </div>
+
+      <div class="mt-3 overflow-auto max-h-[560px] border rounded">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 sticky top-0">
+            <tr>
+              <th class="text-left p-2">ts</th>
+              <th class="text-left p-2">sid</th>
+              <th class="text-left p-2">traceId</th>
+              <th class="text-left p-2">requestId</th>
+              <th class="text-left p-2">reason</th>
+              <th class="text-left p-2">pathHash</th>
+              <th class="text-left p-2">events</th>
+              <th class="text-left p-2">control</th>
+              <th class="text-left p-2">failure</th>
+              <th class="text-left p-2">status</th>
+              <th class="text-left p-2">html</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <details class="mt-3">
+        <summary class="cursor-pointer text-gray-600 text-sm">원본 JSON 보기</summary>
+        <pre id="listJson" class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[420px]">-</pre>
+      </details>
+    </section>
+
+    <section class="card rounded-xl p-5 shadow-sm">
+      <h2 class="text-lg font-semibold">스냅샷 상세</h2>
+      <p class="text-xs text-gray-500 mt-1">왼쪽 목록에서 클릭하면 상세가 표시됩니다.</p>
+
+      <div class="mt-3">
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-gray-500">id</span>
+          <span id="detailId" class="mono">-</span>
+          <button id="btnCopy" class="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300">copy</button>
+          <a id="btnOpenHtml" href="#" target="_blank" class="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300">open html</a>
+          <a id="btnOpenDebugEvents" href="/admin/debug-events" target="_blank" class="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300">debug events</a>
+        </div>
+      </div>
+
+      <div id="timelineBox" class="mt-3 text-xs"></div>
+
+      <details class="mt-3" open>
+        <summary class="cursor-pointer text-gray-600 text-sm">JSON</summary>
+        <pre id="detailJson" class="mono text-xs mt-2 p-3 bg-gray-50 rounded-lg overflow-auto max-h-[620px]">-</pre>
+      </details>
+    </section>
+  </div>
+
+  <div class="mt-6 text-xs text-gray-500">
+    <p>
+      Tip: 콘솔에서 바로 확인하려면
+      <span class="mono">curl -sS /api/diagnostics/trace/snapshots | jq '.snapshots[0]'</span>
+      형태로 확인할 수 있습니다.
+    </p>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(url + ' -> ' + res.status + ' ' + txt);
+    }
+    return res.json();
+  }
+
+  function fmt(v) { return (v === null || v === undefined) ? '' : String(v); }
+
+  function appendTextCell(tr, value, className = '') {
+    const td = document.createElement('td');
+    td.className = ('p-2 ' + className).trim();
+    td.textContent = fmt(value);
+    tr.appendChild(td);
+    return td;
+  }
+
+  function pathSummary(snap) {
+    if (!snap) return '';
+    const hash = fmt(snap.pathHash);
+    const length = fmt(snap.pathLength);
+    return hash ? `${hash} len=${length || '0'}` : '';
+  }
+
+  function htmlSnapshotState(snap) {
+    if (!snap) return '-';
+    if (snap.htmlTruncated === true) return 'truncated';
+    return snap.hasHtml === true ? 'stored' : '-';
+  }
+
+  function matchesFilter(snap, q) {
+    if (!q) return true;
+    const hay = [snap.ts, snap.sid, snap.traceId, snap.requestId, snap.reason, snap.pathHash, snap.pathLength, snap.lastControlAction, snap.lastFailureReason]
+      .map(v => (v ? String(v).toLowerCase() : ''))
+      .join(' | ');
+    return hay.indexOf(q) >= 0;
+  }
+
+  function renderRows(list) {
+    const q = ($('filter').value || '').trim().toLowerCase();
+    const rows = $('rows');
+    rows.innerHTML = '';
+
+    (Array.isArray(list) ? list : []).forEach((snap) => {
+      if (!matchesFilter(snap, q)) return;
+      const tr = document.createElement('tr');
+      tr.className = 'row cursor-pointer border-b';
+      appendTextCell(tr, snap.ts, 'mono');
+      appendTextCell(tr, snap.sid, 'mono');
+      appendTextCell(tr, snap.traceId, 'mono');
+      appendTextCell(tr, snap.requestId, 'mono');
+      appendTextCell(tr, snap.reason);
+      appendTextCell(tr, pathSummary(snap), 'mono');
+      appendTextCell(tr, snap.eventCount, 'mono');
+      appendTextCell(tr, snap.lastControlAction, 'mono');
+      appendTextCell(tr, snap.lastFailureReason, 'mono');
+      appendTextCell(tr, snap.status, 'mono');
+      appendTextCell(tr, htmlSnapshotState(snap), 'mono');
+      tr.addEventListener('click', () => loadDetail(snap.id));
+      rows.appendChild(tr);
+    });
+  }
+
+  let lastList = [];
+
+  async function refresh() {
+    $('status').textContent = '불러오는 중...';
+    try {
+      const lim = parseInt($('limit').value || '50', 10);
+      const data = await fetchJson('/api/diagnostics/trace/snapshots?limit=' + encodeURIComponent(String(lim)));
+      lastList = (data && data.snapshots) ? data.snapshots : [];
+      $('listJson').textContent = JSON.stringify(data, null, 2);
+      renderRows(lastList);
+
+      const ts = new Date().toLocaleString();
+      $('status').textContent = '업데이트 완료: ' + ts;
+    } catch (e) {
+      console.error(e);
+      $('status').textContent = '실패: ' + (e && e.message ? e.message : String(e));
+    }
+  }
+
+  function applyQueryPrefill() {
+    try {
+      const qs = new URLSearchParams(window.location.search || '');
+      const q = (qs.get('q') || '').trim();
+      const traceId = (qs.get('traceId') || '').trim();
+      const sid = (qs.get('sid') || '').trim();
+
+      if (q) $('filter').value = q;
+      else if (traceId) $('filter').value = traceId;
+      else if (sid) $('filter').value = sid;
+    } catch (e) { void e; }
+  }
+
+  async function loadDetail(id) {
+    if (!id) return;
+    try {
+      const data = await fetchJson('/api/diagnostics/trace/snapshots/' + encodeURIComponent(id));
+      $('detailId').textContent = id;
+      $('detailJson').textContent = JSON.stringify(data, null, 2);
+      renderTimeline(data && data.orchestration ? data.orchestration : null);
+
+      const a = $('btnOpenHtml');
+      if (a) {
+        a.href = '/api/diagnostics/trace/snapshots/' + encodeURIComponent(id) + '/html';
+      }
+
+      const traceId = fmt(data.traceId);
+      const sid = fmt(data.sid);
+
+      const b = $('btnOpenDebugEvents');
+      if (b) {
+        if (traceId) b.href = '/admin/debug-events?traceId=' + encodeURIComponent(traceId);
+        else if (sid) b.href = '/admin/debug-events?sid=' + encodeURIComponent(sid);
+        else b.href = '/admin/debug-events';
+      }
+    } catch (e) {
+      console.error(e);
+      $('detailId').textContent = id;
+      $('detailJson').textContent = 'failed: ' + (e && e.message ? e.message : String(e));
+      renderTimeline(null);
+
+      const a = $('btnOpenHtml');
+      if (a) a.href = '#';
+
+      const b = $('btnOpenDebugEvents');
+      if (b) b.href = '/admin/debug-events';
+    }
+  }
+
+  function renderTimeline(orch) {
+    const box = $('timelineBox');
+    if (!box) return;
+    box.innerHTML = '';
+
+    const rows = orch && Array.isArray(orch.timeline) ? orch.timeline : [];
+    const summary = document.createElement('div');
+    summary.className = 'mb-2 text-gray-700';
+    summary.textContent = 'RAG events=' + fmt(orch && orch.eventCount) +
+      ' controls=' + fmt(orch && orch.controlCount) +
+      ' lastControl=' + fmt(orch && orch.lastControlAction) +
+      ' lastFailure=' + fmt(orch && orch.lastFailureReason);
+    box.appendChild(summary);
+
+    if (!rows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'p-3 bg-gray-50 border rounded text-gray-500';
+      empty.textContent = 'No standard RAG pipeline events captured.';
+      box.appendChild(empty);
+      return;
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'overflow-auto border rounded max-h-[280px]';
+    const table = document.createElement('table');
+    table.className = 'w-full text-xs';
+    const thead = document.createElement('thead');
+    thead.className = 'bg-gray-50 sticky top-0';
+    const hr = document.createElement('tr');
+    ['#', 'phase', 'stage', 'step', 'status', 'counts', 'failure', 'control'].forEach((h) => {
+      const th = document.createElement('th');
+      th.className = 'text-left p-2';
+      th.textContent = h;
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    rows.forEach((r) => {
+      const tr = document.createElement('tr');
+      tr.className = 'border-b';
+      const counts = 'returned=' + fmt(r.returnedCount) +
+        ' afterFilter=' + fmt(r.afterFilterCount) +
+        ' selected=' + fmt(r.selectedCount) +
+        ' ms=' + fmt(r.stageMs);
+      [r.seq, r.phase, r.stage, r.step, r.status, counts, r.reasonCode, r.controlAction].forEach((v) => {
+        const td = document.createElement('td');
+        td.className = 'p-2 mono';
+        td.textContent = fmt(v);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    box.appendChild(wrap);
+  }
+
+  $('btnRefresh').addEventListener('click', refresh);
+  $('filter').addEventListener('input', () => renderRows(lastList));
+  $('btnCopy').addEventListener('click', async () => {
+    try {
+      const id = $('detailId').textContent || '';
+      if (!id || id === '-') return;
+      await navigator.clipboard.writeText(id);
+    } catch (e) {
+      console.warn(e);
+    }
+  });
+
+  applyQueryPrefill();
+  refresh();
+</script>
+
+</body>
+</html>

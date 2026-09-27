@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAG Ops Cockpit</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #657084;
+      --line: #d7deea;
+      --nav: #101624;
+      --nav2: #1d2738;
+      --blue: #2463eb;
+      --green: #16784a;
+      --amber: #9a6500;
+      --red: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    a { color: inherit; text-decoration: none; }
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 256px minmax(0, 1fr);
+    }
+    .sidebar {
+      background: var(--nav);
+      color: #e7edf7;
+      padding: 22px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand { font-size: 18px; font-weight: 700; letter-spacing: 0; }
+    .nav { display: grid; gap: 7px; }
+    .nav a {
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: #c7d2e4;
+      font-size: 14px;
+    }
+    .nav a:hover, .nav a.active { background: var(--nav2); color: #fff; }
+    .legacy {
+      margin-top: auto;
+      display: grid;
+      gap: 7px;
+      color: #c7d2e4;
+      font-size: 13px;
+    }
+    .legacy-title { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .main { padding: 28px; min-width: 0; }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 6px; font-size: 28px; letter-spacing: 0; }
+    .sub { color: var(--muted); margin-bottom: 0; }
+    .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .button:hover { filter: brightness(0.97); }
+    .grid { display: grid; gap: 16px; }
+    .cards { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+    .two-col { grid-template-columns: minmax(0, 1.3fr) minmax(320px, .7fr); }
+    .three-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      min-width: 0;
+    }
+    .metric-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .metric-value { font-size: 26px; font-weight: 700; line-height: 1.1; }
+    .metric-detail { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 18px; overflow-wrap: anywhere; }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .section-title h2 { margin-bottom: 0; font-size: 17px; }
+    .subsection-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 14px 0 10px;
+    }
+    .subsection-title h3 { margin-bottom: 0; font-size: 14px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #e5e7eb;
+      color: #364153;
+      white-space: nowrap;
+    }
+    .ok { background: #dcfce7; color: var(--green); }
+    .warn { background: #fef3c7; color: var(--amber); }
+    .bad { background: #fee2e2; color: var(--red); }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); background: #f8fafc; font-weight: 600; white-space: nowrap; }
+    td { overflow-wrap: anywhere; }
+    .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    pre {
+      margin: 0;
+      max-height: 330px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #101624;
+      color: #dbe7ff;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+    }
+    .stack { display: grid; gap: 10px; }
+    .kv {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 13px;
+      border-bottom: 1px solid #edf1f7;
+      padding-bottom: 8px;
+    }
+    .kv:last-child { border-bottom: 0; padding-bottom: 0; }
+    .key { color: var(--muted); }
+    .value { overflow-wrap: anywhere; }
+    .empty { color: var(--muted); padding: 14px; font-size: 13px; }
+    @media (max-width: 1120px) {
+      .cards { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+      .two-col { grid-template-columns: 1fr; }
+      .three-col { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { min-height: auto; }
+      .cards { grid-template-columns: 1fr; }
+      .topbar { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .main { padding: 18px; }
+      .kv { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">RAG Ops Cockpit</div>
+    <nav class="nav" aria-label="Operations navigation">
+      <a href="#overview" class="active">Overview</a>
+      <a th:href="@{/admin/brain-state}" href="/admin/brain-state">Brain State</a>
+      <a th:href="@{/admin/pipeline-status}" href="/admin/pipeline-status">Pipeline Status</a>
+      <a href="#legacy-dev-candidates">Legacy Dev Candidates</a>
+      <a href="#overlays">Overlays</a>
+      <a th:href="@{/admin/learning-data}" href="/admin/learning-data">Learning Data</a>
+      <a href="#samples">Training Samples</a>
+      <a href="#failures">Failure Patterns</a>
+      <a href="#models">Model Metrics</a>
+      <a href="#matrix">9-Matrix</a>
+      <a href="#debug-ai">AI Debug Metrics</a>
+      <a href="#diagnostics">Diagnostics</a>
+      <a th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>RAG Ops Cockpit</h1>
+      <p class="sub">Chat, RAG, agent tools, Chatbot feedback corpus, failure feedback, and model operations.</p>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" class="button primary" type="button">Refresh</button>
+        <a class="button" th:href="@{/admin/rag-ops-cockpit}" href="/admin/rag-ops-cockpit">Cockpit</a>
+        <a class="button" th:href="@{/admin/learning-data}" href="/admin/learning-data">Learning Data</a>
+        <a class="button" th:href="@{/admin/brain-state}" href="/admin/brain-state">Brain State</a>
+        <a class="button" th:href="@{/admin/pipeline-status}" href="/admin/pipeline-status">Pipeline Status</a>
+        <a class="button" href="/api/diagnostics/rag/learning-ops/metrics" target="_blank" rel="noopener">Metrics JSON</a>
+        <a class="button" href="/api/diagnostics/rag/learning-ops/metrics/prometheus" target="_blank" rel="noopener">Prometheus</a>
+        <a class="button" th:href="@{/admin/trace-snapshots}" href="/admin/trace-snapshots">Trace</a>
+        <a class="button" th:href="@{/admin/vector-diagnostics}" href="/admin/vector-diagnostics">Vector</a>
+      </div>
+    </div>
+
+    <section id="overview" class="grid cards" aria-label="Development operations metrics">
+      <div class="panel">
+        <div class="metric-label">Training samples</div>
+        <div id="sampleTotal" class="metric-value">-</div>
+        <div id="sampleDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">Quarantine</div>
+        <div id="quarantineTotal" class="metric-value">-</div>
+        <div id="quarantineDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">Outbox pressure</div>
+        <div id="outboxPressureTotal" class="metric-value">-</div>
+        <div id="outboxPressureDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">Failure patterns</div>
+        <div id="failureTotal" class="metric-value">-</div>
+        <div id="failureDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">Virtual points</div>
+        <div id="virtualPointTotal" class="metric-value">-</div>
+        <div id="virtualPointDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">Evidence rate</div>
+        <div id="evidenceRate" class="metric-value">-</div>
+        <div id="evidenceDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">IdleTrain ingest</div>
+        <div id="idleIngested" class="metric-value">-</div>
+        <div id="idleDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">Legacy dev candidates</div>
+        <div id="legacyDevTotal" class="metric-value">-</div>
+        <div id="legacyDevDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">Overlay links</div>
+        <div id="overlayActiveCount" class="metric-value">-</div>
+        <div id="overlayDetail" class="metric-detail">loading</div>
+      </div>
+    </section>
+
+    <section id="debug-ai" class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>AI Debug Metrics Ledger</h2>
+        <span id="debugAiBadge" class="badge">loading</span>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <select id="debugAiWindow" class="button" style="min-height:32px;padding:4px 8px;font-size:13px;" aria-label="AI Debug window">
+            <option value="60000">1 min</option>
+            <option value="300000">5 min</option>
+            <option value="1800000">30 min</option>
+            <option value="3600000">1 hour</option>
+          </select>
+          <button id="debugAiAutoBtn" class="button" type="button" style="min-height:32px;padding:4px 10px;font-size:13px;">Auto OFF</button>
+          <span id="debugAiLastRefresh" style="font-size:12px;color:var(--muted);">-</span>
+        </div>
+      </div>
+      <div class="grid three-col">
+        <div class="stack" id="debugAiScorecardKv"></div>
+        <div>
+          <div class="subsection-title">
+            <h3>Trend</h3>
+          </div>
+          <pre id="debugAiTrend">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Recommendations</h3>
+          </div>
+          <pre id="debugAiRecommendations">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Fingerprint Hotspots</h3>
+          </div>
+          <pre id="debugAiHotspots">-</pre>
+        </div>
+      </div>
+      <div class="grid two-col" style="margin-top:12px;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+            <tr>
+              <th>tile</th>
+              <th>status</th>
+              <th>events</th>
+              <th>warn</th>
+              <th>error</th>
+              <th>top failure</th>
+            </tr>
+            </thead>
+            <tbody id="debugAiTileRows"></tbody>
+          </table>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+            <tr>
+              <th>kind</th>
+              <th>id</th>
+              <th>count</th>
+              <th>last</th>
+            </tr>
+            </thead>
+            <tbody id="debugAiUsageRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="legacy-dev-candidates" class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Legacy Development Candidates</h2>
+        <span id="legacyDevBadge" class="badge">unknown</span>
+      </div>
+      <div class="grid three-col">
+        <div>
+          <div class="subsection-title">
+            <h3>Feature buckets</h3>
+          </div>
+          <pre id="legacyDevFeatureJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Actions</h3>
+          </div>
+          <pre id="legacyDevActionJson">-</pre>
+        </div>
+        <div class="stack" id="legacyDevKv"></div>
+      </div>
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead>
+          <tr>
+            <th>feature</th>
+            <th>action</th>
+            <th>source</th>
+            <th>created</th>
+            <th>function</th>
+          </tr>
+          </thead>
+          <tbody id="legacyDevRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="overlays" class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Overlay Connections</h2>
+        <span id="overlayBadge" class="badge">unknown</span>
+      </div>
+      <div class="grid three-col">
+        <div>
+          <div class="subsection-title">
+            <h3>Anchor Compression</h3>
+          </div>
+          <pre id="anchorOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>CIH-RAG / MLA</h3>
+          </div>
+          <pre id="cihRagOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>ExtremeZ / Overdrive</h3>
+          </div>
+          <pre id="extremeOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Routing Authority</h3>
+          </div>
+          <pre id="routingPlanOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Hypernova / K-Allocation</h3>
+          </div>
+          <pre id="hypernovaOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Matryoshka Slicing</h3>
+          </div>
+          <pre id="matryoshkaOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Local LLM</h3>
+          </div>
+          <pre id="localLlmOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Model Guard</h3>
+          </div>
+          <pre id="modelGuardOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Zero-100</h3>
+          </div>
+          <pre id="zero100OverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>PromptPose</h3>
+          </div>
+          <pre id="promptPoseOverlayJson">-</pre>
+        </div>
+        <div>
+          <div class="subsection-title">
+            <h3>Virtual Matrix</h3>
+          </div>
+          <pre id="virtualMatrixOverlayJson">-</pre>
+        </div>
+      </div>
+    </section>
+
+    <div class="grid two-col" style="margin-top:16px;">
+      <section id="samples" class="panel">
+        <div class="section-title">
+          <h2>Training Sample Review</h2>
+          <span id="datasetBadge" class="badge">unknown</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+            <tr>
+              <th>time</th>
+              <th>model</th>
+              <th>quality</th>
+              <th>final</th>
+              <th>question</th>
+              <th>answer</th>
+              <th>passages</th>
+            </tr>
+            </thead>
+            <tbody id="sampleRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="idle" class="panel">
+        <div class="section-title">
+          <h2>IdleTrain / Dataset Pipeline</h2>
+          <span id="idleBadge" class="badge">unknown</span>
+        </div>
+        <div id="idleKv" class="stack"></div>
+        <div class="subsection-title">
+          <h3>Mac mini Curation Collector</h3>
+          <span id="collectorBadge" class="badge">unknown</span>
+        </div>
+        <div id="collectorKv" class="stack"></div>
+        <div class="table-wrap" style="margin-top:12px;">
+          <table>
+            <thead>
+            <tr>
+              <th>created</th>
+              <th>decision</th>
+              <th>accepted</th>
+              <th>hotspot</th>
+            </tr>
+            </thead>
+            <tbody id="idleHistoryRows"></tbody>
+          </table>
+        </div>
+        <div class="table-wrap" style="margin-top:12px;">
+          <table>
+            <thead>
+            <tr>
+              <th>action</th>
+              <th>reason</th>
+              <th>lane</th>
+              <th>signal</th>
+              <th>review</th>
+            </tr>
+            </thead>
+            <tbody id="curationQueueRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div class="grid two-col" style="margin-top:16px;">
+      <section id="failures" class="panel">
+        <div class="section-title">
+          <h2>Failure Pattern Review</h2>
+          <span id="failureBadge" class="badge">unknown</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+            <tr>
+              <th>kind</th>
+              <th>key</th>
+              <th>source</th>
+              <th>count</th>
+              <th>last</th>
+            </tr>
+            </thead>
+            <tbody id="failureRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="matrix" class="panel">
+        <div class="section-title">
+          <h2>9-Matrix / Virtual Point</h2>
+          <span id="matrixBadge" class="badge">unknown</span>
+        </div>
+        <pre id="matrixJson">-</pre>
+      </section>
+    </div>
+
+    <div class="grid two-col" style="margin-top:16px;">
+      <section id="models" class="panel">
+        <div class="section-title">
+          <h2>Model Outcome Cards</h2>
+          <span id="modelBadge" class="badge">unknown</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+            <tr>
+              <th>model</th>
+              <th>success</th>
+              <th>failure</th>
+              <th>latency</th>
+              <th>evidence</th>
+              <th>source</th>
+            </tr>
+            </thead>
+            <tbody id="modelRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="quarantine" class="panel">
+        <div class="section-title">
+          <h2>Quarantine State</h2>
+          <span id="quarantineBadge" class="badge">unknown</span>
+        </div>
+        <pre id="quarantineJson">-</pre>
+      </section>
+    </div>
+
+    <section id="diagnostics" class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Runtime Diagnostics</h2>
+        <span id="diagnosticBadge" class="badge">loading</span>
+      </div>
+      <pre id="rawJson">-</pre>
+    </section>
+  </main>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function text(value, fallback = '-') {
+    if (value === null || value === undefined || value === '') return fallback;
+    return String(value);
+  }
+
+  function pct(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '-';
+    return Math.round(n * 1000) / 10 + '%';
+  }
+
+  function setBadge(el, label, level) {
+    if (!el) return;
+    el.textContent = label;
+    el.className = 'badge ' + (level || '');
+  }
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(url + ' -> ' + res.status + ' ' + body.slice(0, 160));
+    }
+    return res.json();
+  }
+
+  function addCell(tr, value, className) {
+    const td = document.createElement('td');
+    if (className) td.className = className;
+    td.textContent = text(value, '');
+    tr.appendChild(td);
+  }
+
+  function emptyRow(tbody, colspan, label) {
+    tbody.textContent = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = colspan;
+    td.className = 'empty';
+    td.textContent = label;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+
+  function renderSamples(data) {
+    const dataset = data.dataset || {};
+    const samples = Array.isArray(data.samples) ? data.samples : [];
+    $('sampleTotal').textContent = text(dataset.parsedLines, '0');
+    $('sampleDetail').textContent = text(dataset.datasetFile, 'train_rag.jsonl') + ' / ' + text(dataset.status);
+    setBadge($('datasetBadge'), text(dataset.status, 'unknown'), dataset.exists === false ? 'warn' : 'ok');
+
+    const rows = $('sampleRows');
+    rows.textContent = '';
+    if (!samples.length) {
+      emptyRow(rows, 7, 'No train_rag samples found in the bounded tail.');
+      return;
+    }
+    samples.slice(0, 25).forEach((sample) => {
+      const tr = document.createElement('tr');
+      addCell(tr, sample.ts, 'mono');
+      addCell(tr, sample.model || sample.provider, 'mono');
+      addCell(tr, sample.qualityScore);
+      addCell(tr, sample.finalSigmoid !== null && sample.finalSigmoid !== undefined ? sample.finalSigmoid : (sample.finalGate ? 'gate:pass' : 'gate:block'));
+      addCell(tr, sample.questionPreview);
+      addCell(tr, sample.answerPreview);
+      const passages = Array.isArray(sample.passages) ? sample.passages : [];
+      addCell(tr, passages.length ? passages.map((p) => p.preview || p.title || p.source).filter(Boolean).slice(0, 2).join(' | ') : '');
+      rows.appendChild(tr);
+    });
+  }
+
+  function renderFailures(data) {
+    const summary = data.failurePatterns || {};
+    const causes = Array.isArray(data.failureTopCauses) ? data.failureTopCauses : [];
+    $('failureTotal').textContent = text(summary.eventCount, '0');
+    $('failureDetail').textContent = text(summary.logFile, 'failure-pattern.jsonl') + ' / ' + text(summary.status);
+    setBadge($('failureBadge'), causes.length ? 'repeating' : text(summary.status, 'empty'), causes.length ? 'warn' : 'ok');
+
+    const rows = $('failureRows');
+    rows.textContent = '';
+    if (!causes.length) {
+      emptyRow(rows, 5, 'No repeated failure pattern found in the bounded tail.');
+      return;
+    }
+    causes.slice(0, 20).forEach((cause) => {
+      const tr = document.createElement('tr');
+      addCell(tr, cause.kind, 'mono');
+      addCell(tr, cause.key, 'mono');
+      addCell(tr, cause.source, 'mono');
+      addCell(tr, cause.count);
+      addCell(tr, cause.lastTsEpochMillis, 'mono');
+      rows.appendChild(tr);
+    });
+  }
+
+  function renderModels(data) {
+    const cards = Array.isArray(data.modelCards) ? data.modelCards : [];
+    setBadge($('modelBadge'), cards.length ? 'tracked' : 'empty', cards.length ? 'ok' : 'warn');
+    const rows = $('modelRows');
+    rows.textContent = '';
+    if (!cards.length) {
+      emptyRow(rows, 6, 'No model outcome records have been observed yet.');
+      return;
+    }
+    cards.forEach((card) => {
+      const tr = document.createElement('tr');
+      addCell(tr, card.model, 'mono');
+      addCell(tr, pct(card.successRate));
+      addCell(tr, pct(card.failureRate));
+      addCell(tr, card.avgLatencyMs === null || card.avgLatencyMs === undefined ? 'n/a' : card.avgLatencyMs + ' ms');
+      addCell(tr, pct(card.evidenceRate));
+      addCell(tr, card.source, 'mono');
+      rows.appendChild(tr);
+    });
+  }
+
+  function kv(container, key, value) {
+    const row = document.createElement('div');
+    row.className = 'kv';
+    const k = document.createElement('div');
+    k.className = 'key';
+    k.textContent = key;
+    const v = document.createElement('div');
+    v.className = 'value mono';
+    v.textContent = text(value);
+    row.appendChild(k);
+    row.appendChild(v);
+    container.appendChild(row);
+  }
+
+  function renderIdle(data) {
+    const idle = data.idleTrain || {};
+    const ledger = data.opsLedger || {};
+    const collector = data.learningOpsCollector || {};
+    const recent = Array.isArray(ledger.recentAutolearn) ? ledger.recentAutolearn : [];
+    const queue = ledger.datasetPipelineQueue || {};
+    const queueItems = Array.isArray(queue.items) ? queue.items : [];
+    $('idleIngested').textContent = text(idle.ingestedCount, '0');
+    $('idleDetail').textContent = text(idle.last, 'no idle event');
+    setBadge($('idleBadge'), queueItems.length ? 'curation queue' : (recent.length ? 'history' : (collector.enabled ? 'collector ready' : (idle.retrainSkipReason ? 'skipped' : 'observed'))), queueItems.length ? 'ok' : (recent.length ? 'ok' : (collector.enabled ? 'ok' : (idle.retrainSkipReason ? 'warn' : 'ok'))));
+    const box = $('idleKv');
+    box.textContent = '';
+    kv(box, 'last', idle.last);
+    kv(box, 'skipReason', idle.skipReason || idle.retrainSkipReason || idle.retrainDisabledReason);
+    kv(box, 'ingestParsed', idle.ingestParsed);
+    kv(box, 'ingestQueued', idle.ingestQueued);
+    kv(box, 'ingestFailed', idle.ingestFailed);
+    kv(box, 'curationQueue', queue.status || 'unknown');
+    kv(box, 'curationItems', queue.itemCount || queueItems.length || 0);
+
+    setBadge($('collectorBadge'), collector.status || 'unknown', collector.enabled ? 'ok' : 'warn');
+    const collectorBox = $('collectorKv');
+    collectorBox.textContent = '';
+    kv(collectorBox, 'mode', collector.mode);
+    kv(collectorBox, 'node', [collector.nodeRole, collector.executionNode].filter(Boolean).join(' / ') || 'unknown');
+    kv(collectorBox, 'input', collector.inputSource);
+    kv(collectorBox, 'outputFile', collector.outputFile);
+    kv(collectorBox, 'outputPathHash', collector.outputPathHash);
+    kv(collectorBox, 'writesDataset', collector.writesDataset === true ? 'true' : 'false');
+    kv(collectorBox, 'requiresReview', collector.requiresReview === false ? 'false' : 'true');
+    kv(collectorBox, 'maxItems', collector.maxItems);
+
+    const rows = $('idleHistoryRows');
+    rows.textContent = '';
+    if (!recent.length) {
+      emptyRow(rows, 4, ledger.enabled === false ? 'Ops ledger is disabled.' : 'No IdleTrain execution history captured yet.');
+    } else {
+      recent.slice(0, 10).forEach((item) => {
+        const quality = item.quality || {};
+        const sourceCounts = item.sourceCounts || {};
+        const tr = document.createElement('tr');
+        addCell(tr, item.createdAt, 'mono');
+        addCell(tr, item.decision || quality.trainDecision, 'mono');
+        addCell(tr, text(quality.accepted ?? sourceCounts.accepted, '0') + ' / ' + text(quality.attempted ?? sourceCounts.attempted, '0'));
+        addCell(tr, item.hotspot || item.failureClass, 'mono');
+        rows.appendChild(tr);
+      });
+    }
+
+    const queueRows = $('curationQueueRows');
+    queueRows.textContent = '';
+    if (!queueItems.length) {
+      emptyRow(queueRows, 5, queue.status === 'ledger_disabled' ? 'Ops ledger is disabled.' : 'No Dataset Pipeline curation candidate yet.');
+      return;
+    }
+    queueItems.slice(0, 10).forEach((item) => {
+      const gpu = item.gpuAdmission || {};
+      const tr = document.createElement('tr');
+      addCell(tr, item.action, 'mono');
+      addCell(tr, item.reason, 'mono');
+      addCell(tr, item.lane, 'mono');
+      addCell(tr, gpu.hardwareReason || gpu.gatewayStatus || item.failureClass || item.hotspot, 'mono');
+      addCell(tr, item.reviewRequired ? 'required' : 'optional', 'mono');
+      queueRows.appendChild(tr);
+    });
+  }
+
+  function renderMatrix(data) {
+    const matrix = data.matrix9 || {};
+    const vp = matrix.virtualPoint || {};
+    $('virtualPointTotal').textContent = text(vp.size, '0');
+    $('virtualPointDetail').textContent = vp.available ? 'in-memory points' : 'service unavailable';
+    setBadge($('matrixBadge'), vp.available ? 'available' : 'unavailable', vp.available ? 'ok' : 'warn');
+    $('matrixJson').textContent = JSON.stringify(matrix, null, 2);
+  }
+
+  function renderQuarantine(data) {
+    const q = data.quarantine || {};
+    const dlq = q.vectorDlq || {};
+    const total = Number(dlq.pending || 0) + Number(dlq.inflight || 0) + Number(dlq.blocked || 0) + Number(dlq.failed || 0);
+    $('quarantineTotal').textContent = String(total + Number(data.dataset?.quarantineCount || 0));
+    $('quarantineDetail').textContent = 'dataset=' + text(data.dataset?.quarantineCount, '0') + ' dlq=' + total;
+    setBadge($('quarantineBadge'), dlq.enabled === false ? 'disabled' : 'tracked', dlq.enabled === false ? 'warn' : 'ok');
+    $('quarantineJson').textContent = JSON.stringify(q, null, 2);
+  }
+
+  function renderOutbox(stats) {
+    const outbox = stats || {};
+    if (outbox.error) {
+      $('outboxPressureTotal').textContent = '-';
+      $('outboxPressureDetail').textContent = 'error=' + text(outbox.error);
+      return;
+    }
+    const pending = Number(outbox.pendingCount || 0);
+    const inflight = Number(outbox.inflightCount || 0);
+    const failures = Number(outbox.nackTotal || 0)
+      + Number(outbox.droppedExpiredTotal || 0)
+      + Number(outbox.parseErrorTotal || 0);
+    $('outboxPressureTotal').textContent = String(pending + inflight);
+    $('outboxPressureDetail').textContent = 'enabled=' + text(outbox.enabled, 'false')
+      + ' mode=' + text(outbox.mode)
+      + ' pending=' + text(outbox.pendingCount, '0')
+      + ' inflight=' + text(outbox.inflightCount, '0')
+      + ' failures=' + failures
+      + ' sweep=' + text(outbox.lastSweepEpochMs, '0');
+  }
+
+  function renderLegacyDevelopmentCandidates(data) {
+    const legacy = data.legacyDevelopmentCandidates || {};
+    const items = Array.isArray(legacy.items) ? legacy.items : [];
+    const status = text(legacy.status, 'unknown');
+    $('legacyDevTotal').textContent = text(legacy.itemCount, '0');
+    $('legacyDevDetail').textContent = text(legacy.reportFile, 'legacy-development-candidates.tsv') + ' / ' + status;
+    setBadge($('legacyDevBadge'), status, status === 'ready' ? 'ok' : (status === 'report_missing' ? 'warn' : ''));
+    $('legacyDevFeatureJson').textContent = JSON.stringify(legacy.byFeature || {}, null, 2);
+    $('legacyDevActionJson').textContent = JSON.stringify(legacy.byAction || {}, null, 2);
+
+    const box = $('legacyDevKv');
+    box.textContent = '';
+    kv(box, 'checkpoint', legacy.checkpoint);
+    kv(box, 'mode', legacy.mode);
+    kv(box, 'cutoffUtc', legacy.cutoffUtc);
+    kv(box, 'activeCount', legacy.activeCount || 0);
+    kv(box, 'reportPathHash', legacy.reportPathHash);
+    kv(box, 'writesDataset', legacy.writesDataset === true ? 'true' : 'false');
+    kv(box, 'requiresReview', legacy.requiresReview === false ? 'false' : 'true');
+
+    const rows = $('legacyDevRows');
+    rows.textContent = '';
+    if (!items.length) {
+      emptyRow(rows, 5, status === 'report_missing'
+        ? 'Run contextPurityReport to generate metadata-based legacy development candidates.'
+        : 'No non-chatbot legacy development candidate matched the metadata cutoff.');
+      return;
+    }
+    items.slice(0, 20).forEach((item) => {
+      const tr = document.createElement('tr');
+      addCell(tr, item.featureBucket, 'mono');
+      addCell(tr, item.candidateAction, 'mono');
+      addCell(tr, item.sourcePath, 'mono');
+      addCell(tr, item.creationTime, 'mono');
+      addCell(tr, item.developmentFunction, 'mono');
+      rows.appendChild(tr);
+    });
+  }
+
+  function renderOverlays(data) {
+    const overlays = data.orchestrationOverlays || {};
+    const active = Number(overlays.activeCount || 0);
+    $('overlayActiveCount').textContent = String(active);
+    $('overlayDetail').textContent = text(overlays.checkpoint, '[AWX][rag][overlays]');
+    setBadge($('overlayBadge'), active > 0 ? active + ' active' : 'idle', active > 0 ? 'ok' : 'warn');
+    $('anchorOverlayJson').textContent = JSON.stringify(overlays.anchorCompression || {}, null, 2);
+    $('cihRagOverlayJson').textContent = JSON.stringify(overlays.cihRag || {}, null, 2);
+    $('extremeOverlayJson').textContent = JSON.stringify(overlays.extremeZ || {}, null, 2);
+    $('routingPlanOverlayJson').textContent = JSON.stringify(overlays.routingPlan || {}, null, 2);
+    $('hypernovaOverlayJson').textContent = JSON.stringify(overlays.hypernova || {}, null, 2);
+    $('matryoshkaOverlayJson').textContent = JSON.stringify(overlays.matryoshka || {}, null, 2);
+    $('localLlmOverlayJson').textContent = JSON.stringify(overlays.localLlm || {}, null, 2);
+    $('modelGuardOverlayJson').textContent = JSON.stringify(overlays.modelGuard || {}, null, 2);
+    $('zero100OverlayJson').textContent = JSON.stringify(overlays.zero100 || {}, null, 2);
+    $('promptPoseOverlayJson').textContent = JSON.stringify(overlays.promptPose || {}, null, 2);
+    $('virtualMatrixOverlayJson').textContent = JSON.stringify(overlays.virtualMatrix || {}, null, 2);
+  }
+
+  function renderDiagnostics(data, side) {
+    const payload = {
+      learningOps: data,
+      trace: side.trace || {},
+      debugEvents: side.debug || [],
+      debugAi: side.debugAi || {},
+      vector: side.vector || {},
+      runtime: side.runtime || {},
+      outbox: side.outbox || {}
+    };
+    $('rawJson').textContent = JSON.stringify(payload, null, 2);
+    setBadge($('diagnosticBadge'), 'live endpoints', 'ok');
+  }
+
+  function renderDebugAi(snapshot) {
+    const unavailable = !snapshot || snapshot.available === false || snapshot.error;
+    if (unavailable) {
+      setBadge($('debugAiBadge'), 'unavailable', 'warn');
+      $('debugAiRecommendations').textContent = snapshot && snapshot.error ? snapshot.error : 'debug AI snapshot unavailable';
+      $('debugAiHotspots').textContent = '-';
+      $('debugAiTrend').textContent = '-';
+      $('debugAiScorecardKv').textContent = '';
+      emptyRow($('debugAiTileRows'), 6, 'No AI debug tile snapshot available.');
+      emptyRow($('debugAiUsageRows'), 4, 'No AI debug usage ledger available.');
+      return;
+    }
+
+    const total = Number(snapshot.totalEvents || 0);
+    const warn = Number(snapshot.warnEvents || 0);
+    const error = Number(snapshot.errorEvents || 0);
+    setBadge($('debugAiBadge'), error > 0 ? 'error' : (warn > 0 ? 'warn' : 'observed'), error > 0 ? 'bad' : (warn > 0 ? 'warn' : 'ok'));
+
+    const score = snapshot.scorecard || {};
+    const box = $('debugAiScorecardKv');
+    box.textContent = '';
+    kv(box, 'schemaVersion', snapshot.schemaVersion);
+    kv(box, 'windowMs', snapshot.windowMs);
+    kv(box, 'totalEvents', total);
+    kv(box, 'warnEvents', warn);
+    kv(box, 'errorEvents', error);
+    kv(box, 'warnTrend', score.warnTrend || 'none');
+    kv(box, 'errorTrend', score.errorTrend || 'none');
+    kv(box, 'warnDelta', score.warnDelta || 0);
+    kv(box, 'errorDelta', score.errorDelta || 0);
+    kv(box, 'hotTile', score.hotTile);
+    kv(box, 'anomalyTriggered', score.anomalyTriggered);
+    kv(box, 'anomalyReason', score.anomalyReason || 'observe');
+    kv(box, 'anomalyScore', score.anomalyScore || 0);
+    kv(box, 'anomalyTile', score.anomalyTile || score.hotTile);
+    kv(box, 'anomalyFailureClass', score.anomalyFailureClass || '-');
+    kv(box, 'queryRewriteSubModelCount', score.queryRewriteSubModelCount || 0);
+    kv(box, 'queryRewriteBranchTitleCount', score.queryRewriteBranchTitleCount || 0);
+    kv(box, 'queryRewriteBranchTitleHashCount', score.queryRewriteBranchTitleHashCount || 0);
+    kv(box, 'queryRewriteBranchAxisCount', score.queryRewriteBranchAxisCount || 0);
+    kv(box, 'queryRewritePaddedCount', score.queryRewritePaddedCount || 0);
+    kv(box, 'toolUsageCount', score.toolUsageCount || 0);
+    kv(box, 'verificationUsageCount', score.verificationUsageCount || 0);
+
+    $('debugAiTrend').textContent = trendGlyph(score.warnTrend, score.warnDelta, 'warn')
+      + '\n' + trendGlyph(score.errorTrend, score.errorDelta, 'error');
+    $('debugAiRecommendations').textContent = JSON.stringify(snapshot.recommendations || [], null, 2);
+    $('debugAiHotspots').textContent = JSON.stringify(snapshot.fingerprintHotspots || [], null, 2);
+
+    const tileRows = $('debugAiTileRows');
+    tileRows.textContent = '';
+    const tiles = Array.isArray(snapshot.tiles) ? snapshot.tiles : [];
+    if (!tiles.length) {
+      emptyRow(tileRows, 6, 'No AI debug tiles emitted yet.');
+    } else {
+      tiles.forEach((tile) => {
+        const tr = document.createElement('tr');
+        addCell(tr, (tile.tileIndex ?? '-') + ' ' + text(tile.tileName), 'mono');
+        addCell(tr, tile.status, 'mono');
+        addCell(tr, tile.eventCount);
+        addCell(tr, tile.warnCount);
+        addCell(tr, tile.errorCount);
+        addCell(tr, tile.topFailureClass, 'mono');
+        tileRows.appendChild(tr);
+      });
+    }
+
+    const usageRows = $('debugAiUsageRows');
+    usageRows.textContent = '';
+    const tools = Array.isArray(snapshot.usedDebugTools) ? snapshot.usedDebugTools.map((row) => ({...row, kind: 'tool'})) : [];
+    const plans = Array.isArray(snapshot.planUsage) ? snapshot.planUsage.map((row) => ({...row, kind: 'plan'})) : [];
+    const usage = tools.concat(plans);
+    if (!usage.length) {
+      emptyRow(usageRows, 4, 'No debug tool or plan usage captured yet.');
+    } else {
+      usage.slice(0, 20).forEach((row) => {
+        const tr = document.createElement('tr');
+        addCell(tr, row.kind, 'mono');
+        addCell(tr, row.toolId || row.planId, 'mono');
+        addCell(tr, row.count);
+        addCell(tr, row.lastTsMs, 'mono');
+        usageRows.appendChild(tr);
+      });
+    }
+  }
+
+  let debugAiTimer = null;
+  const DEBUG_AI_INTERVAL_MS = 30_000;
+
+  function debugAiSnapshotUrl(limit) {
+    const windowMs = $('debugAiWindow') ? Number($('debugAiWindow').value) || 60000 : 60000;
+    const safeLimit = limit || 80;
+    return '/api/diagnostics/debug/ai/snapshot?limit=' + safeLimit + '&windowMs=' + windowMs;
+  }
+
+  function debugAiHistoryUrl(maxEntries) {
+    const safeEntries = maxEntries || 12;
+    return '/api/diagnostics/debug/ai/history?maxEntries=' + safeEntries;
+  }
+
+  function trendGlyph(trend, delta, label) {
+    const value = Number(delta || 0);
+    const marker = trend === 'up' ? '↑' : (trend === 'down' ? '↓' : '→');
+    return label + ' ' + marker + ' ' + value;
+  }
+
+  function renderDebugAiHistory(history) {
+    if (!Array.isArray(history) || !history.length) {
+      return;
+    }
+    const latest = history[0] || {};
+    const previous = history[1] || {};
+    const latestScore = latest.scorecard || {};
+    const previousWarn = Number(previous.warnEvents || 0);
+    const previousError = Number(previous.errorEvents || 0);
+    const warnDelta = Number(latest.warnEvents || 0) - previousWarn;
+    const errorDelta = Number(latest.errorEvents || 0) - previousError;
+    const warnTrend = latestScore.warnTrend || (warnDelta > 0 ? 'up' : (warnDelta < 0 ? 'down' : 'flat'));
+    const errorTrend = latestScore.errorTrend || (errorDelta > 0 ? 'up' : (errorDelta < 0 ? 'down' : 'flat'));
+    $('debugAiTrend').textContent = trendGlyph(warnTrend, warnDelta, 'warn')
+      + '\n' + trendGlyph(errorTrend, errorDelta, 'error')
+      + '\nhistory ' + history.length + ' snapshots';
+  }
+
+  function markDebugAiUpdated() {
+    const el = $('debugAiLastRefresh');
+    if (el) {
+      el.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+    }
+  }
+
+  function fetchDebugAi() {
+    const windowMs = $('debugAiWindow') ? Number($('debugAiWindow').value) || 60000 : 60000;
+    const limit = 80;
+    return Promise.all([
+      fetchJson('/api/diagnostics/debug/ai/snapshot?limit=' + limit + '&windowMs=' + windowMs),
+      fetchJson('/api/diagnostics/debug/ai/history?maxEntries=12')
+    ])
+      .then(function(results) {
+        const snapshot = results[0];
+        renderDebugAi(snapshot);
+        renderDebugAiHistory(results[1]);
+        markDebugAiUpdated();
+        return snapshot;
+      })
+      .catch(function(err) {
+        renderDebugAi({ error: err.message });
+        throw err;
+      });
+  }
+
+  async function refresh() {
+    setBadge($('diagnosticBadge'), 'loading', '');
+    const results = await Promise.allSettled([
+      fetchJson('/api/diagnostics/rag/learning-ops/overview?limit=50'),
+      fetchJson('/api/diagnostics/trace/snapshots?limit=10'),
+      fetchJson('/api/diagnostics/debug/events?limit=10'),
+      fetchJson('/api/vector/diagnostics'),
+      fetchJson('/api/diagnostics/runtime'),
+      fetchJson(debugAiSnapshotUrl(80)),
+      fetchJson(debugAiHistoryUrl(12)),
+      fetchJson('/api/nova/outbox/stats')
+    ]);
+
+    if (results[0].status !== 'fulfilled') {
+      setBadge($('diagnosticBadge'), 'learning ops unavailable', 'bad');
+      $('rawJson').textContent = results[0].reason.message;
+      return;
+    }
+
+    const data = results[0].value;
+    const metrics = data.metrics || {};
+    $('evidenceRate').textContent = pct(metrics.evidenceRate);
+    $('evidenceDetail').textContent = 'bounded tail';
+    renderSamples(data);
+    renderFailures(data);
+    renderModels(data);
+    renderIdle(data);
+    renderMatrix(data);
+    renderQuarantine(data);
+    renderOutbox(results[7].status === 'fulfilled' ? results[7].value : { error: results[7].reason.message });
+    renderLegacyDevelopmentCandidates(data);
+    renderOverlays(data);
+    renderDebugAi(results[5].status === 'fulfilled' ? results[5].value : { error: results[5].reason.message });
+    if (results[6].status === 'fulfilled') {
+      renderDebugAiHistory(results[6].value);
+    }
+    if (results[5].status === 'fulfilled') {
+      markDebugAiUpdated();
+    }
+    renderDiagnostics(data, {
+      trace: results[1].status === 'fulfilled' ? results[1].value : { error: results[1].reason.message },
+      debug: results[2].status === 'fulfilled' ? results[2].value : { error: results[2].reason.message },
+      vector: results[3].status === 'fulfilled' ? results[3].value : { error: results[3].reason.message },
+      runtime: results[4].status === 'fulfilled' ? results[4].value : { error: results[4].reason.message },
+      debugAi: results[5].status === 'fulfilled' ? results[5].value : { error: results[5].reason.message },
+      debugAiHistory: results[6].status === 'fulfilled' ? results[6].value : { error: results[6].reason.message },
+      outbox: results[7].status === 'fulfilled' ? results[7].value : { error: results[7].reason.message }
+    });
+  }
+
+  document.querySelectorAll('.nav a[href^="#"]').forEach((link) => {
+    link.addEventListener('click', () => {
+      document.querySelectorAll('.nav a').forEach((a) => a.classList.remove('active'));
+      link.classList.add('active');
+    });
+  });
+  $('refreshBtn').addEventListener('click', refresh);
+  $('debugAiAutoBtn').addEventListener('click', function() {
+    if (debugAiTimer) {
+      clearInterval(debugAiTimer);
+      debugAiTimer = null;
+      $('debugAiAutoBtn').textContent = 'Auto OFF';
+      $('debugAiAutoBtn').classList.remove('primary');
+      return;
+    }
+    fetchDebugAi().catch(function(e) { void e; });
+    debugAiTimer = setInterval(function() {
+      fetchDebugAi().catch(function(e) { void e; });
+    }, DEBUG_AI_INTERVAL_MS);
+    $('debugAiAutoBtn').textContent = 'Auto ON';
+    $('debugAiAutoBtn').classList.add('primary');
+  });
+  $('debugAiWindow').addEventListener('change', function() {
+    if (debugAiTimer) {
+      fetchDebugAi().catch(function(e) { void e; });
+    }
+  });
+  refresh();
+</script>
+</body>
+</html>

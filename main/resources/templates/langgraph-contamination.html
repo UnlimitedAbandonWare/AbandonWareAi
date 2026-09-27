@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="_csrf" th:content="${_csrf?.token}" th:if="${_csrf != null}">
+  <meta name="_csrf_header" th:content="${_csrf?.headerName}" th:if="${_csrf != null}">
+  <title>LangGraph Contamination</title>
+  <link rel="stylesheet" th:href="@{/css/langgraph-contamination.css}" href="/css/langgraph-contamination.css">
+  <script defer th:src="@{/vendor/vue.global.prod.js}" src="/vendor/vue.global.prod.js"></script>
+</head>
+<body>
+<div id="app" class="shell" v-cloak>
+  <header class="topbar">
+    <div>
+      <h1>LangGraph Contamination</h1>
+      <p>Offline replay, node snapshots, MLA breadcrumbs, redacted JSON reports</p>
+    </div>
+    <nav class="actions">
+      <a href="/admin/dashboard">Dashboard</a>
+      <a href="/admin/trace-snapshots" target="_blank" rel="noreferrer">Trace</a>
+    </nav>
+  </header>
+
+  <section class="panel controls">
+    <label>
+      <span>Scenario</span>
+      <select v-model="scenario">
+        <option value="clean">clean</option>
+        <option value="prompt_injection">prompt_injection</option>
+        <option value="memory_leak">memory_leak</option>
+        <option value="stale_vector">stale_vector</option>
+      </select>
+    </label>
+    <label>
+      <span>topK</span>
+      <input v-model.number="topK" type="number" min="1" max="12">
+    </label>
+    <div class="button-row">
+      <button type="button" class="primary" @click="runReplay" :disabled="loading">Run replay</button>
+      <button type="button" @click="loadReports">Refresh reports</button>
+      <span class="status">{{ status }}</span>
+    </div>
+  </section>
+
+  <section v-if="report" class="grid-main">
+    <div class="panel overflow">
+      <div class="section-head">
+        <div>
+          <h2>Node Timeline</h2>
+          <p class="mono muted">{{ report.runId }}</p>
+        </div>
+        <div class="summary-line">
+          <strong>Highest</strong>
+          <span class="mono">{{ summary.highestRiskNode }}</span>
+          <strong>Score</strong>
+          <span class="mono">{{ summary.maxScore }}</span>
+        </div>
+      </div>
+      <table>
+        <thead>
+        <tr>
+          <th>node</th>
+          <th>score</th>
+          <th>sourceMix</th>
+          <th>flags</th>
+          <th>actions</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr v-for="node in report.nodes" :key="node.node" @click="selectedNode = node">
+          <td class="mono">{{ node.node }}</td>
+          <td>
+            <div class="meter"><div :class="scoreClass(node.contaminationScore)" :style="{width: Math.round(node.contaminationScore * 100) + '%'}"></div></div>
+            <span class="mono small">{{ node.contaminationScore }}</span>
+          </td>
+          <td class="mono small">{{ compact(node.sourceMix) }}</td>
+          <td>
+            <span v-if="node.memoryLeakFlag" class="flag warn">memory</span>
+            <span v-if="node.promptInjectionFlag" class="flag danger">injection</span>
+            <span v-if="node.staleContextFlag" class="flag stale">stale</span>
+            <span v-if="!node.memoryLeakFlag && !node.promptInjectionFlag && !node.staleContextFlag" class="flag ok">clean</span>
+          </td>
+          <td class="small">{{ (node.recommendedActions || []).join(', ') }}</td>
+        </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <aside class="panel detail">
+      <h2>Selected Node</h2>
+      <div v-if="selectedNode" class="stack">
+        <div><strong>node</strong> <span class="mono">{{ selectedNode.node }}</span></div>
+        <div><strong>input</strong> <span class="mono small">{{ snapshotId(selectedNode, 'input') }}</span></div>
+        <div><strong>output</strong> <span class="mono small">{{ snapshotId(selectedNode, 'output') }}</span></div>
+        <div>
+          <strong>riskMarkers</strong>
+          <pre>{{ pretty(selectedNode.riskMarkers) }}</pre>
+        </div>
+        <div>
+          <strong>fieldHashes</strong>
+          <pre>{{ pretty(selectedNode.fieldHashes) }}</pre>
+        </div>
+        <div>
+          <strong>contextSummary</strong>
+          <pre>{{ pretty(selectedNode.contextSummary) }}</pre>
+        </div>
+        <div>
+          <strong>delta</strong>
+          <pre>{{ pretty(selectedNode.delta) }}</pre>
+        </div>
+      </div>
+      <div v-else class="muted">Select a node</div>
+    </aside>
+  </section>
+
+  <section class="grid-secondary">
+    <div class="panel">
+      <h2>Recent Reports</h2>
+      <div class="scroll">
+        <table>
+          <thead>
+          <tr>
+            <th>ts</th>
+            <th>run</th>
+            <th>highest</th>
+            <th>score</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr v-for="row in reports" :key="row.runId" @click="loadReport(row.runId)">
+            <td class="mono small">{{ row.ts }}</td>
+            <td class="mono small">{{ row.runId }}</td>
+            <td class="mono small">{{ row.highestRiskNode }}</td>
+            <td class="mono small">{{ row.maxScore }}</td>
+          </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Agent JSON</h2>
+      <pre class="json">{{ pretty(report || {}) }}</pre>
+    </div>
+  </section>
+</div>
+
+<script>
+window.addEventListener('DOMContentLoaded', function () {
+  const csrfToken = document.querySelector('meta[name="_csrf"]')?.getAttribute('content') || '';
+  const csrfHeader = document.querySelector('meta[name="_csrf_header"]')?.getAttribute('content') || '';
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return {
+        scenario: 'clean',
+        topK: 5,
+        status: '',
+        loading: false,
+        report: null,
+        reports: [],
+        selectedNode: null
+      };
+    },
+    computed: {
+      summary() {
+        return this.report && this.report.contaminationSummary ? this.report.contaminationSummary : {};
+      }
+    },
+    mounted() {
+      this.loadReports();
+    },
+    methods: {
+      async fetchJson(url, options) {
+        const opts = Object.assign({ credentials: 'same-origin' }, options || {});
+        const headers = Object.assign({ 'Accept': 'application/json' }, opts.headers || {});
+        if (opts.body) headers['Content-Type'] = 'application/json';
+        if (csrfToken && csrfHeader && opts.method && opts.method.toUpperCase() !== 'GET') {
+          headers[csrfHeader] = csrfToken;
+        }
+        opts.headers = headers;
+        const res = await fetch(url, opts);
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      },
+      async runReplay() {
+        this.loading = true;
+        this.status = 'running...';
+        try {
+          const body = JSON.stringify({scenario: this.scenario, topK: this.topK});
+          this.report = await this.fetchJson('/api/diagnostics/langgraph-contamination/replay', {method: 'POST', body});
+          this.selectedNode = this.report.nodes && this.report.nodes.length ? this.report.nodes[0] : null;
+          this.status = 'done';
+          await this.loadReports();
+        } catch (e) {
+          this.status = 'failed: ' + (e && e.message ? e.message : String(e));
+        } finally {
+          this.loading = false;
+        }
+      },
+      async loadReports() {
+        try {
+          const data = await this.fetchJson('/api/diagnostics/langgraph-contamination/reports?limit=50');
+          this.reports = data.reports || [];
+        } catch (e) {
+          this.status = 'reports failed: ' + (e && e.message ? e.message : String(e));
+        }
+      },
+      async loadReport(runId) {
+        if (!runId) return;
+        this.report = await this.fetchJson('/api/diagnostics/langgraph-contamination/reports/' + encodeURIComponent(runId));
+        this.selectedNode = this.report.nodes && this.report.nodes.length ? this.report.nodes[0] : null;
+      },
+      snapshotId(node, phase) {
+        return node && node.snapshotIds ? (node.snapshotIds[phase] || '') : '';
+      },
+      pretty(v) {
+        return JSON.stringify(v, null, 2);
+      },
+      compact(v) {
+        return JSON.stringify(v || {});
+      },
+      scoreClass(score) {
+        if (score >= 0.7) return 'fill danger-fill';
+        if (score >= 0.35) return 'fill warn-fill';
+        return 'fill ok-fill';
+      }
+    }
+  }).mount('#app');
+});
+</script>
+</body>
+</html>

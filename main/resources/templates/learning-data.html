@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAG 학습 데이터 관리</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --muted: #667085;
+      --line: #d8dee8;
+      --blue: #2563eb;
+      --green: #17803d;
+      --amber: #b7791f;
+      --red: #c62828;
+      --slate: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    a { color: inherit; text-decoration: none; }
+    .shell {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .sidebar {
+      background: #111827;
+      color: #e5e7eb;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand { font-size: 18px; font-weight: 700; letter-spacing: 0; }
+    .nav { display: grid; gap: 8px; }
+    .nav a {
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+    .nav a:hover, .nav a.active { background: #1f2937; color: #fff; }
+    .sidebar-note {
+      margin-top: auto;
+      color: #94a3b8;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .main { padding: 28px; }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 8px; font-size: 28px; letter-spacing: 0; }
+    .lead { color: var(--muted); line-height: 1.55; max-width: 920px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      min-height: 38px;
+    }
+    .button.primary { background: var(--blue); color: white; border-color: var(--blue); }
+    .button:hover { filter: brightness(0.97); }
+    .grid { display: grid; gap: 16px; }
+    .status-grid { grid-template-columns: repeat(4, minmax(160px, 1fr)); }
+    .two-col { grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr); margin-top: 16px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .metric-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .metric-value { font-size: 28px; font-weight: 700; letter-spacing: 0; }
+    .metric-detail { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 18px; line-height: 1.45; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #e5e7eb;
+      color: var(--slate);
+      white-space: nowrap;
+    }
+    .ok { background: #dcfce7; color: var(--green); }
+    .warn { background: #fef3c7; color: var(--amber); }
+    .bad { background: #fee2e2; color: var(--red); }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); background: #f8fafc; font-weight: 600; white-space: nowrap; }
+    td code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .section-title h2 { margin-bottom: 0; font-size: 17px; letter-spacing: 0; }
+    .empty { color: var(--muted); font-size: 13px; padding: 12px; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      font: inherit;
+      background: white;
+    }
+    pre {
+      margin: 0;
+      max-height: 300px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0f172a;
+      color: #dbeafe;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+    }
+    .list { display: grid; gap: 8px; }
+    .list-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+      font-size: 13px;
+    }
+    .list-row:last-child { border-bottom: 0; padding-bottom: 0; }
+    .muted { color: var(--muted); }
+    @media (max-width: 960px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { position: static; }
+      .status-grid, .two-col, .form-grid { grid-template-columns: 1fr; }
+      .topbar { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">Dynamic RAG Ops</div>
+    <nav class="nav" aria-label="운영 화면">
+      <a th:href="@{/admin/dashboard}" href="/admin/dashboard">Dashboard</a>
+      <a href="#overview" class="active">학습 요약</a>
+      <a href="#history">학습 이력</a>
+      <a href="#quality">오염 / 검증</a>
+      <a href="#retrain">재학습 반영</a>
+      <a th:href="@{/admin/vector-diagnostics}" href="/admin/vector-diagnostics">Vector</a>
+      <a th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
+    </nav>
+    <div class="sidebar-note">
+      조회 전용 화면입니다. 저장된 원문 대신 해시, 건수, 판정, 사유, 점수만 표시합니다.
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>RAG 학습 데이터 관리</h1>
+        <p class="lead">
+          AutoLearn cycle, 검증 품질, 오염 신호, 재학습 반영 상태를 기존 redacted diagnostics API 기준으로 확인합니다.
+        </p>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" class="button primary" type="button">새로고침</button>
+        <a class="button" th:href="@{/admin/dashboard}" href="/admin/dashboard">Dashboard</a>
+        <a class="button" th:href="@{/admin/debug-events}" href="/admin/debug-events">Debug</a>
+        <a class="button" th:href="@{/admin/trace-snapshots}" href="/admin/trace-snapshots">Trace</a>
+      </div>
+    </div>
+
+    <section id="overview" class="grid status-grid" aria-label="학습 데이터 요약">
+      <div class="panel">
+        <div class="metric-label">AutoLearn cycles</div>
+        <div id="cycleCount" class="metric-value">-</div>
+        <div id="cycleDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">accepted / attempted</div>
+        <div id="acceptanceValue" class="metric-value">-</div>
+        <div id="acceptanceDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">current train decision</div>
+        <div id="trainDecision" class="metric-value">-</div>
+        <div id="trainDecisionDetail" class="metric-detail">loading</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label">retrain applied</div>
+        <div id="retrainApplied" class="metric-value">-</div>
+        <div id="retrainDetail" class="metric-detail">loading</div>
+      </div>
+    </section>
+
+    <div class="grid two-col">
+      <section class="panel">
+        <div class="section-title">
+          <h2>현재 학습 루프 상태</h2>
+          <span id="loopBadge" class="badge">unknown</span>
+        </div>
+        <div class="grid form-grid">
+          <div>
+            <label>node role</label>
+            <input id="nodeRole" readonly value="-">
+          </div>
+          <div>
+            <label>dataset file</label>
+            <input id="datasetFile" readonly value="-">
+          </div>
+          <div>
+            <label>dataset path hash</label>
+            <input id="datasetPathHash" readonly value="-">
+          </div>
+          <div>
+            <label>learning loop mode</label>
+            <input id="learningLoopMode" readonly value="-">
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <h2>이력 저장 상태</h2>
+          <span id="ledgerBadge" class="badge">unknown</span>
+        </div>
+        <div class="list">
+          <div class="list-row"><span class="muted">ledger enabled</span><code id="ledgerEnabled">-</code></div>
+          <div class="list-row"><span class="muted">historyDisabledReason</span><code id="historyDisabledReason">-</code></div>
+          <div class="list-row"><span class="muted">window hours</span><code id="windowHours">-</code></div>
+          <div class="list-row"><span class="muted">recent rows</span><code id="recentRows">-</code></div>
+        </div>
+      </section>
+    </div>
+
+    <section id="history" class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>학습 이력</h2>
+        <span id="historyBadge" class="badge">unknown</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+          <tr>
+            <th>createdAt</th>
+            <th>decision</th>
+            <th>attempted</th>
+            <th>accepted</th>
+            <th>acceptanceRate</th>
+            <th>topProblem</th>
+            <th>hotspot</th>
+            <th>vectorDecision</th>
+          </tr>
+          </thead>
+          <tbody id="historyRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="grid two-col">
+      <section id="quality" class="panel">
+        <div class="section-title">
+          <h2>오염 / 검증</h2>
+          <span id="qualityBadge" class="badge">unknown</span>
+        </div>
+        <div class="grid form-grid">
+          <div>
+            <label>contamination EWMA</label>
+            <input id="contaminationEwma" readonly value="-">
+          </div>
+          <div>
+            <label>sample score EWMA</label>
+            <input id="sampleScoreEwma" readonly value="-">
+          </div>
+          <div>
+            <label>error rate window</label>
+            <input id="errorRateWindow" readonly value="-">
+          </div>
+          <div>
+            <label>max train error rate</label>
+            <input id="maxTrainErrorRate" readonly value="-">
+          </div>
+        </div>
+        <h3 style="font-size:14px; margin:16px 0 8px;">reason counts</h3>
+        <div id="reasonCounts" class="list"></div>
+        <h3 style="font-size:14px; margin:16px 0 8px;">threshold breaks</h3>
+        <div id="thresholdBreaks" class="list"></div>
+      </section>
+
+      <section id="retrain" class="panel">
+        <div class="section-title">
+          <h2>재학습 반영</h2>
+          <span id="retrainBadge" class="badge">unknown</span>
+        </div>
+        <div class="list">
+          <div class="list-row"><span class="muted">retrain allowed</span><code id="retrainAllowed">-</code></div>
+          <div class="list-row"><span class="muted">train allowed</span><code id="trainAllowed">-</code></div>
+          <div class="list-row"><span class="muted">gpu admission</span><code id="gpuAdmissionStatus">-</code></div>
+          <div class="list-row"><span class="muted">gpu admission reason</span><code id="gpuAdmissionReason">-</code></div>
+          <div class="list-row"><span class="muted">skip reason</span><code id="skipReason">-</code></div>
+          <div class="list-row"><span class="muted">parsed / queued / failed</span><code id="ingestSummary">-</code></div>
+          <div class="list-row"><span class="muted">quarantine DLQ</span><code id="quarantineDlq">-</code></div>
+          <div class="list-row"><span class="muted">shadow merge DLQ</span><code id="shadowMergeDlq">-</code></div>
+        </div>
+      </section>
+    </div>
+
+    <section id="agent-handoff" class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>Agent Handoff</h2>
+        <span id="handoffBadge" class="badge">unknown</span>
+      </div>
+      <div class="grid form-grid">
+        <div>
+          <label>enabled</label>
+          <input id="handoffEnabled" readonly value="-">
+        </div>
+        <div>
+          <label>root path hash</label>
+          <input id="handoffRootHash" readonly value="-">
+        </div>
+        <div>
+          <label>manifest file</label>
+          <input id="handoffManifestFile" readonly value="-">
+        </div>
+        <div>
+          <label>manifest exists</label>
+          <input id="handoffManifestExists" readonly value="-">
+        </div>
+      </div>
+      <h3 style="font-size:14px; margin:16px 0 8px;">artifact files</h3>
+      <div id="handoffFiles" class="list"></div>
+    </section>
+
+    <section class="panel" style="margin-top:16px;">
+      <div class="section-title">
+        <h2>진단 근거</h2>
+        <span class="badge">redacted</span>
+      </div>
+      <pre id="diagnosticsJson">-</pre>
+    </section>
+  </main>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function text(value, fallback = '-') {
+    if (value === null || value === undefined || value === '') return fallback;
+    return String(value);
+  }
+
+  function number(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function pct(value) {
+    const n = number(value, NaN);
+    return Number.isFinite(n) ? Math.round(n * 1000) / 10 + '%' : '-';
+  }
+
+  function setBadge(el, label, level) {
+    if (!el) return;
+    el.textContent = label;
+    el.className = 'badge ' + (level || '');
+  }
+
+  function get(obj, path, fallback) {
+    if (!obj || !path) return fallback;
+    const parts = path.split('.');
+    let cur = obj;
+    for (const part of parts) {
+      if (cur === null || cur === undefined || !(part in Object(cur))) return fallback;
+      cur = cur[part];
+    }
+    return cur === undefined ? fallback : cur;
+  }
+
+  function trace(loop, key, fallback) {
+    const values = loop && loop.requestThreadTrace ? loop.requestThreadTrace : {};
+    return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : fallback;
+  }
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(url + ' -> ' + res.status + ' ' + body.slice(0, 180));
+    }
+    return res.json();
+  }
+
+  function setInput(id, value) {
+    const el = $(id);
+    if (el) el.value = text(value);
+  }
+
+  function renderList(id, value) {
+    const el = $(id);
+    if (!el) return;
+    el.replaceChildren();
+    const entries = Array.isArray(value)
+      ? value.map((item, idx) => [String(idx + 1), item])
+      : Object.entries(value || {});
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No entries reported.';
+      el.appendChild(empty);
+      return;
+    }
+    for (const [key, val] of entries.slice(0, 12)) {
+      const row = document.createElement('div');
+      row.className = 'list-row';
+      const k = document.createElement('span');
+      k.className = 'muted';
+      k.textContent = key;
+      const v = document.createElement('code');
+      v.textContent = typeof val === 'object' && val !== null ? JSON.stringify(val) : text(val);
+      row.append(k, v);
+      el.appendChild(row);
+    }
+  }
+
+  function appendCell(tr, value, code) {
+    const td = document.createElement('td');
+    if (code) {
+      const c = document.createElement('code');
+      c.textContent = text(value);
+      td.appendChild(c);
+    } else {
+      td.textContent = text(value);
+    }
+    tr.appendChild(td);
+  }
+
+  function renderHistory(items, ledgerEnabled) {
+    const rows = $('historyRows');
+    rows.replaceChildren();
+    if (!items.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.className = 'empty';
+      td.colSpan = 8;
+      td.textContent = ledgerEnabled ? 'No AutoLearn cycle history captured yet.' : 'History ledger is disabled.';
+      tr.appendChild(td);
+      rows.appendChild(tr);
+      setBadge($('historyBadge'), ledgerEnabled ? 'empty' : 'disabled', ledgerEnabled ? 'warn' : 'bad');
+      return;
+    }
+    setBadge($('historyBadge'), 'captured', 'ok');
+    for (const item of items.slice(0, 50)) {
+      const quality = item.quality || {};
+      const sourceCounts = item.sourceCounts || {};
+      const vector = item.vector || {};
+      const tr = document.createElement('tr');
+      appendCell(tr, item.createdAt, true);
+      appendCell(tr, item.decision || quality.trainDecision, true);
+      appendCell(tr, quality.attempted ?? sourceCounts.attempted, true);
+      appendCell(tr, quality.accepted ?? sourceCounts.accepted, true);
+      appendCell(tr, pct(quality.acceptanceRate), true);
+      appendCell(tr, quality.topProblem || item.failureClass, true);
+      appendCell(tr, item.hotspot, true);
+      appendCell(tr, quality.vectorDecision || vector.vectorDecision, true);
+      rows.appendChild(tr);
+    }
+  }
+
+  function renderHandoff(summary) {
+    const handoff = summary || {};
+    const enabled = handoff.enabled === true;
+    setBadge($('handoffBadge'), enabled ? 'enabled' : 'disabled', enabled ? 'ok' : 'warn');
+    setInput('handoffEnabled', enabled);
+    setInput('handoffRootHash', handoff.rootPathHash || '-');
+    const files = handoff.files || {};
+    const manifest = files.manifest || {};
+    setInput('handoffManifestFile', manifest.fileName || '-');
+    setInput('handoffManifestExists', manifest.exists === true);
+
+    const rows = $('handoffFiles');
+    rows.replaceChildren();
+    const entries = Object.entries(files);
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = handoff.disabledReason ? text(handoff.disabledReason) : 'No handoff artifacts reported.';
+      rows.appendChild(empty);
+      return;
+    }
+    for (const [name, file] of entries) {
+      const row = document.createElement('div');
+      row.className = 'list-row';
+      const label = document.createElement('span');
+      label.className = 'muted';
+      label.textContent = name;
+      const value = document.createElement('code');
+      value.textContent = text(file.fileName, '-') + ' exists=' + text(file.exists, false)
+        + ' lines=' + text(file.lineCount, '-')
+        + ' size=' + text(file.sizeBytes, 0);
+      row.append(label, value);
+      rows.appendChild(row);
+    }
+  }
+
+  function sumCycles(items) {
+    let attempted = 0;
+    let accepted = 0;
+    for (const item of items) {
+      const q = item.quality || {};
+      const s = item.sourceCounts || {};
+      attempted += number(q.attempted ?? s.attempted, 0);
+      accepted += number(q.accepted ?? s.accepted, 0);
+    }
+    return { attempted, accepted, rate: attempted > 0 ? accepted / attempted : NaN };
+  }
+
+  function compactEvidence(loop, quality, summary, recent) {
+    return {
+      quality: {
+        windowSize: quality.windowSize,
+        errorRateWindow: quality.errorRateWindow,
+        sampleScoreEwma: quality.sampleScoreEwma,
+        contextContaminationEwma: quality.contextContaminationEwma,
+        trainAllowed: quality.trainAllowed,
+        topProblem: quality.topProblem,
+        reasonCounts: quality.reasonCounts
+      },
+      learningLoop: get(loop, 'nodeProfile.learningLoop', {}),
+      dataset: get(loop, 'nodeProfile.dataset', {}),
+      agentHandoff: get(loop, 'nodeProfile.agentHandoff', {}),
+      lastLoopDiagnostics: loop.lastLoopDiagnostics || {},
+      lastLoopHotspot: loop.lastLoopHotspot || {},
+      ledger: {
+        enabled: summary.enabled,
+        windowHours: summary.windowHours,
+        total: summary.total,
+        byEntryType: summary.byEntryType,
+        byDecision: summary.byDecision,
+        byHotspot: summary.byHotspot,
+        vectorDlq: summary.vectorDlq
+      },
+      recentCount: recent.length
+    };
+  }
+
+  async function refresh() {
+    $('cycleDetail').textContent = 'loading';
+    $('acceptanceDetail').textContent = 'loading';
+    $('trainDecisionDetail').textContent = 'loading';
+    $('retrainDetail').textContent = 'loading';
+
+    const results = await Promise.allSettled([
+      fetchJson('/api/diagnostics/uaw/autolearn/loop'),
+      fetchJson('/api/diagnostics/uaw/autolearn/quality'),
+      fetchJson('/api/diagnostics/rag/ops-ledger/summary?hours=168'),
+      fetchJson('/api/diagnostics/rag/ops-ledger/recent?entryType=AUTOLEARN_CYCLE&limit=50'),
+      fetchJson('/api/diagnostics/uaw/autolearn/agent-handoff')
+    ]);
+
+    const loop = results[0].status === 'fulfilled' ? results[0].value : {};
+    const quality = results[1].status === 'fulfilled' ? results[1].value : (loop.quality || {});
+    const summary = results[2].status === 'fulfilled' ? results[2].value : { enabled: false, error: results[2].reason.message };
+    const recentPayload = results[3].status === 'fulfilled' ? results[3].value : { enabled: false, items: [] };
+    const handoff = results[4].status === 'fulfilled' ? results[4].value : get(loop, 'nodeProfile.agentHandoff', {});
+    const recent = Array.isArray(recentPayload.items) ? recentPayload.items : [];
+    const ledgerEnabled = summary.enabled === true || recentPayload.enabled === true;
+    const historyDisabledReason = ledgerEnabled ? '' : 'rag_ops_ledger_disabled';
+
+    const cycleTotal = number(get(summary, 'byEntryType.AUTOLEARN_CYCLE', NaN), NaN);
+    const cycleCount = Number.isFinite(cycleTotal) ? cycleTotal : recent.length;
+    const sums = sumCycles(recent);
+    const lastAttempted = number(get(loop, 'lastLoopDiagnostics.attempted', 0), 0);
+    const lastAccepted = number(get(loop, 'lastLoopDiagnostics.accepted', 0), 0);
+    const attempted = sums.attempted > 0 ? sums.attempted : lastAttempted;
+    const accepted = sums.attempted > 0 ? sums.accepted : lastAccepted;
+    const acceptanceRate = attempted > 0 ? accepted / attempted : number(get(loop, 'lastLoopDiagnostics.acceptanceRate', NaN), NaN);
+    const currentDecision = get(loop, 'lastLoopDiagnostics.trainDecision', get(quality, 'trainDecision', 'UNKNOWN'));
+    const retrainCount = number(trace(loop, 'uaw.retrain.ingest.count', get(loop, 'lastLoopDiagnostics.retrain.ingested', 0)), 0);
+
+    $('cycleCount').textContent = text(cycleCount);
+    $('cycleDetail').textContent = ledgerEnabled ? 'AUTOLEARN_CYCLE entries in the selected window' : historyDisabledReason;
+    $('acceptanceValue').textContent = accepted + ' / ' + attempted;
+    $('acceptanceDetail').textContent = 'acceptanceRate ' + pct(acceptanceRate);
+    $('trainDecision').textContent = text(currentDecision);
+    $('trainDecisionDetail').textContent = 'topProblem ' + text(get(quality, 'topProblem', get(loop, 'lastLoopDiagnostics.topProblem', 'none')));
+    $('retrainApplied').textContent = text(retrainCount);
+    $('retrainDetail').textContent = 'last ingest count';
+
+    const autolearnEnabled = get(loop, 'nodeProfile.learningLoop.autolearnEnabled', false);
+    const retrainAllowed = get(loop, 'nodeProfile.learningLoop.retrainAllowed', false);
+    setBadge($('loopBadge'), autolearnEnabled ? 'enabled' : 'disabled', autolearnEnabled ? 'ok' : 'warn');
+    setBadge($('ledgerBadge'), ledgerEnabled ? 'enabled' : 'disabled', ledgerEnabled ? 'ok' : 'bad');
+    setBadge($('qualityBadge'), get(quality, 'trainAllowed', false) ? 'train allowed' : 'blocked', get(quality, 'trainAllowed', false) ? 'ok' : 'warn');
+    setBadge($('retrainBadge'), retrainAllowed ? 'allowed' : 'not allowed', retrainAllowed ? 'ok' : 'warn');
+
+    setInput('nodeRole', get(loop, 'nodeProfile.node.role', '-'));
+    setInput('datasetFile', get(loop, 'nodeProfile.dataset.datasetFile', '-'));
+    setInput('datasetPathHash', get(loop, 'nodeProfile.dataset.datasetPathHash', '-'));
+    setInput('learningLoopMode', get(loop, 'nodeProfile.node.learningLoopMode', '-'));
+    $('ledgerEnabled').textContent = text(ledgerEnabled);
+    $('historyDisabledReason').textContent = text(historyDisabledReason, '-');
+    $('windowHours').textContent = text(summary.windowHours, '168');
+    $('recentRows').textContent = text(recent.length);
+
+    setInput('contaminationEwma', pct(quality.contextContaminationEwma));
+    setInput('sampleScoreEwma', pct(quality.sampleScoreEwma));
+    setInput('errorRateWindow', pct(quality.errorRateWindow));
+    setInput('maxTrainErrorRate', pct(quality.maxTrainErrorRate));
+    renderList('reasonCounts', quality.reasonCounts || {});
+    renderList('thresholdBreaks', trace(loop, 'learning.validation.thresholdBreaks', []));
+
+    $('retrainAllowed').textContent = text(retrainAllowed);
+    $('trainAllowed').textContent = text(get(quality, 'trainAllowed', false));
+    $('gpuAdmissionStatus').textContent = text(get(loop, 'nodeProfile.learningLoop.gpuAdmissionStatus', 'unknown'));
+    $('gpuAdmissionReason').textContent = text(get(loop, 'nodeProfile.learningLoop.gpuAdmissionReason', '-'));
+    $('skipReason').textContent = text(trace(loop, 'uaw.retrain.skip.reason', '-'));
+    const ingest = trace(loop, 'uaw.retrain.ingest.summary', {});
+    $('ingestSummary').textContent = text(ingest.parsedLines, 0) + ' / ' + text(ingest.queuedDocs, 0) + ' / ' + text(ingest.failedBatches, 0);
+    const qdlq = get(summary, 'vectorDlq.quarantine', {});
+    const sdlq = get(summary, 'vectorDlq.shadowMerge', {});
+    $('quarantineDlq').textContent = 'pending=' + text(qdlq.pending, 0) + ', blocked=' + text(qdlq.blocked, 0) + ', failed=' + text(qdlq.failed, 0);
+    $('shadowMergeDlq').textContent = 'pending=' + text(sdlq.pending, 0) + ', blocked=' + text(sdlq.blocked, 0) + ', failed=' + text(sdlq.failed, 0);
+
+    renderHistory(recent, ledgerEnabled);
+    renderHandoff(handoff);
+    $('diagnosticsJson').textContent = JSON.stringify(compactEvidence(loop, quality, summary, recent), null, 2);
+  }
+
+  document.querySelectorAll('.nav a[href^="#"]').forEach((link) => {
+    link.addEventListener('click', () => {
+      document.querySelectorAll('.nav a').forEach((a) => a.classList.remove('active'));
+      link.classList.add('active');
+    });
+  });
+  $('refreshBtn').addEventListener('click', refresh);
+  refresh();
+</script>
+</body>
+</html>

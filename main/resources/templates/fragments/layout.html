@@ -1,0 +1,19 @@
+<!-- fragments/layout.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="UTF-8"/>
+  <link rel="stylesheet" th:href="@{/css/main.css}"/>
+</head>
+<body>
+<div th:fragment="header">
+  <nav>
+    <a th:href="@{/}">Home</a> |
+    <a th:href="@{/logout}">Logout</a>
+  </nav>
+</div>
+<div th:fragment="footer">
+  <hr/><p>RAG and agent development console - Chatbot feedback corpus</p>
+</div>
+</body>
+</html>
