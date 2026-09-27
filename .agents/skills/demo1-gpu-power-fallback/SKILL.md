@@ -1,21 +1,23 @@
 ---
 name: demo1-gpu-power-fallback
-description: Use when local Ollama/embedding/LLM calls time out, go silent, or RTX 3090 power-limit is suspected on DESKTOP-M5NOV6K — classify once, cap local retry <=1, fall back to the api-routing.yaml API order
+description: Use when choosing local GPU vs API after the RTX 3090 power issue was resolved on DESKTOP-M5NOV6K — prefer 3090 local first; on a classified local Ollama/embedding/LLM failure, cap local retry <=1 and fall back to the api-routing.yaml API order
 ---
 
 # demo1 GPU Power Fallback (RTX 3090)
 
-DESKTOP-M5NOV6K의 RTX 3090은 전력 피크(위이잉) 시 power limit / driver 이벤트로
-로컬 Ollama·임베딩 호출이 timeout·무응답이 된다. 해법은 "GPU가 살 때까지
-재시도"가 아니라 **실패 분류 + API 폴백**이다. 이 스킬은 판정 절차만 얇게
-얹는다 — 새 오케스트레이터/HTTP 스택을 만들지 않는다.
+> **2026-09 RESOLVED:** DESKTOP-M5NOV6K RTX 3090의 전력 피크/불안정 이슈는
+> **별도 보조 PSU 전원 투입으로 해결됨**. 3090은 정상 운용 대상이며 로컬
+> Ollama·임베딩·LLM 작업은 **3090 로컬 우선**이다. "3090이 불안해서" API로
+> 상시 우회하던 구 지침은 폐기 — 이 스킬은 **분류된 명시적 로컬 실패 1건**의
+> 폴백 판정만 얇게 얹는다 — 새 오케스트레이터/HTTP 스택을 만들지 않는다.
 
 ## When
 
-- 로컬 Ollama / embed / LLM 호출이 timeout·무응답·빈 응답을 내거나, 호스트가
-  전력 제한 상태로 의심될 때. `scripts/rtx3090_health_watch.ps1` alert id
-  (`ollama_timeout_streak`, `hw_power_brake_slowdown_active`,
-  `hw_slowdown_active`, `sw_power_cap_active`, `new_error_events`)도 입력이다.
+- 로컬 Ollama / embed / LLM 호출이 **실제로** timeout·무응답·빈 응답을 냈을
+  때 (전원 사유 선제 회피 금지). 미래 이상 신호인
+  `scripts/rtx3090_health_watch.ps1` alert id (`ollama_timeout_streak`,
+  `hw_power_brake_slowdown_active`, `hw_slowdown_active`, `sw_power_cap_active`,
+  `new_error_events`)도 입력이다 — 상시 우회 사유가 아니라 발생한 실패의 분류 입력.
 - Codex Focus 개인기억 의미검색(`FocusMemoryService` →
   `OllamaEmbeddingModel.embedPrivate`) 등 로컬 임베딩 경로가 이렇게 죽을 때.
 
@@ -26,8 +28,9 @@ DESKTOP-M5NOV6K의 RTX 3090은 전력 피크(위이잉) 시 power limit / driver
    → `reason`(`timeout|no_response|power_limit_suspect|driver_reset|oom_suspect|model_missing|unknown`)
    + `action` + `nextRoute`를 한 번에 받는다. 분류만 `classify`, 후보만 `route`.
 2. **Never hammer** — 같은 로컬 모델 총 재시도 ≤ 1, 그리고
-   `power_limit_suspect`/`driver_reset`/`oom_suspect`이면 **0** (재시도가
-   다음 스파이크를 유발한다). `localRetryBudget`이 이 상한을 그대로 준다.
+   `power_limit_suspect`/`driver_reset`/`oom_suspect`이면 **0** (전원/드라이버/
+   OOM 신호에서 재시도는 무의미하고 상태를 악화시킬 수 있다).
+   `localRetryBudget`이 이 상한을 그대로 준다.
 3. **Fallback order** — `configs/api-routing.yaml` `policy.order`
    (free_local → low_cost → paid_quality). 실패한 free_local 레인은 건너뛰고,
    `paid_quality`는 `AWX_AGENT_ALLOW_PAID_MODELS` 게이트 유지
@@ -35,9 +38,8 @@ DESKTOP-M5NOV6K의 RTX 3090은 전력 피크(위이잉) 시 power limit / driver
 4. **Log why only** — `[AWX][api-spend]` 필드에 `why=local_failover`,
    `errorClass=<reason>`, provider/model/env **이름**만. 키·토큰 값 금지
    (`docs/AGENT_API_SPEND_GUARD.md`).
-5. **Report one line** — 사용자/에이전트에게
-   `로컬 GPU 불안정(<reason>) → API 폴백: <route>` 한 줄 (`decide`의
-   `report` 필드 그대로).
+5. **Report one line** — 사용자/에이전트에게 `decide`의 `report` 필드 한 줄을
+   그대로 보고한다.
 
 ## Soft-auto (질문 카드 금지)
 
@@ -61,9 +63,12 @@ DESKTOP-M5NOV6K의 RTX 3090은 전력 피크(위이잉) 시 power limit / driver
 
 ## Don't
 
-- Ollama/GPU 연속 재시도로 전력 피크 유발 금지. 새 HTTP 클라이언트·프로바이더
+- Ollama/GPU 무한 연속 재시도 금지. 새 HTTP 클라이언트·프로바이더
   스택·오케스트레이터 금지. GPU 클럭/PL/PSU 변경 금지 (watch는 read-only 유지,
   `$demo1-rtx3090-health-watch`). 로그/커밋에 시크릿 값 금지.
+- "3090 전원/불안정"을 이유로 한 상시 API 우선·로컬 회피 금지 — 이슈 해결됨.
+  API 폴백은 분류된 실패·라우팅 스펙(free→cheap→paid)·쿼터/키 부재·
+  `AWX_AGENT_ALLOW_PAID_MODELS` 등 기존 spend-guard 규칙이 있을 때만.
 - `conditional_local_git` / secret guard / hooks / Meta Display 캡션·Focus UI는
   이 스킬 범위 밖.
 

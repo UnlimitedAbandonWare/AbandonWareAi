@@ -1,0 +1,6 @@
+interface:
+  display_name: "Grok Subscription Review"
+  short_description: "Check Grok review readiness without paid fallback"
+  default_prompt: "Use $demo1-grok-subscription-review to check whether one public counterexample review is available."
+policy:
+  allow_implicit_invocation: true

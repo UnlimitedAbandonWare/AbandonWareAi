@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Docker Autograder"
+  short_description: "Run bounded RED/GREEN tests in Docker"
+  default_prompt: "Use $demo1-docker-autograder to execute one immutable focused RED or GREEN job in the fail-closed Docker sandbox without modifying application source."

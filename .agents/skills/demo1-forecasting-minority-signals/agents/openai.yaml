@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Forecasting Minority Signals"
+  short_description: "Track time-bounded minority predictions safely"
+  default_prompt: "Use $demo1-forecasting-minority-signals to record and resolve one decision-changing minority forecast."

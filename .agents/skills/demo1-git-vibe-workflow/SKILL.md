@@ -49,6 +49,11 @@ maps to `commit --preserve-foreign-staged` (`--strict-staging` = exact-match).
   patch seams — separate change-sets, separate checkpoints.
 - No push/pull/fetch/merge/rebase/reset/clean/stash/remote or history rewrite;
   a publish/remote ask needs its own explicit user authorization.
+- Sole valid main remote is `AbandonWareAi`
+  (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`); `AbandonWare3` is
+  fully discarded — report a leftover `origin` pointing at it, never
+  fetch/push to it, never add a second remote (AGENTS.md
+  `DEMO1-GIT-REMOTE-SOLE`).
 - No `git tag`/annotated tags, no VERSION/CHANGELOG/RELEASE root files, no
   semver bumps, no `gh release`, no versioned artifact uploads — agents ship
   local selective commits only; a version/release structure is never part of

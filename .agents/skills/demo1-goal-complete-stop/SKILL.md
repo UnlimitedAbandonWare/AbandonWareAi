@@ -22,8 +22,16 @@ description: Use when a demo-1 Codex goal, objective, or acceptance check is don
    result never blocks the stop and is never forced. Local selective commit
    only — agents never `git tag`, push, bump versions, or write
    VERSION/CHANGELOG/RELEASE files.
-4. Give a short final: what changed, how verified, what remains (if any).
-5. **Stop.** Do not invent the next feature, do not keep "vibe continuing", do not open TLS/DAT/relay rabbit holes.
+4. **Before declaring done**, pass the sentence you are about to report as
+   completion through the goal-switch barrier:
+   `python -B scripts/demo1_goal_switch_barrier.py reject-complete --text "<claim>"`
+   — exit 0 required. A non-zero `instructional-not-acceptance` verdict (e.g.
+   "Read AGENTS.md before continuing", `Use $skill`, a bare tool command) means
+   it was a directive preamble, not an acceptance result: do NOT stop, keep
+   working or report the blocker.
+5. Before the final, close this session's leases: `agent_scope_lease.py done --task <id>` (or `-Action end` with owner+fingerprint) for any claim/begin this session still holds — release on complete, defer, or abort alike; a leftover becomes the next session's stale cleanup.
+6. Give a short final: what changed, how verified, what remains (if any).
+7. **Stop.** Do not invent the next feature, do not keep "vibe continuing", do not open TLS/DAT/relay rabbit holes.
 
 ## Stale artifacts = reference only
 

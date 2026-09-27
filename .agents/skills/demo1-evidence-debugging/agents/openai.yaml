@@ -1,0 +1,7 @@
+interface:
+  display_name: "Demo1 Evidence Debugging"
+  short_description: "로그·재현·경쟁 가설을 실제 소스의 최소 수정과 검증까지 연결"
+  default_prompt: "Use $demo1-evidence-debugging to investigate these logs and symptoms, preserve my intent and constraints, compare falsifiable causes, and carry the smallest authorized source repair through the existing gates and required verification."
+
+policy:
+  allow_implicit_invocation: true

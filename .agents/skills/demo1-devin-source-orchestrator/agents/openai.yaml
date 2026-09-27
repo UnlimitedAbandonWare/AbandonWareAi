@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Devin Source Orchestrator"
+  short_description: "Phase skills and tools for Devin source briefs"
+  default_prompt: "Use $demo1-devin-source-orchestrator: run python -B scripts/devin_task_orchestrate.py plan on the pasted brief, then one skill plus named tools per phase. Do not @ every skill and do not force a multi-seam brief onto one primary route."
