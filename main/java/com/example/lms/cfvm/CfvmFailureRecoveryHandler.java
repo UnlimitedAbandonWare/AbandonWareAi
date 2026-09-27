@@ -129,9 +129,11 @@ public class CfvmFailureRecoveryHandler {
         try {
             boolean adjusted = service.adjustFromCfvm(activeTile, weights);
             TraceStore.put("cfvm.failureRecovery.retrievalOrderAdjusted", adjusted);
+            TraceStore.put("cfvm.retrievalOrderAdjusted", adjusted);
             return adjusted;
         } catch (RuntimeException ex) {
             TraceStore.put("cfvm.failureRecovery.retrievalOrderAdjusted", false);
+            TraceStore.put("cfvm.retrievalOrderAdjusted", false);
             TraceStore.put("cfvm.failureRecovery.retrievalOrderError", errorType(ex));
             TraceStore.put("cfvm.failureRecovery.retrievalOrderErrorHash",
                     SafeRedactor.hashValue(ex.getMessage()));

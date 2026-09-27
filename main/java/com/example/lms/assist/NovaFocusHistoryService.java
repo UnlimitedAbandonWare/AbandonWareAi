@@ -21,7 +21,16 @@ public class NovaFocusHistoryService {
     public record Accepted(String turnId,Long chatSessionId,String state,boolean created) {}
     public record Pair(long sequence,String turnId,String state,String question,String answer) {}
     public record Page(List<Pair> turns,Long beforeSequence) {}
-    public record Context(List<Pair> recent,String summary,List<Pair> relevant) {}
+    public record Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript,
+                          NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion) {
+        public Context(List<Pair> recent,String summary,List<Pair> relevant){this(recent,summary,relevant,List.of());}
+        public Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript){
+            this(recent,summary,relevant,transcript,NovaFocusSettings.AnswerSelection.defaults(),0);
+        }
+        public Context {recent=List.copyOf(recent);relevant=List.copyOf(relevant);transcript=List.copyOf(transcript);
+            answerSelection=answerSelection==null?NovaFocusSettings.AnswerSelection.defaults():answerSelection;}
+        @Override public String toString(){return "NovaFocusContext[redacted]";}
+    }
     @PersistenceContext private EntityManager em;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
@@ -83,8 +92,19 @@ public class NovaFocusHistoryService {
         Objects.requireNonNull(value);ensure(owner,channel);
         return transaction(()->{var p=locked(owner,channel);
             if(p.getSettingsVersion()!=expected)throw new IllegalArgumentException("focus_settings_conflict");
-            try{p.setSettingsJson(mapper.writeValueAsString(value));}catch(Exception e){throw new IllegalArgumentException("invalid_nova_settings");}
-            p.setSettingsVersion(expected+1);return new Settings(p.getSettingsVersion(),value);});
+            var merged=value;
+            if(value.snapshot()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null){ // Omitted optional blocks preserve server-owned values.
+                var stored=decode(p.getSettingsJson());
+                var selection=value.answerSelection()==null?stored.answerSelection():value.answerSelection();
+                if(value.answerSelection()!=null&&value.answerSelection().routing()==null&&stored.answerSelection()!=null)
+                    selection=new NovaFocusSettings.AnswerSelection(selection.mode(),selection.modelId(),stored.answerSelection().routing());
+                merged=new NovaFocusSettings(value.enabled(),value.wakeWord(),value.utteranceQuietMs(),value.followupIdleMs(),
+                    value.wakeListenTimeoutMs(),value.presentation(),value.recallEnabled(),value.rememberFactsEnabled(),
+                    value.snapshot()==null?stored.snapshot():value.snapshot(),
+                    selection,value.recentContext()==null?stored.recentContext():value.recentContext());
+            }
+            try{p.setSettingsJson(mapper.writeValueAsString(merged));}catch(Exception e){throw new IllegalArgumentException("invalid_nova_settings");}
+            p.setSettingsVersion(expected+1);return new Settings(p.getSettingsVersion(),merged);});
     }
     /** Opening alone creates the unique durable room, never a user message. */
     public Long open(String owner,String channel) {

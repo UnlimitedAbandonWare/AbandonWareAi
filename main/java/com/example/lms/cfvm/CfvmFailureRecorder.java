@@ -2,6 +2,8 @@ package com.example.lms.cfvm;
 
 import ai.abandonware.nova.orch.failpattern.FailurePatternMemoryService;
 import com.example.lms.search.TraceStore;
+import com.example.lms.orchestration.control.RagControlLearningGate;
+import com.example.lms.orchestration.control.RagControlRuntimeAdapter;
 import com.example.lms.service.TrainingService;
 import com.example.lms.strategy.RetrievalOrderService;
 import com.example.lms.trace.SafeRedactor;
@@ -11,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -18,6 +21,7 @@ import java.util.Map;
  */
 @Component
 public class CfvmFailureRecorder {
+    public static final String RAG_ORIGIN_MARKER = "ragOrigin";
     private static final String DEFAULT_SOURCE = "cfvm";
     private static final String DEFAULT_HOTSPOT = "orchestration";
 
@@ -26,18 +30,34 @@ public class CfvmFailureRecorder {
     private final ObjectProvider<CfvmJbCbCalculator> jbCbCalculatorProvider;
     private final ObjectProvider<RetrievalOrderService> retrievalOrderServiceProvider;
     private final ObjectProvider<TrainingService> trainingServiceProvider;
+    private final ObjectProvider<RagControlLearningGate> ragControlLearningGateProvider;
 
     @Autowired
     public CfvmFailureRecorder(ObjectProvider<RawMatrixBuffer> rawMatrixBufferProvider,
                                ObjectProvider<FailurePatternMemoryService> failurePatternMemoryProvider,
                                ObjectProvider<CfvmJbCbCalculator> jbCbCalculatorProvider,
                                ObjectProvider<RetrievalOrderService> retrievalOrderServiceProvider,
-                               ObjectProvider<TrainingService> trainingServiceProvider) {
+                               ObjectProvider<TrainingService> trainingServiceProvider,
+                               ObjectProvider<RagControlLearningGate> ragControlLearningGateProvider) {
         this.rawMatrixBufferProvider = rawMatrixBufferProvider;
         this.failurePatternMemoryProvider = failurePatternMemoryProvider;
         this.jbCbCalculatorProvider = jbCbCalculatorProvider;
         this.retrievalOrderServiceProvider = retrievalOrderServiceProvider;
         this.trainingServiceProvider = trainingServiceProvider;
+        this.ragControlLearningGateProvider = ragControlLearningGateProvider;
+    }
+
+    public CfvmFailureRecorder(ObjectProvider<RawMatrixBuffer> rawMatrixBufferProvider,
+                               ObjectProvider<FailurePatternMemoryService> failurePatternMemoryProvider,
+                               ObjectProvider<CfvmJbCbCalculator> jbCbCalculatorProvider,
+                               ObjectProvider<RetrievalOrderService> retrievalOrderServiceProvider,
+                               ObjectProvider<TrainingService> trainingServiceProvider) {
+        this(rawMatrixBufferProvider,
+                failurePatternMemoryProvider,
+                jbCbCalculatorProvider,
+                retrievalOrderServiceProvider,
+                trainingServiceProvider,
+                null);
     }
 
     public CfvmFailureRecorder(ObjectProvider<RawMatrixBuffer> rawMatrixBufferProvider,
@@ -64,6 +84,11 @@ public class CfvmFailureRecorder {
                                String sessionId,
                                Map<String, Object> trace) {
         Map<String, Object> snapshot = trace == null ? new LinkedHashMap<>() : new LinkedHashMap<>(trace);
+        boolean explicitRagOrigin = booleanValue(snapshot.remove(RAG_ORIGIN_MARKER));
+        TraceStore.put("cfvm.ragControl.present", false);
+        TraceStore.put("cfvm.ragControl.hold", false);
+        TraceStore.put("cfvm.ragControl.failureClass", null);
+        TraceStore.put("cfvm.ragControl.errorType", null);
         CfvmJbCbCalculator.JbCbResult jbCb = calculateJbCb(snapshot);
         if (jbCb != null) {
             snapshot.put("cfvm.jb.score", jbCb.jb());
@@ -74,6 +99,14 @@ public class CfvmFailureRecorder {
         String patternHex = Long.toHexString(patternId);
         int signatureLength = signature == null ? 0 : signature.length();
         int traceSize = snapshot.size();
+
+        if (shouldHoldRagWrites(source, failureClass, snapshot, explicitRagOrigin)) {
+            return heldResult(source, failureClass, hotspot, patternHex, signatureLength, traceSize);
+        }
+        if (classifyOutcome(failureClass) == FailureOutcome.NON_CANCEL_DOWNGRADE) {
+            return nonMutatingResult(
+                    source, failureClass, hotspot, patternHex, signatureLength, traceSize);
+        }
 
         boolean buffered = buffer(patternId, traceSize, signatureLength);
         boolean memoryRecorded = recordMemory(source, failureClass, hotspot, sessionId, signature,
@@ -94,6 +127,155 @@ public class CfvmFailureRecorder {
         boolean trainingRecorded = recordTrainingFailurePattern(sessionId, failureClass, signature, boltzmannWeight(jbCb));
         TraceStore.put("cfvm.training.recorded", trainingRecorded);
         return new RecordResult(buffered, memoryRecorded, patternHex, signatureLength, traceSize);
+    }
+
+    private static FailureOutcome classifyOutcome(String failureClass) {
+        return "quality_downgrade".equals(normalized(failureClass))
+                ? FailureOutcome.NON_CANCEL_DOWNGRADE
+                : FailureOutcome.RECORDABLE_FAILURE;
+    }
+
+    private RecordResult nonMutatingResult(
+            String source,
+            String failureClass,
+            String hotspot,
+            String patternHex,
+            int signatureLength,
+            int traceSize) {
+        traceRecordContract(source, failureClass, hotspot, false, false);
+        TraceStore.put("cfvm.record.skipReason", "non_cancel_downgrade");
+        TraceStore.put("cfvm.recorder.patternId", patternHex);
+        TraceStore.put("cfvm.recorder.signature.len", signatureLength);
+        TraceStore.put("cfvm.recorder.trace.count", traceSize);
+        TraceStore.put("cfvm.recorder.buffered", false);
+        TraceStore.put("cfvm.recorder.memory.recorded", false);
+        TraceStore.put("cfvm.buffered", false);
+        TraceStore.put("cfvm.memoryRecorded", false);
+        TraceStore.put("cfvm.patternHex", patternHex);
+        TraceStore.put("cfvm.failureRecorder", "skipped");
+        TraceStore.put("cfvm.slot.extracted", true);
+        TraceStore.put("cfvm.triggered", false);
+        TraceStore.put("cfvm.retrievalOrderAdjusted", false);
+        TraceStore.put("cfvm.retrievalOrderDisabledReason", "non_cancel_downgrade");
+        TraceStore.put("cfvm.recoveryPath", "[]");
+        TraceStore.put("cfvm.recoveryPathDisabledReason", "non_cancel_downgrade");
+        TraceStore.put("cfvm.training.recorded", false);
+        return new RecordResult(false, false, patternHex, signatureLength, traceSize);
+    }
+
+    private enum FailureOutcome {
+        RECORDABLE_FAILURE,
+        NON_CANCEL_DOWNGRADE
+    }
+
+    private boolean shouldHoldRagWrites(
+            String source,
+            String failureClass,
+            Map<String, Object> snapshot,
+            boolean explicitRagOrigin) {
+        if (!isRagOrigin(explicitRagOrigin)) {
+            return false;
+        }
+        try {
+            RagControlLearningGate gate = ragControlLearningGateProvider == null
+                    ? null
+                    : ragControlLearningGateProvider.getIfAvailable();
+            if (gate == null) {
+                TraceStore.put("cfvm.ragControl.present", false);
+                TraceStore.put("cfvm.ragControl.hold", true);
+                TraceStore.put("cfvm.ragControl.failureClass", "learning_gate_unavailable");
+                return true;
+            }
+            TraceStore.put("cfvm.ragControl.present", true);
+            TraceStore.put("cfvm.ragControl.failureClass", null);
+            boolean verificationKnown = snapshot.containsKey("verificationAccepted")
+                    || snapshot.containsKey("finalAnswer.verificationAcceptedForMemory");
+            boolean verificationAccepted = booleanValue(snapshot.get("verificationAccepted"))
+                    || booleanValue(snapshot.get("finalAnswer.verificationAcceptedForMemory"));
+            boolean answerBlank = !booleanValueOrDefault(snapshot.get("responseObserved"), true)
+                    || "silent_failure".equals(normalized(failureClass))
+                    || "model_blank".equals(normalized(failureClass));
+            RagControlLearningGate.Decision decision = gate.evaluate(
+                    RagControlLearningGate.Boundary.CFVM_RAG_PRE_WRITE,
+                    new RagControlRuntimeAdapter.RuntimeInput(
+                            true,
+                            firstCount(snapshot, "returnedCount", "outCount"),
+                            firstCount(snapshot, "afterFilterCount", "promotedCount"),
+                            answerBlank,
+                            verificationKnown,
+                            verificationAccepted,
+                            booleanValue(snapshot.get("hardGuardHeld"))));
+            TraceStore.put("cfvm.ragControl.hold", decision.holdWrites());
+            return decision.holdWrites();
+        } catch (RuntimeException controlFailure) {
+            TraceStore.put("cfvm.ragControl.present", false);
+            TraceStore.put("cfvm.ragControl.hold", true);
+            TraceStore.put("cfvm.ragControl.failureClass", "learning_gate_failed");
+            TraceStore.put("cfvm.ragControl.errorType", SafeRedactor.traceLabelOrFallback(
+                    controlFailure.getClass().getSimpleName(), "runtime_exception"));
+            return true;
+        }
+    }
+
+    private RecordResult heldResult(
+            String source,
+            String failureClass,
+            String hotspot,
+            String patternHex,
+            int signatureLength,
+            int traceSize) {
+        traceRecordContract(source, failureClass, hotspot, false, false);
+        TraceStore.put("cfvm.record.skipReason", "rag_control_hold");
+        TraceStore.put("cfvm.recorder.patternId", patternHex);
+        TraceStore.put("cfvm.recorder.signature.len", signatureLength);
+        TraceStore.put("cfvm.recorder.trace.count", traceSize);
+        TraceStore.put("cfvm.recorder.buffered", false);
+        TraceStore.put("cfvm.recorder.memory.recorded", false);
+        TraceStore.put("cfvm.buffered", false);
+        TraceStore.put("cfvm.memoryRecorded", false);
+        TraceStore.put("cfvm.patternHex", patternHex);
+        TraceStore.put("cfvm.failureRecorder", "skipped");
+        TraceStore.put("cfvm.slot.extracted", true);
+        TraceStore.put("cfvm.triggered", false);
+        TraceStore.put("cfvm.retrievalOrderAdjusted", false);
+        TraceStore.put("cfvm.retrievalOrderDisabledReason", "rag_control_hold");
+        TraceStore.put("cfvm.recoveryPath", "[]");
+        TraceStore.put("cfvm.recoveryPathDisabledReason", "rag_control_hold");
+        TraceStore.put("cfvm.training.recorded", false);
+        return new RecordResult(false, false, patternHex, signatureLength, traceSize);
+    }
+
+    private static boolean isRagOrigin(boolean explicitRagOrigin) {
+        return explicitRagOrigin;
+    }
+
+    private static int firstCount(Map<String, Object> snapshot, String first, String second) {
+        if (snapshot == null) {
+            return 0;
+        }
+        for (String key : new String[] { first, second }) {
+            Object value = snapshot.get(key);
+            if (value instanceof Number number) {
+                return Math.max(0, number.intValue());
+            }
+        }
+        return 0;
+    }
+
+    private static boolean booleanValue(Object value) {
+        return Boolean.TRUE.equals(value)
+                || (value instanceof String text && "true".equalsIgnoreCase(text.trim()));
+    }
+
+    private static boolean booleanValueOrDefault(Object value, boolean fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        return booleanValue(value);
+    }
+
+    private static String normalized(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
     private void traceNormalizedContract(CfvmJbCbCalculator.JbCbResult jbCb, String patternHex) {
@@ -213,7 +395,11 @@ public class CfvmFailureRecorder {
         }
         try {
             boolean adjusted = service.adjustFromCfvm(activeTile, weights);
-            if (!adjusted && TraceStore.get("cfvm.retrievalOrderDisabledReason") == null) {
+            if (adjusted) {
+                TraceStore.put("cfvm.retrievalOrderAdjusted", true);
+                TraceStore.put("cfvm.retrievalOrderDisabledReason", "");
+                TraceStore.put("cfvm.recoveryPathDisabledReason", "");
+            } else if (TraceStore.get("cfvm.retrievalOrderDisabledReason") == null) {
                 traceRetrievalOrderDisabled("RetrievalOrderService_bean_missing_or_adjust_failed");
             }
             return adjusted;

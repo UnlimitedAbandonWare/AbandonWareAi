@@ -38,6 +38,10 @@ public class CfvmSnapshotService {
 
     @PostConstruct
     public void restoreOnStartup() {
+        TraceStore.put("cfvm.snapshot.restored", false);
+        TraceStore.put("cfvm.snapshot.restored.id", null);
+        TraceStore.put("cfvm.snapshot.restore.skipped", null);
+        TraceStore.put("cfvm.snapshot.restore.error", null);
         RawMatrixBuffer buffer = bufferProvider == null ? null : bufferProvider.getIfAvailable();
         CfvmSnapshotRepository repository = repositoryProvider == null ? null : repositoryProvider.getIfAvailable();
         if (buffer == null || repository == null) {
@@ -53,6 +57,11 @@ public class CfvmSnapshotService {
             CfvmSnapshot snapshot = latest.get();
             double[] weights = mapper.readValue(snapshot.getWeightsJson(), double[].class);
             buffer.restoreFromSnapshot(weights, snapshot.getBoltzmannTemp());
+            // The legacy void restore method skips incompatible shapes without throwing.
+            if (weights == null || weights.length != buffer.exportWeights().length) {
+                TraceStore.put("cfvm.snapshot.restore.skipped", "weight_count_mismatch");
+                return;
+            }
             TraceStore.put("cfvm.snapshot.restored", true);
             TraceStore.put("cfvm.snapshot.restored.id", snapshot.getId());
             log.info("[AWX][cfvm] snapshot restored idPresent={}", snapshot.getId() != null);
