@@ -21,6 +21,15 @@ PATTERNS = [
     ("symbol_log_missing", r"symbol:\s+variable\s+log", "lombok", "Logger 정의 또는 Lombok @Slf4j 필요"),
 ]
 PATTERN_REGEX = [(pid, re.compile(rx, re.IGNORECASE), cat, hint) for pid, rx, cat, hint in PATTERNS]
+SECRET_FRAGMENT_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?:"
+    r"sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|"
+    r"gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|"
+    r"sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}|"
+    r"(?:authorization|cookie)\s*[:=]\s*[^\r\n]+|"
+    r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)\s*[:=]\s*\S+|"
+    r"bearer\s+[A-Za-z0-9._~+/=-]{12,})"
+)
 
 def scan_text(text: str):
     counts = collections.Counter()
@@ -31,7 +40,7 @@ def scan_text(text: str):
             if rx.search(l):
                 counts[pid] += 1
                 if pid not in samples and len(l) < 500:
-                    samples[pid] = l
+                    samples[pid] = SECRET_FRAGMENT_RE.sub('<secret>', l)
     return counts, samples
 
 def read_file_safe(p):
