@@ -110,7 +110,7 @@ class ChatOpenSecurityConfigTest {
                 assertEquals(403,denied.getStatus());
             }
         }
-        assertEquals(12,count);
+        assertEquals(14,count);
         for(String path:java.util.List.of("/api/assist/display/focus/admin","/api/assist/display/audio/start","/api/admin","/api/diagnostics/display")){
             assertFalse(Boolean.TRUE.equals(ReflectionTestUtils.invokeMethod(config,"displayRequest",new MockHttpServletRequest("POST",path))),path);
         }

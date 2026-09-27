@@ -13,6 +13,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AdminTokenGuardFilterTest {
+    @Test void durableTaskReadsRequireAdminTokenBeforeMvc() throws Exception {
+        AdminTokenGuardFilter filter=filter("admin-secret","",true,false,"local");
+        assertDenied(filter,request("GET","/v1/tasks/fixture-id"));
+        assertDenied(filter,request("GET","/v1/tasks/fixture-id/result"));
+        var authorized=request("GET","/v1/tasks/fixture-id/result");
+        authorized.addHeader("X-Admin-Token","admin-secret");
+        assertPassedWithAdminRole(filter,authorized);
+    }
 
     @Test
     void deniesSettingsRequestsBeforeMvcForMethodsCaseAndTrailingSlash() throws Exception {
@@ -51,6 +59,8 @@ class AdminTokenGuardFilterTest {
         assertDenied(filter, request("GET", "/api/integrations/check"));
         assertDenied(filter, request("POST", "/api/diagnostics/langgraph-contamination/replay"));
         assertDenied(filter, request("POST", "/api/diagnostics/embedding/reset"));
+        assertDenied(filter, request("GET", "/api/diagnostics/runtime"));
+        assertDenied(filter, request("GET", "/api/diagnostics/debug/events/stream"));
         assertDenied(filter, request("POST", "/v1/tasks/ask/async"));
         assertDenied(filter, request("POST", "/api/rag/probe"));
         assertDenied(filter, request("POST", "/api/nova/outbox/sweep"));
@@ -150,6 +160,10 @@ class AdminTokenGuardFilterTest {
         diagnosticsReplay.addHeader(AdminTokenGuardInterceptor.OWNER_HEADER, "owner-secret");
         assertPassedWithAdminRole(filter, diagnosticsReplay);
 
+        MockHttpServletRequest diagnosticsStream = request("GET", "/api/diagnostics/debug/events/stream");
+        diagnosticsStream.addHeader(AdminTokenGuardInterceptor.OWNER_HEADER, "owner-secret");
+        assertPassedWithAdminRole(filter, diagnosticsStream);
+
         MockHttpServletRequest taskAsync = request("POST", "/v1/tasks/ask/async");
         taskAsync.addHeader(AdminTokenGuardInterceptor.OWNER_HEADER, "owner-secret");
         assertPassedWithAdminRole(filter, taskAsync);
@@ -185,7 +199,6 @@ class AdminTokenGuardFilterTest {
 
         assertPassed(filter, request("GET", "/chat"));
         assertPassed(filter, request("POST", "/internal/dataset/rag"));
-        assertPassed(filter, request("GET", "/api/diagnostics/runtime"));
         assertPassed(filter, request("POST", "/api/rag/query"));
         assertPassed(filter, request("GET", "/api/nova/outbox/stats"));
         assertPassed(filter, request("GET", "/api/train/123/status"));

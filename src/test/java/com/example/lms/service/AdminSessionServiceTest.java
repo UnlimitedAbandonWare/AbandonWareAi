@@ -19,9 +19,14 @@ class AdminSessionServiceTest {
 
         service.issueToken(response, "admin");
 
-        Cookie cookie = response.getCookie("admin-token");
-        assertNotNull(cookie);
+        String setCookie = response.getHeader("Set-Cookie");
+        assertNotNull(setCookie);
+        assertTrue(setCookie.contains("Secure"));
+        assertTrue(setCookie.contains("HttpOnly"));
+        assertTrue(setCookie.contains("SameSite=Lax"));
+        Cookie cookie = adminCookieFromHeader(setCookie);
         assertTrue(cookie.isHttpOnly());
+        assertTrue(cookie.getSecure());
         assertTrue(service.isValid(new Cookie[] {cookie}));
     }
 
@@ -53,12 +58,22 @@ class AdminSessionServiceTest {
 
         AdminSessionService verifier = serviceWithSecret("");
 
-        assertFalse(verifier.isValid(new Cookie[] {response.getCookie("admin-token")}));
+        assertFalse(verifier.isValid(new Cookie[] {adminCookieFromHeader(response.getHeader("Set-Cookie"))}));
     }
 
     private static AdminSessionService serviceWithSecret(String secret) {
         AdminSessionService service = new AdminSessionService();
         ReflectionTestUtils.setField(service, "secretKey", secret);
         return service;
+    }
+
+    private static Cookie adminCookieFromHeader(String setCookie) {
+        assertNotNull(setCookie);
+        int valueStart = "admin-token=".length();
+        int valueEnd = setCookie.indexOf(';');
+        Cookie cookie = new Cookie("admin-token", setCookie.substring(valueStart, valueEnd));
+        cookie.setHttpOnly(setCookie.contains("HttpOnly"));
+        cookie.setSecure(setCookie.contains("Secure"));
+        return cookie;
     }
 }

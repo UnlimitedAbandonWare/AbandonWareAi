@@ -26,6 +26,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AttachmentInspectionServiceOfficeTest {
 
     @Test
+    void previewPreservesSurrogateBoundariesAndNormalization() throws Exception {
+        Method method = AttachmentInspectionService.class.getDeclaredMethod("preview", String.class);
+        method.setAccessible(true);
+        String emoji = "\uD83D\uDE00";
+        String prefix7999 = "a".repeat(7_999);
+
+        String straddling = invokePreview(method, " \u0000" + prefix7999 + emoji + " ");
+        String fullPair = invokePreview(method, "a".repeat(7_998) + emoji + "x");
+        String bmpBoundary = invokePreview(method, prefix7999 + "z" + "x");
+
+        assertEquals(prefix7999, straddling, "POS-PREVIEW-STRADDLE");
+        assertFalse(Character.isHighSurrogate(straddling.charAt(straddling.length() - 1)));
+        assertEquals(straddling, utf8RoundTrip(straddling));
+        assertTrue(straddling.length() <= 8_000);
+        assertEquals("a".repeat(7_998) + emoji, fullPair, "POS-PREVIEW-FULL-BMP pair");
+        assertEquals(fullPair, utf8RoundTrip(fullPair));
+        assertEquals(prefix7999 + "z", bmpBoundary, "POS-PREVIEW-FULL-BMP BMP");
+        assertEquals(bmpBoundary, utf8RoundTrip(bmpBoundary));
+        assertEquals("", invokePreview(method, null), "POS-PREVIEW-NORMALIZATION null");
+        assertEquals("short", invokePreview(method, " \u0000short "), "POS-PREVIEW-NORMALIZATION NUL/trim");
+        assertEquals("a".repeat(8_000), invokePreview(method, "a".repeat(8_000)),
+                "POS-PREVIEW-NORMALIZATION exact limit");
+    }
+
+    @Test
     void emptyReasonTraceUsesTraceLabel() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/service/AttachmentInspectionService.java"));
 
@@ -179,6 +204,14 @@ class AttachmentInspectionServiceOfficeTest {
                 Map.of("confidence", 0.75d)));
 
         assertEquals(0.75d, average);
+    }
+
+    private static String invokePreview(Method method, String text) throws Exception {
+        return (String) method.invoke(null, new Object[]{text});
+    }
+
+    private static String utf8RoundTrip(String value) {
+        return new String(value.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
     }
 
     private static byte[] zip(Map<String, String> entries) throws Exception {
