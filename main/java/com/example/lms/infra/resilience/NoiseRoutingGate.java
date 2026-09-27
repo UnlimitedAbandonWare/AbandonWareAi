@@ -122,7 +122,12 @@ public final class NoiseRoutingGate {
         if (s == null) return "";
         String x = s.replace('\n', ' ').replace('\r', ' ').trim();
         if (x.length() > 200) {
-            x = x.substring(0, 200);
+            int end = 200;
+            if (Character.isHighSurrogate(x.charAt(end - 1))
+                    && Character.isLowSurrogate(x.charAt(end))) {
+                end--;
+            }
+            x = x.substring(0, end);
         }
         return x;
     }
