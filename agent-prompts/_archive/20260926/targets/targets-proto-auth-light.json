@@ -1,0 +1,28 @@
+﻿{
+    "targets":  [
+                    {
+                        "path":  "main/java/com/example/lms/security/AdminTokenGuardInterceptor.java",
+                        "sha256":  "e0ed2cd05ed8670904d664d4083cfe190b3bb3fb3527c7e90b9a8c65eb06a175"
+                    },
+                    {
+                        "path":  "main/java/com/example/lms/security/AdminTokenGuardFilter.java",
+                        "sha256":  "fd275c80861bcf9b43998267d728b5c7b052e7bf1fec2a3fd43560fbbb9ed58e"
+                    },
+                    {
+                        "path":  "main/java/com/example/lms/security/ChatOpenSecurityConfig.java",
+                        "sha256":  "f09b500fc959e35943d4f63b47a763f54d7315b0e1909c9fde3ea702fb2ad892"
+                    },
+                    {
+                        "path":  "main/resources/application-meta-display.yml",
+                        "sha256":  "57cc722460635bfe85a8ee62ea60a25b876363d1f6f6ca96ce8723a7503b41e3"
+                    },
+                    {
+                        "path":  "main/resources/application-local.yml",
+                        "sha256":  "838b7d6e203e399ed176cf32f21cd2b47718831e1f5545b809cd7b447841d4a7"
+                    },
+                    {
+                        "path":  ".windsurf/rules/demo1-hard-constraints.md",
+                        "sha256":  "70cc837fc4f7abc9a13d9664ab957149311f6de594383945aa37057437cef03a"
+                    }
+                ]
+}

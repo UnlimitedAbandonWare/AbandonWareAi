@@ -1,0 +1,143 @@
+[
+  {
+    "id": "AM-01",
+    "title": "Sticky blocked ChangeIntents after owner journals closed",
+    "why": "ChangeIntent board leaves intents state=blocked forever even when blocking lease owner journals are closed and no matching live lock remains. Live 2026-09-27: 4/7 intents blocked citing rtx3090-power-resolved-docs-21ae0260 / mutable-spec-policy-afc0b500 / chat-video-source-repair-80e240cb, yet those journals are closed and source-edit-locks only has clean-* locks. Agents treat the board as a gate despite docs saying PS1 leases are sole authority.",
+    "evidence": [
+      "scripts/agent_change_plane.py",
+      ".agents/skills/demo1-agent-change-plane/SKILL.md",
+      "data/agent-handoff/change-plane/intents.json",
+      "data/agent-handoff/change-plane/LATEST.md",
+      "data/agent-handoff/codex-autonomy/rtx3090-power-resolved-docs-21ae0260/journal.json",
+      "data/agent-handoff/codex-autonomy/mutable-spec-policy-afc0b500/journal.json",
+      "data/agent-handoff/codex-autonomy/chat-video-source-repair-80e240cb/journal.json",
+      "__patch_drop__/source-edit-locks/"
+    ],
+    "severity": 5,
+    "devonable": true
+  },
+  {
+    "id": "AM-02",
+    "title": "Triple write-coordination stack (PS1 lease + scope lease + ChangeIntent)",
+    "why": "One source write may require source_edit_session.ps1 begin/verify/heartbeat/end, agent_scope_lease.py claim/verify/done, AND agent_change_plane.py propose/admit/renew/seal/end. Three+ skills overlap. Vibe agents pick the wrong layer or skip release, seeding the next collision.",
+    "evidence": [
+      "AGENTS.md",
+      "__patch_drop__/source_edit_session.ps1",
+      "scripts/agent_scope_lease.py",
+      "scripts/agent_change_plane.py",
+      "scripts/lease_conflict_autoflow.py",
+      ".agents/skills/agent-scope-lease/SKILL.md",
+      ".agents/skills/demo1-agent-change-plane/SKILL.md",
+      ".agents/skills/scoped-blocker-recovery/references/lease-lifecycle.md"
+    ],
+    "severity": 5,
+    "devonable": true
+  },
+  {
+    "id": "AM-03",
+    "title": "Zombie in_progress handoff journals (15+) with empty events",
+    "why": "Live scan found 15 in_progress journals under data/agent-handoff/codex-autonomy including build-prune-fast-89faf47f (2026-09-20, events=[], never closed). change-plane LATEST lists them as Active. goal-switch-barrier exists but zombies persist and confuse who/overlap checks. PROTO_LIGHT says avoid wholesale handoff reads, yet concurrency inventory requires them.",
+    "evidence": [
+      "data/agent-handoff/change-plane/LATEST.md",
+      "data/agent-handoff/codex-autonomy/build-prune-fast-89faf47f/journal.json",
+      "scripts/demo1_goal_switch_barrier.py",
+      ".agents/skills/demo1-goal-switch-barrier/SKILL.md",
+      "docs/PROTOTYPE_LIGHT.md"
+    ],
+    "severity": 4,
+    "devonable": true
+  },
+  {
+    "id": "AM-04",
+    "title": "Three-way preflight mandatory-vs-optional contradiction",
+    "why": "safe-source-edit deprecated alias redirects to demo1-source-edit-three-way-preflight which says use before any Desktop source write; AGENTS.md says three-way is optional review not a routine prerequisite. Agents either burn tokens on triad packets or skip and get scolded.",
+    "evidence": [
+      ".agents/skills/safe-source-edit/SKILL.md",
+      ".agents/skills/demo1-source-edit-three-way-preflight/SKILL.md",
+      "AGENTS.md"
+    ],
+    "severity": 4,
+    "devonable": true
+  },
+  {
+    "id": "AM-05",
+    "title": "AGENTS.md mega-policy + 125 skills + multi-root always-on rule fanout",
+    "why": "AGENTS.md ~69KB/~359 lines; 125 skill dirs; always-on echoes duplicate across .windsurf/rules, .grok/rules, .clinerules, .devin. PROTOTYPE_LIGHT admits heaviness. Vibe agents thrash on routing instead of coding.",
+    "evidence": [
+      "AGENTS.md",
+      ".agents/skills/",
+      "docs/PROTOTYPE_LIGHT.md",
+      ".windsurf/rules/demo1-conditional-local-git.md",
+      ".grok/rules/demo1-conditional-local-git.md",
+      ".clinerules/60-demo1-vibe-low-admin-guardrail.md",
+      ".clinerules/61-demo1-vibe-agent-auth-relax.md",
+      ".devin/RULES_SSOT.md"
+    ],
+    "severity": 4,
+    "devonable": true
+  },
+  {
+    "id": "AM-06",
+    "title": "Soft-auto git vs Still-forbidden index.lock tension",
+    "why": "VIBE-GIT-AUTO-CONTINUE soft-clears stale 0-byte index.lock without a question card, while GIT-LOCAL-FIRST Still forbidden includes deleting index.lock. Agents misread soft-move-aside as hard-delete authorization or freeze on every lock.",
+    "evidence": [
+      "AGENTS.md",
+      "scripts/conditional_local_git.py",
+      "scripts/agent_git_vibe_commit.py",
+      ".agents/skills/demo1-vibe-git-auto-continue/SKILL.md",
+      ".windsurf/rules/demo1-hard-constraints.md"
+    ],
+    "severity": 3,
+    "devonable": true
+  },
+  {
+    "id": "AM-07",
+    "title": "reject-complete instructional-not-acceptance exit gate",
+    "why": "goal-complete-stop requires reject-complete on the final claim; instructional-looking sentences exit 5 and forbid stop. Natural vibe wrap-ups that mention next steps get trapped; agents invent more work instead of stopping.",
+    "evidence": [
+      ".agents/skills/demo1-goal-complete-stop/SKILL.md",
+      "scripts/demo1_goal_switch_barrier.py",
+      ".agents/skills/objective-executor/SKILL.md"
+    ],
+    "severity": 3,
+    "devonable": true
+  },
+  {
+    "id": "AM-08",
+    "title": "Codex plugin-roles matrix vs Prototype Light minimal tools",
+    "why": "demo1-codex-plugin-roles defines dense work-type x plugin allowlist while PROTO_LIGHT/PROTO_OPEN push minimal BAT+local tools. Agents either enable sprawl plugins or under-tool and bounce between matrices.",
+    "evidence": [
+      ".agents/skills/demo1-codex-plugin-roles/SKILL.md",
+      "AGENTS.md",
+      "docs/PROTOTYPE_LIGHT.md",
+      "EXTERNAL_SKILLS.md"
+    ],
+    "severity": 3,
+    "devonable": true
+  },
+  {
+    "id": "AM-09",
+    "title": "Pre-approved build prune + multi Gradle homes + zombie prune journal",
+    "why": "AGENTS pre-approves prune_build_artifacts.ps1 (-Days 7) with no lease; build/ and .gradle-* hold many agent-named dirs. Daily prune can wipe peer verification outputs. Journal build-prune-fast-89faf47f still in_progress since 2026-09-20.",
+    "evidence": [
+      "AGENTS.md",
+      "scripts/prune_build_artifacts.ps1",
+      "data/agent-handoff/codex-autonomy/build-prune-fast-89faf47f/journal.json"
+    ],
+    "severity": 4,
+    "devonable": true
+  },
+  {
+    "id": "AM-10",
+    "title": "GPU ARCHIVED-repair vs ACTIVE-resolved dual narrative",
+    "why": "AGENTS still carries GPU-LANE-EVIDENCE pointing at archived gpu-lane-repair-20260924 while RTX3090-WATCH ACTIVE says power issue RESOLVED. Agents reopen obsolete repair lanes or skip 3090 because unstable despite explicit ban of that reason.",
+    "evidence": [
+      "AGENTS.md",
+      ".agents/skills/demo1-gpu-lane-evidence/SKILL.md",
+      ".agents/skills/demo1-rtx3090-health-watch/SKILL.md",
+      ".windsurf/rules/demo1-gpu-power-fallback.md"
+    ],
+    "severity": 2,
+    "devonable": true
+  }
+]

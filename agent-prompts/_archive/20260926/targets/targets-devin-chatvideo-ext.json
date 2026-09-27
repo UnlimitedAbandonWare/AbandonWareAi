@@ -1,0 +1,24 @@
+{
+  "targets": [
+    {
+      "path": "main/java/com/example/lms/infra/resilience/NightmareBreaker.java",
+      "sha256": "26aa8f05c361b43e2b9a8b3d2ab7737cb6d1654dca56da154a868fdc7d3ed624"
+    },
+    {
+      "path": "main/java/ai/abandonware/nova/orch/llm/ExpectedFailureChatModel.java",
+      "sha256": "1f5d41baa19dc5a2353b623f5356887d62629468479d2804b0546c7e8480178a"
+    },
+    {
+      "path": "main/java/com/example/lms/debug/ApiFailureRecorder.java",
+      "sha256": "07ce252b3cc078c7dc61ca438df61eff2191937f69c57348e8f068cd670171c4"
+    },
+    {
+      "path": "main/java/com/example/lms/llm/NamedChatModel.java",
+      "sha256": null
+    },
+    {
+      "path": "src/test/java/com/example/lms/infra/resilience/NightmareKeysFocusedTest.java",
+      "sha256": null
+    }
+  ]
+}

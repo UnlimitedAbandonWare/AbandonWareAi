@@ -1,0 +1,7 @@
+id: demo1_claude_peers_web_probe_agent_upgrade_5h
+version: "1.0"
+description: >
+  Desktop Safe Patch directive that adapts claude-peers-suite into demo-1 as a
+  web-probe-first peer evidence bus, orchestration upgrade, and agent tool
+  hardening pass without installing external peer launchers into the canonical root.
+created: "2026-06-28"

@@ -1,0 +1,68 @@
+{
+ "targets": [
+  {
+   "path": "main/java/com/example/lms/assist/NovaFocusState.java",
+   "sha256": "ec1257c109c5ece7dc661da968f6cf9f4ddcd140fdb81f528b004c04d4939daa"
+  },
+  {
+   "path": "main/java/com/example/lms/assist/NovaFocusService.java",
+   "sha256": "4456c15ebe8c78ff392f92a3ed809a093566cc1495a49ec5a64d53e0016b3873"
+  },
+  {
+   "path": "main/java/com/example/lms/assist/NovaFocusSettings.java",
+   "sha256": "debe7d9dec012edc2cc017639c292973663c151b87d661e86ae0a092600665b8"
+  },
+  {
+   "path": "main/java/com/example/lms/assist/NovaFocusHistoryService.java",
+   "sha256": "a5863c252fa7a266dfc11e38ed3a0358da50c56dfa0bd6129a90303f02c1cc56"
+  },
+  {
+   "path": "main/java/com/example/lms/assist/DisplayConversateController.java",
+   "sha256": "98c6264660a356fafc9e828ac3847127a627687d44c8327944d4438f47b67d2c"
+  },
+  {
+   "path": "main/java/com/example/lms/assist/NovaFocusAnswer.java",
+   "sha256": "6e64091157519daa9a3a5dfa622271391335b31aae98585e921379d0b8441c1e"
+  },
+  {
+   "path": "main/java/com/example/lms/assist/NovaFocusAnswerService.java",
+   "sha256": "95ff6b8143706a6971de3bb1898568267046e6280bcf0b3cb19ef9e609b1cd2a"
+  },
+  {
+   "path": "main/java/com/example/lms/service/ChatWorkflow.java",
+   "sha256": "2b415829f3e9158220dd7d277c0f10062fbebb2909466ed3d89e4342c2d8e32e"
+  },
+  {
+   "path": "main/java/com/example/lms/service/rag/plan/PlanModelResolver.java",
+   "sha256": "9abf08c1e42b293d7b5a2c70cb47ffeea329fe0785fec685f757e03b89cbd2d5"
+  },
+  {
+   "path": "main/resources/static/assets/display/display-snapshot.js",
+   "sha256": "c6d501319f67686afaacfa921bec4942d7de4a673d9c38b6dd94e6cf736d9dfc"
+  },
+  {
+   "path": "main/resources/static/assets/display/display-focus-controls.js",
+   "sha256": "e4b9273895bb08cc5f33b818a9d267d120b92812e0ebad19f79fe72bdb7a5333"
+  },
+  {
+   "path": "main/resources/static/assets/display/display-conversate.js",
+   "sha256": "92197a474df47ab6abd7e57e1e6d70591fecbf6aab7b18a0760932c9fb624dae"
+  },
+  {
+   "path": "main/resources/static/assets/display/index.html",
+   "sha256": "24befd635548bf844850661d131f1141b560cf485a3690bd34a4ea657fd2273c"
+  },
+  {
+   "path": "src/test/java/com/example/lms/assist/NovaFocusSnapshotStateTest.java",
+   "sha256": "37d0cda08d3e801c5a29288dac2eac6ceeeae91c644cf34ee0bb815ce1eaabaa"
+  },
+  {
+   "path": "src/test/java/com/example/lms/assist/NovaFocusStateTest.java",
+   "sha256": "325e1ce968b7f903a59746a148718e68d32f5e3011bd88a5093bc98fb68a9c94"
+  },
+  {
+   "path": "src/test/js/display-snapshot.test.cjs",
+   "sha256": "329da195546f888ca9c62b14d8145e2c44190e8ea9f4eade396658fbe4746d80"
+  }
+ ]
+}

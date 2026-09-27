@@ -1,0 +1,52 @@
+{
+  "targets": [
+    {
+      "path": "main/java/com/example/lms/prompt/StandardPromptBuilder.java",
+      "sha256": "193190ba11e26ae308708514fd57d57b25b4076254ee7109d38cc042f859faed"
+    },
+    {
+      "path": "main/java/com/example/lms/service/ChatWorkflow.java",
+      "sha256": "f517e3158996548962fee8f6244a2702a123af5e720d461fe46cc4c9c7e4b7c0"
+    },
+    {
+      "path": "main/java/com/example/lms/service/NoEvidenceChatFallback.java",
+      "sha256": "762655f84bd7efdc7728e232f516e3e71f0fc1671a9d424194a5fc182b1a19c7"
+    },
+    {
+      "path": "main/java/com/example/lms/api/ChatStreamSignalBuilder.java",
+      "sha256": "6391b0180e53fdfe29dd9ab40ce68c467a7f31a0dd1d8e122d95eff99725fbce"
+    },
+    {
+      "path": "main/java/com/example/lms/service/ChatHistoryServiceImpl.java",
+      "sha256": "31263a8744db39e3d9137507755ba500e1e66d33b60736c4ad207db2cd9e1611"
+    },
+    {
+      "path": "main/java/com/example/lms/service/rag/EvidenceAnswerComposer.java",
+      "sha256": "a7d0d526083378162086ed75c9509d712fce581336684d56def062fd71f25e1d"
+    },
+    {
+      "path": "main/java/com/example/lms/web/ChatUiHeartbeatController.java",
+      "sha256": "0ed0b51e049745bfbe40fa80da22ead484e76f608149ec410f32bf7a599189f4"
+    },
+    {
+      "path": "main/java/com/example/lms/service/AgentVisibleDebugEvidenceBuilder.java",
+      "sha256": "98c951b4f0f0dfff9739f99c11628438ae9b34f649a7ba69e90c4cd2065a60da"
+    },
+    {
+      "path": "main/resources/static/js/chat.js",
+      "sha256": "c9d59b32710cb6d8be2c1aaf21a9ad20457118b2c67917cb2e6ade571a02d768"
+    },
+    {
+      "path": "src/test/java/com/example/lms/prompt/StandardPromptBuilderConversationHistoryTest.java",
+      "sha256": null
+    },
+    {
+      "path": "src/test/java/com/example/lms/service/NoEvidenceChatFallbackSessionContextTest.java",
+      "sha256": null
+    },
+    {
+      "path": "src/test/java/com/example/lms/service/ChatWorkflowSessionTranscriptMemoryModeSourceTest.java",
+      "sha256": null
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+# 브리프 — Nova / Fold6 폴드 카메라 단발 촬영 · 사진 기반 AI 힌트 (2026-09-24)
+
+Project Root (고정): C:\AbandonWare\demo-1\demo-1\src
+근거 문서: Nova_Fold6_Camera_Source_Instructions_2026-09-24.md + Fold6_Camera_Hints_Instructions.md
+         + Fold6_Camera_Source_Evidence.md + SOURCE_AUDIT.md (Downloads, 2026-09-24 17:24~17:25 작성본)
+
+## 목적 (판정 문장)
+ON이면 확정 질문마다 폴드 후면 사진 한 장이 실제 AI 입력으로 들어간다.
+사진을 확보하면 그 촬영 작업의 카메라 트랙은 즉시 해제된다.
+OFF이면 새 촬영과 새 이미지 AI 요청이 0건이다.
+어느 경우에도 사진 작업 때문에 기존 폴드 수음(마이크/ASR)이 끊기지 않는다.
+
+## 이번 범위 — 기존 snapshot 경로를 "완성"한다 (신규 카메라 시스템 구축 금지)
+1) OFF 계약 (P0-A): NovaFocusState.configure()의 snapshot OFF 경로는 pendingCaptureId만 지우고
+   snapshotImageBase64/snapshotImageMediaType가 남아 다음 tick의 Request로 복사된다.
+   → 아직 provider로 보내지 않은 이미지/ready/유효상태를 함께 무효화하고, 같은 requestId 질문을 텍스트로 1회 진행.
+2) 촬영 실패가 질문을 버리지 않게 (P0-B): snapshotFailed()는 pendingRequest를 제거하고 LISTENING으로 복귀한다.
+   → 같은 requestId로 사진 없는 Request 1회 + "사진을 받지 못해 음성·텍스트 질문으로 답변합니다" 표시.
+   Focus 닫기·전체 취소·owner 교체는 취소이므로 fallback 금지(이 둘을 구분).
+3) 촬영 모듈 수명 (P0-C): display-snapshot.js의 stop()이 공유 boolean만 바꾼다.
+   → 작업별 token/취소/stream/timer 소유. stop()은 그 작업의 비디오 트랙을 즉시 stop.
+   권한 timeout 뒤 늦게 승인된 스트림은 이전 작업의 무효 상태를 보고 즉시 정리(새 작업 상태로 판정 금지).
+   성공 경로의 즉시 해제는 이미 정상이므로 유지.
+4) 클라이언트 재전송 제한 (P1): display-focus-controls.js는 예외 시 이미지가 있으면 무조건 1회 재전송한다.
+   → OFF/닫기/만료/세션·owner 변경/취소/401·403·409·413/용량초과/잘못된 입력은 재전송 0회.
+   결과 응답만 유실된 경우 동일 captureId·동일 바이트만 제한 재전송(재촬영 금지).
+   claim 반복 true를 두 번째 촬영 허가로 쓰지 않는다(최초 실행권 vs 합류 응답 구분).
+5) 촬영 트리거: 기존 NovaFocusTurnAssembler/NovaFocusState.tick()의 질문 확정 경계만.
+   호출어 단독, ASR 중간결과, polling, 재렌더, 답변 다시 보기, 설정 조회, 재연결은 트리거가 아니다.
+   질문 대기 중 미리 카메라를 열거나 사진을 캐싱하지 않는다.
+6) 이미지의 실제 AI 전달 (P0-D): ChatWorkflow.primaryUserMessage()는 conversation.harmony.mode의
+   enforcementActive()가 false면 이미지가 있어도 text-only를 만든다(vision 라우팅도 같은 조건).
+   → 검증된 이미지 존재 + 실제 모델의 image input capability로 멀티모달 경로를 결정. 전역 ENFORCE 우회 금지.
+   OllamaNativeChatModel의 images 배열 직렬화(1039~1070)를 재사용하고, 그 앞에서 이미지가 사라지지 않는지 검증.
+7) vision 미준비 표현: "evidence_needed: vision_model_unavailable ..." 같은 내부 진단 문자열을
+   정상 답변·완료 기록으로 반환하지 않는다. 모델 이름만으로 이미지 지원을 확정하지 않는다.
+8) 후면 카메라: facingMode:{ideal:'environment'}는 선호일 뿐이다.
+   → exact 제약 또는 사용자가 이 기기에서 확인한 deviceId + 반환 track settings 확인. 전면으로 조용히 대체 금지.
+9) 프레임/예산: 좌상단 16x16 픽셀만으로 전체를 black_frame 처리하지 않는다.
+   실제 프레임 도착 확인(requestVideoFrameCallback feature-detect + fallback), 여러 영역 평가.
+   서버 15초 촬영 기한을 단계별로 새로 부여하지 않고 남은 deadline 하나를 공유. 사진 확보 후에는 카메라와 분리.
+10) 설정 UI: '사진 기반 AI 힌트'(기존 snapshot.enabled 단일 기준), 촬영 장치=폴드 후면,
+    META_GLASSES는 "이번 모드 미지원" 표시(기존 저장값 호환은 유지, 조용히 폴드로 치환 금지),
+    시험 촬영 버튼(이 기기에서만 확인·서버 전송/AI 호출 0회), OFF는 서버 저장 전에 로컬 촬영을 먼저 중단.
+
+## 하지 말 것
+- 새 카메라 시스템·새 업로드 서버·새 AI 프록시·visionEnabled 중복 플래그·카메라 힌트 카드 신설 금지.
+- 전역 harmony ENFORCE 변경, 인증/owner/epoch/예산 가드 완화, CORS·CSRF 완화 금지.
+- 사진 원본/base64를 로그·히스토리·세션 제목·TraceStore·벡터DB·GraphDB·localStorage에 저장하지 않는다.
+- display-voice.js의 audio 스트림/AudioContext/PCM/ASR을 사진 정리 때문에 중단하지 않는다.
+- 안경(meta/receiver) 페이지에서 폴드 카메라를 실행하지 않는다. DAT/Android 앱 신설을 선행조건으로 만들지 않는다.
+- 유료 모델·신규 provider 가입·모델 무단 pull 금지(AWX_AGENT_ALLOW_PAID_MODELS 미설정).
+- 화면 잠금·백그라운드 촬영이 자동 지원된다고 선언하지 않는다(1차 범위는 전경).
+
+## 대상 파일 (정본 현재 바이트 = 지시서 전제와 동일함을 2026-09-24T08:29Z에 SHA-256으로 확인)
+main/resources/static/assets/display/index.html                     24befd635548bf844850661d131f1141b560cf485a3690bd34a4ea657fd2273c
+main/resources/static/assets/display/display-snapshot.js            c6d501319f67686afaacfa921bec4942d7de4a673d9c38b6dd94e6cf736d9dfc
+main/resources/static/assets/display/display-focus-controls.js      e4b9273895bb08cc5f33b818a9d267d120b92812e0ebad19f79fe72bdb7a5333
+main/resources/static/assets/display/display-conversate.js          (리스 대상, 수정 전 해시 재확인)
+main/resources/static/assets/display/display-voice.js               50a7d9d904e52b13ff9e608e831918dfd6c78babc3ad8f68a2e1d981645b01ee (회귀 보호, 수정 금지)
+main/java/com/example/lms/assist/NovaFocusSettings.java             debe7d9dec012edc2cc017639c292973663c151b87d661e86ae0a092600665b8
+main/java/com/example/lms/assist/NovaFocusState.java                ec1257c109c5ece7dc661da968f6cf9f4ddcd140fdb81f528b004c04d4939daa
+main/java/com/example/lms/assist/NovaFocusService.java
+main/java/com/example/lms/assist/NovaFocusHistoryService.java
+main/java/com/example/lms/assist/NovaFocusAnswer.java
+main/java/com/example/lms/assist/NovaFocusAnswerService.java        95ff6b8143706a6971de3bb1898568267046e6280bcf0b3cb19ef9e609b1cd2a
+main/java/com/example/lms/assist/DisplayConversateController.java
+main/java/com/example/lms/service/ChatWorkflow.java                 2b415829f3e9158220dd7d277c0f10062fbebb2909466ed3d89e4342c2d8e32e
+main/java/com/example/lms/api/PublicRequestBudgetGuard.java
+main/java/com/example/lms/llm/OllamaNativeChatModel.java
+main/java/com/example/lms/service/rag/plan/PlanModelResolver.java
+테스트(기존 것 확장, 새 하네스 신설 금지):
+src/test/js/display-snapshot.test.cjs                     (이미 존재, 3,176 bytes)
+src/test/java/com/example/lms/assist/NovaFocusStateTest.java
+src/test/java/com/example/lms/assist/NovaFocusSnapshotStateTest.java
+src/test/java/com/example/lms/assist/NovaFocusAnswerServiceTest.java
+src/test/java/com/example/lms/assist/NovaFocusServiceTest.java
+src/test/java/com/example/lms/assist/NovaFocusHistoryTest.java
+
+## 검증 요구 (등급 분리해서 보고)
+- 단위·JS: OFF 경합, 늦은 권한 승인, 프레임 대기 중 stop, 중복 claim, 취소 후 재전송 0회.
+  실행: .\gradlew.bat test --tests <Fqcn>  /  node --test src/test/js/display-snapshot.test.cjs
+- 컴파일: .\gradlew.bat :compileJava -x test (+ :processResources)
+- 라이브 반영: java/resources 편집 후 DevWatch [DEV-RELOAD] socket ready 확인 또는
+  powershell -NoProfile -File scripts/start_rag_stack.ps1 -MetaDisplay -ForceRestart (구 PID·-CheckOnly·구 프로세스 200은 증거 아님)
+- 실기기(폴드 촬영·안경 렌즈 표시)는 별도 등급: 실행 못 했으면 NOT_RUN으로 남긴다.

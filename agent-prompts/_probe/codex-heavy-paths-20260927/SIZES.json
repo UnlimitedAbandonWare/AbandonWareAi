@@ -1,0 +1,323 @@
+﻿{
+    "generatedAt":  "2026-09-27T10:03:05.4820295+09:00",
+    "timezone":  "Asia/Seoul (UTC+9)",
+    "projectRoot":  "C:\\AbandonWare\\demo-1\\demo-1\\src",
+    "codexHome":  "C:\\Users\\nninn\\.codex",
+    "codexHomeExists":  true,
+    "codexHomeTotalBytes":  25454719912,
+    "codexHomeTotalDecimalGB":  25.454719912,
+    "directFileBytes":  4509600905,
+    "topEight":  [
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\sessions",
+                         "bytes":  9697373584,
+                         "files":  2681,
+                         "old7Files":  2588,
+                         "old7Bytes":  9131768109,
+                         "old30Files":  2400,
+                         "old30Bytes":  7313850267
+                     },
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\visualizations",
+                         "bytes":  8086094594,
+                         "files":  12843
+                     },
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\cache",
+                         "bytes":  713010916,
+                         "files":  2104
+                     },
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\tmp",
+                         "bytes":  632490590,
+                         "files":  2057
+                     },
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\integrations",
+                         "bytes":  631478650,
+                         "files":  4324,
+                         "old7Files":  4296,
+                         "old7Bytes":  630862805
+                     },
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\plugins",
+                         "bytes":  515585212,
+                         "files":  3408,
+                         "old7Files":  3294,
+                         "old7Bytes":  88886306
+                     },
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\.sandbox-bin",
+                         "bytes":  325332792,
+                         "files":  24
+                     },
+                     {
+                         "path":  "C:\\Users\\nninn\\.codex\\.tmp",
+                         "bytes":  219638275,
+                         "files":  6576,
+                         "old7Files":  6283,
+                         "old7Bytes":  155203641
+                     }
+                 ],
+    "heaviestDirectFiles":  [
+                                {
+                                    "path":  "C:\\Users\\nninn\\.codex\\thread_history_1.sqlite",
+                                    "bytes":  2820075520
+                                },
+                                {
+                                    "path":  "C:\\Users\\nninn\\.codex\\logs_2.sqlite",
+                                    "bytes":  1573093376
+                                },
+                                {
+                                    "path":  "C:\\Users\\nninn\\.codex\\state_5.sqlite",
+                                    "bytes":  82067456
+                                }
+                            ],
+    "drilldown":  {
+                      "C:\\Users\\nninn\\.codex\\sessions":  [
+                                                                 {
+                                                                     "path":  "C:\\Users\\nninn\\.codex\\sessions\\2026",
+                                                                     "bytes":  9697373584,
+                                                                     "files":  2681
+                                                                 }
+                                                             ],
+                      "C:\\Users\\nninn\\.codex\\visualizations":  [
+                                                                       {
+                                                                           "path":  "C:\\Users\\nninn\\.codex\\visualizations\\2026",
+                                                                           "bytes":  8086094594,
+                                                                           "files":  12843
+                                                                       }
+                                                                   ],
+                      "C:\\Users\\nninn\\.codex\\cache":  [
+                                                              {
+                                                                  "path":  "C:\\Users\\nninn\\.codex\\cache\\prompt-boundary-probe",
+                                                                  "bytes":  657943069,
+                                                                  "files":  2087
+                                                              },
+                                                              {
+                                                                  "path":  "C:\\Users\\nninn\\.codex\\cache\\remote_plugin_catalog",
+                                                                  "bytes":  40834305,
+                                                                  "files":  4
+                                                              },
+                                                              {
+                                                                  "path":  "C:\\Users\\nninn\\.codex\\cache\\codex_app_directory",
+                                                                  "bytes":  10155531,
+                                                                  "files":  2
+                                                              }
+                                                          ],
+                      "C:\\Users\\nninn\\.codex\\tmp":  [
+                                                            {
+                                                                "path":  "C:\\Users\\nninn\\.codex\\tmp\\demo1-audit50-gradle-home",
+                                                                "bytes":  629744368,
+                                                                "files":  1906
+                                                            },
+                                                            {
+                                                                "path":  "C:\\Users\\nninn\\.codex\\tmp\\demo1-audit50-project-cache",
+                                                                "bytes":  1956462,
+                                                                "files":  15
+                                                            }
+                                                        ],
+                      "C:\\Users\\nninn\\.codex\\integrations":  [
+                                                                     {
+                                                                         "path":  "C:\\Users\\nninn\\.codex\\integrations\\gemini-agy",
+                                                                         "bytes":  617273551,
+                                                                         "files":  3775
+                                                                     },
+                                                                     {
+                                                                         "path":  "C:\\Users\\nninn\\.codex\\integrations\\grok-build",
+                                                                         "bytes":  14205099,
+                                                                         "files":  549
+                                                                     }
+                                                                 ],
+                      "C:\\Users\\nninn\\.codex\\plugins":  [
+                                                                {
+                                                                    "path":  "C:\\Users\\nninn\\.codex\\plugins\\.plugin-appserver",
+                                                                    "bytes":  416484544,
+                                                                    "files":  4
+                                                                },
+                                                                {
+                                                                    "path":  "C:\\Users\\nninn\\.codex\\plugins\\cache",
+                                                                    "bytes":  99100668,
+                                                                    "files":  3404
+                                                                },
+                                                                {
+                                                                    "path":  "C:\\Users\\nninn\\.codex\\plugins\\remote-plugin-install-staging",
+                                                                    "bytes":  0,
+                                                                    "files":  0
+                                                                }
+                                                            ],
+                      "C:\\Users\\nninn\\.codex\\.sandbox-bin":  [
+                                                                     {
+                                                                         "path":  "C:\\Users\\nninn\\.codex\\.sandbox-bin\\codex.exe",
+                                                                         "bytes":  297858352,
+                                                                         "files":  1
+                                                                     }
+                                                                 ],
+                      "C:\\Users\\nninn\\.codex\\.tmp":  [
+                                                             {
+                                                                 "path":  "C:\\Users\\nninn\\.codex\\.tmp\\bundled-marketplaces",
+                                                                 "bytes":  136473509,
+                                                                 "files":  888
+                                                             },
+                                                             {
+                                                                 "path":  "C:\\Users\\nninn\\.codex\\.tmp\\plugins",
+                                                                 "bytes":  79887217,
+                                                                 "files":  5415
+                                                             }
+                                                         ]
+                  },
+    "ageStats":  {
+                     "sessionsOlderThan7d":  {
+                                                 "files":  2588,
+                                                 "bytes":  9131768109
+                                             },
+                     "sessionsOlderThan30d":  {
+                                                  "files":  2400,
+                                                  "bytes":  7313850267
+                                              },
+                     "rolloutsOlderThan7d":  {
+                                                 "exists":  false,
+                                                 "files":  0,
+                                                 "bytes":  0
+                                             },
+                     "attachmentsOlderThan7d":  {
+                                                    "files":  301,
+                                                    "bytes":  16166522
+                                                }
+                 },
+    "sessions":  {
+                     "directoryCount":  182,
+                     "emptyOrNoFilesDirectoryCount":  0,
+                     "orphanIndexAssessment":  "not reliable: legacy JSONL parsing encountered malformed/encoding-corrupted lines; no values emitted",
+                     "sessionIndexExists":  true,
+                     "sessionIndexBytes":  213785
+                 },
+    "existingQuarantine":  [
+                               {
+                                   "path":  "C:\\AbandonWare\\_rescue\\codex-quarantine-20260926",
+                                   "bytes":  618935012,
+                                   "files":  129
+                               },
+                               {
+                                   "path":  "C:\\AbandonWare\\_rescue\\codex-quarantine-9only-20260919",
+                                   "bytes":  161570925,
+                                   "files":  10
+                               },
+                               {
+                                   "path":  "C:\\AbandonWare\\_rescue\\codex-quarantine-20260919",
+                                   "bytes":  1223480,
+                                   "files":  3
+                               }
+                           ],
+    "existingQuarantineTotalBytes":  781729417,
+    "projectHeavyCandidates":  [
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\data\\agent-handoff\\codex-autonomy",
+                                       "bytes":  1796618989,
+                                       "files":  10557
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-madasin-proof-27",
+                                       "bytes":  86659840,
+                                       "files":  9546,
+                                       "excludedFromTargets":  true
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\.gradle",
+                                       "bytes":  50264990,
+                                       "files":  15
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-chat-repair-0868f566",
+                                       "bytes":  47847524,
+                                       "files":  6598,
+                                       "excludedFromTargets":  false
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-nova-focus",
+                                       "bytes":  46910961,
+                                       "files":  6296,
+                                       "excludedFromTargets":  false
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-meta-display",
+                                       "bytes":  44629009,
+                                       "files":  5531,
+                                       "excludedFromTargets":  false
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-madasin-resume",
+                                       "bytes":  37428150,
+                                       "files":  3710,
+                                       "excludedFromTargets":  true
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-chat-resilience",
+                                       "bytes":  31959633,
+                                       "files":  4181,
+                                       "excludedFromTargets":  false
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-meta-display-wear",
+                                       "bytes":  26659023,
+                                       "files":  3823,
+                                       "excludedFromTargets":  false
+                                   },
+                                   {
+                                       "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\build\\desktop-devwatch-verify",
+                                       "bytes":  26296111,
+                                       "files":  3920,
+                                       "excludedFromTargets":  false
+                                   }
+                               ],
+    "agentPromptZipCount":  0,
+    "agentPromptZipBytes":  0,
+    "scripts":  {
+                    "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\scripts\\codex_home_quarantine.py",
+                    "exists":  true,
+                    "cli":  "python -B scripts/codex_home_quarantine.py [--classes a,b,c] [--limit N] [--dry-run] [--rescue=\u003crescue-dir\u003e]",
+                    "headerSummary":  "hash-bound one-purpose quarantine tool; dry-run available; default rescue constant points to codex-quarantine-20260926",
+                    "pythonLauncherAvailable":  false,
+                    "helpExecuted":  false
+                },
+    "kickoff":  {
+                    "path":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\agent-prompts\\clean-codex-paths-hygiene-20260926\\CLEAN_KICKOFF.md",
+                    "exists":  true,
+                    "first80PHeadings":  "P0; P1/P1b/P7/P8 (encoding rendered imperfectly)"
+                },
+    "agents":  {
+                   "rootAGENTS":  "C:\\AbandonWare\\demo-1\\demo-1\\src\\AGENTS.md",
+                   "rootNotesSummary":  "keep OAuth/browser cookies/sessions/personal auth device-local and unchanged; never print .secrets; use hash-bound quarantine; enable only needed plugins",
+                   "AGENTSFoundUnderRoot":  7
+               },
+    "classification":  {
+                           "TIER_A_NOW":  [
+                                              "No confirmed stale rollouts: rollouts path is absent",
+                                              "old attachments \u003e7d: 16.17 MB / 301 files, candidate only after stale-use and lock check",
+                                              "tmp candidate: C:\\Users\\nninn\\.codex\\tmp\\demo1-audit50-gradle-home = 629.74 MB, confirm not active before quarantine",
+                                              "duplicate/obsolete rescue folders only after restore/lease verification",
+                                              "no empty session directories found"
+                                          ],
+                           "TIER_B_AFTER_CONFIRM":  [
+                                                        "plugins = 515.59 MB total; .plugin-appserver = 416.48 MB; user-facing/reinstallable",
+                                                        "integrations = 631.48 MB total; gemini-agy = 617.27 MB; user-facing/reinstallable",
+                                                        "visualizations = 8.09 GB; not safe-now; confirm retention/ownership first",
+                                                        "sessions older than 7d = 9.13 GB; do not bulk-delete without active-session/lease/index verification"
+                                                    ],
+                           "NEVER_DELETE":  [
+                                                "auth.toml/auth.json and config.toml; no contents read or printed",
+                                                "active session locks including .tmp\\rollout-maintenance.lock and plugins.sync.lock",
+                                                "Project Root AGENTS.md and .codex skills SSOT",
+                                                "secrets, OAuth/browser cookies, credentials",
+                                                "build\\desktop-madasin-* and build\\verify-test-*",
+                                                "Java/Gradle processes"
+                                            ]
+                       },
+    "notRun":  [
+                   "No quarantine/delete/move performed",
+                   "No Java/Gradle processes killed",
+                   "No remotes mutated",
+                   "No auth/config/secret contents read or printed",
+                   "python --help not run because py/python launchers unavailable"
+               ]
+}

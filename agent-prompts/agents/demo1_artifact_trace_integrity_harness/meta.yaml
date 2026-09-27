@@ -1,0 +1,5 @@
+id: demo1_artifact_trace_integrity_harness
+lang: ko
+role: system
+version: "1.0.0"
+tags: [demo-1, artifact-trace, integrity, tamper-check, evidence, Superpowers]
