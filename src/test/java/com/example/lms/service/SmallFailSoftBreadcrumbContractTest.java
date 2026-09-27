@@ -1,15 +1,32 @@
 package com.example.lms.service;
 
+import com.example.lms.repository.ChatMessageRepository;
+import com.example.lms.search.TraceStore;
+import com.example.lms.service.chat.JpaChatHistorySummaryService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.domain.Pageable;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SmallFailSoftBreadcrumbContractTest {
+
+    @AfterEach
+    void clearTrace() {
+        TraceStore.clear();
+    }
 
     @Test
     void reportSnapshotNumericFallbacksUseHashOnlyDebug() throws Exception {
@@ -32,7 +49,41 @@ class SmallFailSoftBreadcrumbContractTest {
         assertTrue(summary.contains("log.debug(\"[JpaChatHistorySummary] fail-soft stage={}\", \"repo.findRecent\")"));
         assertTrue(understand.contains("[Understand] meta persistence failed. errorHash={} errorLength={}"));
         assertTrue(understand.contains("[Understand] session id parse failed. errorHash={} errorLength={}"));
+        assertTrue(understand.contains("traceFailSoft(\"memoryStore\", e);"));
+        assertTrue(understand.contains("traceFailSoft(\"metaPersistence\", ignore);"));
+        assertTrue(understand.contains("traceFailSoft(\"sseEmit\", e);"));
+        assertTrue(understand.contains("traceFailSoft(\"summarization\", ex);"));
+        assertTrue(understand.contains("TraceStore.inc(\"understanding.failSoft.count\");"));
+        assertTrue(understand.contains("TraceStore.put(\"understanding.failSoft.\" + safeStage + \".errorType\", errorType);"));
+        assertTrue(understand.contains("[Understand] fail-soft trace failed stage={} errorType={}"));
+        assertFalse(understand.contains("catch (RuntimeException ignored) {\n"
+                + "            // Keep understanding fail-soft tracing from affecting chat flow.\n"
+                + "        }"));
         assertFalse(understand.contains("ignore.getMessage()"));
+    }
+
+    @Test
+    void jpaChatHistorySummaryRepositoryFailureLeavesRedactedTraceBreadcrumb() {
+        ChatMessageRepository repo = mock(ChatMessageRepository.class);
+        when(repo.findByRoleOrderByIdDesc(eq("assistant"), any(Pageable.class)))
+                .thenThrow(new IllegalStateException("ownerToken=private-summary-token"));
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ChatMessageRepository> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(repo);
+
+        JpaChatHistorySummaryService service = new JpaChatHistorySummaryService(provider);
+
+        assertEquals("", service.summarizeRecentLowConfidence(3));
+        assertEquals(Boolean.TRUE, TraceStore.get("chat.history.summary.failSoft"));
+        assertEquals("repo.findRecent", TraceStore.get("chat.history.summary.failSoft.stage"));
+        assertEquals("IllegalStateException", TraceStore.get("chat.history.summary.failSoft.errorType"));
+        assertEquals(Boolean.TRUE, TraceStore.get("chat.history.summary.failSoft.repo.findRecent"));
+        assertEquals("IllegalStateException",
+                TraceStore.get("chat.history.summary.failSoft.repo.findRecent.errorType"));
+        assertNotNull(TraceStore.get("chat.history.summary.failSoft.repo.findRecent.errorHash"));
+        assertEquals("ownerToken=private-summary-token".length(),
+                TraceStore.get("chat.history.summary.failSoft.repo.findRecent.errorLength"));
+        assertFalse(TraceStore.getAll().toString().contains("ownerToken=private-summary-token"));
     }
 
     @Test

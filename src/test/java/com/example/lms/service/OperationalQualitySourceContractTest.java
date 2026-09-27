@@ -72,6 +72,157 @@ class OperationalQualitySourceContractTest {
     }
 
     @Test
+    void forceLightSearchModeMarksCheapAuxBeforeDisambiguation() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflow.java"),
+                StandardCharsets.UTF_8);
+
+        int cheapFlag = source.indexOf("gctx.setCheapSearchMode(");
+        int disambiguationCall = source.indexOf("disambiguationService.clarify(userQuery, recentHistory)");
+        assertTrue(cheapFlag >= 0, "ChatWorkflow should mark FORCE_LIGHT as cheap search mode");
+        assertTrue(disambiguationCall > cheapFlag,
+                "cheap search mode must be set before the disambiguation LLM branch");
+        assertTrue(source.contains("com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT"),
+                "cheap search mode should be tied to the explicit FORCE_LIGHT UI enum");
+    }
+
+    @Test
+    void forceLightSearchModeCollapsesPlannerFanoutBeforeRoutingPlanService() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflow.java"),
+                StandardCharsets.UTF_8);
+
+        int flag = source.indexOf("final boolean forceLightSearchMode =");
+        int plannerCall = source.indexOf("routingPlanService.plan(finalQuery", flag);
+        int lightBranch = source.indexOf("else if (forceLightSearchMode)", flag);
+        assertTrue(flag >= 0, "ChatWorkflow should compute FORCE_LIGHT once for downstream cost gates");
+        assertTrue(plannerCall > flag, "routingPlanService fanout call should be locatable after the FORCE_LIGHT flag");
+        assertTrue(lightBranch > flag && lightBranch < plannerCall,
+                "FORCE_LIGHT must collapse planner fanout before routingPlanService.plan(...) can expand queries");
+        assertTrue(source.contains("TraceStore.put(\"search.mode.lightPlannerFanout.skipped\", true)"),
+                "planner fanout skip should leave a stable TraceStore breadcrumb");
+    }
+
+    @Test
+    void forceLightSearchModeFallsBackToPrefetchedWebEvidenceWhenFusedIsEmpty() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflow.java"),
+                StandardCharsets.UTF_8);
+
+        int retrieveAll = source.indexOf("fused = hybridRetriever.retrieveAll(planned, plateLimit, sessionIdLong, metaHints)");
+        int fallback = source.indexOf("prefetchedWebContents(metaHints", retrieveAll);
+        assertTrue(retrieveAll >= 0, "ChatWorkflow retrieveAll span should be locatable");
+        assertTrue(fallback > retrieveAll,
+                "FORCE_LIGHT should promote prefetched web snippets when downstream fused results are empty");
+        assertTrue(source.contains("TraceStore.put(\"search.mode.lightPrefetch.fusedFallback\", true)"),
+                "prefetched evidence fallback should leave a stable TraceStore breadcrumb");
+        assertTrue(source.contains("metaHints.get(\"prefetch.web.snippets\")"),
+                "prefetched evidence fallback should use the existing prefetch.web.snippets metadata");
+    }
+
+    @Test
+    void forceLightSearchModeBypassesHybridRetrievalWhenPrefetchedWebEvidenceExists() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflow.java"),
+                StandardCharsets.UTF_8);
+
+        int lightBranch = source.indexOf("} else if (forceLightSearchMode) {");
+        int prefetch = source.indexOf("prefetchedWebContents(metaHints", lightBranch);
+        int bypassTrace = source.indexOf("TraceStore.put(\"search.mode.lightPrefetch.hybridBypass\", true)", prefetch);
+        int retrieveAll = source.indexOf("fused = hybridRetriever.retrieveAll(planned, plateLimit, sessionIdLong, metaHints)",
+                prefetch);
+        assertTrue(lightBranch >= 0, "ChatWorkflow should have a FORCE_LIGHT retrieval branch");
+        assertTrue(prefetch > lightBranch, "FORCE_LIGHT should inspect existing prefetched web evidence first");
+        assertTrue(bypassTrace > prefetch && bypassTrace < retrieveAll,
+                "FORCE_LIGHT should leave a stable hybrid bypass breadcrumb before falling back to retrieveAll");
+    }
+
+    @Test
+    void forceLightSearchModePromotesControllerPrefetchEvenWhenPlanHintsDemoteWebFanout() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflow.java"),
+                StandardCharsets.UTF_8);
+
+        int prefetchBlock = source.indexOf("externalCtxProvider.apply(q0)");
+        assertTrue(prefetchBlock >= 0, "ChatWorkflow should still have the controller prefetch promotion block");
+        int conditionStart = source.lastIndexOf("if (", prefetchBlock);
+        assertTrue(conditionStart >= 0, "prefetch promotion condition should be locatable");
+        String condition = source.substring(conditionStart, prefetchBlock);
+        assertTrue(condition.contains("forceLightSearchMode"),
+                "FORCE_LIGHT should promote already-prefetched controller evidence even when later plan hints demote web fanout");
+        assertTrue(condition.contains("externalCtxProvider != null"),
+                "prefetch promotion must remain provider-guarded");
+    }
+
+    @Test
+    void prefetchedWebEvidenceKeepsCitableUrlMetadataForLightModeBypass() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflow.java"),
+                StandardCharsets.UTF_8);
+
+        int helper = source.indexOf("private static List<dev.langchain4j.rag.content.Content> prefetchedWebContents(");
+        int urlHelper = source.indexOf("private static String prefetchedWebSourceUrl(String snippet)", helper);
+        assertTrue(helper >= 0 && urlHelper > helper, "prefetched web helper span should be locatable");
+        String helperBody = source.substring(helper, urlHelper);
+        assertTrue(helperBody.contains("metadata.put(\"url\", sourceUrl)")
+                        && helperBody.contains("metadata.put(\"source\", sourceUrl)"),
+                "prefetched web evidence should preserve URL metadata for citation promotion");
+        assertTrue(helperBody.contains("TextSegment.from(")
+                        && helperBody.contains("Metadata.from(metadata)"),
+                "prefetched web evidence should be promoted as metadata-bearing Content");
+        assertTrue(helperBody.contains("metadata.put(\"prefetch.web.source\", \"controller_prefetch\")"),
+                "prefetched web evidence should leave a stable provenance label");
+    }
+
+    @Test
+    void forceLightSearchModeSkipsVectorRetrievalWhenWebEvidenceIsAlreadyReady() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflow.java"),
+                StandardCharsets.UTF_8);
+
+        int topDocs = source.indexOf("List<dev.langchain4j.rag.content.Content> topDocs;");
+        int bypassFlag = source.indexOf("boolean forceLightVectorBypass = forceLightSearchMode", topDocs);
+        int skipTrace = source.indexOf("TraceStore.put(\"search.mode.lightVector.skipped\", true)", bypassFlag);
+        int vectorCall = source.indexOf("vectorDocs = ragSvc.asContentRetriever(pineconeIndexName)", bypassFlag);
+        assertTrue(topDocs >= 0 && bypassFlag > topDocs,
+                "FORCE_LIGHT vector bypass should be decided after web topDocs are known");
+        assertTrue(source.contains("&& topDocs != null")
+                && source.contains("&& !topDocs.isEmpty()"),
+                "FORCE_LIGHT vector bypass should require real web evidence");
+        assertTrue(skipTrace > bypassFlag && skipTrace < vectorCall,
+                "FORCE_LIGHT vector skip should be traced before the expensive vector retriever call");
+    }
+
+    @Test
+    void chatApiControllerMarksForceLightCheapBeforePrefetchSearch() throws Exception {
+        String source = Files.readString(
+                Path.of("main/java/com/example/lms/api/ChatApiController.java"),
+                StandardCharsets.UTF_8);
+
+        int streamSearchMode = source.indexOf("final boolean allowWeb = shouldUseWebForSearchMode");
+        int streamMark = source.indexOf(
+                "markCheapSearchMode(gctx, effectiveSearchMode, \"stream.preSearch\")", streamSearchMode);
+        int streamSearch = source.indexOf(
+                "webSearchProvider.searchWithTrace(__providerSearchQuery, topKParam)", streamSearchMode);
+        assertTrue(streamSearchMode >= 0 && streamSearch > streamSearchMode,
+                "streaming prefetch search span should be locatable");
+        assertTrue(streamMark > streamSearchMode && streamMark < streamSearch,
+                "streaming FORCE_LIGHT cheap mode must be marked before prefetch search");
+        assertTrue(source.contains("case FORCE_LIGHT, FORCE_DEEP -> true;"),
+                "explicit search modes should bypass the AUTO search heuristic");
+
+        int syncSearchMode = source.indexOf("boolean performSearch = shouldUseWebForSearchMode", streamSearch + 1);
+        int syncMark = source.indexOf(
+                "markCheapSearchMode(__preSearchCtx, effectiveSearchMode, \"sync.preSearch\")", syncSearchMode);
+        int syncSearch = source.indexOf(
+                "webSearchProvider.searchWithTrace(__providerSearchQuery, topKParam)", streamSearch + 1);
+        assertTrue(syncSearchMode >= 0 && syncSearch > syncSearchMode,
+                "sync prefetch search span should be locatable");
+        assertTrue(syncMark > syncSearchMode && syncMark < syncSearch,
+                "sync FORCE_LIGHT cheap mode must be marked before prefetch search");
+    }
+
+    @Test
     void cacheOnlyProviderRescueErrorsUseStableOperationalLabels() throws Exception {
         String brave = Files.readString(
                 Path.of("main/java/com/example/lms/service/web/BraveSearchService.java"),
@@ -95,16 +246,19 @@ class OperationalQualitySourceContractTest {
         String source = Files.readString(
                 Path.of("main/java/com/example/lms/scheduler/PendingMemorySoakScheduler.java"),
                 StandardCharsets.UTF_8);
-        int start = source.indexOf("vectorStoreService.triggerFlushIfDue();");
-        int end = source.indexOf("} catch (Exception e) {", start);
-        assertTrue(start >= 0 && end > start, "triggerFlushIfDue() catch span should be locatable");
+        int start = source.indexOf("outcome = vectorStoreService.flush();");
+        int end = source.indexOf("if (outcome != null && outcome.durable())", start);
+        assertTrue(start >= 0 && end > start, "explicit flush catch span should be locatable");
         String flushCatch = source.substring(start, end);
 
+        assertFalse(source.contains("vectorStoreService.triggerFlushIfDue();"),
+                "pending soak must use explicit flush so promotion follows a durable outcome");
         assertTrue(flushCatch.contains("TraceStore.inc(\"vectorstore.flush.failed\")"),
                 "pending soak flush failure should leave a vectorstore flush breadcrumb");
-        assertTrue(flushCatch.contains("[PENDING_SOAK] triggerFlushIfDue failed err={}")
-                && flushCatch.contains("flushErr.getClass().getSimpleName()"),
-                "pending soak flush failure should log only the exception class");
+        assertTrue(flushCatch.contains("[PENDING_SOAK] flush failed errorHash={} errorLength={}")
+                        && flushCatch.contains("SafeRedactor.hashValue(messageOf(flushErr))")
+                        && flushCatch.contains("messageLength(flushErr)"),
+                "pending soak flush failure should log only a hash and length");
         assertFalse(flushCatch.contains("catch (Exception ignore)"),
                 "pending soak flush failure must not be silently swallowed");
     }
@@ -115,16 +269,35 @@ class OperationalQualitySourceContractTest {
                 Path.of("main/java/com/example/lms/scheduler/IndexingScheduler.java"),
                 StandardCharsets.UTF_8);
 
-        int flag = source.indexOf("boolean flushOk = false;");
-        int flush = source.indexOf("vectorStoreService.flush();");
-        int flagSet = source.indexOf("flushOk = true;", flush);
+        int flush = source.indexOf("outcome = vectorStoreService.flush();");
+        int predicate = source.indexOf(
+                "boolean batchPersisted = outcome != null && outcome.durable();", flush);
+        int durableBranch = source.indexOf("if (batchPersisted)", predicate);
+        int reinforcement = source.indexOf("memorySvc.reinforceWithSnippet", durableBranch);
+        int advance = source.indexOf("lastFetchTime.set(LocalDateTime.now())", durableBranch);
         int trace = source.indexOf("TraceStore.inc(\"indexing.flush.failed\")", flush);
-        int guard = source.indexOf("if (flushOk)", flush);
-        int advance = source.indexOf("lastFetchTime.set(LocalDateTime.now())", guard);
-        assertTrue(flag >= 0, "scheduleIndexing() should track vector flush success");
-        assertTrue(flush >= 0 && flagSet > flush, "flush success should be marked only after vectorStoreService.flush()");
-        assertTrue(trace > flush, "vector flush failure should leave a TraceStore breadcrumb");
-        assertTrue(guard > trace && advance > guard, "lastFetchTime should advance only inside the flushOk guard");
+        int reason = source.indexOf("\"indexing.flush.failed.reason\"", flush);
+
+        assertTrue(flush >= 0, "scheduleIndexing() must consume VectorFlushOutcome");
+        assertFalse(source.contains("boolean flushOk = false;"),
+                "normal return from flush must not imply durable persistence");
+        assertFalse(source.contains("flushOk = true;"),
+                "normal return from flush must not imply durable persistence");
+        assertTrue(predicate > flush,
+                "durability must be null-safe and derived from outcome.durable()");
+        assertTrue(durableBranch > predicate,
+                "reinforcement and cursor movement must have a durable branch");
+        assertTrue(reinforcement > durableBranch && advance > reinforcement,
+                "reinforcement and lastFetchTime movement must be inside the durable branch");
+        assertTrue(trace > flush && reason > flush,
+                "non-durable or exceptional flushes need a failure breadcrumb and fixed reason");
+        assertTrue(source.contains("\"exception\"")
+                        && source.contains("\"null_outcome\"")
+                        && source.contains("\"backoff\"")
+                        && source.contains("\"partial\"")
+                        && source.contains("\"store_failure\"")
+                        && source.contains("\"non_durable\""),
+                "flush failure breadcrumbs must use fixed categorical reasons");
     }
 
     @Test
@@ -137,14 +310,16 @@ class OperationalQualitySourceContractTest {
                 "NightmareBreaker should have a small scheduled stale-state eviction hook");
         assertTrue(source.contains("void evictStaleStates()"),
                 "NightmareBreaker stale-state eviction should be package-visible for focused tests");
-        assertTrue(source.contains("lastActivityMs") && source.contains("void touch()"),
-                "NightmareBreaker.State should track last activity for dynamic keys");
-        assertTrue(source.contains("states.entrySet().removeIf"),
-                "NightmareBreaker should trim stale dynamic state entries");
+        assertTrue(source.contains("lastActivityTick") && source.contains("ticker.getAsLong()"),
+                "NightmareBreaker.GateState should track monotonic activity for dynamic keys");
+        assertTrue(source.contains("state.mode != BreakerMode.CLOSED || state.inFlight != 0"),
+                "NightmareBreaker should retire only idle CLOSED gates");
+        assertTrue(source.contains("gate.state.compareAndSet(state, retired)"),
+                "NightmareBreaker should retire stale gates with CAS");
+        assertTrue(source.contains("states.remove(key, gate)"),
+                "NightmareBreaker should remove only the exact retired Gate identity");
         assertTrue(source.contains("policyCache.keySet().removeIf(k -> !states.containsKey(k))"),
                 "NightmareBreaker should trim policyCache entries after stale states are removed");
-        assertTrue(source.contains("s.touch();"),
-                "NightmareBreaker record paths should refresh state activity");
     }
 
     @Test

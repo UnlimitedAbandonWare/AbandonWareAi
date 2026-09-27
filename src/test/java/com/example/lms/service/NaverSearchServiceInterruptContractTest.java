@@ -10,15 +10,24 @@ import dev.langchain4j.store.embedding.EmbeddingStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -77,6 +86,57 @@ class NaverSearchServiceInterruptContractTest {
         assertFalse(trace.contains(rawSecret), trace);
         assertFalse(trace.contains("CancellationException"), trace);
         assertFalse(trace.contains("ownerToken"), trace);
+    }
+
+    @Test
+    void timingOutOneWaiterDoesNotCancelSharedCacheComputation() throws Exception {
+        CountDownLatch providerSubscribed = new CountDownLatch(1);
+        AtomicBoolean providerCancelled = new AtomicBoolean();
+        Sinks.One<ClientResponse> response = Sinks.one();
+        WebClient webClient = WebClient.builder()
+                .exchangeFunction(request -> {
+                    providerSubscribed.countDown();
+                    return response.asMono().doOnCancel(() -> providerCancelled.set(true));
+                })
+                .build();
+        NaverSearchService service = naverService(webClient, "test-client:test-secret");
+        ReflectionTestUtils.setField(service, "display", 20);
+        ReflectionTestUtils.setField(service, "webTopK", 8);
+        ReflectionTestUtils.setField(service, "apiTimeoutMs", 5_000L);
+
+        Mono<?> first = ReflectionTestUtils.invokeMethod(
+                service,
+                "loadNaverAttempt",
+                "shared cache waiter query",
+                NaverSearchService.SearchPolicy.freeMode(),
+                5_000L,
+                Map.of());
+        CompletableFuture<?> firstWaiter = first.toFuture();
+        assertTrue(providerSubscribed.await(1, TimeUnit.SECONDS));
+
+        Mono<?> second = ReflectionTestUtils.invokeMethod(
+                service,
+                "loadNaverAttempt",
+                "shared cache waiter query",
+                NaverSearchService.SearchPolicy.freeMode(),
+                150L,
+                Map.of());
+        CompletableFuture<?> secondWaiter = second.toFuture();
+
+        // The cache load has its own live owner; only the dependent waiter expires.
+        Object secondOutcome = secondWaiter.get(2, TimeUnit.SECONDS);
+        assertTrue(((List<?>) ReflectionTestUtils.getField(secondOutcome, "snippets")).isEmpty());
+        assertFalse(firstWaiter.isDone(), "shared owner must still be awaiting the held response");
+        assertFalse(providerCancelled.get(), "one waiter timeout must not cancel the cache owner");
+
+        assertEquals(Sinks.EmitResult.OK, response.tryEmitValue(ClientResponse.create(HttpStatus.OK)
+                .header("Content-Type", "application/json")
+                .body("{\"items\":[{\"title\":\"result\",\"link\":\"https://example.com/a\",\"description\":\"usable\"}]}")
+                .build()));
+        Object firstOutcome = firstWaiter.get(2, TimeUnit.SECONDS);
+        List<?> snippets = (List<?>) ReflectionTestUtils.getField(firstOutcome, "snippets");
+        assertEquals(1, snippets.size());
+        assertFalse(providerCancelled.get());
     }
 
     @SuppressWarnings("unchecked")

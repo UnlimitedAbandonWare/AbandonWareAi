@@ -1,8 +1,10 @@
 package com.example.lms.service;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.trace.SafeRedactor;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -13,6 +15,38 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatWorkflowTraceRedactionContractTest {
+
+    @Test
+    void workflowSeedsRequestTraceEnvelopeBetweenClearAndDownstream() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
+
+        int clearIndex = source.indexOf("TraceStore.clear();");
+        int seedIndex = source.indexOf("ChatWorkflowRequestTraceEnvelope.seed(req, sessionKey);", clearIndex);
+        int refinerIndex = source.indexOf(
+                "ensembleFinalAnswerService.sampleCandidatesForRefinement", seedIndex);
+
+        assertTrue(clearIndex >= 0);
+        assertTrue(seedIndex > clearIndex);
+        assertTrue(refinerIndex > seedIndex);
+    }
+
+    @Test
+    void koreanLiteralCharacterCountParseFailureLeavesRedactedBreadcrumb() throws Exception {
+        TraceStore.clear();
+        try {
+            Method parser = ChatWorkflow.class.getDeclaredMethod("koreanLiteralCharacterCount", String.class);
+            parser.setAccessible(true);
+
+            assertEquals(null, parser.invoke(null, "ownerToken=raw-character-count"));
+            assertEquals(Boolean.TRUE,
+                    TraceStore.get("chat.workflow.suppressed.chat.directLiteralFallback.characterCountParse"));
+            assertEquals("invalid_number",
+                    TraceStore.get("chat.workflow.suppressed.chat.directLiteralFallback.characterCountParse.errorType"));
+            assertFalse(String.valueOf(TraceStore.getAll()).contains("ownerToken=raw-character-count"));
+        } finally {
+            TraceStore.clear();
+        }
+    }
 
     @Test
     void chatWorkflowTraceSuppressionsNormalizeNumericErrorType() {
@@ -139,40 +173,21 @@ class ChatWorkflowTraceRedactionContractTest {
     }
 
     @Test
-    void workflowTraceStoreSeedsCorrelationAsHashOnly() throws Exception {
-        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
-
-        assertFalse(source.contains("TraceStore.put(\"trace.runId\", String.format(\"chat:%s:%d\", sessionKey, System.nanoTime()))"));
-        assertFalse(source.contains("TraceStore.putIfAbsent(\"req.sid\", __requestSid)"));
-        assertFalse(source.contains("TraceStore.put(\"chatSessionId\", req.getSessionId())"));
-        assertFalse(source.contains("TraceStore.put(\"sid\", sessionKey)"));
-        assertFalse(source.contains("__bc.put(\"conversationSid\", sessionKey)"));
-        assertFalse(source.contains("__bc.put(\"requestSid\", __requestSid)"));
-        assertFalse(source.contains("__bc.put(\"chatSessionId\", req.getSessionId())"));
-        assertFalse(source.contains("__bc.put(\"traceId\", __traceId)"));
-
-        assertTrue(source.contains("TraceStore.put(\"trace.runId\", String.format(\"chat:%s:%d\", SafeRedactor.hashValue(sessionKey), System.nanoTime()))"));
-        assertTrue(source.contains("TraceStore.putIfAbsent(\"req.sid\", SafeRedactor.hashValue(__requestSid))"));
-        assertTrue(source.contains("TraceStore.put(\"chatSessionHash\", SafeRedactor.hashValue(String.valueOf(req.getSessionId())))"));
-        assertTrue(source.contains("TraceStore.put(\"sid\", SafeRedactor.hashValue(sessionKey))"));
-        assertTrue(source.contains("__bc.put(\"conversationSidHash\", SafeRedactor.hashValue(sessionKey))"));
-        assertTrue(source.contains("__bc.put(\"requestSidHash\", SafeRedactor.hashValue(__requestSid))"));
-        assertTrue(source.contains("__bc.put(\"chatSessionHash\", SafeRedactor.hashValue(String.valueOf(req.getSessionId())))"));
-        assertTrue(source.contains("__bc.put(\"traceIdHash\", SafeRedactor.hashValue(__traceId))"));
-    }
-
-    @Test
     void earlyWorkflowFallbackCatchesLeaveTraceBreadcrumbs() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
+        String envelopeSource = Files.readString(
+                Path.of("main/java/com/example/lms/service/ChatWorkflowRequestTraceEnvelope.java"));
+        String finalizedPersistenceSource = Files.readString(
+                Path.of("main/java/com/example/lms/service/chat/FinalizedMemoryPersistence.java"));
 
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"rerank.onnxBreakerOpen\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceStore.clear\", ignore);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.requestSid\", __ignoreReqSid);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.chatSessionId\", __ignoreChatSid);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.mdcTraceId\", __ignoreMdc);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.mdcSession\", __ignoreMdc2);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.breadcrumb\", __ignoreBc);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.envelope\", __ignoreTraceSeed);"));
+        assertTrue(envelopeSource.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.requestSid\", failure);"));
+        assertTrue(envelopeSource.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.chatSessionId\", failure);"));
+        assertTrue(envelopeSource.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.mdcTraceId\", failure);"));
+        assertTrue(envelopeSource.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.mdcSession\", failure);"));
+        assertTrue(envelopeSource.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.breadcrumb\", failure);"));
+        assertTrue(envelopeSource.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"traceSeed.envelope\", failure);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"searchPolicy.decide\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"webHardDown.stageOffCheck\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"webHardDown.nowCheck\", ignore);"));
@@ -189,15 +204,18 @@ class ChatWorkflowTraceRedactionContractTest {
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"answer.guardRecovery\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"projection.view2.pipeline\", e);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"dualVision.view2.generation\", e);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"memory.learningWriteInterceptor\", ignore);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"memory.understandAndMemorize\", ignore);"));
+        assertTrue(source.contains("ChatWorkflowTraceSuppressions::traceSuppressed"));
+        assertTrue(source.contains("\"memory.learningWriteInterceptor\""));
+        assertTrue(source.contains("\"memory.understandAndMemorize\""));
+        assertTrue(finalizedPersistenceSource.contains(
+                "suppressionSink.suppressed(stage.suppressionReason(), failure);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"model.resolveName\", e);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"evidence.appendix\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"chat.draftBreakerOpen\", oce);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"llm.chatDraft\", e);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"emptyAnswerGuard.triggerTrace\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"emptyAnswerGuard.evidenceDocsTrace\", ignore);"));
-        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"emptyAnswerGuard.appendixTrace\", ignore);"));
+        assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"finalAnswer.postprocess.trace\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"emptyAnswerGuard.fallbackTrace\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"emptyAnswerGuard.finalFallbackTrace\", ignore);"));
         assertTrue(source.contains("ChatWorkflowTraceSuppressions.traceSuppressed(\"evidenceOnly.compose\", e);"));
@@ -392,6 +410,21 @@ class ChatWorkflowTraceRedactionContractTest {
         assertTrue(source.contains("sessionHash"));
         assertTrue(source.contains("endpointHash"));
         assertTrue(source.contains("endpointHost"));
+    }
+
+    @Test
+    void workflowLlmFailureRecordsRedactedOperatorActionForHeartbeat() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
+
+        assertTrue(source.contains(
+                "recordLocalLlmOperatorAction(\"llm_unavailable_after_retries\", \"model_unavailable\", \"inspect_model_route_or_start_local_llm\", 100, 1);"));
+        assertTrue(source.contains("TraceStore.put(\"llm.localSmoke.operatorAction.triggered\", true);"));
+        assertTrue(source.contains("TraceStore.put(\"llm.localSmoke.operatorAction.failureClass\","));
+        assertTrue(source.contains("SafeRedactor.traceLabelOrFallback(failureClass, \"model_unavailable\")"));
+        assertTrue(source.contains("TraceStore.put(\"llm.localSmoke.operatorAction.nextAction\","));
+        assertTrue(source.contains("SafeRedactor.traceLabelOrFallback(nextAction, \"inspect_model_route\")"));
+        assertFalse(source.contains("TraceStore.put(\"llm.localSmoke.operatorAction.rawError\""));
+        assertFalse(source.contains("TraceStore.put(\"llm.localSmoke.operatorAction.rawPrompt\""));
     }
 
     @Test

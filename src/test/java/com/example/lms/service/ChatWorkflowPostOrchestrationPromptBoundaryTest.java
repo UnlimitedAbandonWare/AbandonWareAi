@@ -127,15 +127,32 @@ class ChatWorkflowPostOrchestrationPromptBoundaryTest {
     }
 
     @Test
-    void promotedEvidenceEmptyDoesNotUseLegacyAppendixWhenAttributionServiceExists() throws Exception {
+    void centralAppendixOwnsPromotedAndLegacyPathsAfterBlankRescue() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
         String normalized = source.replace("\r\n", "\n");
 
         assertTrue(source.contains("TraceStore.put(\"rag.evidence.appendix.skipped\", \"no_promoted_evidence\");"));
-        assertTrue(source.contains("emptyAnswerGuard(out, finalQuery, topDocs, vectorDocs, ragEvidenceAttributionService, citableEvidence)"));
-        assertTrue(source.contains("TraceStore.put(\"chat.emptyAnswerGuard.appendixSkipped\", \"no_promoted_evidence\");"));
-        assertTrue(normalized.contains("} else {\n                out = appendEvidenceReferencesIfNeeded(out, topDocs, vectorDocs);"));
-        assertEquals(2, countOccurrences(source, "appendFinalEvidenceAppendix("));
+        assertTrue(source.contains("emptyAnswerGuard(out, finalQuery, topDocs, vectorDocs)"));
+        assertFalse(source.contains("chat.emptyAnswerGuard.appendixSkipped"));
+        assertTrue(normalized.contains("return appendEvidenceReferencesIfNeeded(\n                    answer,"));
+        assertEquals(1, countOccurrences(source, "appendFinalEvidenceAppendix("));
+    }
+
+    @Test
+    void emptyAnswerGuardFallbackKeepsProvenanceInModelLabel() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
+
+        int fallbackFlag = source.indexOf("boolean emptyAnswerFallbackApplied = out == null || out.isBlank();");
+        int guard = source.indexOf(
+                "out = emptyAnswerGuard(out, finalQuery, topDocs, vectorDocs);",
+                fallbackFlag);
+        int modelSuffix = source.indexOf("modelUsed = modelUsed + \":fallback:empty-answer\";", guard);
+        int result = source.indexOf("return ChatResult.of(out, modelUsed, ragUsed", modelSuffix);
+
+        assertTrue(fallbackFlag >= 0 && fallbackFlag < guard,
+                "empty-answer provenance must be captured before the guard synthesizes visible text");
+        assertTrue(modelSuffix > guard && modelSuffix < result,
+                "guard-generated text must retain fallback provenance in modelUsed");
     }
 
     @Test
@@ -198,14 +215,80 @@ class ChatWorkflowPostOrchestrationPromptBoundaryTest {
     }
 
     @Test
-    void finalAnswerPathAttemptsEnsembleBeforeSinglePathFallback() throws Exception {
+    void finalAnswerPathUsesPrimaryOnceAfterOptionalReferenceSampling() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
 
         assertTrue(source.contains("private final com.example.lms.ensemble.EnsembleFinalAnswerService ensembleFinalAnswerService;"));
-        assertTrue(source.contains("ensembleFinalAnswerService.tryGenerate(ctx, sessionIdLong)"));
-        assertTrue(source.contains(".orElseGet(() -> callWithRetry(model, msgs, finalReq))"));
-        assertTrue(source.indexOf("ensembleFinalAnswerService.tryGenerate(ctx, sessionIdLong)")
-                < source.indexOf("callWithRetry(model, msgs, finalReq)"));
+        int refinerCall = source.indexOf("ensembleFinalAnswerService.sampleCandidatesForRefinement");
+        int promptBuild = source.indexOf("String ctxText = promptBuilder.build(ctx);");
+        int finalBlock = source.indexOf("ChatRequestDto finalReq = applyFinalAnswerSamplingOverrides(llmReq);");
+        int primaryCall = source.indexOf("draft = callWithRetryReportingSuccess(", finalBlock);
+        int cancellationCheck = source.indexOf("throwIfCancelled(sessionIdLong);", finalBlock);
+        int finalOwner = source.indexOf(
+                "TraceStore.put(\"ensemble.finalAnswerOwner\", \"primary_model\")", finalBlock);
+
+        assertTrue(refinerCall >= 0 && refinerCall < promptBuild);
+        assertTrue(promptBuild < primaryCall);
+        assertTrue(primaryCall < cancellationCheck);
+        assertTrue(cancellationCheck < finalOwner);
+        assertEquals(1, countOccurrences(source.substring(finalBlock, cancellationCheck),
+                "callWithRetryReportingSuccess("));
+        assertTrue(source.contains("boolean strictSingleAttempt = hasThreeRoleRefinementCandidates(ctx);"),
+                "an attached three-role refinement must select the strict one-attempt primary path");
+        assertTrue(Pattern.compile("primarySuccessRef::set\\s*,\\s*strictSingleAttempt")
+                        .matcher(source).find(),
+                "the final primary call must receive the three-role one-attempt decision");
+        assertTrue(source.contains("final int maxAttempts = strictSingleAttempt ? 0 : llmMaxAttempts;"),
+                "strict primary adjudication must suppress workflow-level retries");
+        assertTrue(source.contains("if (!strictSingleAttempt && (hintCompletions || hintResponses || chatEndpointMissing))"),
+                "strict primary adjudication must not expand into endpoint fallback calls");
+        assertTrue(source.contains("if (!strictSingleAttempt && !selfHealed"),
+                "strict primary adjudication must not expand into parameter self-heal calls");
+        assertTrue(source.contains("if (!strictSingleAttempt && !modelHealed"),
+                "strict primary adjudication must not expand into model self-heal calls");
+        assertTrue(source.contains("TraceStore.put(\"ensemble.finalAnswerOwner\", \"primary_model\")"));
+    }
+
+    @Test
+    void refinerTraceCanRepresentAllThreeApiRoles() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
+
+        assertTrue(source.contains(
+                "TraceStore.put(\"prompt.context.refiner.candidateCount\", Math.min(3, refinementCandidates.size()))"));
+        assertFalse(source.contains(
+                "TraceStore.put(\"prompt.context.refiner.candidateCount\", Math.min(2, refinementCandidates.size()))"));
+    }
+
+    @Test
+    void referenceOnlyFinalPathHasNoJudgeDraftOrHealthBypass() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
+
+        int finalBlock = source.indexOf("ChatRequestDto finalReq = applyFinalAnswerSamplingOverrides(llmReq);");
+        int finalCatch = source.indexOf("} catch (CancellationException ce) {", finalBlock);
+        String primaryOnlyBlock = source.substring(finalBlock, finalCatch);
+
+        assertFalse(primaryOnlyBlock.contains("tryGenerate("));
+        assertFalse(primaryOnlyBlock.contains("judgeService"));
+        assertFalse(primaryOnlyBlock.contains("ensembleDraftUsed"));
+        assertFalse(primaryOnlyBlock.contains("ensembleEvidenceHold"));
+        assertTrue(primaryOnlyBlock.contains("if (primarySuccess != null)"));
+        assertTrue(primaryOnlyBlock.contains("if (primaryPermit != null)"));
+        assertTrue(primaryOnlyBlock.contains("primaryPermit.completeSuccess(ms);"));
+    }
+
+    @Test
+    void contextRefinerPropagatesCancellationBeforeFailSoftCatch() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"))
+                .replace("\r\n", "\n");
+        int refinerCall = source.indexOf("ensembleFinalAnswerService.sampleCandidatesForRefinement");
+        int cancellationCatch = source.indexOf("catch (CancellationException ce)", refinerCall);
+        int failSoftCatch = source.indexOf("catch (Throwable ex)", refinerCall);
+
+        assertTrue(refinerCall >= 0);
+        assertTrue(source.contains("sampleCandidatesForRefinement(refinerSeedCtx, sessionIdLong,"));
+        assertTrue(source.contains("() -> throwIfCancelled(sessionIdLong)"));
+        assertTrue(cancellationCatch > refinerCall && cancellationCatch < failSoftCatch);
+        assertTrue(source.substring(cancellationCatch, failSoftCatch).contains("throw ce;"));
     }
 
     @Test
