@@ -10,6 +10,8 @@ import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Component;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 
@@ -42,15 +44,24 @@ public class WebSearchTool implements AgentTool {
     public ToolResponse execute(ToolRequest request) {
         Map<String, Object> input = request.input();
         String query = textOrNull(input.get("query"));
-        Integer topK = positiveIntOrNull(input.get("topK"), "topK");
+        Integer topK = boundedIntOrNull(input.get("topK"), "topK", 1, 20);
         String lang = textOrNull(input.get("lang"));
         int requestedCount = topK != null ? topK : 5;
         String requestedLang = lang != null ? lang : "ko";
         TraceStore.put("web.search.tool.queryHash", SafeRedactor.hashValue(query));
         TraceStore.put("web.search.tool.queryLength", query == null ? 0 : query.length());
+        TraceStore.put("web.search.tool.requestedCount", requestedCount);
+        if (query == null) {
+            TraceStore.put("web.search.tool.status", "SKIPPED");
+            TraceStore.put("web.search.tool.skipped.reason", "EMPTY_QUERY");
+            TraceStore.put("web.search.tool.returnedCount", 0);
+            TraceStore.put("web.search.tool.zeroResults", true);
+            return ToolResponse.ok()
+                    .put("results", List.of())
+                    .put("skippedReason", "EMPTY_QUERY");
+        }
         TraceStore.put("web.search.tool.providerRequested",
                 SafeRedactor.traceLabelOrFallback(search.getClass().getSimpleName(), "unknown"));
-        TraceStore.put("web.search.tool.requestedCount", requestedCount);
         List<Map<String, Object>> results;
         try {
             results = search.searchAndRank(query, requestedCount, requestedLang);
@@ -82,19 +93,42 @@ public class WebSearchTool implements AgentTool {
         return text.isEmpty() ? null : text;
     }
 
-    private static Integer positiveIntOrNull(Object value, String stage) {
+    private static Integer boundedIntOrNull(Object value, String stage, int min, int max) {
         if (value == null) {
             return null;
         }
         try {
-            int parsed = value instanceof Number number
-                    ? number.intValue()
-                    : Integer.parseInt(String.valueOf(value).trim());
-            return parsed > 0 ? parsed : null;
+            BigInteger parsed = integerValue(value);
+            BigInteger lowerBound = BigInteger.valueOf(min);
+            BigInteger upperBound = BigInteger.valueOf(max);
+            if (parsed.compareTo(lowerBound) < 0) {
+                return min;
+            }
+            if (parsed.compareTo(upperBound) > 0) {
+                return max;
+            }
+            return parsed.intValueExact();
         } catch (RuntimeException error) {
             traceSuppressed(stage, value, error);
             return null;
         }
+    }
+
+    private static BigInteger integerValue(Object value) {
+        if (value instanceof BigInteger integer) {
+            return integer;
+        }
+        if (value instanceof BigDecimal decimal) {
+            return decimal.toBigIntegerExact();
+        }
+        if (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long) {
+            return BigInteger.valueOf(((Number) value).longValue());
+        }
+        if (value instanceof Number number) {
+            return new BigDecimal(number.toString()).toBigIntegerExact();
+        }
+        return new BigInteger(String.valueOf(value).trim());
     }
 
     private static void traceSuppressed(String stage, Object value, Throwable error) {

@@ -7,6 +7,7 @@ import com.abandonware.ai.agent.orchestrator.recovery.RecoveryAction;
 import com.abandonware.ai.agent.orchestrator.recovery.RecoveryPolicy;
 import com.abandonware.ai.agent.orchestrator.recovery.RecoveryRound;
 import com.abandonware.ai.agent.orchestrator.recovery.Verdict;
+import com.abandonware.ai.agent.orchestrator.subagent.SubagentFlowRunner;
 import com.abandonware.ai.agent.trace.AgentBreadcrumbMemory;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
@@ -25,6 +26,7 @@ public class Orchestrator {
     private final CriticNode criticNode;
     private final RecoveryPolicy policy;
     private final ObjectProvider<FailurePatternMemoryService> failurePatternMemory;
+    private final SubagentFlowRunner subagentFlowRunner;
 
     public Orchestrator() {
         this(RecoveryPolicy.load());
@@ -37,18 +39,27 @@ public class Orchestrator {
     public Orchestrator(DefaultRecoveryExecutor recoveryExecutor,
                         CriticNode criticNode,
                         RecoveryPolicy policy) {
-        this(recoveryExecutor, criticNode, policy, null);
+        this(recoveryExecutor, criticNode, policy, null, null);
+    }
+
+    public Orchestrator(DefaultRecoveryExecutor recoveryExecutor,
+                        CriticNode criticNode,
+                        RecoveryPolicy policy,
+                        ObjectProvider<FailurePatternMemoryService> failurePatternMemory) {
+        this(recoveryExecutor, criticNode, policy, failurePatternMemory, null);
     }
 
     @Autowired
     public Orchestrator(DefaultRecoveryExecutor recoveryExecutor,
                         CriticNode criticNode,
                         RecoveryPolicy policy,
-                        ObjectProvider<FailurePatternMemoryService> failurePatternMemory) {
+                        ObjectProvider<FailurePatternMemoryService> failurePatternMemory,
+                        SubagentFlowRunner subagentFlowRunner) {
         this.recoveryExecutor = recoveryExecutor == null ? new DefaultRecoveryExecutor() : recoveryExecutor;
         this.policy = policy == null ? RecoveryPolicy.load() : policy;
         this.criticNode = criticNode == null ? new CriticNode(this.policy) : criticNode;
         this.failurePatternMemory = failurePatternMemory;
+        this.subagentFlowRunner = subagentFlowRunner;
     }
 
     public Map<String, Object> run(String flowId, Map<String, Object> input) {
@@ -59,6 +70,15 @@ public class Orchestrator {
         Map<String, Object> state = new LinkedHashMap<>();
         if (input != null) state.putAll(input);
         state.putIfAbsent("flow", flowId == null ? "default.v1" : flowId);
+
+        if ("subagent.v1".equals(flowId) && subagentFlowRunner != null) {
+            Map<String, Object> subagentState = subagentFlowRunner.run(flowId, state, ctx);
+            if (!"FAILED".equals(subagentState.get("subagent.status"))) {
+                return subagentState;
+            }
+            state.clear();
+            state.putAll(subagentState);
+        }
 
         long started = Instant.now().toEpochMilli();
         Verdict verdict = state.get("verdict") instanceof Verdict v

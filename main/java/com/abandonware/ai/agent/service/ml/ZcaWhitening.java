@@ -1,12 +1,15 @@
 package com.abandonware.ai.agent.service.ml;
 
 import java.util.Arrays;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Minimal ZCA whitening for small batches.
  * Not optimized; meant as a pre-processing utility before similarity/DPP kernels.
  */
 public final class ZcaWhitening {
+    private static final Logger log = Logger.getLogger(ZcaWhitening.class.getName());
 
     public static class Model {
         public final double[] mean; // length d
@@ -63,6 +66,7 @@ public final class ZcaWhitening {
                 for(int i=0;i<d;i++) U[i][k]=v[i];
             }
         }catch(Throwable t){
+            logFailSoft("fit", t);
             U = identity(d);
             Arrays.fill(L, 1.0);
         }
@@ -128,5 +132,12 @@ public final class ZcaWhitening {
         double[][] B = new double[n][m];
         for(int i=0;i<n;i++) System.arraycopy(A[i],0,B[i],0,m);
         return B;
+    }
+
+    private static void logFailSoft(String stage, Throwable t) {
+        if (log.isLoggable(Level.FINE)) {
+            String errorType = t == null ? "unknown" : t.getClass().getSimpleName();
+            log.fine("[AWX][rag][zca-whitening] failSoft stage=" + stage + " errorType=" + errorType);
+        }
     }
 }

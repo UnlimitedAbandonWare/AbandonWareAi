@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
-@Component
+@Component("agentPlanLoader")
 public class PlanLoader {
 
     public Map<String, RetrievalPlan> loadAll(String locationPattern) {

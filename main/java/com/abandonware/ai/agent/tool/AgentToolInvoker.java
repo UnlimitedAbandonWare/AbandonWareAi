@@ -18,6 +18,7 @@ import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.DebugProbeType;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.trace.TraceContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -73,31 +74,31 @@ public class AgentToolInvoker {
         if (id.isBlank()) {
             throw ToolInvocationException.badRequest("missing_tool_id");
         }
+        String authorizationSource = adminAuthorized ? "ADMIN_TOKEN" : "UNRESOLVED";
+        boolean userConsentGranted = false;
+        recordAuthorization(adminAuthorized, userConsentGranted, authorizationSource);
 
         ToolManifestSnapshot snapshot = catalog.load();
-        ToolManifestEntry entry = snapshot.entry(id);
-        if (entry == null) {
+        ToolTarget target = resolveTarget(snapshot, id);
+        String missingReason = target.missingReason();
+        if (missingReason != null) {
             traceInvocation(id, adminAuthorized, false, "POLICY_REJECTED", startedMillis,
-                    elapsedMs(started), "manifest_missing", null);
+                    elapsedMs(started), missingReason, null);
             AgentBreadcrumbMemory.toolInvocation(id, adminAuthorized, false, "POLICY_REJECTED", startedMillis,
-                    elapsedMs(started), "manifest_missing", null, input, null, failurePatternMemory());
-            emit(id, "tool.invoke.denied", "manifest_missing", adminAuthorized, 0, null);
-            throw ToolInvocationException.notFound("tool_manifest_missing");
+                    elapsedMs(started), missingReason, null, input, null, failurePatternMemory());
+            emit(id, "tool.invoke.denied", missingReason, adminAuthorized, 0, null);
+            throw ToolInvocationException.notFound("tool_" + missingReason);
         }
-
-        AgentTool tool = registry.get(id).orElse(null);
-        if (tool == null) {
-            traceInvocation(id, adminAuthorized, false, "POLICY_REJECTED", startedMillis,
-                    elapsedMs(started), "registry_missing", null);
-            AgentBreadcrumbMemory.toolInvocation(id, adminAuthorized, false, "POLICY_REJECTED", startedMillis,
-                    elapsedMs(started), "registry_missing", null, input, null, failurePatternMemory());
-            emit(id, "tool.invoke.denied", "registry_missing", adminAuthorized, 0, null);
-            throw ToolInvocationException.notFound("tool_registry_missing");
-        }
+        ToolManifestEntry entry = target.entry();
+        AgentTool tool = target.tool();
 
         boolean scopesSatisfied = false;
         try {
-            scopesSatisfied = ensureScopes(tool, context, adminAuthorized);
+            AuthorizationDecision authorization = ensureScopes(tool, entry, context, adminAuthorized);
+            scopesSatisfied = authorization.scopesSatisfied();
+            userConsentGranted = authorization.userConsentGranted();
+            authorizationSource = authorization.source();
+            recordAuthorization(adminAuthorized, userConsentGranted, authorizationSource);
             policy.beforeCall(id, entry, adminAuthorized, scopesSatisfied);
         } catch (ToolInvocationException ex) {
             String status = "missing_consent_service".equals(ex.code()) ? "CONSENT_DENIED" : "POLICY_REJECTED";
@@ -113,13 +114,27 @@ public class AgentToolInvoker {
         try {
             ToolContext safeContext = context == null ? new ToolContext("internal-agent", new ConsentToken("internal-agent")) : context;
             ToolResponse response = tool.execute(new ToolRequest(safeInput, safeContext));
-            Map<String, Object> sanitizedData = sanitizeMap(response == null ? Map.of() : response.data(), entry.maxOutputBytes());
+            if (response == null) {
+                throw ToolInvocationException.failed("tool_result_invalid");
+            }
+            long remainingMillis = TraceContext.current().remainingMillis();
+            boolean budgetBounded = remainingMillis != Long.MAX_VALUE;
+            boolean budgetExceeded = remainingMillis == 0L;
+            if (budgetExceeded && entry.readOnly()) {
+                throw new ToolInvocationException(408, "tool_budget_exhausted");
+            }
+            Map<String, Object> sanitizedData = sanitizeMap(response.data(), entry.maxOutputBytes());
             int maxInline = Math.max(1024, Math.min(entry.maxOutputBytes(), configuredMaxInlineBytes <= 0 ? 65536 : configuredMaxInlineBytes));
             byte[] bytes = artifactWriter.toJsonBytes(sanitizedData);
 
             Map<String, Object> result = baseResult(id, true, started);
             result.put("readOnly", entry.readOnly());
             result.put("risk", entry.risk());
+            result.put("policyDecision", "ALLOW");
+            result.put("authorizationSource", authorizationSource);
+            result.put("userConsentGranted", userConsentGranted);
+            result.put("budgetBounded", budgetBounded);
+            result.put("resultValidation", "PASSED");
             if (entry.returnsLargePayloadByReference() || bytes.length > maxInline) {
                 result.put("data", Map.of("summary", "payload stored as artifact", "inlineBytes", bytes.length));
                 result.put("artifact", artifactWriter.write("tool-response", id, sanitizedData));
@@ -127,6 +142,11 @@ public class AgentToolInvoker {
             } else {
                 result.put("data", sanitizedData);
                 result.put("truncated", false);
+            }
+            if (budgetExceeded) {
+                result.put("budgetExceeded", true);
+                result.put("retryRecommended", false);
+                TraceStore.put("tool.invoke.budgetExceeded", true);
             }
             policy.afterCall(id);
             traceInvocation(id, adminAuthorized, scopesSatisfied, "OK", startedMillis,
@@ -155,11 +175,13 @@ public class AgentToolInvoker {
     public Map<String, Object> describeTools() {
         ToolManifestSnapshot snapshot = catalog.load();
         List<Map<String, Object>> tools = snapshot.entries().values().stream()
-                .map(entry -> {
+                .map(entry -> resolveTarget(snapshot, entry.id()))
+                .map(target -> {
+                    ToolManifestEntry entry = target.entry();
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("id", entry.id());
                     row.put("enabled", entry.enabled());
-                    row.put("registered", registry.get(entry.id()).isPresent());
+                    row.put("registered", target.tool() != null);
                     row.put("description", SafeRedactor.safeMessage(entry.description(), 240));
                     row.put("risk", entry.risk());
                     row.put("readOnly", entry.readOnly());
@@ -180,11 +202,35 @@ public class AgentToolInvoker {
         return out;
     }
 
-    private boolean ensureScopes(AgentTool tool, ToolContext context, boolean adminAuthorized) {
+    /** Resolve the same manifest/implementation identity for inventory and invocation. */
+    private ToolTarget resolveTarget(ToolManifestSnapshot snapshot, String id) {
+        ToolManifestEntry entry = snapshot.entry(id);
+        return new ToolTarget(entry, entry == null ? null : registry.get(id).orElse(null));
+    }
+
+    private record ToolTarget(ToolManifestEntry entry, AgentTool tool) {
+        private String missingReason() {
+            if (entry == null) {
+                return "manifest_missing";
+            }
+            return tool == null ? "registry_missing" : null;
+        }
+    }
+
+    private AuthorizationDecision ensureScopes(AgentTool tool,
+                                               ToolManifestEntry entry,
+                                               ToolContext context,
+                                               boolean adminAuthorized) {
         RequiresScopes annotation = tool.getClass().getAnnotation(RequiresScopes.class);
         ToolScope[] required = annotation == null ? new ToolScope[0] : annotation.value();
-        if (required.length == 0 || adminAuthorized) {
-            return true;
+        if (required.length == 0) {
+            if (adminAuthorized && entry != null && entry.ownerTokenRequired()) {
+                return new AuthorizationDecision(true, false, "ADMIN_TOKEN");
+            }
+            return new AuthorizationDecision(true, false, "NO_SCOPES_REQUIRED");
+        }
+        if (adminAuthorized) {
+            return new AuthorizationDecision(true, false, "ADMIN_TOKEN");
         }
         ConsentService service = consentService == null ? null : consentService.getIfAvailable();
         if (service == null) {
@@ -197,7 +243,16 @@ public class AgentToolInvoker {
         attrs.put("debugTrace", safeContext.debugTrace());
         attrs.put("scopes", Arrays.stream(required).map(ToolScope::value).toList());
         service.ensureGranted(safeContext.consent(), required, new ConsentContext(attrs));
-        return true;
+        return new AuthorizationDecision(true, true, "CONSENT_GRANT");
+    }
+
+    private static void recordAuthorization(boolean adminAuthorized,
+                                            boolean userConsentGranted,
+                                            String authorizationSource) {
+        TraceStore.put("tool.invoke.adminAuthorized", adminAuthorized);
+        TraceStore.put("tool.invoke.authorizationSource",
+                SafeRedactor.traceLabelOrFallback(authorizationSource, "UNRESOLVED"));
+        TraceStore.put("tool.invoke.userConsentGranted", userConsentGranted);
     }
 
     @SuppressWarnings("unchecked")
@@ -285,5 +340,11 @@ public class AgentToolInvoker {
 
     private static long elapsedMs(long started) {
         return Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
+    }
+
+    private record AuthorizationDecision(
+            boolean scopesSatisfied,
+            boolean userConsentGranted,
+            String source) {
     }
 }
