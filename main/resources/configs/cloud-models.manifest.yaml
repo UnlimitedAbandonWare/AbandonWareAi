@@ -43,7 +43,7 @@ models:
 
   - id: "openai/gpt-oss-120b"
     provider: "groq"
-    enabled: false
+    enabled: true
     endpoint:
       type: "openai_compat"
       base_url: "https://api.groq.com/openai/v1"
@@ -55,7 +55,7 @@ models:
     capabilities: [chat, reasoning, code, tools, agentic]
     costTier: "fast_low_cost"
     latencyTier: "low"
-    routingDecision: "metadata_for_existing_api3_fallback"
+    routingDecision: "existing_api3_direct_and_fallback"
     sourceDocUrl: "https://console.groq.com/docs/model/openai/gpt-oss-120b"
     catalogCapturedAt: "2026-07-21"
     catalogTrust: "attachment_unverified"
