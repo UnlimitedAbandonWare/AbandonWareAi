@@ -56,6 +56,8 @@ public class StochasticTransformerEvolver {
             TraceStore.put("sse.source", "fallback_to_deterministic");
             TraceStore.put("sse.bypassReason", "max_reset_exceeded");
             TraceStore.put("sse.consecutivePenalty", state.consecutivePenalty());
+            TraceStore.put("sse.resetCount", state.consecutivePenalty());
+            TraceStore.put("sse.guard.accepted", false);
             return new SseResult(base, SseSessionState.initial());
         }
         SsePhase phase = resolvePhase(state);
@@ -238,11 +240,13 @@ public class StochasticTransformerEvolver {
         TraceStore.put("sse.lr", rounded(lr));
         TraceStore.put("sse.delta", rounded(card.delta()));
         TraceStore.put("sse.consecutivePenalty", nextState.consecutivePenalty());
+        TraceStore.put("sse.resetCount", phase == SsePhase.RESET ? nextState.consecutivePenalty() : 0);
         TraceStore.put("sse.directionSign", nextState.directionSign());
         TraceStore.put("sse.basePlateId", SafeRedactor.traceLabelOrFallback(base == null ? "" : base.id(), ""));
         TraceStore.put("sse.mutatedPlateId", SafeRedactor.traceLabelOrFallback(mutated == null ? "" : mutated.id(), ""));
         TraceStore.put("sse.highReward", highReward);
         TraceStore.put("sse.lowPenalty", lowPenalty);
+        TraceStore.put("sse.guard.accepted", true);
     }
 
     private static String safeId(ArtPlateSpec base, SsePhase phase) {

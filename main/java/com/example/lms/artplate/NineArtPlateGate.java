@@ -31,7 +31,6 @@ public class NineArtPlateGate {
     private final ArtPlateRegistry reg;
     private final ArtPlateEvolver evolver;
     private final RawMatrixBuffer rawMatrixBuffer;
-    private volatile ArtPlateSpec lastSelected;
     @Autowired(required = false)
     private StochasticTransformerEvolver sseEvolver;
     private final ConcurrentMap<String, AtomicReference<SseRuntimeState>> sseRuntimeStates =
@@ -77,13 +76,8 @@ public class NineArtPlateGate {
             rollout = new ArtPlateEvolver.RolloutDecision(candidate, 0.0d, 0, false, "evolver_error");
             selected = base != null ? base : (scored.plate() != null ? scored.plate() : emergencyCostSaverPlate());
         }
-        lastSelected = selected;
         traceSelection(ctx, base, candidate, selected, rollout, scored.scoreCard(), scored.evaluatedCount());
         return selected;
-    }
-
-    public ArtPlateSpec getLastSelected() {
-        return lastSelected;
     }
 
     private ArtPlateSpec baseDecision(PlateContext ctx) {
@@ -179,7 +173,7 @@ public class NineArtPlateGate {
                 ? 0.10d
                 : ((double) Math.max(0, candidate.webBudgetMs() + candidate.vecBudgetMs())) / 8_000.0d;
         double errorPenalty = ctx.noisy() ? 0.45d : (authority < 0.25d ? 0.20d : 0.03d);
-        int samples = Math.max(0, ctx.evidenceCount() * 5 + ctx.sessionRecur());
+        int heuristicMass = Math.max(0, ctx.evidenceCount() * 5 + ctx.sessionRecur());
         return new ArtPlateEvolver.ScoreCard(
                 authority,
                 novelty,
@@ -187,7 +181,7 @@ public class NineArtPlateGate {
                 match,
                 latencyPenalty,
                 errorPenalty,
-                samples);
+                heuristicMass);
     }
 
     private Candidate bestCandidate(PlateContext ctx, ArtPlateSpec base) {
@@ -327,6 +321,7 @@ public class NineArtPlateGate {
         TraceStore.put("artplate.selector.candidate", safePlateId(candidate));
         TraceStore.put("artplate.selector.selected", selectedId);
         TraceStore.put("artplate.selector.score", score);
+        TraceStore.put("artplate.selector.scoreKind", "heuristic");
         TraceStore.put("artplate.selected.id", selectedId);
         TraceStore.put("artplate.selected.score", score);
         TraceStore.put("artplate.gate.evaluated", Math.max(0, evaluatedCount));

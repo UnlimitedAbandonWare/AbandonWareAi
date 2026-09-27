@@ -1,6 +1,10 @@
 package com.example.lms.assist;
 
 import com.example.lms.web.ClientOwnerKeyResolver;
+import com.example.lms.dto.ChatRequestDto;
+import com.example.lms.gptsearch.dto.SearchMode;
+import com.example.lms.api.PublicRequestBudgetGuard;
+import com.example.lms.plan.PlanHints;
 import jakarta.servlet.http.HttpServletRequest;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +29,7 @@ public class DisplayConversateController {
     private final Clock clock;
     private final DisplayRelay relay;
     @Autowired(required=false) private DisplayRuntimeDiagnostics runtimeDiagnostics;
+    @Autowired(required=false) private PublicRequestBudgetGuard budgets;
     private final Map<String,Binding> bindings=new HashMap<>();
     // Existing cookie owners, transient codes and explicit receiver approval only.
     private final Map<String,String> phoneLinks=new HashMap<>();
@@ -47,18 +52,25 @@ public class DisplayConversateController {
     @Autowired public DisplayConversateController(ConversateSessionService sessions,ClientOwnerKeyResolver owners,InterviewDemoPublicAddress address){this(sessions,owners,address,Clock.systemUTC());}
     DisplayConversateController(ConversateSessionService sessions,ClientOwnerKeyResolver owners,InterviewDemoPublicAddress address,Clock clock){this.sessions=sessions;this.owners=owners;this.address=address;this.clock=clock;this.relay=new DisplayRelay(clock);sessions.displayPrefs(this::prefsFor);}
     private LensDisplayPrefs prefsFor(String owner){var prefs=lensPrefs.get(owner);return prefs==null?LensDisplayPrefs.defaults(defaultHintTargetChars):prefs;}
-    public record Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation){public Connection(String assistId,long epoch,String clientId){this(assistId,epoch,clientId,false,false);}}
+    public record Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation,ConversateCloudStt.StreamPolicy sttPolicy){
+        public Connection(String assistId,long epoch,String clientId){this(assistId,epoch,clientId,false,false,null);}
+        public Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation){this(assistId,epoch,clientId,activate,continuation,null);}
+    }
     public record RelayPoll(String clientId,long eventId){}
     public record RelaySettings(String assistId,long epoch,String clientId,boolean enabled,int segmentSeconds){}
     public record RelayTest(String assistId,long epoch,String clientId,int number,boolean fromFold){}
     public record Input(String assistId,long epoch,String clientId,String requestId,String text,List<String> eventOrder,String verificationMode){@Override public String toString(){return "DisplayInput[redacted]";}}
     public record AudioChunk(String assistId,long epoch,String clientId,long sequence,String pcm){@Override public String toString(){return "DisplayAudio[redacted]";}}
+    public record AudioFrame(Long sequence,String pcm){@Override public String toString(){return "DisplayAudioFrame[redacted]";}}
+    public record AudioBatch(String assistId,long epoch,String clientId,List<AudioFrame> frames){@Override public String toString(){return "DisplayAudioBatch[redacted]";}}
+    public record AudioBatchAck(View view,long acceptedThrough,int acceptedCount){}
     public record AudioStop(String assistId,long epoch,String clientId,boolean finish){}
     public record View(String assistId,long epoch,String state,String reason,long version,DisplayContentView.TextCard card,String requestId,boolean processing,boolean ready,boolean audioAvailable,String audioState,String voiceRequestId,
-                       DisplayContentView.Transcript caption,long captionTtlMs,long cardTtlMs,boolean hintsEnabled,String role,boolean linked,boolean linkPending,String confirmation,boolean audioFinished,long audioRenewAfterMs,Map<String,Object> testStatus,NovaFocusState.View focus,boolean focusProducer){}
+                       DisplayContentView.Transcript caption,long captionTtlMs,long cardTtlMs,boolean hintsEnabled,String role,boolean linked,boolean linkPending,String confirmation,boolean audioFinished,long audioRenewAfterMs,Map<String,Object> testStatus,NovaFocusState.View focus,boolean focusProducer,NovaFocusState.Command focusControl){}
     @Autowired(required=false) private NovaFocusService novaFocus;
     public record DiagnosticRequest(String assistId,boolean enabled){}
-    public record FocusCommand(String assistId,long epoch,String clientId,String renderTarget,String requestId,String text){
+    public record FocusCommand(String assistId,long epoch,String clientId,String renderTarget,String requestId,String text,String imageBase64,String imageMediaType,String captureId,String error){
+        public FocusCommand(String assistId,long epoch,String clientId,String renderTarget,String requestId,String text){this(assistId,epoch,clientId,renderTarget,requestId,text,null,null,null,null);}
         @Override public String toString(){return "FocusCommand[redacted]";}
     }
     public record FocusSettings(String assistId,long epoch,String clientId,long settingsVersion,NovaFocusSettings settings){}
@@ -128,6 +140,26 @@ public class DisplayConversateController {
         String caller=owner(http);limited(caller,2);Binding b=focusBinding(caller,r.assistId(),r.epoch(),r.clientId());
         return focusCall(()->Map.of("accepted",novaFocus.inputAccepted(b.owner,b.id,r.epoch(),r.requestId(),r.text())));
     }
+    /** 촬영 명령의 단일 생산자 claim. 중복 claim은 같은 작업에 합류하고 결과만 다시 받는다. */
+    @PostMapping("/api/assist/display/focus/snapshot/claim")
+    public synchronized ResponseEntity<?> focusSnapshotClaim(@RequestBody FocusCommand r,HttpServletRequest http){
+        String caller=owner(http);limited(caller,2);Binding b=focusBinding(caller,r.assistId(),r.epoch(),r.clientId());
+        return focusCall(()->novaFocus.snapshotClaim(b.owner,b.id,r.epoch(),r.requestId(),r.captureId()));
+    }
+    /** 수락된 이미지는 그대로 generate 진행, 실패는 질문 보존 후 이유 표시. 업로드 응답 유실 재시도는 같은 식별자로 멱등 처리된다. */
+    @PostMapping("/api/assist/display/focus/snapshot/result")
+    public synchronized ResponseEntity<?> focusSnapshotResult(@RequestBody FocusCommand r,HttpServletRequest http){
+        String caller=owner(http);limited(caller,1);Binding b=focusBinding(caller,r.assistId(),r.epoch(),r.clientId());
+        if(r.error()==null||r.error().isBlank()){
+            if(r.imageBase64()==null||r.imageBase64().isBlank())throw error(HttpStatus.BAD_REQUEST,"focus_snapshot_image_required");
+            if(budgets!=null){
+                var probe=ChatRequestDto.builder().message("nova-focus-snapshot").imageBase64(r.imageBase64()).imageMediaType(r.imageMediaType())
+                    .snapshotSource("focus_snapshot").searchMode(SearchMode.OFF).useWebSearch(false).useRag(false).build();
+                budgets.validateChatProjected(probe,PlanHints.empty("nova-focus"),false,false);
+            }
+        }
+        return focusCall(()->novaFocus.snapshotResult(b.owner,b.id,r.epoch(),r.requestId(),r.captureId(),r.imageBase64(),r.imageMediaType(),r.error()));
+    }
     @PostMapping("/api/assist/display/focus/close")
     public synchronized ResponseEntity<?> focusClose(@RequestBody FocusCommand r,HttpServletRequest http){
         String caller=owner(http);limited(caller,1);Binding b=focusBinding(caller,r.assistId(),r.epoch(),r.clientId());
@@ -178,7 +210,7 @@ public class DisplayConversateController {
         result.put("searchResults",s.metrics().stages().cue().getOrDefault("ragDocuments","not_observed"));
         result.put("embeddingModel",s.metrics().stages().cue().getOrDefault("embeddingModel","not_observed"));
         var audio=asr==null?Map.<String,Object>of():asr.displayDiagnostics(s.audio());
-        result.put("audio",safeFields(audio,List.of("provider","transport","model","configuredProvider","configuredCloudModel","firstPartialMs","finalAfterStopMs","fallbackGapMs","shutdownMs","stopReason","failureReason","processedMs")));
+        result.put("audio",safeFields(audio,List.of("provider","transport","model","configuredProvider","configuredCloudModel","requestedEngine","fallbackAllowed","fallbackCount","fallbackReason","modelEvidence","firstPartialMs","finalAfterStopMs","fallbackGapMs","shutdownMs","stopReason","failureReason","processedMs")));
         result.put("pipeline",pipelineDiagnostics(s.metrics().stages().cue()));
         if(novaFocus!=null)try{result.put("focus",novaFocus.diagnostics(b.owner,b.id,s.epoch()));}catch(IllegalArgumentException unavailable){result.put("focus",Map.of("available",false));}
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(result);
@@ -500,19 +532,19 @@ public class DisplayConversateController {
     public ResponseEntity<View> audioStart(@RequestBody Connection request,HttpServletRequest http){
         String owner=owner(http);Binding b;long epoch;
         synchronized(this){audioGuard();validateClient(request.clientId());b=audioBinding(owner,request.assistId());requireProducer(b,request.clientId());
-            var current=sessions.status(b.owner,b.id);
+            var current=sessions.status(b.owner,b.id);boolean resumable=false;
             if(request.continuation()){
                 long minimum=b.lastSegmentSeconds==0?asr.renewAfterMs():b.lastSegmentSeconds*1000L;
-                if(Set.of("WAITING","API_PAUSED").contains(current.audio().state())||"finished".equals(current.audio().runtime().get("stopReason")))minimum=Math.min(minimum,1000);
+                if(resumable=Set.of("WAITING","API_PAUSED").contains(current.audio().state())||"finished".equals(current.audio().runtime().get("stopReason")))minimum=Math.min(minimum,1000);
                 boolean firstRecovery=b.lastStartAt==0&&Set.of("WAITING","API_PAUSED").contains(current.audio().state());
                 if((b.relayChannel==null&&b.lastSegmentSeconds!=0)||!firstRecovery&&(b.lastStartAt==0||clock.millis()-b.lastStartAt<minimum-500))throw error(HttpStatus.CONFLICT,"segment_not_ready");
                 limited(owner,7);
             }else limited(owner,3);
-            if(current.epoch()!=request.epoch())throw error(HttpStatus.CONFLICT,"stale_epoch");
-            if(request.continuation())current=sessions.nextSegment(b.owner,b.id,request.epoch());
+            if(current.epoch()!=request.epoch()&&!resumable)throw error(HttpStatus.CONFLICT,"stale_epoch");
+            if(request.continuation())current=sessions.nextSegment(b.owner,b.id,current.epoch());
             else if(current.audio().state().equals("STOPPED")&&current.audio().runtime().containsKey("stopReason"))current=sessions.control(b.owner,b.id,request.epoch(),"text_fallback");
             epoch=current.epoch();if(!b.transcription)sessions.pollOutput(b.owner,b.id,epoch,request.clientId());}
-        asr.start(b.owner,b.id,epoch);
+        asr.start(b.owner,b.id,epoch,request.sttPolicy());
         synchronized(this){requireProducer(b,request.clientId());b.audioStarts++;b.lastStartAt=clock.millis();b.lastSegmentSeconds=b.segmentSeconds;return result(b,sessions.status(b.owner,b.id),owner,request.clientId());}
     }
     @PostMapping("/api/assist/display/audio/chunk")
@@ -521,6 +553,44 @@ public class DisplayConversateController {
         synchronized(this){audioGuard();validateClient(request.clientId());b=audioBinding(owner,request.assistId());requireProducer(b,request.clientId());limited(owner,4);}
         Snapshot s=asr.chunk(b.owner,b.id,request.epoch(),request.sequence(),request.pcm());
         synchronized(this){requireProducer(b,request.clientId());if(request.sequence()>b.lastAudioSequence||request.epoch()!=b.lastAudioEpoch){b.audioBytes+=Base64.getDecoder().decode(request.pcm()).length;b.lastAudioAt=clock.millis();b.lastAudioSequence=request.sequence();b.lastAudioEpoch=request.epoch();}return result(b,s,owner,request.clientId());}
+    }
+    @PostMapping("/api/assist/display/audio/chunk-batch")
+    public ResponseEntity<AudioBatchAck> audioBatch(@RequestBody AudioBatch request,HttpServletRequest http){
+        String owner=owner(http);Binding b;int[] lengths;
+        synchronized(this){audioGuard();validateClient(request.clientId());b=audioBinding(owner,request.assistId());requireProducer(b,request.clientId());
+            lengths=validateAudioBatch(request.frames());limited(owner,4,lengths.length);}
+        Snapshot snapshot=null;
+        for(int i=0;i<lengths.length;i++){
+            var frame=request.frames().get(i);
+            synchronized(this){requireProducer(b,request.clientId());}
+            var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            if(budget!=null&&budget.remainingMillis()<=0)throw error(HttpStatus.REQUEST_TIMEOUT,"audio_batch_deadline");
+            // The existing bridge owns sequence, duplicate, epoch and transport ACK fences.
+            snapshot=asr.chunk(b.owner,b.id,request.epoch(),frame.sequence(),frame.pcm());
+            synchronized(this){requireProducer(b,request.clientId());
+                if(frame.sequence()>b.lastAudioSequence||request.epoch()!=b.lastAudioEpoch){
+                    b.audioBytes+=lengths[i];b.lastAudioAt=clock.millis();b.lastAudioSequence=frame.sequence();b.lastAudioEpoch=request.epoch();
+                }
+            }
+        }
+        synchronized(this){requireProducer(b,request.clientId());var response=result(b,snapshot,owner,request.clientId());
+            return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                .body(new AudioBatchAck(response.getBody(),request.frames().get(lengths.length-1).sequence(),lengths.length));}
+    }
+    private static int[] validateAudioBatch(List<AudioFrame> frames){
+        if(frames==null||frames.isEmpty()||frames.size()>8)throw error(HttpStatus.BAD_REQUEST,"invalid_audio_batch");
+        int[] lengths=new int[frames.size()];Long first=frames.get(0)==null?null:frames.get(0).sequence();
+        if(first==null||first<0||first>Long.MAX_VALUE-frames.size()+1)throw error(HttpStatus.BAD_REQUEST,"invalid_audio_batch");
+        for(int i=0;i<frames.size();i++){
+            var frame=frames.get(i);
+            if(frame==null||frame.sequence()==null||frame.sequence()!=first+i||frame.pcm()==null||frame.pcm().length()>10240)
+                throw error(HttpStatus.BAD_REQUEST,"invalid_audio_batch");
+            byte[] bytes;
+            try{bytes=Base64.getDecoder().decode(frame.pcm());}catch(IllegalArgumentException invalid){throw error(HttpStatus.BAD_REQUEST,"invalid_audio_batch");}
+            lengths[i]=bytes.length;Arrays.fill(bytes,(byte)0);
+            if(lengths[i]==0||lengths[i]>7680||lengths[i]%640!=0)throw error(HttpStatus.BAD_REQUEST,"invalid_audio_batch");
+        }
+        return lengths;
     }
     @PostMapping("/api/assist/display/audio/stop")
     public ResponseEntity<View> audioStop(@RequestBody AudioStop request,HttpServletRequest http){
@@ -559,9 +629,10 @@ public class DisplayConversateController {
         if(s.caption()!=null)b.lastTranscriptAt=Math.max(b.lastTranscriptAt,s.caption().receivedAt());
         var card=DisplayContentView.card(s.card(),now);var caption=DisplayContentView.caption(s.caption(),now);
         if(b.relayChannel!=null)relay.publish(b.relayChannel,producer(b),caption,sessions.hintsEnabled(b.owner,b.id)?card:null,lensFocus(b,s));
+        boolean focusProducer=novaFocus!=null&&b.relayChannel!=null&&Objects.equals(client,b.producerClient)&&producer(b).equals(relay.active(b.relayChannel));
         var view=new View(s.assistId(),s.epoch(),s.state(),publicReason(s.reason()),s.version(),card,s.diagnostics().requestId(),s.metrics().inFlight()>0||s.metrics().queueLength()>0,s.state().equals("RUNNING"),audioEnabled&&asr!=null&&asr.available(),s.audio().state(),"phone_voice".equals(s.diagnostics().inputPath())?s.diagnostics().requestId():null,
-                caption,caption==null?0:Math.max(0,caption.expiresAt()-now),card==null?0:Math.max(0,card.expiresAt()-now),sessions.hintsEnabled(b.owner,b.id),caller.equals(b.owner)?(b.standalone?"STANDALONE":"DISPLAY"):"PHONE",b.phoneOwner!=null,b.pendingPhone!=null,b.confirmation,"finished".equals(s.audio().runtime().get("stopReason")),asr==null?540000:asr.renewAfterMs(),b.standalone?testStatus(b,s,client):null,foldFocus(b,s),
-                novaFocus!=null&&b.relayChannel!=null&&Objects.equals(client,b.producerClient)&&producer(b).equals(relay.active(b.relayChannel)));
+                caption,caption==null?0:Math.max(0,caption.expiresAt()-now),card==null?0:Math.max(0,card.expiresAt()-now),sessions.hintsEnabled(b.owner,b.id),caller.equals(b.owner)?(b.standalone?"STANDALONE":"DISPLAY"):"PHONE",b.phoneOwner!=null,b.pendingPhone!=null,b.confirmation,"finished".equals(s.audio().runtime().get("stopReason")),asr==null?540000:asr.renewAfterMs(),b.standalone?testStatus(b,s,client):null,foldFocus(b,s),focusProducer,
+                focusProducer?novaFocus.snapshotCommand(b.owner,b.id,s.epoch(),now):null);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("Referrer-Policy","no-referrer").body(view);
     }
     private Map<String,Object> testStatus(Binding b,Snapshot s,String client){
@@ -575,14 +646,15 @@ public class DisplayConversateController {
         status.put("lensDisplay",prefsFor(b.owner).describe());
         status.put("processing",s.metrics().inFlight()>0||s.metrics().queueLength()>0);
         status.put("processingMs",s.metrics().lastProcessingMs());
-        status.put("asr",asr==null?Map.of():safeFields(asr.displayDiagnostics(s.audio()),List.of("provider","transport","model","configuredProvider","configuredCloudModel","firstPartialMs","finalAfterStopMs","stopReason","failureReason","renewAfterMs")));
+        status.put("asr",asr==null?Map.of():safeFields(asr.displayDiagnostics(s.audio()),List.of("provider","transport","model","configuredProvider","configuredCloudModel","requestedEngine","fallbackAllowed","fallbackCount","fallbackReason","modelEvidence","firstPartialMs","finalAfterStopMs","stopReason","failureReason","renewAfterMs")));
         status.put("asrUsage",asr==null?Map.of():asr.displayUsage());
         status.put("audio",Map.of("bindingAcceptedAudioMs",b.audioBytes/32,"captureChunks",s.audio().chunks(),"capturePartials",s.audio().partials(),"captureFinals",s.audio().finals(),"captureDuplicates",s.audio().duplicates(),"utteranceDuplicates",s.metrics().duplicates()));
         var cue=s.metrics().stages().cue();
         status.put("pipeline",pipelineDiagnostics(cue));
         return status;
     }
-    private Binding limited(String owner,int operation){
+    private Binding limited(String owner,int operation){return limited(owner,operation,1);}
+    private Binding limited(String owner,int operation,int units){
         long now=clock.millis();
         bindings.entrySet().removeIf(e->now-e.getValue().lastSeen>3_600_000);
         phoneLinks.entrySet().removeIf(e->!bindings.containsKey(e.getValue()));
@@ -590,8 +662,8 @@ public class DisplayConversateController {
         if(b==null){if(bindings.size()>=256)throw limitedError(60);b=new Binding();b.owner=owner;bindings.put(owner,b);}
         global.reset(now);b.window.reset(now);b.lastSeen=now;
         int[] perOwner={20,6,120,6,360,5,360,18},all={120,30,3000,30,720,30,720,60};
-        if(b.window.counts[operation]>=perOwner[operation]||global.counts[operation]>=all[operation])throw limitedError(Math.max(1,(int)((60_000-(now-b.window.started)+999)/1000)));
-        b.window.counts[operation]++;global.counts[operation]++;return b;
+        if(b.window.counts[operation]+units>perOwner[operation]||global.counts[operation]+units>all[operation])throw limitedError(Math.max(1,(int)((60_000-(now-b.window.started)+999)/1000)));
+        b.window.counts[operation]+=units;global.counts[operation]+=units;return b;
     }
     private static ResponseStatusException limitedError(int seconds){return new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,"display_rate_limited"){@Override public HttpHeaders getHeaders(){var h=new HttpHeaders();h.set("Retry-After",Integer.toString(seconds));return h;}};}
     private static void validateClient(String client){if(client==null||!client.matches("[a-f0-9]{32}"))throw error(HttpStatus.BAD_REQUEST,"invalid_output_client");}

@@ -311,7 +311,7 @@ public class ConversateSessionService implements AutoCloseable {
                     s.disconnectedAt=outputCount(s)==0?clock.millis():-1;
                 }
                 case "resume" -> {if(!s.state.equals("PAUSED"))throw error(HttpStatus.CONFLICT,"assist_not_paused");s.state="RUNNING";s.reason="resumed";s.version++;s.disconnectedAt=outputCount(s)==0?clock.millis():-1;}
-                case "context_reset" -> {cancelWork(s);s.context.clear();s.contextEpoch++;s.contextEpochStartAt=clock.millis();s.contextResetAudioMark=new HashMap<>(s.audioOrder);resetCueTracking(s);s.card=null;s.version++;s.reason="CONTEXT_RESET";diagnostic(s,"CONTEXT_EPOCH",Map.of("reason","user_reset","contextEpoch",s.contextEpoch));}
+                case "context_reset" -> {if(novaFocus!=null)novaFocus.resetContext(owner,id,epoch);cancelWork(s);s.context.clear();s.contextEpoch++;s.contextEpochStartAt=clock.millis();s.contextResetAudioMark=new HashMap<>(s.audioOrder);resetCueTracking(s);s.card=null;s.version++;s.reason="CONTEXT_RESET";diagnostic(s,"CONTEXT_EPOCH",Map.of("reason","user_reset","contextEpoch",s.contextEpoch));}
                 case "stop" -> {stop(s,"user_stop");sessions.remove(s.id,s);}
                 default -> throw error(HttpStatus.BAD_REQUEST,"invalid_control");
             }return snapshot(s);
