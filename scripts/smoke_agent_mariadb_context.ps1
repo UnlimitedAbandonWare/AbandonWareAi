@@ -98,7 +98,11 @@ function Get-SafeReasonToken {
     return "redacted"
 }
 
-if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+if ([string]::IsNullOrWhiteSpace($BaseUrl) -and -not [string]::IsNullOrWhiteSpace($env:APP_PUBLIC_BASE_URL)) {
+    $BaseUrl = $env:APP_PUBLIC_BASE_URL
+} elseif ([string]::IsNullOrWhiteSpace($BaseUrl) -and -not [string]::IsNullOrWhiteSpace($env:PUBLIC_BASE_URL)) {
+    $BaseUrl = $env:PUBLIC_BASE_URL
+} elseif ([string]::IsNullOrWhiteSpace($BaseUrl)) {
     $BaseUrl = "http://127.0.0.1:8080"
 }
 

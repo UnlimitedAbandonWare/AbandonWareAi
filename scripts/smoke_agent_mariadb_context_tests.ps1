@@ -23,6 +23,13 @@ Assert-True "agent db context smoke script exists" (Test-Path -LiteralPath $Scri
 $text = Get-Content -LiteralPath $ScriptUnderTest -Raw
 Assert-True "source prints toolbox failReason" ($text -match '\$result\.failReason') "missing top-level failReason output"
 Assert-True "source prints local fallback presence" ($text -match 'localFallbackPresent=') "missing local fallback output"
+Assert-True "source supports APP_PUBLIC_BASE_URL fallback" ($text -match '\$env:APP_PUBLIC_BASE_URL') "missing public deployment base URL fallback"
+Assert-True "source supports PUBLIC_BASE_URL fallback" ($text -match '\$env:PUBLIC_BASE_URL') "missing public deployment base URL fallback"
+$appPublicIndex = $text.IndexOf('$env:APP_PUBLIC_BASE_URL')
+$publicIndex = $text.IndexOf('$env:PUBLIC_BASE_URL')
+$localFallbackIndex = $text.IndexOf('$BaseUrl = "http://127.0.0.1:8080"')
+Assert-True "APP_PUBLIC_BASE_URL fallback is checked before local runtime fallback" ($appPublicIndex -ge 0 -and $localFallbackIndex -gt $appPublicIndex) "public env fallback must precede local fallback"
+Assert-True "PUBLIC_BASE_URL fallback is checked before local runtime fallback" ($publicIndex -ge 0 -and $localFallbackIndex -gt $publicIndex) "public env fallback must precede local fallback"
 
 $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptUnderTest `
     -Endpoint snapshot `

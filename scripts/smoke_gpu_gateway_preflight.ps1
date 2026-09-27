@@ -24,6 +24,8 @@ $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("awx-gpu-gateway-smoke-
 New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
 $DatasetFile = Join-Path $TempRoot "train_rag_curated.jsonl"
 $DatasetKey = "gpu-gateway-smoke-" + [guid]::NewGuid().ToString("N")
+$AdminToken = "gpu-gateway-smoke-admin-" + [guid]::NewGuid().ToString("N")
+$OriginalEnv = @{}
 
 function Redact-Text([string]$Text) {
     if ($null -eq $Text) { return "" }
@@ -32,6 +34,7 @@ function Redact-Text([string]$Text) {
             $DatasetKey,
             $DatasetFile,
             $TempRoot,
+            $AdminToken,
             $env:MACMINI_DATASET_API_KEY,
             $env:LLM_OWNER_TOKEN,
             $env:LLM_API_KEY,
@@ -58,15 +61,7 @@ function Has-UsableSecret([string]$Value) {
 }
 
 function New-DiagnosticsHeaders {
-    $headers = @{}
-    if (Has-UsableSecret $env:DOMAIN_ALLOWLIST_ADMIN_TOKEN) {
-        $headers["X-Admin-Token"] = $env:DOMAIN_ALLOWLIST_ADMIN_TOKEN
-        return $headers
-    }
-    if (Has-UsableSecret $env:LLM_OWNER_TOKEN) {
-        $headers["X-Owner-Token"] = $env:LLM_OWNER_TOKEN
-    }
-    return $headers
+    return @{ "X-Admin-Token" = $AdminToken }
 }
 
 function Get-FreePort {
@@ -130,44 +125,18 @@ function Stop-FakeGpuGateway($Job) {
     Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue | Out-Null
 }
 
-function Clear-SmokeEnv {
-    foreach ($name in @(
-            "SPRING_PROFILES_ACTIVE",
-            "SERVER_PORT",
-            "MANAGEMENT_SERVER_PORT",
-            "SERVER_SSL_ENABLED",
-            "MACMINI_DATASET_API_ENABLED",
-            "MACMINI_DATASET_API_KEY",
-            "MACMINI_AUTOLEARN_ENABLED",
-            "MACMINI_AUTOLEARN_IDLE_TRIGGER_ENABLED",
-            "MACMINI_AUTOLEARN_DATASET_PATH",
-            "MACMINI_AUTOLEARN_DATASET_NAME",
-            "MACMINI_DESKTOP_GPU_GATEWAY_ENABLED",
-            "MACMINI_DESKTOP_GPU_3090_BASE_URL",
-            "MACMINI_DESKTOP_GPU_3060_BASE_URL",
-            "MACMINI_DESKTOP_GPU_EMBED_BASE_URL",
-            "MACMINI_DESKTOP_GPU_ALLOWED_HOSTS",
-            "MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE",
-            "MACMINI_DESKTOP_GPU_PREFLIGHT_ADMISSION_ENABLED",
-            "MACMINI_DESKTOP_GPU_PREFLIGHT_TIMEOUT_MS",
-            "LOCAL_LLM_AUTOSTART",
-            "LOCAL_LLM_WARMUP_ENABLED",
-            "DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED",
-            "DESKTOP_RAG_OPS_LEDGER_ENABLED",
-            "DESKTOP_AUTOLEARN_ENABLED",
-            "DESKTOP_AUTOLEARN_IDLE_TRIGGER_ENABLED",
-            "DESKTOP_AUTOLEARN_RETRAIN_ENABLED",
-            "LLM_3090_BASE_URL",
-            "LLM_3060_BASE_URL",
-            "EMBED_3060_BASE_URL",
-            "LLM_PROVIDER_GUARD_ALLOWED_HOSTS",
-            "LLM_PROVIDER_GUARD_REQUIRE_AUTH_FOR_REMOTE",
-            "ONNX_ENABLED",
-            "EMBED_CROSS_GPU_FALLBACK_ENABLED",
-            "EMBED_FALLBACK_ENABLED"
-        )) {
-        Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
+function Set-SmokeEnvValue([string]$Name, [string]$Value) {
+    if (-not $OriginalEnv.ContainsKey($Name)) {
+        $OriginalEnv[$Name] = [Environment]::GetEnvironmentVariable($Name, "Process")
     }
+    [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+}
+
+function Clear-SmokeEnv {
+    foreach ($entry in $OriginalEnv.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+    }
+    $OriginalEnv.Clear()
 }
 
 function Get-SmokeGradleArguments {
@@ -221,64 +190,66 @@ function Assert-NoGradleCollision([string]$Stage) {
 }
 
 function Set-BaseSmokeEnv {
-    $env:SPRING_PROFILES_ACTIVE = "macmini-control-plane"
-    $env:SERVER_PORT = [string]$Port
-    $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
-    $env:SERVER_SSL_ENABLED = "false"
-    $env:MACMINI_AUTOLEARN_ENABLED = "false"
-    $env:MACMINI_AUTOLEARN_IDLE_TRIGGER_ENABLED = "false"
-    $env:MACMINI_AUTOLEARN_DATASET_PATH = $DatasetFile
-    $env:MACMINI_AUTOLEARN_DATASET_NAME = "gpu-gateway-smoke-curated-rag"
-    $env:MACMINI_DESKTOP_GPU_GATEWAY_ENABLED = "true"
-    $env:MACMINI_DESKTOP_GPU_PREFLIGHT_ADMISSION_ENABLED = "true"
-    $env:MACMINI_DESKTOP_GPU_PREFLIGHT_TIMEOUT_MS = "750"
-    $env:LOCAL_LLM_AUTOSTART = "false"
-    $env:LOCAL_LLM_WARMUP_ENABLED = "false"
-    $env:DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED = "false"
+    Set-SmokeEnvValue "SPRING_PROFILES_ACTIVE" "macmini-control-plane"
+    Set-SmokeEnvValue "SERVER_PORT" ([string]$Port)
+    Set-SmokeEnvValue "MANAGEMENT_SERVER_PORT" ([string]$ManagementPort)
+    Set-SmokeEnvValue "SERVER_SSL_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_AUTOLEARN_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_AUTOLEARN_IDLE_TRIGGER_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_AUTOLEARN_DATASET_PATH" $DatasetFile
+    Set-SmokeEnvValue "MACMINI_AUTOLEARN_DATASET_NAME" "gpu-gateway-smoke-curated-rag"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_GATEWAY_ENABLED" "true"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_PREFLIGHT_ADMISSION_ENABLED" "true"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_PREFLIGHT_TIMEOUT_MS" "750"
+    Set-SmokeEnvValue "LOCAL_LLM_AUTOSTART" "false"
+    Set-SmokeEnvValue "LOCAL_LLM_WARMUP_ENABLED" "false"
+    Set-SmokeEnvValue "DOMAIN_ALLOWLIST_ADMIN_TOKEN" $AdminToken
+    Set-SmokeEnvValue "DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED" "true"
 }
 
 function Set-BlockedGatewayEnv([int]$ClosedGatewayPort) {
     Set-BaseSmokeEnv
-    $env:MACMINI_DATASET_API_ENABLED = "false"
-    $env:MACMINI_DATASET_API_KEY = ""
-    $env:MACMINI_DESKTOP_GPU_3090_BASE_URL = "http://127.0.0.1:$ClosedGatewayPort/v1"
-    $env:MACMINI_DESKTOP_GPU_3060_BASE_URL = ""
-    $env:MACMINI_DESKTOP_GPU_EMBED_BASE_URL = ""
-    $env:MACMINI_DESKTOP_GPU_ALLOWED_HOSTS = "127.0.0.1:$ClosedGatewayPort"
-    $env:MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE = "true"
+    Set-SmokeEnvValue "MACMINI_DATASET_API_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_DATASET_API_KEY" ""
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_3090_BASE_URL" "http://127.0.0.1:$ClosedGatewayPort/v1"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_3060_BASE_URL" ""
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_EMBED_BASE_URL" ""
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_ALLOWED_HOSTS" "127.0.0.1:$ClosedGatewayPort"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE" "true"
 }
 
 function Set-ReachableGatewayEnv([int]$GatewayPort) {
     Set-BaseSmokeEnv
-    $env:MACMINI_DATASET_API_ENABLED = "true"
-    $env:MACMINI_DATASET_API_KEY = $DatasetKey
-    $env:MACMINI_DESKTOP_GPU_3090_BASE_URL = "http://127.0.0.1:$GatewayPort/v1"
-    $env:MACMINI_DESKTOP_GPU_3060_BASE_URL = "http://127.0.0.1:$GatewayPort/v1"
-    $env:MACMINI_DESKTOP_GPU_EMBED_BASE_URL = "http://127.0.0.1:$GatewayPort/api/embed"
-    $env:MACMINI_DESKTOP_GPU_ALLOWED_HOSTS = "127.0.0.1:$GatewayPort"
-    $env:MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE = "true"
+    Set-SmokeEnvValue "MACMINI_DATASET_API_ENABLED" "true"
+    Set-SmokeEnvValue "MACMINI_DATASET_API_KEY" $DatasetKey
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_3090_BASE_URL" "http://127.0.0.1:$GatewayPort/v1"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_3060_BASE_URL" "http://127.0.0.1:$GatewayPort/v1"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_EMBED_BASE_URL" "http://127.0.0.1:$GatewayPort/api/embed"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_ALLOWED_HOSTS" "127.0.0.1:$GatewayPort"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE" "true"
 }
 
 function Set-DesktopGpuNodeEnv([int]$GatewayPort) {
-    $env:SPRING_PROFILES_ACTIVE = "desktop-gpu-node"
-    $env:SERVER_PORT = [string]$Port
-    $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
-    $env:SERVER_SSL_ENABLED = "false"
-    $env:DESKTOP_RAG_OPS_LEDGER_ENABLED = "false"
-    $env:DESKTOP_AUTOLEARN_ENABLED = "false"
-    $env:DESKTOP_AUTOLEARN_IDLE_TRIGGER_ENABLED = "false"
-    $env:DESKTOP_AUTOLEARN_RETRAIN_ENABLED = "false"
-    $env:LLM_3090_BASE_URL = "http://127.0.0.1:$GatewayPort/v1"
-    $env:LLM_3060_BASE_URL = "http://127.0.0.1:$GatewayPort/v1"
-    $env:EMBED_3060_BASE_URL = "http://127.0.0.1:$GatewayPort/api/embed"
-    $env:LLM_PROVIDER_GUARD_ALLOWED_HOSTS = "127.0.0.1:$GatewayPort"
-    $env:LLM_PROVIDER_GUARD_REQUIRE_AUTH_FOR_REMOTE = "true"
-    $env:LOCAL_LLM_AUTOSTART = "false"
-    $env:LOCAL_LLM_WARMUP_ENABLED = "false"
-    $env:ONNX_ENABLED = "false"
-    $env:EMBED_CROSS_GPU_FALLBACK_ENABLED = "false"
-    $env:EMBED_FALLBACK_ENABLED = "false"
-    $env:DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED = "false"
+    Set-SmokeEnvValue "SPRING_PROFILES_ACTIVE" "desktop-gpu-node"
+    Set-SmokeEnvValue "SERVER_PORT" ([string]$Port)
+    Set-SmokeEnvValue "MANAGEMENT_SERVER_PORT" ([string]$ManagementPort)
+    Set-SmokeEnvValue "SERVER_SSL_ENABLED" "false"
+    Set-SmokeEnvValue "DESKTOP_RAG_OPS_LEDGER_ENABLED" "false"
+    Set-SmokeEnvValue "DESKTOP_AUTOLEARN_ENABLED" "false"
+    Set-SmokeEnvValue "DESKTOP_AUTOLEARN_IDLE_TRIGGER_ENABLED" "false"
+    Set-SmokeEnvValue "DESKTOP_AUTOLEARN_RETRAIN_ENABLED" "false"
+    Set-SmokeEnvValue "LLM_3090_BASE_URL" "http://127.0.0.1:$GatewayPort/v1"
+    Set-SmokeEnvValue "LLM_3060_BASE_URL" "http://127.0.0.1:$GatewayPort/v1"
+    Set-SmokeEnvValue "EMBED_3060_BASE_URL" "http://127.0.0.1:$GatewayPort/api/embed"
+    Set-SmokeEnvValue "LLM_PROVIDER_GUARD_ALLOWED_HOSTS" "127.0.0.1:$GatewayPort"
+    Set-SmokeEnvValue "LLM_PROVIDER_GUARD_REQUIRE_AUTH_FOR_REMOTE" "true"
+    Set-SmokeEnvValue "LOCAL_LLM_AUTOSTART" "false"
+    Set-SmokeEnvValue "LOCAL_LLM_WARMUP_ENABLED" "false"
+    Set-SmokeEnvValue "ONNX_ENABLED" "false"
+    Set-SmokeEnvValue "EMBED_CROSS_GPU_FALLBACK_ENABLED" "false"
+    Set-SmokeEnvValue "EMBED_FALLBACK_ENABLED" "false"
+    Set-SmokeEnvValue "DOMAIN_ALLOWLIST_ADMIN_TOKEN" $AdminToken
+    Set-SmokeEnvValue "DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED" "true"
 }
 
 function Assert-RealGatewayConfig {
@@ -307,13 +278,13 @@ function Assert-RealGatewayConfig {
 function Set-RealGatewayEnv {
     Assert-RealGatewayConfig
     Set-BaseSmokeEnv
-    $env:MACMINI_DATASET_API_ENABLED = "true"
-    $env:MACMINI_DATASET_API_KEY = $DatasetKey
-    $env:MACMINI_DESKTOP_GPU_3090_BASE_URL = $RealPrimaryChatBaseUrl
-    $env:MACMINI_DESKTOP_GPU_3060_BASE_URL = $RealFastBaseUrl
-    $env:MACMINI_DESKTOP_GPU_EMBED_BASE_URL = $RealEmbeddingBaseUrl
-    $env:MACMINI_DESKTOP_GPU_ALLOWED_HOSTS = $RealAllowedHosts
-    $env:MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE = if (Is-Blank $RealRequireAuthForRemote) { "true" } else { $RealRequireAuthForRemote }
+    Set-SmokeEnvValue "MACMINI_DATASET_API_ENABLED" "true"
+    Set-SmokeEnvValue "MACMINI_DATASET_API_KEY" $DatasetKey
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_3090_BASE_URL" $RealPrimaryChatBaseUrl
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_3060_BASE_URL" $RealFastBaseUrl
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_EMBED_BASE_URL" $RealEmbeddingBaseUrl
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_ALLOWED_HOSTS" $RealAllowedHosts
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_REQUIRE_AUTH_FOR_REMOTE" $(if (Is-Blank $RealRequireAuthForRemote) { "true" } else { $RealRequireAuthForRemote })
 }
 
 function Start-SmokeApp([string]$Name) {
@@ -361,31 +332,75 @@ function Wait-ForHttp($App) {
     throw "[AWX][gpu-gateway-smoke] startup timeout for $($App.Name)`n$(Tail-Log $App.OutLog)`n$(Tail-Log $App.ErrLog)"
 }
 
+function Get-SafeContentType([string]$ContentType) {
+    if ([string]::IsNullOrWhiteSpace($ContentType)) { return "missing" }
+    return ($ContentType -replace '[^A-Za-z0-9/;=.+_-]', '_')
+}
+
+function Get-NonJsonBodyClass([string]$Content) {
+    if ([string]::IsNullOrWhiteSpace($Content)) { return "empty" }
+    if ($Content -match '(?is)^\s*(?:<!doctype\s+html|<html)') {
+        if ($Content -match '(?is)(?:action\s*=\s*["'']?/?login|name\s*=\s*["'']?(?:username|password)|type\s*=\s*["'']?password)') {
+            return "login_html"
+        }
+        return "html"
+    }
+    return "plain_text"
+}
+
 function Invoke-Diagnostics([string]$Path) {
+    $request = @{
+        Uri = "http://127.0.0.1:$Port$Path"
+        Method = "GET"
+        UseBasicParsing = $true
+        TimeoutSec = 15
+        Headers = New-DiagnosticsHeaders
+    }
     try {
-        $request = @{
-            Uri = "http://127.0.0.1:$Port$Path"
-            Method = "GET"
-            UseBasicParsing = $true
-            TimeoutSec = 15
-        }
-        $headers = New-DiagnosticsHeaders
-        if ($headers.Count -gt 0) {
-            $request.Headers = $headers
-        }
         $resp = Invoke-WebRequest @request
-        return @{ Status = [int]$resp.StatusCode; Body = ($resp.Content | ConvertFrom-Json) }
     } catch {
         $response = $_.Exception.Response
-        if ($null -eq $response) { throw }
-        $stream = $response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($stream)
-        $content = $reader.ReadToEnd()
-        $parsedBody = $null
-        if (-not [string]::IsNullOrWhiteSpace($content)) {
-            try { $parsedBody = $content | ConvertFrom-Json } catch { $parsedBody = $content }
+        if ($null -eq $response) {
+            throw "[AWX][gpu-gateway-smoke] diagnostics-connection-failure category=request_failed adminTokenPresent=true"
         }
-        return @{ Status = [int]$response.StatusCode; Body = $parsedBody }
+        $responseContentType = Get-SafeContentType ([string]$response.ContentType)
+        throw "[AWX][gpu-gateway-smoke] diagnostics-http-error status=$([int]$response.StatusCode) contentType=$responseContentType contentLength=$($response.ContentLength) adminTokenPresent=true"
+    }
+
+    $content = [string]$resp.Content
+    $contentType = [string]$resp.Headers["Content-Type"]
+    $safeContentType = Get-SafeContentType $contentType
+    $isJson = $contentType -match '(?i)^\s*application/(?:[^;\s]+\+)?json(?:\s*;|$)'
+    if (-not $isJson) {
+        $bodyClass = Get-NonJsonBodyClass $content
+        throw "[AWX][gpu-gateway-smoke] diagnostics-non-json status=$([int]$resp.StatusCode) contentType=$safeContentType contentLength=$($content.Length) bodyClass=$bodyClass adminTokenPresent=true"
+    }
+    if ([string]::IsNullOrWhiteSpace($content)) {
+        throw "[AWX][gpu-gateway-smoke] diagnostics-json-empty status=$([int]$resp.StatusCode) contentType=$safeContentType contentLength=0 adminTokenPresent=true"
+    }
+
+    try {
+        $body = $content | ConvertFrom-Json
+    } catch {
+        throw "[AWX][gpu-gateway-smoke] diagnostics-json-invalid status=$([int]$resp.StatusCode) contentType=$safeContentType contentLength=$($content.Length) adminTokenPresent=true"
+    }
+    return @{ Status = [int]$resp.StatusCode; Body = $body }
+}
+
+function Assert-NoSmokeSecretLeak([string]$Payload, $App) {
+    $surface = [string]$Payload
+    if ($null -ne $App) {
+        foreach ($path in @($App.OutLog, $App.ErrLog)) {
+            if (Test-Path -LiteralPath $path) {
+                $surface += [System.IO.File]::ReadAllText($path)
+            }
+        }
+    }
+    if ($surface.Contains($AdminToken)) {
+        throw "[AWX][gpu-gateway-smoke] leaked admin token"
+    }
+    if ($surface -match '(?i)X-Admin-Token\s*:') {
+        throw "[AWX][gpu-gateway-smoke] leaked admin-token header"
     }
 }
 
@@ -414,6 +429,7 @@ function Test-SimulatedGateway {
     Assert-Eq $blockedPreflight.Body.preflight.status "unreachable" "blocked preflight status"
     Assert-Eq $blockedPreflight.Body.preflight.endpoints.primaryChat.status "connection_failed" "blocked endpoint status"
     Stop-SmokeApp $blocked
+    Assert-NoSmokeSecretLeak ($blockedPreflight.Body | ConvertTo-Json -Depth 16 -Compress) $blocked
 
     $gatewayPort = Get-FreePort
     $script:fakeGateway = Start-FakeGpuGateway $gatewayPort
@@ -439,12 +455,13 @@ function Test-SimulatedGateway {
     Assert-Eq $loop.Body.nodeProfile.selfLearningBridge.gpuGateway.primaryStatus "ok" "loop bridge primary"
     Assert-Eq $loop.Body.nodeProfile.selfLearningBridge.gpuGateway.embeddingStatus "ok" "loop bridge embedding"
 
-    $stored = Redact-Text (($reachablePreflight.Body | ConvertTo-Json -Depth 16 -Compress) + ($loop.Body | ConvertTo-Json -Depth 16 -Compress))
+    Stop-SmokeApp $reachable
+    $stored = ($reachablePreflight.Body | ConvertTo-Json -Depth 16 -Compress) + ($loop.Body | ConvertTo-Json -Depth 16 -Compress)
+    Assert-NoSmokeSecretLeak $stored $reachable
     if ($stored.Contains($DatasetKey) -or $stored.Contains($DatasetFile) -or $stored.Contains($TempRoot)) {
         throw "[AWX][gpu-gateway-smoke] diagnostic payload leaked a smoke secret or raw dataset path"
     }
 
-    Stop-SmokeApp $reachable
     Stop-FakeGpuGateway $script:fakeGateway
     $script:fakeGateway = $null
     Write-Host "[AWX][gpu-gateway-smoke] OK blockedUnreachable=unreachable reachable=ok node=macmini-control-plane route=handoff_to_desktop_gpu datasetCuration=true retrainAllowed=false"
@@ -477,12 +494,13 @@ function Test-RealGateway {
     Assert-Eq $loop.Body.nodeProfile.selfLearningBridge.gpuGateway.fastStatus "ok" "real bridge fast"
     Assert-Eq $loop.Body.nodeProfile.selfLearningBridge.gpuGateway.embeddingStatus "ok" "real bridge embedding"
 
-    $stored = Redact-Text (($realPreflight.Body | ConvertTo-Json -Depth 16 -Compress) + ($loop.Body | ConvertTo-Json -Depth 16 -Compress))
+    Stop-SmokeApp $real
+    $stored = ($realPreflight.Body | ConvertTo-Json -Depth 16 -Compress) + ($loop.Body | ConvertTo-Json -Depth 16 -Compress)
+    Assert-NoSmokeSecretLeak $stored $real
     if ($stored.Contains($DatasetKey) -or $stored.Contains($DatasetFile) -or $stored.Contains($TempRoot)) {
         throw "[AWX][gpu-gateway-smoke] real diagnostic payload leaked a smoke secret or raw dataset path"
     }
 
-    Stop-SmokeApp $real
     Write-Host "[AWX][gpu-gateway-smoke] OK realGateway=ok configured=3 reachable=3 node=macmini-control-plane route=handoff_to_desktop_gpu datasetCuration=true retrainAllowed=false"
 }
 
@@ -521,12 +539,13 @@ function Test-DesktopGpuNode {
     Assert-Eq $loop.Body.nodeProfile.selfLearningBridge.gpuGateway.fastStatus "ok" "desktop bridge fast"
     Assert-Eq $loop.Body.nodeProfile.selfLearningBridge.gpuGateway.embeddingStatus "ok" "desktop bridge embedding"
 
-    $stored = Redact-Text (($preflight.Body | ConvertTo-Json -Depth 16 -Compress) + ($loop.Body | ConvertTo-Json -Depth 16 -Compress))
+    Stop-SmokeApp $desktop
+    $stored = ($preflight.Body | ConvertTo-Json -Depth 16 -Compress) + ($loop.Body | ConvertTo-Json -Depth 16 -Compress)
+    Assert-NoSmokeSecretLeak $stored $desktop
     if ($stored.Contains($TempRoot)) {
         throw "[AWX][gpu-gateway-smoke] desktop diagnostic payload leaked a smoke temp path"
     }
 
-    Stop-SmokeApp $desktop
     Stop-FakeGpuGateway $script:fakeGateway
     $script:fakeGateway = $null
     Write-Host "[AWX][gpu-gateway-smoke] OK desktopGpuNode=ok configured=3 reachable=3 node=desktop-rtx3090-rtx3060 route=execute_on_this_node heavyWorkloads=true autolearnDefault=false"

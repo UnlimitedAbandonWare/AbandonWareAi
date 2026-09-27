@@ -187,6 +187,7 @@ try {
         'X-Admin-Token' = $AdminToken
         'X-Session-Id' = 'codex-db-evidence-runtime-smoke'
         'X-Request-Id' = 'codex-db-evidence-runtime-smoke-001'
+        'X-Agent-Tool-Budget-Ms' = '60000'
     }
     Set-ProcessEnv $previousEnv 'AWX_ADMIN_TOKEN' $AdminToken
     Set-ProcessEnv $previousEnv 'AWX_AGENT_DB_CONTEXT_BASE_URL' $BaseUrl

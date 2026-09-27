@@ -143,8 +143,10 @@ $candidatePaths = @(
 )
 
 $candidates = [System.Collections.Generic.List[object]]::new()
+$candidateFullPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($relativePath in $candidatePaths) {
     $fullPath = [IO.Path]::GetFullPath((Join-Path $resolvedRoot $relativePath))
+    $candidateFullPaths.Add($fullPath) | Out-Null
     $summary = Get-ItemSummary -FullPath $fullPath
     $kind = Get-CandidateKind -Path $relativePath
     $classification = Get-Classification -Kind $kind -Exists ([bool]$summary.exists)
@@ -197,13 +199,43 @@ $result['rawSecretPatternHits'] = $rawSecretPatternHits
 $jsonText = $result | ConvertTo-Json -Depth 10
 
 if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
-    $outputInputPath = if ([IO.Path]::IsPathRooted($OutputPath)) {
+    $outputPathIsRooted = [IO.Path]::IsPathRooted($OutputPath)
+    $outputInputPath = if ($outputPathIsRooted) {
         $OutputPath
     } else {
-        Join-Path (Get-Location).Path $OutputPath
+        Join-Path $resolvedRoot $OutputPath
     }
     $resolvedOutputPath = [IO.Path]::GetFullPath($outputInputPath)
+    if (-not $outputPathIsRooted) {
+        $rootPrefix = $resolvedRoot.TrimEnd([char[]]'\/') + [IO.Path]::DirectorySeparatorChar
+        if (-not $resolvedOutputPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw '[AWX][safe-delete] output_path_outside_root'
+        }
+    }
+    if ($candidateFullPaths.Contains($resolvedOutputPath)) {
+        throw '[AWX][safe-delete] output_path_conflicts_with_audited_candidate'
+    }
+    if (Test-Path -LiteralPath $resolvedOutputPath) {
+        $outputItem = Get-Item -LiteralPath $resolvedOutputPath -Force
+        if (-not [string]::IsNullOrWhiteSpace([string]$outputItem.LinkType)) {
+            throw '[AWX][safe-delete] output_path_link_not_supported'
+        }
+    }
     $outputParent = Split-Path -Parent $resolvedOutputPath
+    $outputAncestor = $outputParent
+    while (-not [string]::IsNullOrWhiteSpace($outputAncestor)) {
+        if (Test-Path -LiteralPath $outputAncestor) {
+            $ancestorItem = Get-Item -LiteralPath $outputAncestor -Force
+            if (($ancestorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw '[AWX][safe-delete] output_path_reparse_not_supported'
+            }
+        }
+        $nextAncestor = Split-Path -Parent $outputAncestor
+        if ([string]::IsNullOrWhiteSpace($nextAncestor) -or $nextAncestor -eq $outputAncestor) {
+            break
+        }
+        $outputAncestor = $nextAncestor
+    }
     if ($outputParent) {
         New-Item -ItemType Directory -Force -Path $outputParent | Out-Null
     }

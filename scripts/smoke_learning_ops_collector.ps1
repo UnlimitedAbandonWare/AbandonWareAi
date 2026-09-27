@@ -19,11 +19,13 @@ $DbFile = (Join-Path $TempRoot "ops-ledger-db").Replace('\', '/')
 $DbUrl = "jdbc:h2:file:$DbFile;MODE=MariaDB;DATABASE_TO_UPPER=false"
 $CollectorFile = Join-Path $TempRoot "learning-ops-curation.jsonl"
 $SeedSecret = "collector-smoke-secret-" + [guid]::NewGuid().ToString("N")
+$AdminToken = "collector-smoke-admin-" + [guid]::NewGuid().ToString("N")
+$OriginalEnv = @{}
 
 function Redact-Text([string]$Text) {
     if ($null -eq $Text) { return "" }
     $out = $Text
-    foreach ($secret in @($TempRoot, $DbFile, $CollectorFile, $SeedSecret)) {
+    foreach ($secret in @($TempRoot, $DbFile, $CollectorFile, $SeedSecret, $AdminToken)) {
         if (-not [string]::IsNullOrWhiteSpace($secret)) {
             $out = $out -replace [regex]::Escape($secret), "<redacted>"
         }
@@ -126,49 +128,47 @@ INSERT INTO rag_ops_ledger (
     }
 }
 
+function Set-SmokeEnvValue([string]$Name, [string]$Value) {
+    if (-not $OriginalEnv.ContainsKey($Name)) {
+        $OriginalEnv[$Name] = [Environment]::GetEnvironmentVariable($Name, "Process")
+    }
+    [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+}
+
 function Set-SmokeEnv {
-    $env:SPRING_PROFILES_ACTIVE = "macmini-control-plane"
-    $env:SERVER_PORT = [string]$Port
-    $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
-    $env:SERVER_SSL_ENABLED = "false"
-    $env:MACMINI_DB_URL = $DbUrl
-    $env:MACMINI_JPA_DDL_AUTO = "update"
-    $env:MACMINI_SQL_INIT_MODE = "never"
-    $env:MACMINI_RAG_OPS_LEDGER_ENABLED = "true"
-    $env:MACMINI_RAG_OPS_LEDGER_CAPTURE_RAG = "true"
-    $env:MACMINI_RAG_OPS_LEDGER_CAPTURE_AUTOLEARN = "true"
-    $env:MACMINI_LEARNING_OPS_COLLECTOR_ENABLED = "true"
-    $env:MACMINI_LEARNING_OPS_COLLECTOR_OUTPUT_PATH = $CollectorFile
-    $env:MACMINI_LEARNING_OPS_COLLECTOR_INITIAL_DELAY_MS = "1000"
-    $env:MACMINI_LEARNING_OPS_COLLECTOR_INTERVAL_MS = "5000"
-    $env:MACMINI_LEARNING_OPS_COLLECTOR_MAX_ITEMS = "5"
-    $env:MACMINI_LEARNING_OPS_COLLECTOR_MAX_OVERVIEW_LIMIT = "20"
-    $env:MACMINI_DATASET_API_ENABLED = "false"
-    $env:MACMINI_DATASET_API_KEY = ""
-    $env:MACMINI_AUTOLEARN_ENABLED = "false"
-    $env:MACMINI_AUTOLEARN_IDLE_TRIGGER_ENABLED = "false"
-    $env:MACMINI_AUTOLEARN_RETRAIN_ENABLED = "false"
-    $env:MACMINI_DESKTOP_GPU_GATEWAY_ENABLED = "false"
-    $env:LOCAL_LLM_AUTOSTART = "false"
-    $env:LOCAL_LLM_WARMUP_ENABLED = "false"
-    $env:DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED = "false"
+    Set-SmokeEnvValue "SPRING_PROFILES_ACTIVE" "macmini-control-plane"
+    Set-SmokeEnvValue "SERVER_PORT" ([string]$Port)
+    Set-SmokeEnvValue "MANAGEMENT_SERVER_PORT" ([string]$ManagementPort)
+    Set-SmokeEnvValue "SERVER_SSL_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_DB_URL" $DbUrl
+    Set-SmokeEnvValue "MACMINI_JPA_DDL_AUTO" "update"
+    Set-SmokeEnvValue "MACMINI_SQL_INIT_MODE" "never"
+    Set-SmokeEnvValue "MACMINI_RAG_OPS_LEDGER_ENABLED" "true"
+    Set-SmokeEnvValue "MACMINI_RAG_OPS_LEDGER_CAPTURE_RAG" "true"
+    Set-SmokeEnvValue "MACMINI_RAG_OPS_LEDGER_CAPTURE_AUTOLEARN" "true"
+    Set-SmokeEnvValue "MACMINI_LEARNING_OPS_COLLECTOR_ENABLED" "true"
+    Set-SmokeEnvValue "MACMINI_LEARNING_OPS_COLLECTOR_OUTPUT_PATH" $CollectorFile
+    Set-SmokeEnvValue "MACMINI_LEARNING_OPS_COLLECTOR_INITIAL_DELAY_MS" "1000"
+    Set-SmokeEnvValue "MACMINI_LEARNING_OPS_COLLECTOR_INTERVAL_MS" "5000"
+    Set-SmokeEnvValue "MACMINI_LEARNING_OPS_COLLECTOR_MAX_ITEMS" "5"
+    Set-SmokeEnvValue "MACMINI_LEARNING_OPS_COLLECTOR_MAX_OVERVIEW_LIMIT" "20"
+    Set-SmokeEnvValue "MACMINI_DATASET_API_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_DATASET_API_KEY" ""
+    Set-SmokeEnvValue "MACMINI_AUTOLEARN_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_AUTOLEARN_IDLE_TRIGGER_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_AUTOLEARN_RETRAIN_ENABLED" "false"
+    Set-SmokeEnvValue "MACMINI_DESKTOP_GPU_GATEWAY_ENABLED" "false"
+    Set-SmokeEnvValue "LOCAL_LLM_AUTOSTART" "false"
+    Set-SmokeEnvValue "LOCAL_LLM_WARMUP_ENABLED" "false"
+    Set-SmokeEnvValue "DOMAIN_ALLOWLIST_ADMIN_TOKEN" $AdminToken
+    Set-SmokeEnvValue "DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED" "true"
 }
 
 function Clear-SmokeEnv {
-    foreach ($name in @(
-            "SPRING_PROFILES_ACTIVE", "SERVER_PORT", "MANAGEMENT_SERVER_PORT", "SERVER_SSL_ENABLED",
-            "MACMINI_DB_URL", "MACMINI_JPA_DDL_AUTO", "MACMINI_SQL_INIT_MODE",
-            "MACMINI_RAG_OPS_LEDGER_ENABLED", "MACMINI_RAG_OPS_LEDGER_CAPTURE_RAG", "MACMINI_RAG_OPS_LEDGER_CAPTURE_AUTOLEARN",
-            "MACMINI_LEARNING_OPS_COLLECTOR_ENABLED", "MACMINI_LEARNING_OPS_COLLECTOR_OUTPUT_PATH",
-            "MACMINI_LEARNING_OPS_COLLECTOR_INITIAL_DELAY_MS", "MACMINI_LEARNING_OPS_COLLECTOR_INTERVAL_MS",
-            "MACMINI_LEARNING_OPS_COLLECTOR_MAX_ITEMS", "MACMINI_LEARNING_OPS_COLLECTOR_MAX_OVERVIEW_LIMIT",
-            "MACMINI_DATASET_API_ENABLED", "MACMINI_DATASET_API_KEY",
-            "MACMINI_AUTOLEARN_ENABLED", "MACMINI_AUTOLEARN_IDLE_TRIGGER_ENABLED", "MACMINI_AUTOLEARN_RETRAIN_ENABLED",
-            "MACMINI_DESKTOP_GPU_GATEWAY_ENABLED", "LOCAL_LLM_AUTOSTART", "LOCAL_LLM_WARMUP_ENABLED",
-            "DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED"
-        )) {
-        Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
+    foreach ($entry in $OriginalEnv.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
     }
+    $OriginalEnv.Clear()
 }
 
 function Get-SmokeGradleArguments {
@@ -241,8 +241,34 @@ function Wait-ForHttp($App) {
 }
 
 function Invoke-Json([string]$Path) {
-    $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port$Path" -UseBasicParsing -TimeoutSec 15
-    return @{ Status = [int]$resp.StatusCode; Body = ($resp.Content | ConvertFrom-Json) }
+    try {
+        $resp = Invoke-WebRequest `
+            -Uri "http://127.0.0.1:$Port$Path" `
+            -Headers @{ "X-Admin-Token" = $AdminToken } `
+            -UseBasicParsing `
+            -TimeoutSec 15
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response) { throw }
+        $responseContentType = ([string]$response.ContentType -replace '[^A-Za-z0-9/;=.+_-]', '_')
+        throw "[AWX][learning-ops-smoke] diagnostics-auth-or-non-json status=$([int]$response.StatusCode) contentType=$responseContentType contentLength=$($response.ContentLength) loginHtml=unknown adminTokenPresent=true"
+    }
+
+    $content = [string]$resp.Content
+    $contentType = [string]$resp.Headers["Content-Type"]
+    $isJson = $contentType -match '(?i)^\s*application/(?:[^;\s]+\+)?json(?:\s*;|$)'
+    if (-not $isJson) {
+        $safeContentType = ($contentType -replace '[^A-Za-z0-9/;=.+_-]', '_')
+        $loginHtml = $content -match '(?is)^\s*(?:<!doctype\s+html|<html)'
+        throw "[AWX][learning-ops-smoke] diagnostics-auth-or-non-json status=$([int]$resp.StatusCode) contentType=$safeContentType contentLength=$($content.Length) loginHtml=$($loginHtml.ToString().ToLowerInvariant()) adminTokenPresent=true"
+    }
+
+    try {
+        $body = $content | ConvertFrom-Json
+    } catch {
+        throw "[AWX][learning-ops-smoke] diagnostics-json-invalid status=$([int]$resp.StatusCode) contentType=application/json contentLength=$($content.Length)"
+    }
+    return @{ Status = [int]$resp.StatusCode; Body = $body }
 }
 
 function Assert-Eq($Actual, $Expected, [string]$Label) {
@@ -311,13 +337,22 @@ try {
     $combined = ($overview.Body | ConvertTo-Json -Depth 20 -Compress) +
             ($loop.Body | ConvertTo-Json -Depth 20 -Compress) +
             (Get-Content -LiteralPath $CollectorFile -Raw)
-    foreach ($forbidden in @($SeedSecret, $TempRoot, $DbFile, $CollectorFile)) {
+    foreach ($forbidden in @($SeedSecret, $AdminToken, $TempRoot, $DbFile, $CollectorFile)) {
         if ($combined.Contains($forbidden)) {
             throw "[AWX][learning-ops-smoke] leaked forbidden smoke value: $(Redact-Text $forbidden)"
         }
     }
+    $runtimeLeakSurface = $combined +
+            (Get-Content -LiteralPath $app.OutLog -Raw -ErrorAction SilentlyContinue) +
+            (Get-Content -LiteralPath $app.ErrLog -Raw -ErrorAction SilentlyContinue)
+    if ($runtimeLeakSurface.Contains($AdminToken)) {
+        throw "[AWX][learning-ops-smoke] leaked admin token"
+    }
+    if ($runtimeLeakSurface -match '(?i)X-Admin-Token\s*:') {
+        throw "[AWX][learning-ops-smoke] leaked admin-token header"
+    }
 
-    Write-Host "[AWX][learning-ops-smoke] OK node=macmini-control-plane collector=written queue=ready writesDataset=false requiresReview=true outputHash=$((Hash-Value $CollectorFile))"
+    Write-Host "[AWX][learning-ops-smoke] OK node=macmini-control-plane collector=written queue=ready writesDataset=false requiresReview=true adminTokenPresent=true adminTokenFingerprint=$(Hash-Value $AdminToken) outputHash=$((Hash-Value $CollectorFile))"
 } finally {
     Stop-SmokeApp $app
     Clear-SmokeEnv

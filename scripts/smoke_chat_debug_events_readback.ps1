@@ -1,6 +1,7 @@
 param(
     [int]$Port = 18088,
     [int]$ManagementPort = 18089,
+    [int]$NettyPort = 18091,
     [int]$StartupTimeoutSeconds = 160,
     [int]$TimeoutSec = 90,
     [string]$BaseUrl = "",
@@ -79,6 +80,21 @@ function Get-JsonProp($Object, [string]$Name) {
     return $prop.Value
 }
 
+function Test-SafeOperatorNextAction([string]$NextAction) {
+    if ([string]::IsNullOrWhiteSpace($NextAction)) {
+        return $false
+    }
+    return @(
+        "prefer_native_ollama_route",
+        "inspect_ollama_runtime_capacity",
+        "inspect_model_route_or_start_local_llm",
+        "respect_ollama_retry_after",
+        "inspect_ollama_request_contract",
+        "inspect_ollama_http_failure",
+        "monitor_local_llm_route"
+    ) -contains $NextAction
+}
+
 function Test-OperatorDebugEvent($Event) {
     if ($null -eq $Event) { return $false }
     $probe = [string](Get-JsonProp $Event "probe")
@@ -98,7 +114,7 @@ function Test-OperatorDebugEvent($Event) {
         $probe -eq "MODEL_GUARD" -and
         $fingerprint.Contains("chat.localLlm.operatorAction") -and
         $stage -eq "local_llm_operator_action" -and
-        $nextAction -eq "prefer_native_ollama_route" -and
+        (Test-SafeOperatorNextAction $nextAction) -and
         -not [string]::IsNullOrWhiteSpace($failureClass)
 }
 
@@ -166,6 +182,33 @@ function Find-OperatorDebugEvent([string]$Base, [int]$Limit, [int]$WaitSeconds) 
         ReadbackContentType = $lastContentType
         ReadbackContentLength = $lastContentLength
     }
+}
+
+function Resolve-SmokeBaseUrl([string]$ExplicitBaseUrl, [int]$RuntimePort, [bool]$UseAssumeRunning) {
+    $candidate = if (-not [string]::IsNullOrWhiteSpace($ExplicitBaseUrl)) {
+        $ExplicitBaseUrl.TrimEnd("/")
+    } elseif ($UseAssumeRunning -and -not [string]::IsNullOrWhiteSpace($env:APP_PUBLIC_BASE_URL)) {
+        $env:APP_PUBLIC_BASE_URL.TrimEnd("/")
+    } elseif ($UseAssumeRunning -and -not [string]::IsNullOrWhiteSpace($env:PUBLIC_BASE_URL)) {
+        $env:PUBLIC_BASE_URL.TrimEnd("/")
+    } else {
+        "http://127.0.0.1:$RuntimePort"
+    }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ine 'http') {
+        throw '[AWX][chat-debug-events-readback] evidence_needed: invalid-base-url reason=scheme'
+    }
+    if (-not $uri.IsLoopback) {
+        throw '[AWX][chat-debug-events-readback] evidence_needed: invalid-base-url reason=non-loopback'
+    }
+    $localBaseUrl = "http://127.0.0.1:$RuntimePort"
+    $normalizedEffectiveUrl = $uri.AbsoluteUri.TrimEnd('/')
+    $normalizedLocalUrl = ([Uri]$localBaseUrl).AbsoluteUri.TrimEnd('/')
+    if (-not $UseAssumeRunning -and $normalizedEffectiveUrl -ine $normalizedLocalUrl) {
+        throw '[AWX][chat-debug-events-readback] evidence_needed: invalid-base-url reason=local-start-mismatch'
+    }
+    return $candidate
 }
 
 function Invoke-StreamTrigger([string]$Base) {
@@ -257,7 +300,11 @@ $envNames = @(
     "SPRING_PROFILES_ACTIVE",
     "SERVER_PORT",
     "MANAGEMENT_SERVER_PORT",
+    "NETTY_PORT",
     "SERVER_SSL_ENABLED",
+    "APP_PUBLIC_BASE_URL",
+    "PUBLIC_BASE_URL",
+    "SECURITY_FORCE_HTTPS",
     "LOCAL_LLM_AUTOSTART",
     "LOCAL_LLM_WARMUP_ENABLED",
     "DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED",
@@ -287,11 +334,19 @@ try {
     $env:AWX_PROJECT_CACHE_DIR = $ProjectCacheDir
     New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $ProjectCacheDir | Out-Null
 
-    $env:SPRING_APPLICATION_JSON = '{"naver":{"keys":"","client-id":"","client-secret":""}}'
-    $env:SPRING_PROFILES_ACTIVE = "local"
-    $env:SERVER_PORT = [string]$Port
-    $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
-    $env:SERVER_SSL_ENABLED = "false"
+    if (-not $AssumeRunning) {
+        $env:SPRING_APPLICATION_JSON = '{"naver":{"keys":"","client-id":"","client-secret":""}}'
+        $env:SPRING_PROFILES_ACTIVE = "local"
+        $env:SERVER_PORT = [string]$Port
+        $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
+        $env:NETTY_PORT = [string]$NettyPort
+        $env:SERVER_SSL_ENABLED = "false"
+        $localHttpBaseUrl = "http://127.0.0.1:$Port"
+        $env:APP_PUBLIC_BASE_URL = $localHttpBaseUrl
+        $env:PUBLIC_BASE_URL = $localHttpBaseUrl
+        $env:SECURITY_FORCE_HTTPS = "false"
+        Write-Host "[AWX][chat-debug-events-readback] localHttpRollback=true baseScheme=http host=loopback port=$Port serverSsl=false forceHttps=false"
+    }
     $env:LOCAL_LLM_AUTOSTART = "false"
     $env:LOCAL_LLM_WARMUP_ENABLED = "false"
     $env:DOMAIN_ALLOWLIST_ADMIN_TOKEN_REQUIRED = "false"
@@ -308,14 +363,14 @@ try {
     $env:TAVILY_API_KEY = ""
     $env:OPENAI_API_KEY = ""
 
-    $effectiveBaseUrl = if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-        "http://127.0.0.1:$Port"
-    } else {
-        $BaseUrl.TrimEnd("/")
-    }
+    $effectiveBaseUrl = Resolve-SmokeBaseUrl $BaseUrl $Port ([bool]$AssumeRunning)
 
     if (-not $AssumeRunning) {
-        foreach ($p in @($Port, $ManagementPort)) {
+        $launchPorts = @($Port, $ManagementPort, $NettyPort) | Where-Object { $_ -gt 0 }
+        if ((@($launchPorts | Sort-Object -Unique)).Count -ne @($launchPorts).Count) {
+            throw "[AWX][chat-debug-events-readback] port-conflict reason=duplicate-launch-port ports=$($launchPorts -join ',')"
+        }
+        foreach ($p in @($Port, $ManagementPort, $NettyPort)) {
             $inUse = netstat -ano | Select-String ":$p "
             if ($inUse) {
                 throw "[AWX][chat-debug-events-readback] port-conflict port=$p"
@@ -323,7 +378,7 @@ try {
         }
         $outLog = Join-Path (Split-Path -Parent $ReportPath) "$SmokeName.out.log"
         $errLog = Join-Path (Split-Path -Parent $ReportPath) "$SmokeName.err.log"
-        $gradleArgs = @("bootRun", "--no-daemon", "-x", "test", "--project-cache-dir", $ProjectCacheDir)
+        $gradleArgs = @("bootRun", "--no-daemon", "-x", "test", "--project-cache-dir", $ProjectCacheDir, "--args=--netty.port=$NettyPort")
         $proc = Start-Process -FilePath $Gradle `
             -ArgumentList $gradleArgs `
             -WorkingDirectory $Root `

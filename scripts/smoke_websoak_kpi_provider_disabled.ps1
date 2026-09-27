@@ -1,6 +1,7 @@
 param(
     [int]$Port = 18086,
     [int]$ManagementPort = 18087,
+    [int]$NettyPort = 18090,
     [int]$StartupTimeoutSeconds = 150,
     [int]$TimeoutSec = 25,
     [int]$Iterations = 1,
@@ -94,6 +95,33 @@ function Wait-ForProbeUi($App, [string]$Url) {
     throw "[AWX][websoak-smoke] evidence_needed: startup timeout waiting for $Url"
 }
 
+function Resolve-SmokeBaseUrl([string]$ExplicitBaseUrl, [int]$RuntimePort, [bool]$UseAssumeRunning) {
+    $candidate = if (-not [string]::IsNullOrWhiteSpace($ExplicitBaseUrl)) {
+        $ExplicitBaseUrl.TrimEnd("/")
+    } elseif ($UseAssumeRunning -and -not [string]::IsNullOrWhiteSpace($env:APP_PUBLIC_BASE_URL)) {
+        $env:APP_PUBLIC_BASE_URL.TrimEnd("/")
+    } elseif ($UseAssumeRunning -and -not [string]::IsNullOrWhiteSpace($env:PUBLIC_BASE_URL)) {
+        $env:PUBLIC_BASE_URL.TrimEnd("/")
+    } else {
+        "http://127.0.0.1:$RuntimePort"
+    }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ine 'http') {
+        throw '[AWX][websoak-smoke] evidence_needed: invalid-base-url reason=scheme'
+    }
+    if (-not $uri.IsLoopback) {
+        throw '[AWX][websoak-smoke] evidence_needed: invalid-base-url reason=non-loopback'
+    }
+    $localBaseUrl = "http://127.0.0.1:$RuntimePort"
+    $normalizedEffectiveUrl = $uri.AbsoluteUri.TrimEnd('/')
+    $normalizedLocalUrl = ([Uri]$localBaseUrl).AbsoluteUri.TrimEnd('/')
+    if (-not $UseAssumeRunning -and $normalizedEffectiveUrl -ine $normalizedLocalUrl) {
+        throw '[AWX][websoak-smoke] evidence_needed: invalid-base-url reason=local-start-mismatch'
+    }
+    return $candidate
+}
+
 if ($StaticOnly) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ReportPath) | Out-Null
     Write-Host "[AWX][websoak-smoke] staticOnly=true script=$PSCommandPath"
@@ -115,7 +143,11 @@ $envNames = @(
     "SPRING_PROFILES_ACTIVE",
     "SERVER_PORT",
     "MANAGEMENT_SERVER_PORT",
+    "NETTY_PORT",
     "SERVER_SSL_ENABLED",
+    "APP_PUBLIC_BASE_URL",
+    "PUBLIC_BASE_URL",
+    "SECURITY_FORCE_HTTPS",
     "PROBE_WEBSOAK_KPI_ENABLED",
     "PROBE_WEBSOAK_KPI_REQUIRE_KEY",
     "PROBE_WEBSOAK_KPI_ALLOW_QUERY_PARAM_KEY",
@@ -146,10 +178,18 @@ try {
     $env:AWX_PROJECT_CACHE_DIR = $ProjectCacheDir
     New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $ProjectCacheDir | Out-Null
 
-    $env:SPRING_PROFILES_ACTIVE = "local"
-    $env:SERVER_PORT = [string]$Port
-    $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
-    $env:SERVER_SSL_ENABLED = "false"
+    if (-not $AssumeRunning) {
+        $env:SPRING_PROFILES_ACTIVE = "local"
+        $env:SERVER_PORT = [string]$Port
+        $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
+        $env:NETTY_PORT = [string]$NettyPort
+        $env:SERVER_SSL_ENABLED = "false"
+        $localHttpBaseUrl = "http://127.0.0.1:$Port"
+        $env:APP_PUBLIC_BASE_URL = $localHttpBaseUrl
+        $env:PUBLIC_BASE_URL = $localHttpBaseUrl
+        $env:SECURITY_FORCE_HTTPS = "false"
+        Write-Host "[AWX][websoak-smoke] localHttpRollback=true baseScheme=http host=loopback port=$Port serverSsl=false forceHttps=false"
+    }
     $env:PROBE_WEBSOAK_KPI_ENABLED = "true"
     $env:PROBE_WEBSOAK_KPI_REQUIRE_KEY = "true"
     $env:PROBE_WEBSOAK_KPI_ALLOW_QUERY_PARAM_KEY = "false"
@@ -165,14 +205,14 @@ try {
     $env:TAVILY_API_KEY = ""
     $env:OPENAI_API_KEY = ""
 
-    $effectiveBaseUrl = if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-        "http://127.0.0.1:$Port"
-    } else {
-        $BaseUrl.TrimEnd("/")
-    }
+    $effectiveBaseUrl = Resolve-SmokeBaseUrl $BaseUrl $Port ([bool]$AssumeRunning)
 
     if (-not $AssumeRunning) {
-        foreach ($p in @($Port, $ManagementPort)) {
+        $launchPorts = @($Port, $ManagementPort, $NettyPort) | Where-Object { $_ -gt 0 }
+        if ((@($launchPorts | Sort-Object -Unique)).Count -ne @($launchPorts).Count) {
+            throw "[AWX][websoak-smoke] port-conflict reason=duplicate-launch-port ports=$($launchPorts -join ',')"
+        }
+        foreach ($p in @($Port, $ManagementPort, $NettyPort)) {
             $inUse = netstat -ano | Select-String ":$p "
             if ($inUse) {
                 throw "[AWX][websoak-smoke] port-conflict port=$p"
@@ -180,7 +220,7 @@ try {
         }
         $outLog = Join-Path (Split-Path -Parent $ReportPath) "$SmokeName.out.log"
         $errLog = Join-Path (Split-Path -Parent $ReportPath) "$SmokeName.err.log"
-        $gradleArgs = @("bootRun", "--no-daemon", "-x", "test", "--project-cache-dir", $ProjectCacheDir)
+        $gradleArgs = @("bootRun", "--no-daemon", "-x", "test", "--project-cache-dir", $ProjectCacheDir, "--args=--netty.port=$NettyPort")
         $proc = Start-Process -FilePath $Gradle `
             -ArgumentList $gradleArgs `
             -WorkingDirectory $Root `

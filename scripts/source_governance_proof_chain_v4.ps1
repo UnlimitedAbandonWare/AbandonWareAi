@@ -8,9 +8,320 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
-$SecretValuePattern = "sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}|-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY-----"
+$LeaseContractPath = Join-Path $PSScriptRoot '..\__patch_drop__\source_edit_lease_contract.ps1'
+if (-not (Test-Path -LiteralPath $LeaseContractPath -PathType Leaf)) {
+    throw "source edit lease contract missing: $LeaseContractPath"
+}
+. $LeaseContractPath
+
+$SecretValuePattern = "(?i)sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}|\b(?:authorization|cookie)\s*[:=]|-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY-----"
 $PatchInstructionPattern = "(?i)(Before snippet|After snippet|Minimal unified diff|Patch Blocks:|Setup Commands:|Source Modifier Agent|read Abandon\.md|BEGIN PATCH|END PATCH|Autonomous Safe Patch Prompt|Return exactly this structure)"
 $FileModePattern = "(?m)^(old mode|new mode|deleted file mode|new file mode)\s+"
+$ForbiddenPatchPathPatterns = @(
+    @{ Pattern = '(^|/)(apikey\.txt|apikey\.ps1)$'; Reason = 'secret-setup' },
+    @{ Pattern = '(^|/)\.env[^/]*(/|$)'; Reason = 'secret-env' },
+    @{ Pattern = '(^|/)pages/api/'; Reason = 'nextjs-pages-api' },
+    @{ Pattern = '(^|/)(\.gradle|build|node_modules|\.next|\.turbo|\.swc)(/|$)'; Reason = 'shared-cache-build-output' },
+    @{ Pattern = '\.(p12|jks)$'; Reason = 'keystore' }
+)
+
+function Test-JsonBooleanProperty {
+    param(
+        [Parameter(Mandatory = $true)]$Object,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][bool]$Expected
+    )
+    if ($null -eq $Object) { return $false }
+    $property = $Object.PSObject.Properties[$Name]
+    return $null -ne $property -and $property.Value -is [bool] -and $property.Value -eq $Expected
+}
+
+function Test-JsonIntegerProperty {
+    param(
+        [Parameter(Mandatory = $true)]$Object,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][long]$Expected
+    )
+    if ($null -eq $Object) { return $false }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $property.Value -is [bool]) { return $false }
+    if (-not ($property.Value -is [int] -or $property.Value -is [long])) { return $false }
+    return [long]$property.Value -eq $Expected
+}
+
+function Test-CanonicalPatchRelativePath {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains('\')) { return $false }
+    if ($Value.StartsWith('/') -or $Value.StartsWith('//') -or $Value -match '^[A-Za-z]:') { return $false }
+    if ($Value -match '[\x00-\x20\x7f"<>:|?*]') { return $false }
+    $parts = @($Value.Split('/'))
+    if (@($parts | Where-Object { $_ -in @('', '.', '..') }).Count -ne 0) { return $false }
+    foreach ($part in $parts) {
+        if ($part.EndsWith('.') -or $part.EndsWith(' ')) { return $false }
+        if ($part -match '^(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)') { return $false }
+    }
+    return $true
+}
+
+function Test-CanonicalPatchNewFileTarget {
+    param([Parameter(Mandatory = $true)][string]$Target)
+    if (-not (Test-CanonicalPatchRelativePath $Target)) { return $false }
+    foreach ($entry in $script:ForbiddenPatchPathPatterns) {
+        if ($Target -match $entry.Pattern) { return $false }
+    }
+    return $true
+}
+
+function Get-FirstPatchHunkIndex {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Lines)
+    for ($position = 0; $position -lt $Lines.Count; $position++) {
+        if ($Lines[$position].StartsWith('@@ ')) { return $position }
+    }
+    return -1
+}
+
+function Test-ExactPatchHunkSequence {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Lines,
+        [switch]$RequireNewFile
+    )
+    $firstHunk = Get-FirstPatchHunkIndex -Lines $Lines
+    if ($firstHunk -lt 0) { return $false }
+    $oldIndexes = @()
+    $newIndexes = @()
+    for ($position = 0; $position -lt $firstHunk; $position++) {
+        if ($Lines[$position].StartsWith('--- ')) { $oldIndexes += $position }
+        if ($Lines[$position].StartsWith('+++ ')) { $newIndexes += $position }
+    }
+    if ($oldIndexes.Count -ne 1 -or $newIndexes.Count -ne 1 -or $newIndexes[0] -ne ($oldIndexes[0] + 1)) { return $false }
+    if ($firstHunk -ne ($newIndexes[0] + 1)) { return $false }
+    $index = $firstHunk
+    $hunkCount = 0
+    while ($index -lt $Lines.Count) {
+        $header = [regex]::Match($Lines[$index], '^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$')
+        if (-not $header.Success) { return $false }
+        $oldStart = [int]$header.Groups[1].Value
+        $oldExpected = if ($header.Groups[2].Success) { [int]$header.Groups[2].Value } else { 1 }
+        $newStart = [int]$header.Groups[3].Value
+        $newExpected = if ($header.Groups[4].Success) { [int]$header.Groups[4].Value } else { 1 }
+        if ($RequireNewFile -and ($hunkCount -ne 0 -or $oldStart -ne 0 -or $oldExpected -ne 0 -or $newStart -ne 1 -or $newExpected -le 0)) { return $false }
+        $hunkCount++
+        $index++
+        $oldActual = 0
+        $newActual = 0
+        $oldEofMarked = $false
+        $newEofMarked = $false
+        while ($index -lt $Lines.Count -and -not $Lines[$index].StartsWith('@@ ')) {
+            $line = $Lines[$index]
+            if ($line -ceq '\ No newline at end of file') {
+                if ($index -eq 0 -or -not $Lines[$index - 1].StartsWith(' ') -and -not $Lines[$index - 1].StartsWith('+') -and -not $Lines[$index - 1].StartsWith('-')) { return $false }
+                for ($future = $index + 1; $future -lt $Lines.Count; $future++) {
+                    if ($Lines[$future].StartsWith('@@ ')) { return $false }
+                }
+                $previousKind = $Lines[$index - 1][0]
+                if ($previousKind -eq '-') {
+                    if ($oldEofMarked -or $newEofMarked) { return $false }
+                    $oldEofMarked = $true
+                } elseif ($previousKind -eq '+') {
+                    if ($newEofMarked) { return $false }
+                    $newEofMarked = $true
+                } else {
+                    if ($oldEofMarked -or $newEofMarked) { return $false }
+                    $oldEofMarked = $true
+                    $newEofMarked = $true
+                }
+                $index++
+                continue
+            }
+            if ([string]::IsNullOrEmpty($line) -or $line[0] -notin @(' ', '+', '-')) { return $false }
+            if ($newEofMarked -or ($oldEofMarked -and $line[0] -ne '+')) { return $false }
+            if ($RequireNewFile -and $line[0] -ne '+') { return $false }
+            if ($line[0] -in @(' ', '-')) { $oldActual++ }
+            if ($line[0] -in @(' ', '+')) { $newActual++ }
+            if ($oldActual -gt $oldExpected -or $newActual -gt $newExpected) { return $false }
+            $index++
+        }
+        if ($oldActual -ne $oldExpected -or $newActual -ne $newExpected) { return $false }
+    }
+    if ($RequireNewFile) { return $hunkCount -eq 1 }
+    return $hunkCount -gt 0
+}
+
+function Test-CanonicalPatchNewFileHunk {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Lines)
+    return (Test-ExactPatchHunkSequence -Lines $Lines -RequireNewFile)
+}
+
+function Get-CanonicalPatchNewFileTarget {
+    param(
+        [Parameter(Mandatory = $true)][string]$Block,
+        [Parameter(Mandatory = $true)][string[]]$ModeLines
+    )
+    if ($ModeLines.Count -ne 1 -or $ModeLines[0] -cne 'new file mode 100644') { return '' }
+    $normalizedBlock = $Block.Replace("`r`n", "`n")
+    if ($normalizedBlock.EndsWith("`n", [StringComparison]::Ordinal)) { $normalizedBlock = $normalizedBlock.Substring(0, $normalizedBlock.Length - 1) }
+    $lines = @($normalizedBlock -split "`n")
+    if ($lines.Count -eq 0) { return '' }
+    $header = [regex]::Match($lines[0], '^diff --git a/([^\s"\\]+) b/([^\s"\\]+)$')
+    if (-not $header.Success -or $header.Groups[1].Value -cne $header.Groups[2].Value) { return '' }
+    $target = $header.Groups[1].Value
+    if (-not (Test-CanonicalPatchNewFileTarget -Target $target)) { return '' }
+    $firstHunk = Get-FirstPatchHunkIndex -Lines $lines
+    $envelope = if ($firstHunk -gt 0) { @($lines[0..($firstHunk - 1)]) } else { @($lines) }
+    $oldHeaders = @($envelope | Where-Object { $_.StartsWith('--- ') })
+    $newHeaders = @($envelope | Where-Object { $_.StartsWith('+++ ') })
+    if ($oldHeaders.Count -ne 1 -or $oldHeaders[0] -cne '--- /dev/null') { return '' }
+    if ($newHeaders.Count -ne 1 -or $newHeaders[0] -cne "+++ b/$target") { return '' }
+    if (-not (Test-CanonicalPatchNewFileHunk $lines)) { return '' }
+    foreach ($line in $lines) {
+        if (
+            $line.StartsWith('rename from ') -or
+            $line.StartsWith('rename to ') -or
+            $line.StartsWith('copy from ') -or
+            $line.StartsWith('copy to ') -or
+            $line -eq 'GIT binary patch' -or
+            ($line.StartsWith('Binary files ') -and $line.EndsWith(' differ'))
+        ) { return '' }
+    }
+    return $target
+}
+
+function Get-PatchModeSummary {
+    param([Parameter(Mandatory = $true)][string]$PatchText)
+    $text = $PatchText.TrimStart([char]0xfeff).Replace("`r`n", "`n")
+    $modePattern = '(?m)^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$'
+    $total = ([regex]::Matches($text, $modePattern)).Count
+    $covered = 0
+    $allowed = 0
+    $violations = 0
+    $targets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($blockMatch in [regex]::Matches($text, '(?ms)^diff --git .*?(?=^diff --git |\z)')) {
+        $modeLines = @([regex]::Matches($blockMatch.Value, $modePattern) | ForEach-Object { $_.Value })
+        $covered += $modeLines.Count
+        $blockLines = @($blockMatch.Value.Replace("`r`n", "`n") -split "`n")
+        $firstHunk = Get-FirstPatchHunkIndex -Lines $blockLines
+        $envelope = if ($firstHunk -gt 0) { @($blockLines[0..($firstHunk - 1)]) } else { @($blockLines) }
+        $hasOldNull = @($envelope | Where-Object { $_ -ceq '--- /dev/null' }).Count -gt 0
+        $hasNewNull = @($envelope | Where-Object { $_ -ceq '+++ /dev/null' }).Count -gt 0
+        if ($hasNewNull -or ($hasOldNull -and $modeLines.Count -eq 0)) {
+            $violations += [Math]::Max(1, $modeLines.Count)
+            continue
+        }
+        if ($modeLines.Count -eq 0) { continue }
+        $target = Get-CanonicalPatchNewFileTarget -Block $blockMatch.Value -ModeLines $modeLines
+        if (-not [string]::IsNullOrWhiteSpace($target) -and $targets.Add($target)) {
+            $allowed++
+        } else {
+            $violations += $modeLines.Count
+        }
+    }
+    $violations += ($total - $covered)
+    return [pscustomobject]@{
+        FilemodeLineCount = $total
+        AllowedNewFileCount = $allowed
+        FilemodeViolationCount = $violations
+    }
+}
+
+function Get-PatchTargetPaths {
+    param([Parameter(Mandatory = $true)][string]$PatchText)
+    $targets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $hunkStarted = $false
+    foreach ($line in ($PatchText.TrimStart([char]0xfeff) -split "`r?`n")) {
+        $candidates = New-Object System.Collections.Generic.List[string]
+        if ($line.StartsWith('diff --git ')) {
+            $hunkStarted = $false
+            $match = [regex]::Match($line, '^diff --git a/([^\s"\\]+) b/([^\s"\\]+)$')
+            if ($match.Success) {
+                $candidates.Add($match.Groups[1].Value)
+                $candidates.Add($match.Groups[2].Value)
+            } else {
+                $candidates.Add($line.Substring('diff --git '.Length))
+            }
+        } elseif ($line.StartsWith('@@ ')) {
+            $hunkStarted = $true
+        } elseif (-not $hunkStarted -and ($line.StartsWith('--- ') -or $line.StartsWith('+++ '))) {
+            $raw = $line.Substring(4).Split("`t", 2)[0]
+            if ($raw -eq '/dev/null') { continue }
+            if ($raw.StartsWith('a/') -or $raw.StartsWith('b/')) { $raw = $raw.Substring(2) }
+            $candidates.Add($raw)
+        } elseif ($line.StartsWith('rename from ') -or $line.StartsWith('rename to ') -or $line.StartsWith('copy from ') -or $line.StartsWith('copy to ')) {
+            $candidates.Add($line.Substring($line.IndexOf(' ') + 1).Substring($line.Substring($line.IndexOf(' ') + 1).IndexOf(' ') + 1))
+        }
+        foreach ($candidate in $candidates) {
+            if (-not [string]::IsNullOrWhiteSpace($candidate)) { [void]$targets.Add($candidate) }
+        }
+    }
+    return @($targets)
+}
+
+function Get-PatchPathViolationCount {
+    param([Parameter(Mandatory = $true)][string]$PatchText)
+    $violations = 0
+    foreach ($target in (Get-PatchTargetPaths -PatchText $PatchText)) {
+        if (-not (Test-CanonicalPatchRelativePath $target)) {
+            $violations++
+            continue
+        }
+        foreach ($entry in $script:ForbiddenPatchPathPatterns) {
+            if ($target -match $entry.Pattern) {
+                $violations++
+                break
+            }
+        }
+    }
+    return $violations
+}
+
+function Get-PatchStructureViolationCount {
+    param(
+        [Parameter(Mandatory = $true)][string]$PatchPath,
+        [Parameter(Mandatory = $true)][string]$PatchText
+    )
+    $text = $PatchText.TrimStart([char]0xfeff).Replace("`r`n", "`n")
+    if ($text.EndsWith("`n", [StringComparison]::Ordinal)) { $text = $text.Substring(0, $text.Length - 1) }
+    $blocks = [regex]::Matches($text, '(?ms)^diff --git .*?(?=^diff --git |\z)')
+    $violations = 0
+    if ($blocks.Count -eq 0) { $violations++ }
+    if ($blocks.Count -gt 0 -and $blocks[0].Index -gt 0 -and -not [string]::IsNullOrWhiteSpace($text.Substring(0, $blocks[0].Index))) { $violations++ }
+    $seenTargets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($blockMatch in $blocks) {
+        $block = $blockMatch.Value
+        if ($block.EndsWith("`n", [StringComparison]::Ordinal)) { $block = $block.Substring(0, $block.Length - 1) }
+        $lines = @($block -split "`n")
+        $header = [regex]::Match($lines[0], '^diff --git a/([^\s"\\]+) b/([^\s"\\]+)$')
+        if (-not $header.Success -or $header.Groups[1].Value -cne $header.Groups[2].Value) { $violations++; continue }
+        $target = $header.Groups[1].Value
+        if (-not (Test-CanonicalPatchRelativePath $target) -or -not $seenTargets.Add($target)) { $violations++; continue }
+        $firstHunk = Get-FirstPatchHunkIndex -Lines $lines
+        $envelope = if ($firstHunk -gt 0) { @($lines[0..($firstHunk - 1)]) } else { @($lines) }
+        $oldHeaders = @($envelope | Where-Object { $_.StartsWith('--- ') })
+        $newHeaders = @($envelope | Where-Object { $_.StartsWith('+++ ') })
+        $modeLines = @($lines | Where-Object { $_ -match '^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$' })
+        if ($oldHeaders.Count -eq 1 -and $oldHeaders[0] -ceq '--- /dev/null') {
+            if ([string]::IsNullOrWhiteSpace((Get-CanonicalPatchNewFileTarget -Block $block -ModeLines $modeLines))) { $violations++ }
+        } elseif (
+            $oldHeaders.Count -ne 1 -or
+            $newHeaders.Count -ne 1 -or
+            $oldHeaders[0] -cne "--- a/$target" -or
+            $newHeaders[0] -cne "+++ b/$target" -or
+            -not (Test-ExactPatchHunkSequence -Lines $lines)
+        ) {
+            $violations++
+        }
+    }
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & git apply --numstat --whitespace=nowarn -- $PatchPath 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { $violations++ }
+    } catch {
+        $violations++
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    return $violations
+}
 
 function Resolve-ProofRoot {
     param([string]$CandidateRoot)
@@ -391,9 +702,13 @@ function Invoke-SourceGovernanceProofChainV4 {
     $orphanMetaCount = 0
     $patchSecretHits = 0
     $patchFilemodeHits = 0
+    $patchAllowedNewFileCount = 0
+    $patchFilemodeViolationCount = 0
+    $patchBinaryMarkerHits = 0
     $desktopApplyHelperCount = 0
     $sourceLeaseActiveCount = 0
     $sourceLeaseCorruptCount = 0
+    $sourceLeaseExpiredCount = 0
     $notebookPendingCount = 0
     $notebookReconciliationCount = 0
     $notebookReconciliationPendingCount = 0
@@ -419,15 +734,40 @@ function Invoke-SourceGovernanceProofChainV4 {
                 }
             }
             $patchText = Read-TextOrEmpty $patch.FullName
-            $secretHits = [regex]::Matches($patchText, $SecretValuePattern).Count
-            $filemodeHits = [regex]::Matches($patchText, $FileModePattern).Count
+            $secretCorpus = $patchText
+            foreach ($sidecar in $requiredSidecars) {
+                $sidecarPath = Join-RootPath $patchDrop $sidecar
+                if (Test-Path -LiteralPath $sidecarPath -PathType Leaf) {
+                    $secretCorpus += Read-TextOrEmpty $sidecarPath
+                }
+            }
+            $secretHits = [regex]::Matches($secretCorpus, $SecretValuePattern).Count
+            $modeSummary = Get-PatchModeSummary -PatchText $patchText
+            $filemodeHits = [int]$modeSummary.FilemodeLineCount
+            $filemodeViolations = [int]$modeSummary.FilemodeViolationCount
+            $allowedNewFiles = [int]$modeSummary.AllowedNewFileCount
+            $binaryMarkerHits = [regex]::Matches($patchText, '(?m)^(GIT binary patch|Binary files .+ differ)$').Count
+            $pathViolationCount = Get-PatchPathViolationCount -PatchText $patchText
+            $structureViolationCount = Get-PatchStructureViolationCount -PatchPath $patch.FullName -PatchText $patchText
             $patchSecretHits += $secretHits
             $patchFilemodeHits += $filemodeHits
+            $patchAllowedNewFileCount += $allowedNewFiles
+            $patchFilemodeViolationCount += $filemodeViolations
+            $patchBinaryMarkerHits += $binaryMarkerHits
             if ($secretHits -gt 0) {
-                Add-Finding $findings "secret-leak-risk" "BLOCK" (Convert-ToProofRelativePath $rootPath $patch.FullName) "patch contains high-confidence secret pattern count=$secretHits"
+                Add-Finding $findings "secret-leak-risk" "BLOCK" (Convert-ToProofRelativePath $rootPath $patch.FullName) "bundle contains high-confidence secret pattern count=$secretHits"
             }
-            if ($filemodeHits -gt 0) {
-                Add-Finding $findings "filemode-blocked" "BLOCK" (Convert-ToProofRelativePath $rootPath $patch.FullName) "patch contains filemode metadata count=$filemodeHits"
+            if ($filemodeViolations -gt 0) {
+                Add-Finding $findings "filemode-blocked" "BLOCK" (Convert-ToProofRelativePath $rootPath $patch.FullName) "patch contains unsafe filemode metadata count=$filemodeViolations"
+            }
+            if ($binaryMarkerHits -gt 0) {
+                Add-Finding $findings "binary-patch-blocked" "BLOCK" (Convert-ToProofRelativePath $rootPath $patch.FullName) "patch contains binary marker count=$binaryMarkerHits"
+            }
+            if ($pathViolationCount -gt 0) {
+                Add-Finding $findings "unsafe-patch-path" "BLOCK" (Convert-ToProofRelativePath $rootPath $patch.FullName) "patch contains unsafe or forbidden target count=$pathViolationCount"
+            }
+            if ($structureViolationCount -gt 0) {
+                Add-Finding $findings "patch-structure-invalid" "BLOCK" (Convert-ToProofRelativePath $rootPath $patch.FullName) "patch is not a canonical parseable unified diff count=$structureViolationCount"
             }
             $manifestPath = Join-RootPath $patchDrop "$slug.manifest.json"
             if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
@@ -437,8 +777,50 @@ function Invoke-SourceGovernanceProofChainV4 {
                     if ($manifest.PSObject.Properties.Name -contains "activePatch") {
                         $activePatch = [string]$manifest.activePatch
                     }
+                    $manifestSchemaVersion = ''
+                    if ($manifest.PSObject.Properties.Name -contains 'schemaVersion') {
+                        $manifestSchemaVersion = [string]$manifest.schemaVersion
+                    }
+                    if ($manifestSchemaVersion -cne 'patchdrop-producer-v3') {
+                        Add-Finding $findings "patch-manifest-schema" "BLOCK" (Convert-ToProofRelativePath $rootPath $manifestPath) "manifest schemaVersion must be patchdrop-producer-v3"
+                    }
                     if ($activePatch -ne $patch.Name) {
                         Add-Finding $findings "patch-drop-pending" "BLOCK" (Convert-ToProofRelativePath $rootPath $manifestPath) "manifest activePatch does not match patch file"
+                    }
+                    $identity = [regex]::Match($slug, '^(?<topic>[a-z0-9]|[a-z0-9][a-z0-9._-]{0,94}[a-z0-9])-v3$')
+                    $manifestContractValid = $identity.Success
+                    $expectedTopic = if ($identity.Success) { $identity.Groups['topic'].Value } else { '' }
+                    $manifestNode = [string]$manifest.node
+                    $manifestSourceRootInputHash = [string]$manifest.sourceRootInputHash
+                    $manifestSourceRootHash = [string]$manifest.sourceRootHash
+                    $isolation = $manifest.sourceIsolation
+                    $verification = $manifest.verification
+                    $manifestContractValid = $manifestContractValid -and
+                        [string]$manifest.topic -ceq $expectedTopic -and
+                        [string]$manifest.slug -ceq $expectedTopic -and
+                        $manifestNode -cin @('macmini', 'notebook', 'desktop') -and
+                        $activePatch -ceq $patch.Name -and
+                        [string]$manifest.desktopFinalProof -ceq 'evidence_needed' -and
+                        $manifestSourceRootInputHash -cmatch '^[a-f0-9]{64}$' -and
+                        $manifestSourceRootHash -cmatch '^[a-f0-9]{64}$' -and
+                        $null -ne $isolation -and
+                        [string]$isolation.guard -ceq 'PASS' -and
+                        [string]$isolation.sourceRootKind -ceq 'local-worktree' -and
+                        (Test-JsonBooleanProperty -Object $isolation -Name 'sharedSourceRoot' -Expected $false) -and
+                        (Test-JsonBooleanProperty -Object $isolation -Name 'desktopCanonicalSourceRoot' -Expected $false) -and
+                        (Test-JsonBooleanProperty -Object $isolation -Name 'directCanonicalSourceEdit' -Expected $false) -and
+                        (Test-JsonBooleanProperty -Object $isolation -Name 'gitRootPresent' -Expected $true) -and
+                        (Test-JsonBooleanProperty -Object $isolation -Name 'gitRootMatchesSourceRoot' -Expected $true) -and
+                        [string]$isolation.gitRootHash -ceq $manifestSourceRootHash -and
+                        (Test-JsonIntegerProperty -Object $verification -Name 'diffHeaderCount' -Expected ([regex]::Matches($patchText.TrimStart([char]0xfeff), '(?m)^diff --git ').Count)) -and
+                        (Test-JsonIntegerProperty -Object $verification -Name 'filemodeLineCount' -Expected $filemodeHits) -and
+                        (Test-JsonIntegerProperty -Object $verification -Name 'allowedNewFileCount' -Expected $allowedNewFiles) -and
+                        (Test-JsonIntegerProperty -Object $verification -Name 'filemodeViolationCount' -Expected $filemodeViolations) -and
+                        (Test-JsonIntegerProperty -Object $verification -Name 'forbiddenPathCount' -Expected $pathViolationCount) -and
+                        (Test-JsonIntegerProperty -Object $verification -Name 'secretPatternHits' -Expected $secretHits) -and
+                        (Test-JsonIntegerProperty -Object $verification -Name 'rawSecretPatternHits' -Expected $secretHits)
+                    if (-not $manifestContractValid) {
+                        Add-Finding $findings "patch-manifest-contract" "BLOCK" (Convert-ToProofRelativePath $rootPath $manifestPath) "manifest identity, root, isolation, or verification metrics do not match bundle bytes"
                     }
                 } catch {
                     Add-Finding $findings "patch-drop-pending" "BLOCK" (Convert-ToProofRelativePath $rootPath $manifestPath) "manifest is not valid JSON"
@@ -468,29 +850,22 @@ function Invoke-SourceGovernanceProofChainV4 {
             Add-Finding $findings "desktop-apply-helper" "BLOCK" (Convert-ToProofRelativePath $rootPath $helper.FullName) "top-level Desktop apply helper requires review/quarantine; do not bypass source lease gates"
         }
 
-        $sourceEditLocks = Join-RootPath $patchDrop "source-edit-locks"
-        if (Test-Path -LiteralPath $sourceEditLocks -PathType Container) {
-            $sourceLeaseLocks = @(Get-ChildItem -LiteralPath $sourceEditLocks -Directory -Filter "*.lock" -ErrorAction SilentlyContinue)
-            $sourceLeaseActiveCount = $sourceLeaseLocks.Count
-            foreach ($lock in $sourceLeaseLocks) {
-                $leasePath = Join-RootPath $lock.FullName "lease.json"
-                $findingClass = "source-lease-active"
-                $detail = "source-edit lease is active; release or expire it before final proof"
-                if (Test-Path -LiteralPath $leasePath -PathType Leaf) {
-                    try {
-                        $lease = Get-Content -LiteralPath $leasePath -Raw | ConvertFrom-Json
-                        $detail = "source-edit lease is active topic=$($lease.topic) ownerId=$($lease.ownerId) role=$($lease.role) expiresAtUtc=$($lease.expiresAtUtc)"
-                    } catch {
-                        $findingClass = "source-lease-corrupt"
-                        $sourceLeaseCorruptCount++
-                        $detail = "source-edit lease is active but lease.json is invalid"
-                    }
-                } else {
-                    $findingClass = "source-lease-corrupt"
-                    $sourceLeaseCorruptCount++
-                    $detail = "source-edit lease is active but lease.json is missing"
+        $sourceLeaseSummary = Get-AwxSourceEditLeaseSummary -PatchDropDir $patchDrop
+        $sourceLeaseActiveCount = [int]$sourceLeaseSummary.sourceLeaseActiveCount
+        $sourceLeaseCorruptCount = [int]$sourceLeaseSummary.sourceLeaseCorruptCount
+        $sourceLeaseExpiredCount = [int]$sourceLeaseSummary.sourceLeaseExpiredCount
+        foreach ($lease in @($sourceLeaseSummary.sourceLeases)) {
+            $relativeLockPath = Convert-ToProofRelativePath $rootPath ([string]$lease.lockPath)
+            switch ([string]$lease.status) {
+                'active' {
+                    Add-Finding $findings "source-lease-active" "BLOCK" $relativeLockPath "source-edit lease is active topic=$($lease.topic) role=$($lease.role) expiresAtUtc=$($lease.expiresAtUtc)"
                 }
-                Add-Finding $findings $findingClass "BLOCK" (Convert-ToProofRelativePath $rootPath $lock.FullName) $detail
+                'expired' {
+                    Add-Finding $findings "source-lease-expired" "WARN" $relativeLockPath "source-edit lease expired and is nonblocking topic=$($lease.topic) expiresAtUtc=$($lease.expiresAtUtc)"
+                }
+                default {
+                    Add-Finding $findings "source-lease-corrupt" "BLOCK" $relativeLockPath "source-edit lease is corrupt topic=$($lease.topic) reason=$($lease.reason)"
+                }
             }
         }
 
@@ -518,9 +893,13 @@ function Invoke-SourceGovernanceProofChainV4 {
     $observations.OrphanPatchDropMetaCount = $orphanMetaCount
     $observations.PatchSecretPatternHits = $patchSecretHits
     $observations.PatchFilemodeHits = $patchFilemodeHits
+    $observations.PatchAllowedNewFileCount = $patchAllowedNewFileCount
+    $observations.PatchFilemodeViolationCount = $patchFilemodeViolationCount
+    $observations.PatchBinaryMarkerHits = $patchBinaryMarkerHits
     $observations.DesktopApplyHelperCount = $desktopApplyHelperCount
     $observations.SourceLeaseActiveCount = $sourceLeaseActiveCount
     $observations.SourceLeaseCorruptCount = $sourceLeaseCorruptCount
+    $observations.SourceLeaseExpiredCount = $sourceLeaseExpiredCount
     $observations.NotebookPendingCount = $notebookPendingCount
     $observations.NotebookReconciliationCount = $notebookReconciliationCount
     $observations.NotebookReconciliationPendingCount = $notebookReconciliationPendingCount
@@ -642,9 +1021,13 @@ function Invoke-SourceGovernanceProofChainV4 {
     [void]$report.AppendLine("- orphanPatchDropMetaCount: $orphanMetaCount")
     [void]$report.AppendLine("- patchSecretPatternHits: $patchSecretHits")
     [void]$report.AppendLine("- patchFilemodeHits: $patchFilemodeHits")
+    [void]$report.AppendLine("- patchAllowedNewFileCount: $patchAllowedNewFileCount")
+    [void]$report.AppendLine("- patchFilemodeViolationCount: $patchFilemodeViolationCount")
+    [void]$report.AppendLine("- patchBinaryMarkerHits: $patchBinaryMarkerHits")
     [void]$report.AppendLine("- desktopApplyHelperCount: $desktopApplyHelperCount")
     [void]$report.AppendLine("- sourceLeaseActiveCount: $sourceLeaseActiveCount")
     [void]$report.AppendLine("- sourceLeaseCorruptCount: $sourceLeaseCorruptCount")
+    [void]$report.AppendLine("- sourceLeaseExpiredCount: $sourceLeaseExpiredCount")
     [void]$report.AppendLine("- notebookPendingCount: $notebookPendingCount")
     [void]$report.AppendLine("- notebookReconciliationCount: $notebookReconciliationCount")
     [void]$report.AppendLine("- notebookReconciliationPendingCount: $notebookReconciliationPendingCount")
@@ -711,7 +1094,7 @@ function Invoke-SourceGovernanceProofChainV4 {
     }
 
     [IO.File]::WriteAllText($reportFullPath, $report.ToString(), [Text.UTF8Encoding]::new($false))
-    Write-Host "[AWX][source-governance][v4] status=$status blocking=$blockCount warnings=$warnCount activePatchCount=$activePatchCount desktopApplyHelperCount=$desktopApplyHelperCount sourceLeaseActiveCount=$sourceLeaseActiveCount sourceLeaseCorruptCount=$sourceLeaseCorruptCount notebookPendingCount=$notebookPendingCount notebookReconciliationCount=$notebookReconciliationCount notebookReconciliationPendingCount=$notebookReconciliationPendingCount notebookReconciliationRecordedCount=$notebookReconciliationRecordedCount largeActiveSourceGrowth=$($largeActiveSourceGrowthRows.Count) sourceChangedDuringProof=$($sourceSnapshotChanges.Count) patchInstructionResidue=$instructionHits secretResourceStores=$secretResourceStores activeResourceSecretHits=$activeResourceSecretHits godObjectCandidates=$($godObjects.Count) report=$reportFullPath"
+    Write-Host "[AWX][source-governance][v4] status=$status blocking=$blockCount warnings=$warnCount activePatchCount=$activePatchCount desktopApplyHelperCount=$desktopApplyHelperCount sourceLeaseActiveCount=$sourceLeaseActiveCount sourceLeaseCorruptCount=$sourceLeaseCorruptCount sourceLeaseExpiredCount=$sourceLeaseExpiredCount notebookPendingCount=$notebookPendingCount notebookReconciliationCount=$notebookReconciliationCount notebookReconciliationPendingCount=$notebookReconciliationPendingCount notebookReconciliationRecordedCount=$notebookReconciliationRecordedCount largeActiveSourceGrowth=$($largeActiveSourceGrowthRows.Count) sourceChangedDuringProof=$($sourceSnapshotChanges.Count) patchInstructionResidue=$instructionHits secretResourceStores=$secretResourceStores activeResourceSecretHits=$activeResourceSecretHits godObjectCandidates=$($godObjects.Count) report=$reportFullPath"
 
     return [pscustomobject]@{
         Status = $status
@@ -799,16 +1182,78 @@ function New-TestBundle {
     $patchDrop = Join-Path $TestRoot "__patch_drop__"
     $patchName = "$Slug.patch"
     $patchPath = Join-Path $patchDrop $patchName
+    $topic = if ($Slug.EndsWith('-v3', [StringComparison]::Ordinal)) { $Slug.Substring(0, $Slug.Length - 3) } else { $Slug }
+    $reportPath = Join-Path $patchDrop "$Slug.report.md"
+    $verifyPath = Join-Path $patchDrop "$Slug.verify.log"
+    $manifestPath = Join-Path $patchDrop "$Slug.manifest.json"
+    $reportText = "# report`nDesktop final proof: evidence_needed`n"
+    $verifyText = "secretPatternHits=0`nrawSecretPatternHits=0`nDesktop final proof: evidence_needed`n"
     Set-TestFile $patchPath $PatchBody
-    Set-TestFile (Join-Path $patchDrop "$Slug.report.md") "# report`n"
-    Set-TestFile (Join-Path $patchDrop "$Slug.verify.log") "verify`n"
-    Set-TestFile (Join-Path $patchDrop "$Slug.manifest.json") "{`"activePatch`":`"$patchName`"}`n"
-    $hash = if ($WrongHash) {
-        "0000000000000000000000000000000000000000000000000000000000000000"
-    } else {
-        (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-TestFile $reportPath $reportText
+    Set-TestFile $verifyPath $verifyText
+    $modeSummary = Get-PatchModeSummary -PatchText $PatchBody
+    $rootHash = 'a' * 64
+    $secretHits = [regex]::Matches(($PatchBody + $reportText + $verifyText), $SecretValuePattern).Count
+    $manifest = [ordered]@{
+        schemaVersion = 'patchdrop-producer-v3'
+        topic = $topic
+        slug = $topic
+        node = 'macmini'
+        activePatch = $patchName
+        desktopFinalProof = 'evidence_needed'
+        sourceRootInputHash = $rootHash
+        sourceRootHash = $rootHash
+        sourceIsolation = [ordered]@{
+            guard = 'PASS'
+            sourceRootKind = 'local-worktree'
+            sharedSourceRoot = $false
+            desktopCanonicalSourceRoot = $false
+            directCanonicalSourceEdit = $false
+            gitRootPresent = $true
+            gitRootMatchesSourceRoot = $true
+            gitRootHash = $rootHash
+        }
+        verification = [ordered]@{
+            diffHeaderCount = [regex]::Matches($PatchBody.TrimStart([char]0xfeff), '(?m)^diff --git ').Count
+            filemodeLineCount = [int]$modeSummary.FilemodeLineCount
+            allowedNewFileCount = [int]$modeSummary.AllowedNewFileCount
+            filemodeViolationCount = [int]$modeSummary.FilemodeViolationCount
+            forbiddenPathCount = [int](Get-PatchPathViolationCount -PatchText $PatchBody)
+            secretPatternHits = $secretHits
+            rawSecretPatternHits = $secretHits
+        }
     }
-    Set-TestFile (Join-Path $patchDrop "$Slug.sha256.txt") "$hash  $patchName`n"
+    Set-TestFile $manifestPath (($manifest | ConvertTo-Json -Depth 10) + "`n")
+    $shaLines = @()
+    foreach ($entry in @(
+        [pscustomobject]@{ Name = $patchName; Path = $patchPath },
+        [pscustomobject]@{ Name = "$Slug.report.md"; Path = $reportPath },
+        [pscustomobject]@{ Name = "$Slug.verify.log"; Path = $verifyPath },
+        [pscustomobject]@{ Name = "$Slug.manifest.json"; Path = $manifestPath }
+    )) {
+        $hash = if ($WrongHash -and $entry.Name -ceq $patchName) {
+            '0000000000000000000000000000000000000000000000000000000000000000'
+        } else {
+            (Get-FileHash -LiteralPath $entry.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        $shaLines += "$hash  $($entry.Name)"
+    }
+    Set-TestFile (Join-Path $patchDrop "$Slug.sha256.txt") (($shaLines -join "`n") + "`n")
+}
+
+function Set-TestBundleHashes {
+    param(
+        [Parameter(Mandatory = $true)][string]$TestRoot,
+        [Parameter(Mandatory = $true)][string]$Slug
+    )
+    $patchDrop = Join-Path $TestRoot '__patch_drop__'
+    $lines = @()
+    foreach ($suffix in @('.patch', '.report.md', '.verify.log', '.manifest.json')) {
+        $name = $Slug + $suffix
+        $path = Join-Path $patchDrop $name
+        $lines += "$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant())  $name"
+    }
+    Set-TestFile (Join-Path $patchDrop "$Slug.sha256.txt") (($lines -join "`n") + "`n")
 }
 
 function Assert-Condition {
@@ -861,9 +1306,186 @@ dependencies {
         $failures += Assert-Condition "missing bundle metadata detected" (Test-HasFinding $missing "missing-bundle-meta") "expected missing-bundle-meta"
 
         Initialize-TestRoot $testRoot
+        New-TestBundle -TestRoot $testRoot -Slug 'manifest-schema-v3' -PatchBody "diff --git a/README.md b/README.md`n--- a/README.md`n+++ b/README.md`n@@ -1 +1 @@`n-before`n+after`n"
+        Set-TestFile (Join-Path $testRoot '__patch_drop__/manifest-schema-v3.manifest.json') '{"activePatch":"manifest-schema-v3.patch"}'
+        $manifestSchema = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'manifest schema is required' (Test-HasFinding $manifestSchema 'patch-manifest-schema') 'expected patch-manifest-schema'
+
+        Initialize-TestRoot $testRoot
         New-TestBundle -TestRoot $testRoot -Slug "filemode-v3" -PatchBody "diff --git a/README.md b/README.md`nold mode 100644`nnew mode 100755`n"
         $filemode = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
         $failures += Assert-Condition "filemode blocked detected" (Test-HasFinding $filemode "filemode-blocked") "expected filemode-blocked"
+
+        Initialize-TestRoot $testRoot
+        $newFilePatch = @(
+            'diff --git a/main/resources/new-fixture.txt b/main/resources/new-fixture.txt',
+            'new file mode 100644',
+            'index 0000000..1111111',
+            '--- /dev/null',
+            '+++ b/main/resources/new-fixture.txt',
+            '@@ -0,0 +1 @@',
+            '+created'
+        ) -join "`n"
+        New-TestBundle -TestRoot $testRoot -Slug "new-file-v3" -PatchBody ($newFilePatch + "`n")
+        $newFile = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition "canonical new-file patch is not filemode drift" (
+            $newFile.Status -eq 'PASS' -and
+            -not (Test-HasFinding $newFile 'filemode-blocked') -and
+            [int]$newFile.Observations.PatchFilemodeHits -eq 1
+        ) "expected canonical new-file patch to pass with observable mode metadata"
+
+        Set-TestFile (Join-Path $testRoot 'main/resources/new-fixture.txt') "created`n"
+        $newFileAfterApply = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition "canonical new-file structure stays valid during post-apply proof" (
+            -not (Test-HasFinding $newFileAfterApply 'filemode-blocked')
+        ) "source governance must not reuse the consumer-only target absence gate"
+
+        foreach ($unsafeMode in @('100755', '100600', '120000')) {
+            Initialize-TestRoot $testRoot
+            $unsafeModePatch = $newFilePatch.Replace('new file mode 100644', "new file mode $unsafeMode")
+            New-TestBundle -TestRoot $testRoot -Slug "unsafe-mode-$unsafeMode-v3" -PatchBody ($unsafeModePatch + "`n")
+            $unsafeModeResult = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+            $failures += Assert-Condition "unsafe new-file mode $unsafeMode remains blocked" (Test-HasFinding $unsafeModeResult 'filemode-blocked') "expected mode $unsafeMode to remain blocked"
+        }
+
+        Initialize-TestRoot $testRoot
+        $deletedPatch = $newFilePatch.Replace('new file mode 100644', 'deleted file mode 100644')
+        New-TestBundle -TestRoot $testRoot -Slug 'deleted-v3' -PatchBody ($deletedPatch + "`n")
+        $deleted = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'deleted file mode remains blocked' (Test-HasFinding $deleted 'filemode-blocked') 'expected deletion to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        $modeFreeDeletePatch = "diff --git a/README.md b/README.md`n--- a/README.md`n+++ /dev/null`n@@ -1 +0,0 @@`n-before`n"
+        New-TestBundle -TestRoot $testRoot -Slug 'mode-free-delete-v3' -PatchBody $modeFreeDeletePatch
+        $modeFreeDelete = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'mode-free deletion remains blocked' (Test-HasFinding $modeFreeDelete 'filemode-blocked') 'expected semantic deletion to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        $unsafePathPatch = $newFilePatch.Replace('main/resources/new-fixture.txt', '../outside.txt')
+        New-TestBundle -TestRoot $testRoot -Slug 'unsafe-path-v3' -PatchBody ($unsafePathPatch + "`n")
+        $unsafePath = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'unsafe new-file target remains blocked' (Test-HasFinding $unsafePath 'filemode-blocked') 'expected unsafe target to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        $adsPatch = "diff --git a/apikey.ps1::`$DATA b/apikey.ps1::`$DATA`n--- a/apikey.ps1::`$DATA`n+++ b/apikey.ps1::`$DATA`n@@ -1 +1 @@`n-before`n+after`n"
+        New-TestBundle -TestRoot $testRoot -Slug 'ads-path-v3' -PatchBody $adsPatch
+        $adsPath = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'ADS target remains blocked' (Test-HasFinding $adsPath 'unsafe-patch-path') 'expected ADS target to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        $envrcPatch = "diff --git a/.envrc b/.envrc`n--- a/.envrc`n+++ b/.envrc`n@@ -1 +1 @@`n-before`n+after`n"
+        New-TestBundle -TestRoot $testRoot -Slug 'envrc-path-v3' -PatchBody $envrcPatch
+        $envrcPath = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition '.env prefix target remains blocked' (Test-HasFinding $envrcPath 'unsafe-patch-path') 'expected .envrc target to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        $forbiddenPathPatch = $newFilePatch.Replace('main/resources/new-fixture.txt', 'pages/api/unsafe.ts')
+        New-TestBundle -TestRoot $testRoot -Slug 'forbidden-path-v3' -PatchBody ($forbiddenPathPatch + "`n")
+        $forbiddenPath = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'forbidden new-file target remains blocked' (Test-HasFinding $forbiddenPath 'filemode-blocked') 'expected forbidden target to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        $malformedHunkPatch = $newFilePatch.Replace('@@ -0,0 +1 @@', '@@ -0,0 +1,999 @@')
+        New-TestBundle -TestRoot $testRoot -Slug 'malformed-hunk-v3' -PatchBody ($malformedHunkPatch + "`n")
+        $malformedHunk = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'malformed new-file hunk count remains blocked' (Test-HasFinding $malformedHunk 'filemode-blocked') 'expected malformed new-file hunk to remain blocked'
+
+        $trackedEnvelope = @(
+            'diff --git a/f.txt b/f.txt',
+            '--- a/f.txt',
+            '+++ b/f.txt'
+        )
+        $validTracked = ($trackedEnvelope + @(
+            '@@ -1 +1 @@', '-a', '+A',
+            '@@ -3 +3 @@', '-c', '+C', ''
+        )) -join "`n"
+        Initialize-TestRoot $testRoot
+        New-TestBundle -TestRoot $testRoot -Slug 'exact-hunk-valid-v3' -PatchBody $validTracked
+        $validTrackedResult = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'exact tracked multi-hunk remains valid' (
+            $validTrackedResult.Status -eq 'PASS' -and -not (Test-HasFinding $validTrackedResult 'patch-structure-invalid')
+        ) 'expected exact multi-hunk patch to pass'
+
+        $headerLikePayload = ($trackedEnvelope + @(
+            '@@ -1 +1 @@', '--- /dev/null', '+++ /dev/null', ''
+        )) -join "`n"
+        Initialize-TestRoot $testRoot
+        New-TestBundle -TestRoot $testRoot -Slug 'header-like-payload-v3' -PatchBody $headerLikePayload
+        $headerLikePayloadResult = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'header-like tracked payload is not parsed as envelope or mode metadata' (
+            $headerLikePayloadResult.Status -eq 'PASS' -and
+            -not (Test-HasFinding $headerLikePayloadResult 'patch-structure-invalid') -and
+            -not (Test-HasFinding $headerLikePayloadResult 'filemode-blocked')
+        ) 'expected ---/+++ payload content to remain hunk data'
+
+        $unsafeLookingPayload = ($trackedEnvelope + @(
+            '@@ -1 +1 @@', '--- ../../outside.txt', '+++ pages/api/unsafe.ts', ''
+        )) -join "`n"
+        Initialize-TestRoot $testRoot
+        New-TestBundle -TestRoot $testRoot -Slug 'unsafe-looking-payload-v3' -PatchBody $unsafeLookingPayload
+        $unsafeLookingPayloadResult = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'path scanner ignores header-like hunk payload' (
+            $unsafeLookingPayloadResult.Status -eq 'PASS' -and
+            -not (Test-HasFinding $unsafeLookingPayloadResult 'unsafe-patch-path')
+        ) 'expected payload text to stay out of target path classification'
+
+        foreach ($case in @(
+            [pscustomobject]@{ Label = 'deficit'; Body = @('@@ -1 +1 @@', '-a', '+A', '@@ -3,2 +3,2 @@', '-c', '+C', '') },
+            [pscustomobject]@{ Label = 'overflow'; Body = @('@@ -1 +1 @@', '-a', '+A', '@@ -3 +3 @@', '-c', '+C', '+extra', '') },
+            [pscustomobject]@{ Label = 'marker-before'; Body = @('@@ -1 +1 @@', '\ No newline at end of file', '-a', '+A', '') },
+            [pscustomobject]@{ Label = 'trailing-junk'; Body = @('@@ -1 +1 @@', '-a', '+A', 'TRAILER', '') },
+            [pscustomobject]@{ Label = 'old-marker-before-old-payload'; Body = @('@@ -1,2 +1,2 @@', '-a', '\ No newline at end of file', '-b', '+A', '+B', '') },
+            [pscustomobject]@{ Label = 'new-marker-before-new-payload'; Body = @('@@ -1 +1,2 @@', '-a', '+A', '\ No newline at end of file', '+B', '') },
+            [pscustomobject]@{ Label = 'marker-before-later-hunk'; Body = @('@@ -1 +1 @@', '-a', '+A', '\ No newline at end of file', '@@ -3 +3 @@', '-c', '+C', '') },
+            [pscustomobject]@{ Label = 'context-marker-before-context'; Body = @('@@ -1,2 +1,2 @@', ' one', '\ No newline at end of file', ' two', '') }
+        )) {
+            Initialize-TestRoot $testRoot
+            $invalidTracked = ($trackedEnvelope + $case.Body) -join "`n"
+            New-TestBundle -TestRoot $testRoot -Slug "exact-hunk-$($case.Label)-v3" -PatchBody $invalidTracked
+            $invalidTrackedResult = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+            $failures += Assert-Condition "exact tracked $($case.Label) remains blocked" (
+                Test-HasFinding $invalidTrackedResult 'patch-structure-invalid'
+            ) 'expected patch-structure-invalid'
+        }
+
+        Initialize-TestRoot $testRoot
+        New-TestBundle -TestRoot $testRoot -Slug 'sidecar-secret-v3' -PatchBody "diff --git a/README.md b/README.md`n--- a/README.md`n+++ b/README.md`n@@ -1 +1 @@`n-before`n+after`n"
+        $sidecarSecret = 'author' + 'ization: REDACTED'
+        Set-TestFile (Join-Path $testRoot '__patch_drop__/sidecar-secret-v3.report.md') ("# report`n$sidecarSecret`n")
+        Set-TestBundleHashes -TestRoot $testRoot -Slug 'sidecar-secret-v3'
+        $sidecarSecretResult = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'SHA-covered sidecar secret remains blocked' (
+            Test-HasFinding $sidecarSecretResult 'secret-leak-risk'
+        ) 'expected secret-leak-risk from report sidecar'
+
+        Initialize-TestRoot $testRoot
+        New-TestBundle -TestRoot $testRoot -Slug 'manifest-contract-v3' -PatchBody "diff --git a/README.md b/README.md`n--- a/README.md`n+++ b/README.md`n@@ -1 +1 @@`n-before`n+after`n"
+        $manifestContractPath = Join-Path $testRoot '__patch_drop__/manifest-contract-v3.manifest.json'
+        $manifestContractData = Get-Content -LiteralPath $manifestContractPath -Raw | ConvertFrom-Json
+        $manifestContractData.topic = 'wrong-topic'
+        Set-TestFile $manifestContractPath (($manifestContractData | ConvertTo-Json -Depth 10) + "`n")
+        Set-TestBundleHashes -TestRoot $testRoot -Slug 'manifest-contract-v3'
+        $manifestContractResult = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'manifest identity mutation remains blocked' (
+            Test-HasFinding $manifestContractResult 'patch-manifest-contract'
+        ) 'expected patch-manifest-contract'
+
+        Initialize-TestRoot $testRoot
+        $binaryPatch = "diff --git a/main/resources/blob.bin b/main/resources/blob.bin`nBinary files a/main/resources/blob.bin and b/main/resources/blob.bin differ`n"
+        New-TestBundle -TestRoot $testRoot -Slug 'binary-v3' -PatchBody $binaryPatch
+        $binary = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'binary patch marker remains blocked' (Test-HasFinding $binary 'binary-patch-blocked') 'expected binary marker to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        New-TestBundle -TestRoot $testRoot -Slug 'nonsense-v3' -PatchBody "diff --git a/README.md b/README.md`nnonsense`n"
+        $nonsense = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'malformed unified envelope remains blocked' (Test-HasFinding $nonsense 'patch-structure-invalid') 'expected malformed unified patch to remain blocked'
+
+        Initialize-TestRoot $testRoot
+        $composedDelete = "--- a/README.md`n+++ /dev/null`n@@ -1 +0,0 @@`n-before`ndiff --git a/dummy.txt b/dummy.txt`n"
+        New-TestBundle -TestRoot $testRoot -Slug 'composed-delete-v3' -PatchBody $composedDelete
+        $composed = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition 'traditional composed deletion remains blocked' (Test-HasFinding $composed 'patch-structure-invalid') 'expected composed traditional patch to remain blocked'
 
         Initialize-TestRoot $testRoot
         New-TestBundle -TestRoot $testRoot -Slug "sha-v3" -PatchBody "diff --git a/README.md b/README.md`n" -WrongHash
@@ -892,7 +1514,21 @@ dependencies {
         New-Item -ItemType Directory -Force -Path (Join-Path $testRoot "__patch_drop__/source-edit-locks/corrupt-topic.lock") | Out-Null
         $sourceLeaseCorrupt = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
         $sourceLeaseCorruptReport = Read-TextOrEmpty $sourceLeaseCorrupt.ReportPath
-        $failures += Assert-Condition "corrupt source lease blocks final proof separately" ((Test-HasFinding $sourceLeaseCorrupt "source-lease-corrupt") -and ($sourceLeaseCorrupt.Observations.SourceLeaseActiveCount -eq 1) -and ($sourceLeaseCorrupt.Observations.SourceLeaseCorruptCount -eq 1) -and $sourceLeaseCorruptReport.Contains("sourceLeaseCorruptCount: 1")) "expected source-lease-corrupt finding and sourceLeaseCorruptCount=1"
+        $failures += Assert-Condition "corrupt source lease blocks final proof separately" ((Test-HasFinding $sourceLeaseCorrupt "source-lease-corrupt") -and ($sourceLeaseCorrupt.Observations.SourceLeaseActiveCount -eq 0) -and ($sourceLeaseCorrupt.Observations.SourceLeaseCorruptCount -eq 1) -and $sourceLeaseCorruptReport.Contains("sourceLeaseCorruptCount: 1")) "expected source-lease-corrupt finding, sourceLeaseActiveCount=0, and sourceLeaseCorruptCount=1"
+
+        Initialize-TestRoot $testRoot
+        $expiredLeaseDir = Join-Path $testRoot "__patch_drop__/source-edit-locks/expired-topic.lock"
+        New-Item -ItemType Directory -Force -Path $expiredLeaseDir | Out-Null
+        Set-TestFile (Join-Path $expiredLeaseDir "lease.json") "{`"topic`":`"expired-topic`",`"ownerId`":`"desktop-codex`",`"role`":`"desktop`",`"expiresAt`":`"2000-01-01T00:00:00Z`"}"
+        $sourceLeaseExpired = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $sourceLeaseExpiredReport = Read-TextOrEmpty $sourceLeaseExpired.ReportPath
+        $expiredLeaseFindingCount = @($sourceLeaseExpired.Findings | Where-Object { $_.Class -in @('source-lease-active', 'source-lease-corrupt') }).Count
+        $failures += Assert-Condition "legacy expired source lease is observable but nonblocking" (($expiredLeaseFindingCount -eq 0) -and ($sourceLeaseExpired.Observations.SourceLeaseActiveCount -eq 0) -and ($sourceLeaseExpired.Observations.SourceLeaseCorruptCount -eq 0) -and ($sourceLeaseExpired.Observations.SourceLeaseExpiredCount -eq 1) -and $sourceLeaseExpiredReport.Contains("sourceLeaseExpiredCount: 1")) "expected expired lease count=1 with no active/corrupt finding"
+
+        Initialize-TestRoot $testRoot
+        Set-TestFile (Join-Path $testRoot "__patch_drop__/source-edit-locks") "malformed lock root"
+        $sourceLeaseMalformedRoot = Invoke-SourceGovernanceProofChainV4 -RootPath $testRoot -AllowPendingBundles
+        $failures += Assert-Condition "non-directory source lease root fails closed" ((Test-HasFinding $sourceLeaseMalformedRoot "source-lease-corrupt") -and ($sourceLeaseMalformedRoot.Observations.SourceLeaseActiveCount -eq 0) -and ($sourceLeaseMalformedRoot.Observations.SourceLeaseCorruptCount -eq 1)) "expected malformed source-edit-locks root to block as corrupt"
 
         Initialize-TestRoot $testRoot
         Set-TestFile (Join-Path $testRoot "__patch_drop__/proof-v3.notebook-reconciliation.md") "proof-skipped because RunGradle not set`n"
