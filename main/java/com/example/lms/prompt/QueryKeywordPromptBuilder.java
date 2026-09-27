@@ -246,18 +246,18 @@ public class QueryKeywordPromptBuilder {
 
     public String buildSelfAskSeedPrompt(String question) {
         return String.format("""
-                ?뱀떊? 寃?됱뼱 ?앹꽦湲곗엯?덈떎.
-                ?ъ슜??吏덈Ц??媛???④낵?곸쑝濡?李얠쓣 ???덈뒗 **吏㏃? ?ㅼ썙?쒗삎 吏덉쓽** 1~3媛쒕? ?쒖떆?섏꽭??
-                - ?ㅻ챸?대굹 ?묐몢?щ뒗 湲덉??섍퀬, ??以꾩뿉 寃?됱뼱留?異쒕젰?섏꽭??
-                吏덈Ц: %s
+                당신은 검색어 생성기입니다.
+                사용자 질문을 가장 효과적으로 찾을 수 있는 **짧은 키워드형 질의** 1~3개를 제시하세요.
+                - 설명이나 접두사는 금지하고, 한 줄에 검색어만 출력하세요.
+                질문: %s
                 """, question);
     }
 
     public String buildSelfAskFollowupPrompt(String parent) {
         return String.format("""
-                "%s" 寃?됱뼱媛 愿묐쾾?꾪빀?덈떎.
-                ??援ъ껜?곸씠怨??뺣낫?깆쓣 ?믪씪 **?ㅼ썙?쒗삎 吏덉쓽** 1~2媛쒕쭔 ?쒓뎅?대줈 ?쒖븞?섏꽭??
-                (??以꾩뿉 ?섎굹, ?ㅻ챸 湲덉?)
+                "%s" 검색어가 광범위합니다.
+                더 구체적이고 정보성을 높일 **키워드형 질의** 1~2개만 한국어로 제안하세요.
+                (한 줄에 하나, 설명 금지)
                 """, parent);
     }
 

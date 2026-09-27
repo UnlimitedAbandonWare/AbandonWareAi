@@ -2,6 +2,8 @@ package com.example.lms.prompt.pose;
 
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.rag.learn.CfvmBanditStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.trace.SafeRedactor;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -39,6 +41,11 @@ public class PromptPoseRewardAspect {
     }
 
     private void updateReward(Throwable failure) {
+        GuardContext context = GuardContextHolder.get();
+        if (context != null && context.isInteractionMemoryWriteSuppressed()) {
+            TraceStore.put("promptPose.reward.skipped", "interaction_policy");
+            return;
+        }
         if (store == null) {
             return;
         }

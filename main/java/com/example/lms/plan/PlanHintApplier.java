@@ -14,6 +14,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -21,6 +23,11 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class PlanHintApplier {
     private static final System.Logger LOG = System.getLogger(PlanHintApplier.class.getName());
+    private static final int MAX_PLAN_TOP_K = 100;
+    private static final long MAX_PLAN_BUDGET_MS = 120_000L;
+    private static final int MAX_PLAN_MIN_CITATIONS = 100;
+    private static final String FIELD_APPLIED = "fieldApplied";
+    private static final String FIELD_REJECTED = "fieldRejected";
 
     private final ResourceLoader resourceLoader;
     private final ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
@@ -28,7 +35,9 @@ public class PlanHintApplier {
     @Value("${plans.cache.ttl-ms:5000}")
     private long cacheTtlMs;
 
-    private record CacheEntry(PlanHints hints, long loadedAtMs) {}
+    private record LoadedPlan(PlanHints hints, PlanExecutionSpec spec) {}
+
+    private record CacheEntry(PlanHints hints, PlanExecutionSpec spec, long loadedAtMs) {}
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public PlanHints load(String planId) {
@@ -36,12 +45,35 @@ public class PlanHintApplier {
         CacheEntry hit = cache.get(normalized);
         long now = System.currentTimeMillis();
         if (hit != null && (now - hit.loadedAtMs) <= cacheTtlMs) {
+            traceFieldDecisions(hit.hints);
             return hit.hints;
         }
 
-        PlanHints loaded = loadInternal(normalized);
-        cache.put(normalized, new CacheEntry(loaded, now));
-        return loaded;
+        LoadedPlan loaded = loadInternal(normalized);
+        cache.put(normalized, new CacheEntry(loaded.hints(), loaded.spec(), now));
+        traceFieldDecisions(loaded.hints());
+        return loaded.hints();
+    }
+
+    /**
+     * Additive execution view of {@code plan.when} / {@code plan.pipeline}.
+     * Kept out of {@link PlanHints} on purpose: the typed/raw projection is
+     * pinned by the boundary tests, while execution gating needs the gated
+     * structure separately.
+     */
+    public PlanExecutionSpec loadExecutionSpec(String planId) {
+        String normalized = normalizePlanId(planId);
+        CacheEntry hit = cache.get(normalized);
+        long now = System.currentTimeMillis();
+        if (hit != null && (now - hit.loadedAtMs) <= cacheTtlMs) {
+            return hit.spec();
+        }
+        // Same single resource read as load(): the spec is parsed inside
+        // loadInternal from the already-read plan node, so a request never
+        // performs a second plan-resource lookup for execution semantics.
+        LoadedPlan loaded = loadInternal(normalized);
+        cache.put(normalized, new CacheEntry(loaded.hints(), loaded.spec(), now));
+        return loaded.spec();
     }
 
     public void applyToGuardContext(PlanHints ph, GuardContext ctx) {
@@ -218,6 +250,8 @@ public class PlanHintApplier {
         meta.put("allowRag", String.valueOf(hints.isAllowRag()));
         meta.put("webTopK", String.valueOf(hints.getWebTopK()));
         meta.put("vecTopK", String.valueOf(hints.getVecTopK()));
+        meta.put("webBudgetMs", hints.getWebBudgetMs());
+        meta.put("vecBudgetMs", hints.getVecBudgetMs());
         meta.put("enableCrossEncoder", String.valueOf(hints.isEnableCrossEncoder()));
 
         TraceStore.put("plan.meta.applied", true);
@@ -269,10 +303,20 @@ public class PlanHintApplier {
         Map<String, Object> flat = new java.util.LinkedHashMap<>();
         flattenInto(flat, "", asMap(ph.raw().get("params")));
         flattenInto(flat, "", asMap(ph.raw().get("knobs")));
+        flat.putIfAbsent("alias.corrector.enabled", ph.raw().get("alias.corrector.enabled"));
+        flat.putIfAbsent("retrieval.web.enabled", ph.raw().get("retrieval.web.enabled"));
+        flat.putIfAbsent("retrieval.vector.enabled", ph.raw().get("retrieval.vector.enabled"));
+        for (String key : List.of("diversity.dpp.enabled", "retrieval.vector.enabled", "alias.corrector.enabled", "retrieval.web.enabled")) {
+            if (!flat.containsKey(key)) continue;
+            Boolean enabled = asBool(flat.get(key));
+            if (enabled == null) flat.remove(key);
+            else flat.put(key, enabled);
+        }
         return flat;
     }
 
     private static boolean isPassthroughKey(String key) {
+        if ("diversity.dpp.enabled".equals(key) || "alias.corrector.enabled".equals(key)) return true;
         for (String prefix : PASSTHROUGH_PREFIXES) {
             if (key.startsWith(prefix)) return true;
         }
@@ -302,17 +346,19 @@ public class PlanHintApplier {
 
     // ---------------- loader ----------------
 
-    private PlanHints loadInternal(String planId) {
+    private LoadedPlan loadInternal(String planId) {
         Resource res = findPlanResource(planId);
         if (res == null || !res.exists()) {
             TraceStore.append("plan.load.miss", safeTraceToken(planId));
-            return PlanHints.empty(planId);
+            return new LoadedPlan(PlanHints.empty(planId), PlanExecutionSpec.empty("missing_resource"));
         }
 
         try (InputStream in = res.getInputStream()) {
             @SuppressWarnings("unchecked")
             Map<String, Object> root = yamlMapper.readValue(in, Map.class);
-            if (root == null) return PlanHints.empty(planId);
+            if (root == null) {
+                return new LoadedPlan(PlanHints.empty(planId), PlanExecutionSpec.empty("empty_document"));
+            }
             PlanValidationResult validation = validatePlanRoot(planId, root);
             if (!validation.valid()) {
                 TraceStore.append("plan.schema.invalid", safeTraceToken(planId + ":" + validation.reason()));
@@ -321,7 +367,7 @@ public class PlanHintApplier {
                     TraceStore.put("plan.schema.fallback", safeTraceToken(planId + "->safe.v1"));
                     return loadInternal("safe.v1");
                 }
-                return PlanHints.empty("safe.v1");
+                return new LoadedPlan(PlanHints.empty("safe.v1"), PlanExecutionSpec.empty("invalid_plan"));
             }
             TraceStore.append("plan.schema.ok", safeTraceToken(planId));
 
@@ -330,6 +376,7 @@ public class PlanHintApplier {
             Map<String, Object> props = asMap(overrides.get("properties"));
             Map<String, Object> knobs = asMap(overrides.get("knobs"));
             Map<String, Object> params = asMap(root.get("params"));
+            PlanFieldDecisions fieldDecisions = new PlanFieldDecisions();
             List<String> chain = firstNonEmptyStrList(
                     asStrList(root.get("chain")),
                     asStrList(deepGet(root, "chain"))
@@ -371,83 +418,111 @@ public class PlanHintApplier {
                     asIntList(deepGet(root, "k_schedule"))
             );
 
-            Integer webTopK = firstNonNullInt(
-                    asInt(deepGet(root, "retrieval.k.web")),
-                    asInt(deepGet(root, "retrieval.topk.web")),
-                    asInt(deepGet(root, "k_allocation.web")),
-                    asInt(deepGet(root, "kAllocation.web")),
-                    asInt(props.get("naver.search.web-top-k")),
-                    asInt(props.get("web.search.top-k")),
+            Integer webTopK = fieldDecisions.positiveInt("topk.web", MAX_PLAN_TOP_K,
+                    deepGet(root, "retrieval.k.web"),
+                    deepGet(root, "retrieval.topk.web"),
+                    deepGet(root, "k_allocation.web"),
+                    deepGet(root, "kAllocation.web"),
+                    props.get("naver.search.web-top-k"),
+                    props.get("web.search.top-k"),
                     // legacy/AP plan params variants
-                    asInt(params.get("webTopK")),
-                    asInt(params.get("web_top_k")),
-                    asInt(params.get("web-top-k")),
-                    asInt(params.get("webTopk"))
+                    params.get("webTopK"),
+                    params.get("web_top_k"),
+                    params.get("web-top-k"),
+                    params.get("webTopk"),
+                    deepGet(params, "topk.web"),
+                    deepGet(params, "top_k.web"),
+                    deepGet(root, "topk.web"),
+                    deepGet(root, "top_k.web")
             );
 
-            Integer vecTopK = firstNonNullInt(
-                    asInt(deepGet(root, "retrieval.k.vector")),
-                    asInt(deepGet(root, "retrieval.topk.vector")),
-                    asInt(deepGet(root, "k_allocation.vector")),
-                    asInt(deepGet(root, "kAllocation.vector")),
-                    asInt(props.get("rag.vector.top-k")),
+            Integer vecTopK = fieldDecisions.positiveInt("topk.vector", MAX_PLAN_TOP_K,
+                    deepGet(root, "retrieval.k.vector"),
+                    deepGet(root, "retrieval.topk.vector"),
+                    deepGet(root, "k_allocation.vector"),
+                    deepGet(root, "kAllocation.vector"),
+                    props.get("rag.vector.top-k"),
                     // legacy/AP plan params variants
-                    asInt(params.get("vecTopK")),
-                    asInt(params.get("vectorTopK")),
-                    asInt(params.get("vector_top_k")),
-                    asInt(params.get("vector-top-k"))
+                    params.get("vecTopK"),
+                    params.get("vectorTopK"),
+                    params.get("vector_top_k"),
+                    params.get("vector-top-k"),
+                    deepGet(params, "topk.vector"),
+                    deepGet(params, "top_k.vector"),
+                    deepGet(root, "topk.vector"),
+                    deepGet(root, "top_k.vector")
             );
 
-            Integer kgTopK = firstNonNullInt(
-                    asInt(deepGet(root, "retrieval.k.kg")),
-                    asInt(deepGet(root, "retrieval.topk.kg")),
-                    asInt(deepGet(root, "k_allocation.kg")),
-                    asInt(deepGet(root, "kAllocation.kg")),
+            Integer kgTopK = fieldDecisions.positiveInt("topk.kg", MAX_PLAN_TOP_K,
+                    deepGet(root, "retrieval.k.kg"),
+                    deepGet(root, "retrieval.topk.kg"),
+                    deepGet(root, "k_allocation.kg"),
+                    deepGet(root, "kAllocation.kg"),
                     // legacy/AP plan params variants
-                    asInt(params.get("kgTopK")),
-                    asInt(params.get("kg_top_k")),
-                    asInt(params.get("kg-top-k"))
+                    params.get("kgTopK"),
+                    params.get("kg_top_k"),
+                    params.get("kg-top-k"),
+                    deepGet(params, "topk.kg"),
+                    deepGet(params, "top_k.kg"),
+                    deepGet(root, "topk.kg"),
+                    deepGet(root, "top_k.kg")
             );
 
-            Long webBudgetMs = firstNonNullLong(
-                    asLong(deepGet(root, "budgets.web_ms")),
-                    asLong(deepGet(root, "budgets.webMs")),
-                    asLong(deepGet(root, "budget.web_ms")),
-                    asLong(deepGet(root, "budget.webMs")),
-                    asLong(params.get("webBudgetMs")),
-                    asLong(params.get("web_budget_ms")),
-                    asLong(params.get("web-budget-ms"))
+            Object genericTopK = firstNonNullObject(
+                    params.get("topk"),
+                    params.get("topK"),
+                    params.get("top_k"),
+                    root.get("topk"),
+                    root.get("topK"),
+                    root.get("top_k"));
+            if (genericTopK != null && !(genericTopK instanceof Map<?, ?>)) {
+                fieldDecisions.reject("topk", "ambiguous_generic");
+            }
+
+            Long webBudgetMs = fieldDecisions.positiveLong("budget_ms.web", MAX_PLAN_BUDGET_MS,
+                    deepGet(root, "budgets.web_ms"),
+                    deepGet(root, "budgets.webMs"),
+                    deepGet(root, "budget.web_ms"),
+                    deepGet(root, "budget.webMs"),
+                    params.get("webBudgetMs"),
+                    params.get("web_budget_ms"),
+                    params.get("web-budget-ms")
             );
 
-            Long vecBudgetMs = firstNonNullLong(
-                    asLong(deepGet(root, "budgets.vec_ms")),
-                    asLong(deepGet(root, "budgets.vecMs")),
-                    asLong(deepGet(root, "budget.vec_ms")),
-                    asLong(deepGet(root, "budget.vecMs")),
-                    asLong(params.get("vecBudgetMs")),
-                    asLong(params.get("vec_budget_ms")),
-                    asLong(params.get("vec-budget-ms")),
-                    asLong(params.get("vector_budget_ms"))
+            Long vecBudgetMs = fieldDecisions.positiveLong("budget_ms.vector", MAX_PLAN_BUDGET_MS,
+                    deepGet(root, "budgets.vec_ms"),
+                    deepGet(root, "budgets.vecMs"),
+                    deepGet(root, "budget.vec_ms"),
+                    deepGet(root, "budget.vecMs"),
+                    params.get("vecBudgetMs"),
+                    params.get("vec_budget_ms"),
+                    params.get("vec-budget-ms"),
+                    params.get("vector_budget_ms")
             );
 
             // legacy/AP plan: a single budget_ms often exists
-            Long budgetMs = firstNonNullLong(
-                    asLong(params.get("budget_ms")),
-                    asLong(params.get("budgetMs")),
-                    asLong(params.get("budget"))
+            Long budgetMs = fieldDecisions.positiveLong("budget_ms", MAX_PLAN_BUDGET_MS,
+                    deepGet(root, "budgets.total_ms"),
+                    deepGet(root, "budgets.totalMs"),
+                    deepGet(root, "budget.total_ms"),
+                    deepGet(root, "budget.totalMs"),
+                    params.get("budget_ms"),
+                    params.get("budgetMs"),
+                    params.get("budget")
             );
-            if (budgetMs != null && budgetMs > 0) {
-                if (webBudgetMs == null || webBudgetMs <= 0) webBudgetMs = budgetMs;
-                if (vecBudgetMs == null || vecBudgetMs <= 0) vecBudgetMs = budgetMs;
+            if (budgetMs != null) {
+                if (webBudgetMs == null && !fieldDecisions.rejected("budget_ms.web")) webBudgetMs = budgetMs;
+                if (vecBudgetMs == null && !fieldDecisions.rejected("budget_ms.vector")) vecBudgetMs = budgetMs;
             }
 
-            Integer minCitations = firstNonNullInt(
-                    asInt(deepGet(root, "guards.min_citations")),
-                    asInt(deepGet(root, "gates.citationMin")),
-                    asInt(deepGet(root, "gates.citation.min")),
-                    asInt(deepGet(root, "gates.citation_min")),
-                    asInt(props.get("gate.citation.min")),
-                    asInt(params.get("minCitations"))
+            Integer minCitations = fieldDecisions.positiveInt(
+                    "guard.min_citations", MAX_PLAN_MIN_CITATIONS,
+                    deepGet(root, "guards.min_citations"),
+                    deepGet(root, "gates.citationMin"),
+                    deepGet(root, "gates.citation.min"),
+                    deepGet(root, "gates.citation_min"),
+                    props.get("gate.citation.min"),
+                    params.get("minCitations")
             );
 
             Boolean allowWeb = firstNonNullBool(asBool(params.get("allowWeb")), asBool(deepGet(root, "allowWeb")));
@@ -498,7 +573,8 @@ public class PlanHintApplier {
             Boolean onnxEnabled = firstNonNullBool(
                     asBool(deepGet(root, "onnx_enabled")),
                     asBool(deepGet(root, "onnx.enabled")),
-                    asBool(props.get("onnx.enabled"))
+                    asBool(props.get("onnx.enabled")),
+                    asBool(deepGet(root, "rerank.onnx.enabled"))
             );
 
             Boolean overdriveEnabled = firstNonNullBool(
@@ -640,8 +716,16 @@ public class PlanHintApplier {
             // passthrough: keep raw params/knobs for optional plan-overrides (e.g., extremeZ.*)
             raw.put("params", params);
             raw.put("knobs", knobs);
+            Boolean aliasEnabled = asBool(deepGet(root, "alias.corrector.enabled"));
+            if (aliasEnabled != null) raw.put("alias.corrector.enabled", aliasEnabled);
+            Boolean webEnabled = asBool(deepGet(root, "retrieval.web.enabled"));
+            if (webEnabled != null) raw.put("retrieval.web.enabled", webEnabled);
+            Boolean vectorEnabled = asBool(deepGet(root, "retrieval.vector.enabled"));
+            if (vectorEnabled != null) raw.put("retrieval.vector.enabled", vectorEnabled);
+            raw.put(FIELD_APPLIED, fieldDecisions.applied());
+            raw.put(FIELD_REJECTED, fieldDecisions.rejections());
 
-            return new PlanHints(
+            return new LoadedPlan(new PlanHints(
                     planId,
                     officialOnly,
                     whitelistProfile,
@@ -664,15 +748,38 @@ public class PlanHintApplier {
                     queryBurstCount,
                     extremeZEnabled,
                     raw
-            );
+            ), PlanExecutionSpec.parse(plan));
         } catch (Exception e) {
             TraceStore.append("plan.load.error", safeTraceToken(planId + ":load_failed"));
-            return PlanHints.empty(planId);
+            return new LoadedPlan(PlanHints.empty(planId), PlanExecutionSpec.empty("load_failed"));
         }
     }
 
     private static String safeTraceToken(String value) {
         return SafeRedactor.safeMessage(value, 160);
+    }
+
+    private static void traceFieldDecisions(PlanHints hints) {
+        TraceStore.put("plan.fields.applied", fieldDecisionList(hints, FIELD_APPLIED));
+        TraceStore.put("plan.fields.rejected", fieldDecisionList(hints, FIELD_REJECTED));
+    }
+
+    private static List<String> fieldDecisionList(PlanHints hints, String key) {
+        if (hints == null || hints.raw() == null || key == null) {
+            return List.of();
+        }
+        Object value = hints.raw().get(key);
+        if (!(value instanceof Collection<?> values)) {
+            return List.of();
+        }
+        LinkedHashSet<String> safe = new LinkedHashSet<>();
+        for (Object candidate : values) {
+            String token = candidate == null ? "" : String.valueOf(candidate).trim();
+            if (token.length() <= 80 && token.matches("[a-z0-9_.:-]+")) {
+                safe.add(token);
+            }
+        }
+        return List.copyOf(safe);
     }
 
     public static List<String> dslUnwiredKeys(PlanHints plan) {
@@ -1015,6 +1122,115 @@ public class PlanHintApplier {
             cur = ((Map<?, ?>) m).get(part);
         }
         return cur;
+    }
+
+    private static Object firstNonNullObject(Object... values) {
+        if (values == null) return null;
+        for (Object value : values) {
+            if (value != null) return value;
+        }
+        return null;
+    }
+
+    private record ParsedIntegral(BigInteger value, String error) {
+        static ParsedIntegral valid(BigInteger value) {
+            return new ParsedIntegral(value, "");
+        }
+
+        static ParsedIntegral invalid(String error) {
+            return new ParsedIntegral(null, error);
+        }
+    }
+
+    private static ParsedIntegral parseIntegral(Object raw) {
+        if (raw == null) {
+            return ParsedIntegral.invalid("invalid_number");
+        }
+        try {
+            String text = raw instanceof BigDecimal decimal
+                    ? decimal.toPlainString()
+                    : String.valueOf(raw).trim();
+            if (text.isBlank()) {
+                return ParsedIntegral.invalid("invalid_number");
+            }
+            return ParsedIntegral.valid(new BigDecimal(text).toBigIntegerExact());
+        } catch (NumberFormatException | ArithmeticException invalid) {
+            return ParsedIntegral.invalid("invalid_number");
+        }
+    }
+
+    private static final class PlanFieldDecisions {
+        private final LinkedHashSet<String> applied = new LinkedHashSet<>();
+        private final LinkedHashSet<String> rejected = new LinkedHashSet<>();
+
+        Integer positiveInt(String field, int max, Object... candidates) {
+            Object raw = firstNonNullObject(candidates);
+            if (raw == null) return null;
+            ParsedIntegral parsed = parseIntegral(raw);
+            if (parsed.value() == null) {
+                reject(field, parsed.error());
+                return null;
+            }
+            if (parsed.value().compareTo(BigInteger.valueOf(Integer.MIN_VALUE)) < 0
+                    || parsed.value().compareTo(BigInteger.valueOf(Integer.MAX_VALUE)) > 0) {
+                reject(field, "overflow");
+                return null;
+            }
+            int value = parsed.value().intValue();
+            if (value <= 0) {
+                reject(field, "non_positive");
+                return null;
+            }
+            if (value > max) {
+                reject(field, "out_of_range");
+                return null;
+            }
+            applied.add(field);
+            return value;
+        }
+
+        Long positiveLong(String field, long max, Object... candidates) {
+            Object raw = firstNonNullObject(candidates);
+            if (raw == null) return null;
+            ParsedIntegral parsed = parseIntegral(raw);
+            if (parsed.value() == null) {
+                reject(field, parsed.error());
+                return null;
+            }
+            if (parsed.value().compareTo(BigInteger.valueOf(Long.MIN_VALUE)) < 0
+                    || parsed.value().compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+                reject(field, "overflow");
+                return null;
+            }
+            long value = parsed.value().longValue();
+            if (value <= 0L) {
+                reject(field, "non_positive");
+                return null;
+            }
+            if (value > max) {
+                reject(field, "out_of_range");
+                return null;
+            }
+            applied.add(field);
+            return value;
+        }
+
+        void reject(String field, String reason) {
+            rejected.add(field + ":" + reason);
+        }
+
+        boolean rejected(String field) {
+            String prefix = field + ":";
+            return rejected.stream().anyMatch(value -> value.startsWith(prefix));
+        }
+
+        List<String> applied() {
+            return List.copyOf(applied);
+        }
+
+        List<String> rejections() {
+            return List.copyOf(rejected);
+        }
     }
 
     private static String asString(Object o) {

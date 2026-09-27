@@ -3,6 +3,7 @@ package com.example.lms.plugin.image.debug;
 import com.example.lms.debug.DebugEventLevel;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.DebugProbeType;
+import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -286,7 +287,7 @@ public class ImageJobDebugLedger {
         double reasonPenalty = reasonPenalty(reason);
         double repeatedPenalty = booleanish(data == null ? null : data.get("repeated")) ? 1.0d : 0.0d;
         double stalePenalty = booleanish(data == null ? null : data.get("stale"))
-                || number(data == null ? null : data.get("waitingMs")) > number(data == null ? null : data.get("expectedUiPollMs"))
+                || number("waitingMs", data == null ? null : data.get("waitingMs")) > number("expectedUiPollMs", data == null ? null : data.get("expectedUiPollMs"))
                 ? 1.0d : 0.0d;
         return clamp01(0.35d * clamp01(severity)
                 + 0.25d * clamp01(Math.abs(delta))
@@ -370,7 +371,7 @@ public class ImageJobDebugLedger {
         return value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
-    private static double number(Object value) {
+    private static double number(String field, Object value) {
         if (value instanceof Number n) {
             return n.doubleValue();
         }
@@ -379,9 +380,23 @@ public class ImageJobDebugLedger {
         }
         try {
             return Double.parseDouble(String.valueOf(value));
-        } catch (Exception ignore) {
+        } catch (Exception failure) {
+            TraceStore.put("image.job.debug.metricCoercion.failed", true);
+            traceMetricCoercion(field, value, failure);
             return 0.0d;
         }
+    }
+
+    private static void traceMetricCoercion(String field, Object value, Exception failure) {
+        String safeField = SafeRedactor.traceLabelOrFallback(field, "metric");
+        String raw = String.valueOf(value);
+        TraceStore.put("image.job.debug.metricCoercion.failed", true);
+        TraceStore.put("image.job.debug.metricCoercion.field", safeField);
+        TraceStore.put("image.job.debug.metricCoercion.errorType", "invalid_number");
+        TraceStore.put("image.job.debug.metricCoercion.exceptionType",
+                SafeRedactor.traceLabelOrFallback(failure == null ? null : failure.getClass().getSimpleName(), "unknown"));
+        TraceStore.put("image.job.debug.metricCoercion.valueHash", SafeRedactor.hashValue(raw));
+        TraceStore.put("image.job.debug.metricCoercion.valueLength", raw.length());
     }
 
     private static String safeStage(String stage) {

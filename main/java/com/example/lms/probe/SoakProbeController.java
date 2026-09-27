@@ -104,9 +104,13 @@ public class SoakProbeController {
                     // 1) Trip OPEN
                     int n = Math.max(1, breakerProps.getFailureThreshold());
                     for (int i = 0; i < n; i++) {
-                        breaker.recordFailure(key, NightmareBreaker.FailureKind.TIMEOUT, new TimeoutException("soak:trip"), "soak:trip");
+                        breaker.signalFailure(
+                                key,
+                                NightmareBreaker.FailureKind.TIMEOUT,
+                                new TimeoutException("soak:trip"),
+                                "soak.artificial-trip");
                     }
-                    resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":afterTripOpen", breaker.inspect(key), "recordFailure x" + n));
+                    resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":afterTripOpen", breaker.inspect(key), "signalFailure x" + n));
 
                     // 2) Wait until OPEN expires
                     try {
@@ -118,9 +122,10 @@ public class SoakProbeController {
                         resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":sleepInterrupted", breaker.inspect(key), "sleep interrupted"));
                     }
 
-                    // 3) Trigger HALF_OPEN transition via check
+                    // 3) Transition to HALF_OPEN and reserve the first real trial atomically.
+                    NightmareBreaker.CallPermit firstTrialPermit = null;
                     try {
-                        breaker.checkOpenOrThrow(key);
+                        firstTrialPermit = breaker.acquire(key, "soak.half-open-trial");
                     } catch (NightmareBreaker.OpenCircuitException oce) {
                         // If still OPEN, keep the exception note for visibility (should be rare unless clock skew).
                         log.debug("[AWX][probe][soak] breaker still open stage=half_open_check errorType={}",
@@ -128,34 +133,42 @@ public class SoakProbeController {
                         resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":stillOpen", breaker.inspect(key),
                                 "remaining=" + oce.remaining()));
                     }
-                    resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":afterCheck", breaker.inspect(key), "checkOpenOrThrow"));
+                    resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":afterCheck", breaker.inspect(key), "acquire"));
+                    if (firstTrialPermit == null) {
+                        continue;
+                    }
 
                     // 4) HALF_OPEN trials
                     boolean injectedFail = false;
                     for (int t = 1; t <= maxCalls; t++) {
-                        try {
-                            breaker.checkOpenOrThrow(key);
-                        } catch (NightmareBreaker.OpenCircuitException oce) {
-                            log.debug("[AWX][probe][soak] trial blocked stage=half_open_trial errorType={}",
-                                    oce.getClass().getSimpleName());
-                            resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":trial:" + t + ":blocked", breaker.inspect(key),
-                                    blockedProbeNote(oce.getMessage(), oce.remaining())));
-                            break;
+                        NightmareBreaker.CallPermit permit = firstTrialPermit;
+                        if (t > 1) {
+                            try {
+                                permit = breaker.acquire(key, "soak.half-open-trial");
+                            } catch (NightmareBreaker.OpenCircuitException oce) {
+                                log.debug("[AWX][probe][soak] trial blocked stage=half_open_trial errorType={}",
+                                        oce.getClass().getSimpleName());
+                                resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":trial:" + t + ":blocked", breaker.inspect(key),
+                                        blockedProbeNote(oce.getMessage(), oce.remaining())));
+                                break;
+                            }
                         }
 
                         if (failOnce && !injectedFail) {
                             injectedFail = true;
                             // HALF_OPEN에서 실패가 발생하면 즉시 OPEN으로 복귀해야 한다.
-                            breaker.recordFailure(key, NightmareBreaker.FailureKind.TIMEOUT, new TimeoutException("soak:half-open-fail"),
-                                    "soak:half-open-fail");
+                            permit.completeFailure(
+                                    NightmareBreaker.FailureKind.TIMEOUT,
+                                    new TimeoutException("soak:half-open-fail"),
+                                    "soak.half-open-trial");
                             resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":trial:" + t + ":failInjected", breaker.inspect(key),
                                     "half-open failure injected"));
                             break;
                         }
 
-                        breaker.recordSuccess(key, 5L);
+                        permit.completeSuccess(5L);
                         resp.steps.add(new SoakProbeResponse.Step("cycle:" + c + ":trial:" + t + ":success", breaker.inspect(key),
-                                "recordSuccess"));
+                                "completeSuccess"));
 
                         // Close early if transitioned
                         NightmareBreaker.StateView v = breaker.inspect(key);

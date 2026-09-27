@@ -7,6 +7,8 @@ import com.example.lms.dto.RagEvidenceMetadata;
 import com.example.lms.service.rag.pre.CognitiveState;
 import com.example.lms.rag.model.QueryDomain;
 import com.example.lms.guard.GuardProfile;
+import com.example.lms.guard.ConversationFrameV1;
+import com.example.lms.guard.InteractionEvidencePolicy;
 import com.example.lms.domain.enums.VisionMode;
 import com.example.lms.domain.enums.AnswerMode;
 import com.example.lms.domain.enums.MemoryMode;
@@ -44,6 +46,8 @@ public class PromptContext {
     private final String intent;
     private final String domain;
     private final Map<String, Set<String>> interactionRules;
+    private final InteractionEvidencePolicy.Decision interactionPolicyDecision;
+    private final ConversationFrameV1 conversationFrame;
     private final CognitiveState cognitiveState;
     private final List<Content> web;
     private final List<Content> rag;
@@ -77,6 +81,8 @@ public class PromptContext {
     private final String learningContextSummary;
     private final List<SampledCandidate> ensembleCandidates;
     private final boolean ensembleJudgeMode;
+    private final String contextRefinementSummary;
+    private final Map<String, Double> contextRefinementSignals;
     private final List<String> sourceUrls;
     private final List<String> officialSources;
 
@@ -98,6 +104,12 @@ public class PromptContext {
         this.intent = b.intent;
         this.domain = b.domain;
         this.interactionRules = b.interactionRules;
+        this.interactionPolicyDecision = b.interactionPolicyDecision == null
+                ? InteractionEvidencePolicy.offDecision()
+                : b.interactionPolicyDecision;
+        this.conversationFrame = b.conversationFrame == null
+                ? ConversationFrameV1.off(false)
+                : b.conversationFrame;
         this.cognitiveState = b.cognitiveState;
         // null-safe: prompt builders and renderers assume these are non-null
         this.web = b.web != null ? b.web : java.util.Collections.emptyList();
@@ -129,6 +141,10 @@ public class PromptContext {
         this.learningContextSummary = b.learningContextSummary;
         this.ensembleCandidates = b.ensembleCandidates != null ? b.ensembleCandidates : java.util.Collections.emptyList();
         this.ensembleJudgeMode = b.ensembleJudgeMode;
+        this.contextRefinementSummary = b.contextRefinementSummary;
+        this.contextRefinementSignals = b.contextRefinementSignals != null
+                ? java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(b.contextRefinementSignals))
+                : java.util.Collections.emptyMap();
         this.sourceUrls = b.sourceUrls != null ? b.sourceUrls : java.util.Collections.emptyList();
         this.officialSources = b.officialSources != null ? b.officialSources : java.util.Collections.emptyList();
 
@@ -151,6 +167,8 @@ public class PromptContext {
     public AnswerMode answerMode() { return answerMode; }
     public MemoryMode memoryMode() { return memoryMode; }
     public Map<String, Set<String>> interactionRules() { return interactionRules; }
+    public InteractionEvidencePolicy.Decision interactionPolicyDecision() { return interactionPolicyDecision; }
+    public ConversationFrameV1 conversationFrame() { return conversationFrame; }
     public CognitiveState cognitiveState() { return cognitiveState; }
     public List<Content> web() { return web; }
     public List<Content> rag() { return rag; }
@@ -179,6 +197,8 @@ public class PromptContext {
     public List<SampledCandidate> getEnsembleCandidates() { return ensembleCandidates; }
     public boolean ensembleJudgeMode() { return ensembleJudgeMode; }
     public boolean isEnsembleJudgeMode() { return ensembleJudgeMode; }
+    public String contextRefinementSummary() { return contextRefinementSummary; }
+    public Map<String, Double> contextRefinementSignals() { return contextRefinementSignals; }
     public List<String> sourceUrls() { return sourceUrls; }
     public List<String> getSourceUrls() { return sourceUrls; }
     public List<String> officialSources() { return officialSources; }
@@ -206,6 +226,8 @@ public class PromptContext {
                 .answerMode(answerMode)
                 .memoryMode(memoryMode)
                 .interactionRules(interactionRules)
+                .interactionPolicyDecision(interactionPolicyDecision)
+                .conversationFrame(conversationFrame)
                 .cognitiveState(cognitiveState)
                 .web(web)
                 .rag(rag)
@@ -231,6 +253,8 @@ public class PromptContext {
                 .learningContextSummary(learningContextSummary)
                 .ensembleCandidates(ensembleCandidates)
                 .ensembleJudgeMode(ensembleJudgeMode)
+                .contextRefinementSummary(contextRefinementSummary)
+                .contextRefinementSignals(contextRefinementSignals)
                 .sourceUrls(sourceUrls)
                 .officialSources(officialSources);
     }
@@ -252,6 +276,8 @@ public class PromptContext {
         private String learningContextSummary;
         private List<SampledCandidate> ensembleCandidates;
         private boolean ensembleJudgeMode;
+        private String contextRefinementSummary;
+        private Map<String, Double> contextRefinementSignals;
         private List<String> sourceUrls;
         private List<String> officialSources;
 
@@ -276,6 +302,8 @@ public class PromptContext {
         private AnswerMode answerMode = AnswerMode.BALANCED;
         private MemoryMode memoryMode = MemoryMode.HYBRID;
         private Map<String, Set<String>> interactionRules;
+        private InteractionEvidencePolicy.Decision interactionPolicyDecision = InteractionEvidencePolicy.offDecision();
+        private ConversationFrameV1 conversationFrame = ConversationFrameV1.off(false);
         private CognitiveState cognitiveState;
         private List<Content> web;
         private List<Content> rag;
@@ -311,6 +339,14 @@ public class PromptContext {
         public Builder answerMode(AnswerMode m) { this.answerMode = m; return this; }
         public Builder memoryMode(MemoryMode m) { this.memoryMode = m; return this; }
         public Builder interactionRules(Map<String, Set<String>> m) { this.interactionRules = m; return this; }
+        public Builder interactionPolicyDecision(InteractionEvidencePolicy.Decision decision) {
+            this.interactionPolicyDecision = decision;
+            return this;
+        }
+        public Builder conversationFrame(ConversationFrameV1 frame) {
+            this.conversationFrame = frame;
+            return this;
+        }
         public Builder cognitiveState(CognitiveState cs) { this.cognitiveState = cs; return this; }
         public Builder web(List<Content> w) { this.web = w; return this; }
         public Builder rag(List<Content> r) { this.rag = r; return this; }
@@ -345,6 +381,8 @@ public class PromptContext {
         public Builder learningContextSummary(String summary) { this.learningContextSummary = summary; return this; }
         public Builder ensembleCandidates(List<SampledCandidate> candidates) { this.ensembleCandidates = candidates; return this; }
         public Builder ensembleJudgeMode(boolean enabled) { this.ensembleJudgeMode = enabled; return this; }
+        public Builder contextRefinementSummary(String summary) { this.contextRefinementSummary = summary; return this; }
+        public Builder contextRefinementSignals(Map<String, Double> signals) { this.contextRefinementSignals = signals; return this; }
         public Builder sourceUrls(List<String> urls) { this.sourceUrls = urls; return this; }
         public Builder officialSources(List<String> urls) { this.officialSources = urls; return this; }
 

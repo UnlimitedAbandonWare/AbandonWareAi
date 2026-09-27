@@ -13,13 +13,16 @@ import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDate;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -226,10 +229,89 @@ public class FileSystemImageStorage {
             if (uri.getUserInfo() != null) {
                 throw new IOException("image download URL must not contain user info");
             }
+            requirePublicLiteralHost(uri.getHost());
             return uri;
         } catch (IllegalArgumentException ex) {
             throw new IOException("invalid image download URL", ex);
         }
+    }
+
+    private static void requirePublicLiteralHost(String rawHost) throws IOException {
+        String host = normalizeHost(rawHost);
+        if (host.equals("localhost") || host.endsWith(".localhost")) {
+            throw new IOException("image download URL must use a public host");
+        }
+        if (!looksLikeNumericAddress(host)) {
+            return;
+        }
+        if (host.contains("%")) {
+            throw new IOException("image download URL must use a public host");
+        }
+        final InetAddress address;
+        try {
+            address = InetAddress.getByName(host);
+        } catch (UnknownHostException invalidAddress) {
+            throw new IOException("image download URL must use a public host", invalidAddress);
+        }
+        if (isNonPublicAddress(address)) {
+            throw new IOException("image download URL must use a public host");
+        }
+    }
+
+    private static String normalizeHost(String rawHost) {
+        String host = rawHost == null ? "" : rawHost.trim().toLowerCase(Locale.ROOT);
+        if (host.startsWith("[") && host.endsWith("]") && host.length() > 2) {
+            host = host.substring(1, host.length() - 1);
+        }
+        while (host.endsWith(".") && host.length() > 1) {
+            host = host.substring(0, host.length() - 1);
+        }
+        return host;
+    }
+
+    private static boolean looksLikeNumericAddress(String host) {
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        if (host.indexOf(':') >= 0 || host.matches("[0-9.]+")) {
+            return true;
+        }
+        return host.matches("(?:0x[0-9a-f]+\\.?)+");
+    }
+
+    private static boolean isNonPublicAddress(InetAddress address) {
+        if (address == null
+                || address.isAnyLocalAddress()
+                || address.isLoopbackAddress()
+                || address.isLinkLocalAddress()
+                || address.isSiteLocalAddress()
+                || address.isMulticastAddress()) {
+            return true;
+        }
+        byte[] bytes = address.getAddress();
+        if (bytes.length == 4) {
+            int first = bytes[0] & 0xff;
+            int second = bytes[1] & 0xff;
+            int third = bytes[2] & 0xff;
+            return first == 0
+                    || (first == 100 && second >= 64 && second <= 127)
+                    || (first == 192 && second == 0)
+                    || (first == 192 && second == 88 && third == 99)
+                    || (first == 198 && (second == 18 || second == 19))
+                    || (first == 198 && second == 51 && third == 100)
+                    || (first == 203 && second == 0 && third == 113)
+                    || first >= 240;
+        }
+        if (bytes.length == 16) {
+            int first = bytes[0] & 0xff;
+            boolean uniqueLocal = (first & 0xfe) == 0xfc;
+            boolean documentation = first == 0x20
+                    && (bytes[1] & 0xff) == 0x01
+                    && (bytes[2] & 0xff) == 0x0d
+                    && (bytes[3] & 0xff) == 0xb8;
+            return uniqueLocal || documentation;
+        }
+        return true;
     }
 
     private record Destination(Path path, String publicUrl) {

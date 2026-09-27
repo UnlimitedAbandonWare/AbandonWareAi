@@ -3,6 +3,7 @@ package com.example.lms.prompt.pose;
 import com.example.lms.config.PromptPoseProperties;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.rag.learn.CfvmBanditStore;
+import com.example.lms.service.guard.SensitiveTopicDetector;
 import com.example.lms.trace.SafeRedactor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,18 +87,25 @@ public class PromptPoseApplicationJudge {
 
     private String intentSlot(PromptPoseInputSanitizer.SanitizedInput input) {
         String preview = safeLower(input.preview());
-        if (containsAny(preview, "explore", "brainstorm", "creative", "idea", "탐색", "응용", "아이디어", "과감")) {
-            return "explore";
-        }
-        if (containsAny(preview, "citation", "verify", "evidence", "official", "source", "검증", "근거", "인용", "출처", "논문")) {
+        if (SensitiveTopicDetector.isSensitiveText(preview) || containsAny(preview,
+                "citation", "verify", "evidence", "official", "source", "fact", "factual", "accuracy",
+                "latest", "current", "medical", "health", "diagnosis", "treatment", "legal", "law",
+                "attorney", "privacy", "personal data", "credential", "password", "api key", "security",
+                "vulnerability", "self-harm", "self harm", "suicide", "suicidal", "abuse", "trauma", "ptsd",
+                "prescription", "lawsuit", "oauth token", "access token", "personal information",
+                "검증", "근거", "인용", "출처", "논문", "사실", "정확", "최신", "현재",
+                "의료", "건강", "진단", "치료", "법률", "법적", "개인정보", "자격 증명", "비밀번호",
+                "보안", "취약점", "자해", "자살", "학대", "폭력", "트라우마", "처방", "소송", "개인 정보")) {
             return "evidence_strict";
         }
-        if ("debug".equals(input.coarseIntent()) || "patch".equals(input.coarseIntent())
-                || containsAny(preview, "patch", "fix", "debug", "failure", "장애", "수정")) {
+        if (containsAny(preview, "patch", "fix", "debug", "failure", "fail", "error", "exception", "장애", "수정")) {
             return "debug_patch";
         }
         if ("compare".equals(input.coarseIntent()) || containsAny(preview, "compare", "vs", "tradeoff", "비교")) {
             return "compare";
+        }
+        if (containsAny(preview, "explore", "brainstorm", "creative", "idea", "탐색", "응용", "아이디어", "과감")) {
+            return "explore";
         }
         return "general";
     }
@@ -117,7 +125,6 @@ public class PromptPoseApplicationJudge {
     private String failureSlot() {
         Map<String, Object> trace = TraceStore.getAll();
         String raw = firstTrace(trace,
-                "promptPose.failureClass",
                 "blackbox.risk.dominantFailure",
                 "extremez.risk.primaryCause",
                 "web.brave.skipped.reason",
@@ -126,7 +133,8 @@ public class PromptPoseApplicationJudge {
                 "web.serpapi.skipped.reason",
                 "zero100.scheduler.failureClass",
                 "queryTransformer.reason",
-                "starvationFallback.trigger");
+                "starvationFallback.trigger",
+                "promptPose.failureClass");
         String s = safeLower(raw);
         if (s.isBlank() || "none".equals(s)) {
             return "none";
@@ -417,7 +425,7 @@ public class PromptPoseApplicationJudge {
                 continue;
             }
             String s = String.valueOf(value).trim();
-            if (!s.isBlank()) {
+            if (!s.isBlank() && !"none".equalsIgnoreCase(s)) {
                 return s;
             }
         }
@@ -454,9 +462,30 @@ public class PromptPoseApplicationJudge {
             return false;
         }
         for (String needle : needles) {
-            if (needle != null && !needle.isBlank() && value.contains(needle)) {
+            if (needle != null && !needle.isBlank() && containsMarker(value, needle)) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    private static boolean containsMarker(String value, String needle) {
+        if (needle.codePoints().anyMatch(cp -> cp > 0x7f)) {
+            return value.contains(needle);
+        }
+        int from = 0;
+        while (from <= value.length() - needle.length()) {
+            int index = value.indexOf(needle, from);
+            if (index < 0) {
+                return false;
+            }
+            int end = index + needle.length();
+            boolean leftBoundary = index == 0 || !Character.isLetterOrDigit(value.charAt(index - 1));
+            boolean rightBoundary = end == value.length() || !Character.isLetterOrDigit(value.charAt(end));
+            if (leftBoundary && rightBoundary) {
+                return true;
+            }
+            from = index + 1;
         }
         return false;
     }

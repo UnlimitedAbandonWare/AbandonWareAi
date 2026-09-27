@@ -1,6 +1,9 @@
 package com.example.lms.probe;
 
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.debug.DebugEventLevel;
+import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugProbeType;
 import com.example.lms.trace.LogCorrelation;
 import com.example.lms.search.TraceStore;
 import com.example.lms.probe.dto.SearchProbeResponse;
@@ -31,6 +34,9 @@ public class SearchProbeController {
     @Autowired(required = false)
     private TraceSnapshotStore traceSnapshotStore;
 
+    @Autowired(required = false)
+    private DebugEventStore debugEventStore;
+
     public SearchProbeController(
             SearchProbeService service,
             @Value("${probe.search.enabled:false}") boolean enabled,
@@ -57,7 +63,19 @@ public class SearchProbeController {
         if (adminToken == null || adminToken.isBlank() || !adminToken.equals(token)) {
             return ResponseEntity.status(401).body(err("UNAUTHORIZED"));
         }
-        Object out = service.run(req);
+        Object out;
+        try {
+            out = service.run(req);
+        } catch (RuntimeException error) {
+            TraceStore.put("traceMemory.probe.search.serviceRun.catch", Boolean.TRUE);
+            recordServiceFailure(error);
+            String snapshotId = captureProbeSnapshot(request, 500);
+            ResponseEntity.BodyBuilder failed = ResponseEntity.status(500);
+            if (snapshotId != null && !snapshotId.isBlank()) {
+                failed.header("X-Trace-Snapshot-Id", snapshotId);
+            }
+            return failed.body(err("PROBE_FAILED"));
+        }
         restoreSelectedTrace(out);
         String snapshotId = captureProbeSnapshot(request);
         appendProbeSnapshotDiagnostics(out, snapshotId);
@@ -73,6 +91,10 @@ public class SearchProbeController {
     }
 
     private String captureProbeSnapshot(HttpServletRequest request) {
+        return captureProbeSnapshot(request, 200);
+    }
+
+    private String captureProbeSnapshot(HttpServletRequest request, int status) {
         TraceSnapshotStore store = traceSnapshotStore;
         if (store == null) {
             TraceStore.put("traceSnapshot.probe.search.storeAvailable", Boolean.FALSE);
@@ -84,7 +106,7 @@ public class SearchProbeController {
         try {
             String method = request == null ? "POST" : request.getMethod();
             String path = request == null ? "/api/probe/search" : request.getRequestURI();
-            String snapshotId = store.captureCurrent("probe_search", method, path, 200, null);
+            String snapshotId = store.captureCurrent("probe_search", method, path, status, null);
             boolean captured = snapshotId != null && !snapshotId.isBlank();
             TraceStore.put("traceSnapshot.probe.search.captured", captured);
             if (captured) {
@@ -101,6 +123,51 @@ public class SearchProbeController {
             TraceStore.put("traceSnapshot.probe.search.errorType",
                     error == null ? "unknown" : error.getClass().getSimpleName());
             return null;
+        }
+    }
+
+    private void recordServiceFailure(RuntimeException error) {
+        String errorType = error == null ? "unknown" : error.getClass().getSimpleName();
+        String errorHash = SafeRedactor.hashValue(error == null ? "" : String.valueOf(error.getMessage()));
+        TraceStore.put("traceSnapshot.probe.search.serviceFailed", Boolean.TRUE);
+        TraceStore.put("traceSnapshot.probe.search.failedStage", "serviceRun");
+        TraceStore.put("traceSnapshot.probe.search.errorType", errorType);
+        TraceStore.put("traceSnapshot.probe.search.errorHash", errorHash);
+        TraceStore.put("traceMemory.probe.search.serviceFailed", Boolean.TRUE);
+        TraceStore.put("traceMemory.probe.search.failedStage", "serviceRun");
+        TraceStore.put("traceMemory.probe.search.errorType", errorType);
+        TraceStore.put("traceMemory.probe.search.errorHash", errorHash);
+        TraceStore.put("traceMemory.virtualCheckpoint.probeSearch", "serviceRun.failed");
+        TraceStore.put("traceMemory.probe.search.sequence", TraceStore.nextSequence("traceMemory.probe.search.failure"));
+        emitServiceFailureDebugEvent(errorType, errorHash);
+    }
+
+    private void emitServiceFailureDebugEvent(String errorType, String errorHash) {
+        DebugEventStore store = debugEventStore;
+        if (store == null) {
+            TraceStore.put("traceMemory.probe.search.debugEventStoreAvailable", Boolean.FALSE);
+            return;
+        }
+        try {
+            store.emit(
+                    DebugProbeType.TRACE_MEMORY,
+                    DebugEventLevel.ERROR,
+                    "trace-memory:probe-search:service-run",
+                    "Probe search service failed before trace snapshot capture",
+                    "SearchProbeController.search",
+                    Map.of(
+                            "stage", "serviceRun",
+                            "errorType", errorType,
+                            "errorHash", errorHash,
+                            "snapshotAttempted", Boolean.TRUE),
+                    null);
+            TraceStore.put("traceMemory.probe.search.debugEventEmitted", Boolean.TRUE);
+        } catch (RuntimeException debugError) {
+            TraceStore.put("traceMemory.probe.search.debugEventSuppressed", Boolean.TRUE);
+            TraceStore.put("traceMemory.probe.search.debugEventErrorType",
+                    debugError.getClass().getSimpleName());
+            TraceStore.put("traceMemory.probe.search.debugEventErrorHash",
+                    SafeRedactor.hashValue(String.valueOf(debugError.getMessage())));
         }
     }
 

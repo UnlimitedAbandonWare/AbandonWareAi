@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.LinkedHashMap;
@@ -58,6 +59,7 @@ public class ImageJobService {
 
     // Recent job durations (in milliseconds) for ETA estimation
     private final Deque<Long> recentDurations = new LinkedList<>();
+    private final Object recentDurationsLock = new Object();
 
     /**
      * Enqueue a new image generation request.  The job is persisted in
@@ -135,11 +137,15 @@ public class ImageJobService {
         }
         long relayMs = props.getRelayDelayMs();
         // Compute moving average duration; fallback to relay delay when no samples exist
+        List<Long> durationSnapshot;
+        synchronized (recentDurationsLock) {
+            durationSnapshot = new ArrayList<>(recentDurations);
+        }
         long avgMs;
-        if (recentDurations.isEmpty()) {
+        if (durationSnapshot.isEmpty()) {
             avgMs = relayMs;
         } else {
-            avgMs = (long) recentDurations.stream().mapToLong(Long::longValue).average().orElse(relayMs);
+            avgMs = (long) durationSnapshot.stream().mapToLong(Long::longValue).average().orElse(relayMs);
         }
         long etaMs = relayMs * index + avgMs;
         long etaSeconds = (long) Math.ceil(etaMs / 1000.0);
@@ -275,9 +281,12 @@ public class ImageJobService {
                             "artifactHashPresent", job.getArtifactHash() != null));
             jobRepo.save(job);
             // Maintain a moving window of recent durations for ETA estimation
-            recentDurations.addLast(duration);
-            if (recentDurations.size() > props.getEtaSamples()) {
-                recentDurations.removeFirst();
+            int etaSamples = props.getEtaSamples();
+            synchronized (recentDurationsLock) {
+                recentDurations.addLast(duration);
+                if (recentDurations.size() > etaSamples) {
+                    recentDurations.removeFirst();
+                }
             }
             // Clear any image meta to prevent leakage into subsequent calls
             try {

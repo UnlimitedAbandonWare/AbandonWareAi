@@ -256,21 +256,19 @@ public class ProbeConfig {
                         hasUsableConfigValue(env, "gpt-search.brave.subscription-token"));
                 brave.params.put("keyPresent.gpt-search.brave.api-key",
                         hasUsableConfigValue(env, "gpt-search.brave.api-key"));
-                boolean envGptSub = envPresent("GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN");
-                boolean envBraveSub = envPresent("BRAVE_SUBSCRIPTION_TOKEN");
                 boolean envGptApi = envPresent("GPT_SEARCH_BRAVE_API_KEY");
                 boolean envBraveApi = envPresent("BRAVE_API_KEY");
+                boolean envBraveFree = envPresent("BRAVE_API_KEY_FREE");
+                boolean envGptSub = envPresent("GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN");
+                boolean envBraveSub = envPresent("BRAVE_SUBSCRIPTION_TOKEN");
 
-                brave.params.put("envPresent.GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN", envGptSub);
-                brave.params.put("envPresent.BRAVE_SUBSCRIPTION_TOKEN", envBraveSub);
                 brave.params.put("envPresent.GPT_SEARCH_BRAVE_API_KEY", envGptApi);
                 brave.params.put("envPresent.BRAVE_API_KEY", envBraveApi);
-
-                // Probe checklist fields: ensure exactly ONE subscription token is set.
-                brave.params.put("envPresent.subscriptionToken.single", (envGptSub ^ envBraveSub));
-                brave.params.put("envPresent.subscriptionToken.winner",
-                        envGptSub ? "GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN"
-                                : (envBraveSub ? "BRAVE_SUBSCRIPTION_TOKEN" : null));
+                brave.params.put("envPresent.BRAVE_API_KEY_FREE", envBraveFree);
+                brave.params.put("envPresent.GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN", envGptSub);
+                brave.params.put("envPresent.BRAVE_SUBSCRIPTION_TOKEN", envBraveSub);
+                brave.params.put("envPresent.subscriptionToken.retired", envGptSub || envBraveSub);
+                brave.params.put("envPresent.subscriptionToken.winner", null);
                 brave.params.put("envPresent.apiKey.single", (envGptApi ^ envBraveApi));
                 brave.params.put("envPresent.apiKey.winner",
                         envGptApi ? "GPT_SEARCH_BRAVE_API_KEY"
@@ -650,17 +648,17 @@ public class ProbeConfig {
 
             boolean envSubA = envPresent("GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN");
             boolean envSubB = envPresent("BRAVE_SUBSCRIPTION_TOKEN");
+            boolean envFree = envPresent("BRAVE_API_KEY_FREE");
             boolean envApiA = envPresent("GPT_SEARCH_BRAVE_API_KEY");
             boolean envApiB = envPresent("BRAVE_API_KEY");
 
             brave.put("envPresent.GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN", envSubA);
             brave.put("envPresent.BRAVE_SUBSCRIPTION_TOKEN", envSubB);
+            brave.put("envPresent.BRAVE_API_KEY_FREE", envFree);
+            brave.put("envPresent.subscriptionToken.winner", null);
             brave.put("envPresent.GPT_SEARCH_BRAVE_API_KEY", envApiA);
             brave.put("envPresent.BRAVE_API_KEY", envApiB);
-            brave.put("envPresent.subscriptionToken.single", (envSubA ^ envSubB));
-            brave.put("envPresent.subscriptionToken.winner",
-                    envSubA ? "GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN"
-                            : (envSubB ? "BRAVE_SUBSCRIPTION_TOKEN" : null));
+            brave.put("envPresent.subscriptionToken.retired", envSubA || envSubB);
             brave.put("envPresent.apiKey.single", (envApiA ^ envApiB));
             brave.put("envPresent.apiKey.winner",
                     envApiA ? "GPT_SEARCH_BRAVE_API_KEY"
