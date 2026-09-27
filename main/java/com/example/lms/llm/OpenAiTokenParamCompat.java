@@ -1,13 +1,15 @@
 package com.example.lms.llm;
 
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * OpenAI API 토큰 파라미터 호환 헬퍼.
  *
  * <p>일부 최신 OpenAI 모델(gpt-5.*, o1, o3, o4)은 legacy {@code max_tokens}를 거부하고
- * {@code max_completion_tokens}를 요구함. LangChain4j 1.0.1은 {@code max_completion_tokens}를
- * 지원하지 않으므로, 해당 모델에서는 maxTokens 세팅을 스킵해야 함.
+ * {@code max_completion_tokens}를 요구함. LangChain4j 1.0.1은 {@code maxCompletionTokens}
+ * 빌더 메서드를 지원하며, 해당 모델에서는 {@code max_completion_tokens}를
+ * 전송한다(호출: LlmRouterAspect, GeminiGateway).
  *
  * <p>추가: 프록시/게이트웨이 환경에서도 모델별 규칙을 바꿀 수 있도록
  * {@link OpenAiModelParamMatrix}를 (선택적으로) 연동한다.
@@ -83,7 +85,8 @@ public final class OpenAiTokenParamCompat {
     /**
      * LangChain4j builder용: legacy maxTokens를 보내도 되는지 판단.
      *
-     * <p>matrix가 NONE/ max_completion_tokens이면 false. (LangChain4j 1.0.1은 max_completion_tokens 미지원)
+     * <p>matrix가 MAX_TOKENS이면 true; MAX_COMPLETION_TOKENS/NONE이면 false
+     * (해당 모델에서는 {@code max_completion_tokens} 전송 또는 파라미터 생략).
      */
     public static boolean shouldSendLegacyMaxTokens(String modelName, String baseUrl) {
         OpenAiModelParamMatrix m = MATRIX;
@@ -121,7 +124,7 @@ public final class OpenAiTokenParamCompat {
         while (cur != null && guard++ < 8) {
             String msg = cur.getMessage();
             if (msg != null) {
-                String s = msg.toLowerCase();
+                String s = msg.toLowerCase(Locale.ROOT);
                 if (s.contains("unsupported parameter") && s.contains("max_tokens")) {
                     return true;
                 }
@@ -169,11 +172,11 @@ public final class OpenAiTokenParamCompat {
     private static boolean isUnsupportedParam(Throwable t, String paramKey) {
         Throwable cur = t;
         int guard = 0;
-        String p = (paramKey == null) ? "" : paramKey.toLowerCase();
+        String p = (paramKey == null) ? "" : paramKey.toLowerCase(Locale.ROOT);
         while (cur != null && guard++ < 8) {
             String msg = cur.getMessage();
             if (msg != null) {
-                String s = msg.toLowerCase();
+                String s = msg.toLowerCase(Locale.ROOT);
                 // ERROR_AW 패턴 매칭
                 if (s.contains("unsupported value") && s.contains(p)) return true;
                 if (s.contains("unsupported_value") && s.contains(p)) return true;
@@ -190,7 +193,7 @@ public final class OpenAiTokenParamCompat {
 
     static String normalizeBaseUrl(String raw) {
         if (raw == null) return "";
-        String s = raw.trim().toLowerCase();
+        String s = raw.trim().toLowerCase(Locale.ROOT);
         while (s.endsWith("/")) {
             s = s.substring(0, s.length() - 1);
         }

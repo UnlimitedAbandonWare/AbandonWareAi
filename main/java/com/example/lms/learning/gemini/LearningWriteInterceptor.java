@@ -41,6 +41,10 @@ public class LearningWriteInterceptor {
         if (answer == null || answer.isBlank()) {
             return;
         }
+        if (!Double.isFinite(score)) {
+            log.debug("Learning write skipped non-finite score");
+            return;
+        }
         double boundedScore = Math.max(0.0, Math.min(1.0, score));
         if (boundedScore < minScore) {
             log.debug("Learning write skipped score={} minScore={}", boundedScore, minScore);

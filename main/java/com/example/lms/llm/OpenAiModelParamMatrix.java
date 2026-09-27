@@ -149,14 +149,16 @@ public class OpenAiModelParamMatrix {
      *   <li>baseUrl-matched ruleset (longest substring match)</li>
      *   <li>ruleset.byModel exact match</li>
      *   <li>ruleset.byPrefix longest prefix match</li>
-     *   <li>ruleset.tokenParamDefault (or global default if missing)</li>
+     *   <li>ruleset.tokenParamDefault</li>
+     *   <li>global byModel exact match, then global byPrefix longest prefix match</li>
+     *   <li>global tokenParamDefault</li>
      *   <li>Safety fallback: official OpenAI + (gpt-5/o-series) => MAX_COMPLETION_TOKENS</li>
      * </ol>
      */
     public TokenParam resolveTokenParam(String modelName, String baseUrl) {
         RuleSet rs = findRuleSetForBaseUrl(baseUrl);
 
-        // 1) baseUrl ruleset: exact/prefix override only
+        // 1) baseUrl ruleset: exact, prefix, then scoped default
         TokenParam baseOverride = null;
         if (rs != null) {
             TokenParam exactOrPrefix = resolveExactOrPrefix(modelName, rs.getByModel(), rs.getByPrefix());
@@ -167,10 +169,13 @@ public class OpenAiModelParamMatrix {
             }
         }
 
-        // 2) global: exact/prefix
-        TokenParam resolved = resolveExactOrPrefix(modelName, byModel, byPrefix);
+        // 2) Fall back to global rules only when the endpoint scope has no rule.
+        TokenParam resolved = baseOverride;
         if (resolved == null) {
-            resolved = (baseOverride != null) ? baseOverride : TokenParam.from(tokenParamDefault);
+            resolved = resolveExactOrPrefix(modelName, byModel, byPrefix);
+        }
+        if (resolved == null) {
+            resolved = TokenParam.from(tokenParamDefault);
         }
 
         // Safety fallback: 공식 OpenAI + gpt-5/o-series면 max_completion_tokens 쪽으로 강제

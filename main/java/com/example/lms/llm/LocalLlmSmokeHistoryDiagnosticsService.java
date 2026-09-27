@@ -1,5 +1,6 @@
 package com.example.lms.llm;
 
+import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -27,6 +29,7 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
     private static final String HISTORY_NAME = "local-llm-generation.history.jsonl";
     private static final int DEFAULT_LIMIT = 12;
     private static final int MAX_LIMIT = 50;
+    private static final long FRESH_REPORT_MAX_AGE_MS = Duration.ofMinutes(30).toMillis();
 
     private final Path root;
     private final ObjectMapper objectMapper;
@@ -61,6 +64,11 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
         Path history = report.getParent().resolve(HISTORY_NAME).normalize();
         putPathDiagnostics(out, "reportPath", report);
         putPathDiagnostics(out, "historyPath", history);
+        long reportAgeMs = reportAgeMs(report);
+        boolean reportStale = reportAgeMs > FRESH_REPORT_MAX_AGE_MS;
+        out.put("reportAgeMs", reportAgeMs);
+        out.put("reportStale", reportStale);
+        out.put("evidenceMode", reportStale ? "supporting_stale" : "current");
         out.put("latest", readReport(report));
         out.put("historyFound", Files.isRegularFile(history));
         out.put("history", readHistory(history, limit));
@@ -78,7 +86,8 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
                 stream.filter(Files::isDirectory)
                         .map(path -> path.resolve("reports").normalize())
                         .forEach(path -> addReportCandidates(candidates, path));
-            } catch (IOException ignored) {
+            } catch (IOException ex) {
+                traceSuppressed("build_dir_scan", ex);
                 // Missing or unreadable host-split build directories are reflected as reportFound=false.
             }
         }
@@ -95,7 +104,8 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
                                 && path.getFileName().toString().startsWith("local-llm-smoke"))
                         .map(path -> path.resolve(REPORT_NAME))
                         .forEach(path -> addKnownCandidate(candidates, path));
-            } catch (IOException ignored) {
+            } catch (IOException ex) {
+                traceSuppressed("report_candidates_scan", ex);
                 // Missing or unreadable smoke report directories are reflected as reportFound=false.
             }
         }
@@ -110,16 +120,24 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
     private FileTime lastModifiedOrEpoch(Path path) {
         try {
             return Files.getLastModifiedTime(path);
-        } catch (IOException ignored) {
+        } catch (IOException ex) {
+            traceSuppressed("report_last_modified", ex);
             return FileTime.fromMillis(0L);
         }
+    }
+
+    private long reportAgeMs(Path path) {
+        FileTime modified = lastModifiedOrEpoch(path);
+        long age = Instant.now().toEpochMilli() - modified.toMillis();
+        return Math.max(0L, age);
     }
 
     private Map<String, Object> readReport(Path report) {
         try {
             JsonNode rootNode = objectMapper.readTree(stripUtf8Bom(Files.readString(report, StandardCharsets.UTF_8)));
             return sanitizeReport(rootNode);
-        } catch (IOException ignored) {
+        } catch (IOException ex) {
+            traceSuppressed("report_read", ex);
             return Map.of("available", false, "reason", "local_llm_smoke_report_unreadable");
         }
     }
@@ -131,7 +149,8 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
         List<String> lines;
         try {
             lines = Files.readAllLines(history, StandardCharsets.UTF_8);
-        } catch (IOException ignored) {
+        } catch (IOException ex) {
+            traceSuppressed("history_read", ex);
             return List.of();
         }
         int from = Math.max(0, lines.size() - limit);
@@ -142,7 +161,8 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
             }
             try {
                 out.add(sanitizeHistoryRow(objectMapper.readTree(stripUtf8Bom(line))));
-            } catch (JsonProcessingException ignored) {
+            } catch (JsonProcessingException ex) {
+                traceSuppressed("history_row_parse", ex);
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("parseSkipped", true);
                 row.put("reason", "invalid_jsonl_row");
@@ -228,6 +248,8 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
         Map<String, Object> cumulative = mapValue(report.get("cumulativeSignals"));
         int openAiScore = intValue(openAi.get("score"));
         int nativeScore = intValue(nativeOllama.get("score"));
+        int openAiStatus = intValue(openAi.get("status"));
+        int nativeStatus = intValue(nativeOllama.get("status"));
         int negativeSignals = Math.max(intValue(report.get("negativeSignalCount")), intValue(cumulative.get("negativeSignalCount")));
         int scoreDelta = Math.max(0, nativeScore - openAiScore);
         boolean thresholdExceeded = Boolean.TRUE.equals(cumulative.get("thresholdExceeded"));
@@ -239,15 +261,28 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
         boolean preferNative = "native_ollama".equals(recommendedRoute) && nativeScore > openAiScore;
         boolean triggered = thresholdExceeded || debugTrigger || (modelBlank && preferNative);
         int actionScore = clampScore(scoreDelta + (negativeSignals * 5) + (thresholdExceeded ? 10 : 0));
+        int upstreamStatus = preferNative && nativeStatus > 0 ? nativeStatus : openAiStatus;
+        String upstreamFailureClass = upstreamFailureClass(upstreamStatus, false);
+        String nextAction = preferNative ? "prefer_native_ollama_route" : "monitor_local_llm_route";
+        if (!"none".equals(upstreamFailureClass)) {
+            nextAction = upstreamNextAction(upstreamStatus);
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("triggered", triggered);
         out.put("triggerReason", thresholdExceeded ? "threshold_exceeded" : (debugTrigger ? "debug_trigger" : "none"));
         out.put("failureClass", modelBlank ? "model_blank" : "none");
-        out.put("nextAction", preferNative ? "prefer_native_ollama_route" : "monitor_local_llm_route");
+        out.put("nextAction", nextAction);
         out.put("actionScore", actionScore);
         out.put("scoreDelta", scoreDelta);
         out.put("negativeSignalCount", negativeSignals);
+        if (upstreamStatus > 0) {
+            out.put("upstreamStatus", upstreamStatus);
+        }
+        if (!"none".equals(upstreamFailureClass)) {
+            out.put("upstreamFailureClass", upstreamFailureClass);
+            out.put("upstreamNextAction", upstreamNextAction(upstreamStatus));
+        }
         return out;
     }
 
@@ -269,6 +304,39 @@ public class LocalLlmSmokeHistoryDiagnosticsService {
 
     private static int clampScore(int value) {
         return Math.max(0, Math.min(100, value));
+    }
+
+    private static String upstreamFailureClass(int status, boolean modelBlank) {
+        if (status >= 500) {
+            return "ollama_upstream_5xx";
+        }
+        if (status == 429) {
+            return "ollama_rate_limit";
+        }
+        if (status >= 400) {
+            return "ollama_upstream_4xx";
+        }
+        return modelBlank ? "model_blank" : "none";
+    }
+
+    private static String upstreamNextAction(int status) {
+        if (status >= 500) {
+            return "inspect_ollama_runtime_capacity";
+        }
+        if (status == 429) {
+            return "respect_ollama_retry_after";
+        }
+        if (status >= 400) {
+            return "inspect_ollama_request_contract";
+        }
+        return "monitor_local_llm_route";
+    }
+
+    private static void traceSuppressed(String stage, Exception failure) {
+        String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
+        TraceStore.put("localLlm.smokeHistory.suppressed." + safeStage, true);
+        TraceStore.put("localLlm.smokeHistory.suppressed." + safeStage + ".errorType",
+                failure == null ? "unknown" : failure.getClass().getSimpleName());
     }
 
     private static String stripUtf8Bom(String value) {

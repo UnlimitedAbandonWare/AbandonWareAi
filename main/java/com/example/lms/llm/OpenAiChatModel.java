@@ -19,6 +19,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -86,6 +87,10 @@ public class OpenAiChatModel implements ChatModel {
     @Value("${llm.gateway.throw-on-empty-failure:false}")
     private boolean throwOnEmptyFailure;
 
+    /** Optional dispatch-time endpoint resolver (quarantine/failover); absent in tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ModelRuntimeHealthTracker modelRuntimeHealthTracker;
+
     /**
      * Dedicated WebClient configured with timeouts and buffer limits.
      */
@@ -97,8 +102,8 @@ public class OpenAiChatModel implements ChatModel {
         this.baseUrl = normaliseBaseUrl(resolved);
         this.defaultModel = (defaultModel == null ? "" : defaultModel.trim());
 
-        String url = this.baseUrl.toLowerCase();
-        String model = this.defaultModel.toLowerCase();
+        String url = this.baseUrl.toLowerCase(Locale.ROOT);
+        String model = this.defaultModel.toLowerCase(Locale.ROOT);
 
         // Guard: obviously-local model ids should not be sent to api.openai.com
         if (url.contains("api.openai.com")
@@ -175,7 +180,9 @@ public class OpenAiChatModel implements ChatModel {
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", defaultModel);
             payload.put("messages", List.of(Map.of("role", "user", "content", llmGenerationPrompt)));
-            payload.put("temperature", temperature);
+            if (!omitsTemperature(baseUrl, defaultModel)) {
+                payload.put("temperature", temperature);
+            }
             String tokenKey = OpenAiTokenParamCompat.tokenParamKey(defaultModel, baseUrl);
             if (tokenKey != null && !tokenKey.isBlank() && !"none".equalsIgnoreCase(tokenKey)) {
                 payload.put(tokenKey, maxTokens);
@@ -183,7 +190,9 @@ public class OpenAiChatModel implements ChatModel {
 
             java.util.function.Function<Map<String, Object>, String> invoke = (pl) -> {
                 WebClient.RequestBodySpec spec = openaiWebClient.post()
-                        .uri(baseUrl + "/v1/chat/completions")
+                        .uri(modelRuntimeHealthTracker == null
+                                ? baseUrl + "/v1/chat/completions"
+                                : modelRuntimeHealthTracker.resolveServiceEndpoint(baseUrl + "/v1/chat/completions"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.APPLICATION_JSON);
 
@@ -243,6 +252,15 @@ public class OpenAiChatModel implements ChatModel {
                 throw new IllegalStateException("llm.gateway.empty_failure=" + failureClass.name(), e);
             }
             return "";
+        }
+    }
+
+    private static boolean omitsTemperature(String endpoint, String model) {
+        if (!List.of("gpt-5", "gpt-5-mini", "gpt-5-nano").contains(model)) return false;
+        try {
+            return "api.openai.com".equalsIgnoreCase(java.net.URI.create(endpoint).getHost());
+        } catch (IllegalArgumentException | NullPointerException invalidEndpoint) {
+            return false; // Preserve the existing request failure path.
         }
     }
 

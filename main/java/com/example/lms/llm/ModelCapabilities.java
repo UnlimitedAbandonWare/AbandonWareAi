@@ -20,9 +20,9 @@ public final class ModelCapabilities {
     private static final Logger log = LoggerFactory.getLogger(ModelCapabilities.class);
 
     public static final String DEFAULT_LOCAL_CHAT_MODEL = "gemma4:26b";
-    public static final String DEFAULT_LOCAL_FAST_MODEL = "qwen3:8b";
-    public static final String DEFAULT_LOCAL_JUDGE_MODEL = "qwen3:30b";
-    public static final String DEFAULT_LOCAL_CODER_MODEL = "qwen3-coder:30b";
+    public static final String DEFAULT_LOCAL_FAST_MODEL = "qwen3.5:9b";
+    public static final String DEFAULT_LOCAL_JUDGE_MODEL = "smtek/Qwen3.8-27B:Q3_K_XL";
+    public static final String DEFAULT_LOCAL_CODER_MODEL = "smtek/Qwen3.8-27B:Q3_K_XL";
     public static final String DEFAULT_LOCAL_VISION_MODEL = "qwen3-vl:8b";
     public static final String DEFAULT_LOCAL_EMBEDDING_MODEL = "qwen3-embedding:4b";
     public static final String OPTIONAL_LOCAL_CHAT_MODEL = "gemma4:31b-it-q4_K_M";
@@ -38,6 +38,9 @@ public final class ModelCapabilities {
             "o1", // o-series reasoning 모델
             "o3",
             "o4");
+
+    private static final Set<String> PLACEHOLDER_MODEL_IDS = Set.of(
+            "model", "unknown", "placeholder");
 
 	    // 오케스트레이션 suffix 태그들 (로컬 모델 tag는 제외)
 	    private static final Set<String> ORCH_TAGS = Set.of(
@@ -139,12 +142,24 @@ public final class ModelCapabilities {
         return m.startsWith("gpt-") || m.startsWith("openai") || m.matches("o\\d.*") || m.startsWith("o-");
     }
 
+    public static boolean isPlaceholderModelId(String modelId) {
+        String m = canonicalModelName(modelId);
+        if (m == null || m.isBlank()) {
+            return false;
+        }
+        m = m.trim().toLowerCase(Locale.ROOT);
+        return PLACEHOLDER_MODEL_IDS.contains(m) || (m.startsWith("${") && m.endsWith("}"));
+    }
+
     public static boolean isLocalChatModelId(String modelId) {
         String m = canonicalModelName(modelId);
         if (m == null || m.isBlank()) {
             return false;
         }
         m = m.trim().toLowerCase(Locale.ROOT);
+        if (isPlaceholderModelId(m)) {
+            return false;
+        }
         if (m.contains("embedding") || m.startsWith("text-embedding")) {
             return false;
         }

@@ -10,6 +10,7 @@ import java.util.Locale;
 public final class OpenAiModelSelectionPolicy {
 
     private static final String DEFAULT_OPENAI_CHAT_MODELS = String.join(",",
+            "gpt-5.6-luna",
             "gpt-5.5",
             "gpt-5.4",
             "gpt-5.4-mini",

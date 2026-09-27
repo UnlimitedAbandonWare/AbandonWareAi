@@ -7,8 +7,7 @@ import java.util.Locale;
 import java.util.Set;
 
 public final class ConfiguredLocalChatModels {
-    public static final String DEFAULT_CSV = "gemma4:26b,qwen3:30b,qwen3-coder:30b,gemma3:27b,"
-            + "qwen3-vl:8b,qwen3:8b,qwen2.5:7b-instruct,qwen2.5:7b,gemma3:4b";
+    public static final String DEFAULT_CSV = "gemma4:26b,smtek/Qwen3.8-27B:Q3_K_XL,qwen3-vl:8b,qwen3.5:9b,gemma4:12b";
 
     private ConfiguredLocalChatModels() {
     }

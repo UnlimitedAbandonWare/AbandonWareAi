@@ -57,11 +57,11 @@ public final class ModelMap {
      * as EvidenceRepairHandler may require feeding in hundreds of thousands
      * of tokens; these should use a model with an enlarged context window.
      * The environment variable {@code GEMINI_LARGE_CONTEXT_MODEL} is
-     * consulted, otherwise {@code gemini-1.5-flash-legacy} is used.
+     * consulted, otherwise the supported {@code gemini-2.5-flash} model is used.
      */
     public static String getLargeContextModel() {
         String m = System.getProperty("GEMINI_LARGE_CONTEXT_MODEL");
-        return (m == null || m.isBlank()) ? "gemini-1.5-flash-legacy" : m;
+        return (m == null || m.isBlank()) ? "gemini-2.5-flash" : m;
     }
 
     /**

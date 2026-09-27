@@ -1,12 +1,16 @@
 package com.example.lms.llm;
 
+import ai.abandonware.nova.config.LlmRouterProperties;
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.llm.gateway.LlmFailureClass;
+import com.example.lms.llm.gateway.LlmGatewayException;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 
 import java.net.URI;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Guard helpers for local OpenAI-compatible gateways such as Ollama/vLLM.
@@ -16,6 +20,74 @@ public final class LocalLlmGatewaySecurity {
     public static final String DEFAULT_OWNER_TOKEN_HEADER = "X-Owner-Token";
 
     private LocalLlmGatewaySecurity() {
+    }
+
+    /** Resolve operator OFF only from configured intent or an exact model/endpoint mapping. */
+    public static LlmGatewayException routePolicyFailure(
+            LlmRouterProperties routes, String requestedModelId, String effectiveModel, String baseUrl) {
+        if (routes == null || routes.getModels() == null || routes.getModels().isEmpty()) {
+            return null;
+        }
+        String requested = trimToEmpty(requestedModelId);
+        String alias = routes.getAliases().get(requested);
+        if (alias == null) {
+            alias = routes.getAliases().get(requested.toLowerCase(Locale.ROOT));
+        }
+        String logical = alias == null || alias.isBlank() ? requested : alias.trim();
+        if (logical.startsWith("llmrouter.") && !"llmrouter.auto".equals(logical)) {
+            LlmRouterProperties.ModelConfig explicit = routes.getModels().get(logical.substring(10));
+            if (explicit != null) {
+                return explicit.isEnabled() ? null : routePolicyFailure("route_disabled");
+            }
+        }
+        String model = ModelCapabilities.canonicalModelName(effectiveModel);
+        if (model == null || model.isBlank()) {
+            return null;
+        }
+        var matches = routes.getModels().values().stream()
+                .filter(Objects::nonNull)
+                .filter(cfg -> model.equals(ModelCapabilities.canonicalModelName(cfg.getName())))
+                .filter(cfg -> sameRouteEndpoint(baseUrl, cfg.getBaseUrl()))
+                .toList();
+        if (matches.stream().noneMatch(cfg -> !cfg.isEnabled())) {
+            return null;
+        }
+        String stage = null;
+        String role = null;
+        for (var cfg : matches) {
+            String candidateStage = trimToNull(cfg.getStage());
+            String candidateRole = trimToNull(cfg.getDeviceRole());
+            if (candidateStage == null || candidateRole == null || cfg.isEnabled()
+                    || (stage != null && !stage.equalsIgnoreCase(candidateStage))
+                    || (role != null && !role.equalsIgnoreCase(candidateRole))) {
+                return routePolicyFailure("route_mapping_unconfirmed");
+            }
+            stage = candidateStage;
+            role = candidateRole;
+        }
+        return routePolicyFailure("route_disabled");
+    }
+
+    private static boolean sameRouteEndpoint(String first, String second) {
+        URI left = parseUri(OpenAiCompatBaseUrl.sanitize(first));
+        URI right = parseUri(OpenAiCompatBaseUrl.sanitize(second));
+        if (left == null || right == null || left.getHost() == null || right.getHost() == null
+                || left.getScheme() == null || right.getScheme() == null
+                || !("http".equalsIgnoreCase(left.getScheme()) || "https".equalsIgnoreCase(left.getScheme()))) {
+            return false;
+        }
+        int leftPort = left.getPort() < 0 ? ("https".equalsIgnoreCase(left.getScheme()) ? 443 : 80) : left.getPort();
+        int rightPort = right.getPort() < 0 ? ("https".equalsIgnoreCase(right.getScheme()) ? 443 : 80) : right.getPort();
+        return left.getScheme().equalsIgnoreCase(right.getScheme())
+                && left.getHost().equalsIgnoreCase(right.getHost())
+                && leftPort == rightPort && Objects.equals(left.getRawPath(), right.getRawPath());
+    }
+
+    private static LlmGatewayException routePolicyFailure(String reason) {
+        TraceStore.put("llmrouter.route.enabled", false);
+        TraceStore.put("llmrouter.api.disabledReason", reason);
+        return new LlmGatewayException("Local LLM route is unavailable: " + reason,
+                LlmFailureClass.DISABLED, reason);
     }
 
     public static Map<String, String> ownerTokenHeaders(String headerName, String ownerToken) {
@@ -53,6 +125,8 @@ public final class LocalLlmGatewaySecurity {
                 || h.endsWith(".groq.com")
                 || h.equals("api.cerebras.ai")
                 || h.endsWith(".cerebras.ai")
+                || h.equals("api.mistral.ai")
+                || h.endsWith(".mistral.ai")
                 || h.equals("api.openrouter.ai")
                 || h.endsWith(".openrouter.ai")
                 || h.equals("openrouter.ai")
@@ -149,6 +223,25 @@ public final class LocalLlmGatewaySecurity {
         }
         String host = uri.getHost();
         return host == null ? "" : host.toLowerCase(Locale.ROOT);
+    }
+
+    public static String endpointScheme(String baseUrl) {
+        URI uri = parseUri(baseUrl);
+        if (uri == null || uri.getScheme() == null) {
+            return "";
+        }
+        return uri.getScheme().toLowerCase(Locale.ROOT);
+    }
+
+    public static String endpointFamily(String baseUrl) {
+        if (isKnownExternalProviderBaseUrl(baseUrl)) {
+            return "external-provider";
+        }
+        if (isLoopbackBaseUrl(baseUrl)) {
+            return "local-loopback";
+        }
+        String host = endpointHost(baseUrl);
+        return host == null || host.isBlank() ? "unknown" : "custom-remote";
     }
 
     static boolean isAllowedHost(String baseUrl, String allowedHostsCsv) {

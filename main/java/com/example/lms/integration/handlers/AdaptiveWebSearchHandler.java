@@ -218,29 +218,58 @@ public class AdaptiveWebSearchHandler extends AbstractRetrievalHandler {
             boolean hardFilter = officialOnly || hasDomainProfile;
             boolean profileUsable = hasDomainProfile && domainProfiles != null;
             if (hardFilter) {
+                long integrityStarted = System.nanoTime();
+                int inputCount = docs.size();
+                int urlMissingCount = 0;
+                int policyDeniedCount = 0;
+                boolean resolverUnavailable = !profileUsable && domainWhitelist == null;
                 List<WebDocument> filtered = new ArrayList<>(docs.size());
                 List<String> filteredProviders = new ArrayList<>(providerNames.size());
                 for (int i = 0; i < docs.size(); i++) {
                     WebDocument d = docs.get(i);
                     String url = (d != null ? d.getUrl() : null);
-                    boolean ok = true;
-                    if (url != null) {
+                    boolean ok = false;
+                    if (url == null || url.isBlank()) {
+                        urlMissingCount++;
+                    } else {
                         if (profileUsable) {
-                            ok = domainProfiles.isAllowedByProfile(url, domainProfile);
+                            try {
+                                ok = domainProfiles.isAllowedByProfile(url, domainProfile);
+                            } catch (RuntimeException unavailable) {
+                                resolverUnavailable = true;
+                                traceSuppressed("hardPolicyProfile", unavailable);
+                            }
                         } else if (domainWhitelist != null) {
-                            ok = domainWhitelist.isOfficial(url);
+                            try {
+                                ok = domainWhitelist.isOfficial(url);
+                            } catch (RuntimeException unavailable) {
+                                resolverUnavailable = true;
+                                traceSuppressed("hardPolicyWhitelist", unavailable);
+                            }
                         }
                     }
                     if (ok) {
                         filtered.add(d);
                         filteredProviders.add(providerNames.get(i));
+                    } else if (url != null && !url.isBlank()) {
+                        policyDeniedCount++;
                     }
                 }
-                // fail-soft: do not starve to empty
-                if (!filtered.isEmpty()) {
-                    docs = filtered;
-                    providerNames = filteredProviders;
-                }
+                // A hard evidence policy is non-restorable: filtered-empty stays empty.
+                docs = filtered;
+                providerNames = filteredProviders;
+                TraceStore.put("retrieval.integrity.source", "adaptive_web");
+                TraceStore.put("retrieval.integrity.inputCount", inputCount);
+                TraceStore.put("retrieval.integrity.urlMissingCount", urlMissingCount);
+                TraceStore.put("retrieval.integrity.policyDeniedCount", policyDeniedCount);
+                TraceStore.put("retrieval.integrity.filteredCount", inputCount - filtered.size());
+                TraceStore.put("retrieval.integrity.finalUsedCount", filtered.size());
+                TraceStore.put("retrieval.integrity.fallbackStage", "none");
+                TraceStore.put("retrieval.integrity.emptyReason", filtered.isEmpty()
+                        ? (resolverUnavailable ? "policy_resolver_unavailable" : "hard_policy_filtered_empty")
+                        : null);
+                TraceStore.put("retrieval.integrity.elapsedMs",
+                        Math.max(0L, (System.nanoTime() - integrityStarted) / 1_000_000L));
             }
 
             // After official domain filtering, remove finance noise domains unless intent is FINANCE
@@ -306,7 +335,7 @@ public class AdaptiveWebSearchHandler extends AbstractRetrievalHandler {
                         String chunk = header + "\n" + body + "\n\n";
                         int remain = Math.max(0, maxAggregateChars - used);
                         if (remain <= 0) break;
-                        if (chunk.length() > remain) chunk = chunk.substring(0, remain);
+                        if (chunk.length() > remain) chunk = utf16SafePrefix(chunk, remain);
                         big.append(chunk);
                         used += chunk.length();
                         count++;
@@ -340,7 +369,7 @@ public class AdaptiveWebSearchHandler extends AbstractRetrievalHandler {
                         // 타임박스: perMs applies here as well
                         String body = scraper.fetchText(d.getUrl(), perPageMs);
                         if (body != null) {
-                            _snip = body.length() > 200 ? body.substring(0, 200) + "/* ... *&#47;" : body;
+                            _snip = body.length() > 200 ? utf16SafePrefix(body, 200) + "/* ... *&#47;" : body;
                         }
                     } catch (Exception ignore) {
                         /* fail-soft */
@@ -363,6 +392,17 @@ public class AdaptiveWebSearchHandler extends AbstractRetrievalHandler {
                     SafeRedactor.hashValue(messageOf(ex)), messageLength(ex));
         }
         return true;
+    }
+
+    private static String utf16SafePrefix(String input, int maxUnits) {
+        if (input.length() <= maxUnits) return input;
+        int end = maxUnits;
+        if (end > 0
+                && Character.isHighSurrogate(input.charAt(end - 1))
+                && Character.isLowSurrogate(input.charAt(end))) {
+            end--;
+        }
+        return input.substring(0, end);
     }
 
     private List<WebSearchProvider> resolveProviders(List<ProviderId> desired) {
@@ -460,7 +500,7 @@ public class AdaptiveWebSearchHandler extends AbstractRetrievalHandler {
         for (String n : names) {
             if (n == null || n.isBlank()) continue;
             try {
-                out.add(ProviderId.valueOf(n.trim().toUpperCase()));
+                out.add(ProviderId.valueOf(n.trim().toUpperCase(Locale.ROOT)));
             } catch (IllegalArgumentException ignore) {
                 // 알 수 없는 값은 건너뜀 (fail-soft)
                 traceSuppressed("providerId", ignore);

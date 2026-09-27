@@ -1,25 +1,48 @@
 package com.example.lms.llm;
 
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.debug.ai.ChatUsageLedger;
 import com.example.lms.guard.KeyResolver;
+import com.example.lms.guard.ProviderCredentialResolver;
+import com.example.lms.llm.gateway.LlmFailureClass;
+import com.example.lms.llm.gateway.LlmGatewayException;
+import com.example.lms.llm.gateway.LlmGatewayFailureClassifier;
+import com.example.lms.llm.gateway.LlmGatewayProperties;
+import com.example.lms.routing.AgentApiSpendGuard;
+import com.example.lms.routing.ApiSpendAttribution;
 import com.example.lms.trace.SafeRedactor;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.openai.OpenAiChatModel;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.WeakHashMap;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class DynamicChatModelFactory {
+    @Autowired(required = false)
+    private com.example.lms.llm.gateway.HybridLlmGatewayProbeService localGatewayProbe;
+    @Autowired(required = false)
+    private ai.abandonware.nova.orch.aop.LlmRouterAspect localFailoverRouter;
+
+    private static final Map<ChatModel, ChatUsageLedger.ConfiguredCap> CONFIGURED_TOKEN_BUDGETS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<ChatModel, String> CONFIGURED_MODEL_IDS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final LlmGatewayFailureClassifier FAILURE_CLASSIFIER = new LlmGatewayFailureClassifier();
 
     @Value("${llm.chat-model:${llm.fast.model:gemma4:26b}}")
     private String defaultModelName;
@@ -88,8 +111,41 @@ public class DynamicChatModelFactory {
     @Value("${llm.ollama-native.think-false.enabled:true}")
     private boolean ollamaNativeThinkFalseEnabled;
 
+    @Value("${llm.ollama-native.num-gpu:${LLM_OLLAMA_NATIVE_NUM_GPU:}}")
+    private String ollamaNativeNumGpu;
+
     private final Environment env;
     private final KeyResolver keyResolver;
+    private final ModelRuntimeHealthTracker modelRuntimeHealthTracker;
+    private final LlmGatewayProperties llmGatewayProperties;
+
+    @Autowired(required = false)
+    private ai.abandonware.nova.config.LlmRouterProperties llmRouterProperties;
+
+    @Autowired
+    public DynamicChatModelFactory(Environment env,
+                                   KeyResolver keyResolver,
+                                   ModelRuntimeHealthTracker modelRuntimeHealthTracker,
+                                   LlmGatewayProperties llmGatewayProperties) {
+        this.env = env;
+        this.keyResolver = keyResolver;
+        this.modelRuntimeHealthTracker = modelRuntimeHealthTracker == null
+                ? new ModelRuntimeHealthTracker()
+                : modelRuntimeHealthTracker;
+        this.llmGatewayProperties = llmGatewayProperties == null
+                ? new LlmGatewayProperties()
+                : llmGatewayProperties;
+    }
+
+    public DynamicChatModelFactory(Environment env,
+                                   KeyResolver keyResolver,
+                                   ModelRuntimeHealthTracker modelRuntimeHealthTracker) {
+        this(env, keyResolver, modelRuntimeHealthTracker, new LlmGatewayProperties());
+    }
+
+    public DynamicChatModelFactory(Environment env, KeyResolver keyResolver) {
+        this(env, keyResolver, new ModelRuntimeHealthTracker(), new LlmGatewayProperties());
+    }
 
     /**
      * Backward-compatible overload (no penalties).
@@ -156,7 +212,21 @@ public class DynamicChatModelFactory {
             Double presencePenalty,
             Integer maxTokens,
             int timeoutSeconds) {
+        return lcWithTimeout(modelName, temperature, topP, frequencyPenalty, presencePenalty,
+                maxTokens, timeoutSeconds, null);
+    }
 
+    public ChatModel lcWithTimeout(String modelName,
+            Double temperature,
+            Double topP,
+            Double frequencyPenalty,
+            Double presencePenalty,
+            Integer maxTokens,
+            int timeoutSeconds,
+            Integer maxRetriesOverride) {
+
+        boolean creativeSamplingClaimed = claimCreativeProviderSampling();
+        try {
         String rawModel = trimToNull(modelName);
         if (rawModel == null) {
             rawModel = trimToNull(defaultModelName);
@@ -167,7 +237,10 @@ public class DynamicChatModelFactory {
             rawModel = trimToNull(env.getProperty("llm.chat-model"));
         }
 
-        String effectiveModel = ModelCapabilities.canonicalModelName(rawModel);
+        boolean exactSelection = RequestedModelSelection.matches(rawModel);
+        if (exactSelection && rawModel.startsWith("llmrouter."))
+            throw new ModelSelectionException("provider_not_configured");
+        String effectiveModel = exactSelection ? rawModel : ModelCapabilities.canonicalModelName(rawModel);
         if (effectiveModel == null || effectiveModel.isBlank()) {
             throw new IllegalStateException(
                     "model is required (blank modelName after canonicalize). rawModel='"
@@ -175,11 +248,28 @@ public class DynamicChatModelFactory {
         }
 
         // Route selection + credential selection (fail-soft):
-        // - local 모델이면 localBaseUrl/localApiKey
+        // - local 모델이면 configured device endpoint + central provider credential resolution
         // - OpenAI 모델이면 openAiBaseUrl + OpenAI key(없으면 IllegalStateException)
         boolean local = isLocalModel(effectiveModel);
-        String baseUrl = OpenAiCompatBaseUrl.sanitize(local ? selectLocalBaseUrl(effectiveModel) : openAiBaseUrl);
-        String apiKeyForCall = local ? localApiKey : resolveOpenAiApiKey();
+        String baseUrl = OpenAiCompatBaseUrl.sanitize(local
+                ? selectLocalBaseUrl(effectiveModel) : openAiBaseUrl);
+        LlmGatewayException routeFailure = LocalLlmGatewaySecurity.routePolicyFailure(
+                llmRouterProperties, rawModel, effectiveModel, baseUrl);
+        if (routeFailure != null) {
+            throw routeFailure;
+        }
+        // Agent-mode soft spend gate: 로컬 모델·비-agent 트래픽은 그대로 통과하고,
+        // agent 모드의 stale paid 자동 모델만 자격 증명 해석 전에 why_code로 차단한다.
+        if (!local && ApiSpendAttribution.agentModeActive()) {
+            AgentApiSpendGuard.Decision spend = AgentApiSpendGuard.beforeCall(
+                    "llm_factory_build", "openai", effectiveModel,
+                    "DynamicChatModelFactory", rawModel, false);
+            if (!spend.allow()) {
+                throw new IllegalStateException("agent spend guard blocked: "
+                        + SafeRedactor.traceLabelOrFallback(spend.why(), "blocked"));
+            }
+        }
+        String apiKeyForCall = local ? resolveLocalApiKey() : resolveOpenAiApiKey();
 
         // Best-effort trace breadcrumbs (no secrets).
         try {
@@ -203,7 +293,7 @@ public class DynamicChatModelFactory {
                     allowPrivateRemote,
                     allowedHosts,
                     requireAuthForRemote,
-                    localApiKey,
+                    apiKeyForCall,
                     ownerToken);
         }
         if (!local) {
@@ -250,22 +340,71 @@ public class DynamicChatModelFactory {
             String safeApiKey = local
                     ? localApiKeyForCall(apiKeyForCall)
                     : apiKeyForCall.trim();
+            Integer wireMaxTokens = maxTokens != null && maxTokens > 0 ? maxTokens : null;
+            boolean sharedLocalFailover = !exactSelection && local && localFailoverRouter != null && localGatewayProbe != null
+                    && localGatewayProbe.localFailoverEnabled() && localGatewayProbe.cloudFallbackEnabled();
+            Duration primaryTimeout = localPrimaryTimeout(timeoutSeconds, sharedLocalFailover);
             if (local && shouldUseOllamaNativeThinkFalse(effectiveModel, baseUrl)) {
                 com.example.lms.search.TraceStore.put("llm.ollamaNative.route", true);
                 com.example.lms.search.TraceStore.put("llm.ollamaNative.route.modelHash", SafeRedactor.hashValue(effectiveModel));
                 com.example.lms.search.TraceStore.put("llm.ollamaNative.route.modelLength", effectiveModel.length());
-                return new OllamaNativeChatModel(
+                ChatModel selectedModel = new OllamaNativeChatModel(
                         baseUrl,
                         effectiveModel,
-                        Duration.ofSeconds(timeoutSeconds),
+                        primaryTimeout,
+                        wireMaxTokens,
+                        safeTemp,
+                        safeTopP,
+                        ollamaNativeNumGpu(),
+                        modelRuntimeHealthTracker,
+                        !sharedLocalFailover && (maxRetriesOverride == null || maxRetriesOverride > 0),
+                        localGatewayProbe == null ? llmGatewayProperties.getLocalDeviceFailover().toEndpointQuarantinePolicy()
+                                : ModelRuntimeHealthTracker.EndpointQuarantinePolicy.disabled());
+                recordSelectedRequestEndpoint(effectiveModel, baseUrl);
+                if (sharedLocalFailover) selectedModel = localFailoverRouter.routeLocalInference(selectedModel,
+                        baseUrl, effectiveModel, timeoutSeconds * 1000, safeTemp, safeTopP,
+                        safeFreqPenalty, safePresencePenalty, wireMaxTokens, "ollama_native");
+                else {
+                if (localGatewayProbe != null) selectedModel = localGatewayProbe.guardLocalModel(selectedModel, baseUrl, effectiveModel);
+                selectedModel = decorateRequestAttempt(
+                        selectedModel,
+                        "ollama",
+                        effectiveModel,
+                        baseUrl,
+                        "ollama_native",
+                        safeTemp,
+                        safeTopP,
+                        safeFreqPenalty,
+                        safePresencePenalty,
+                        wireMaxTokens,
+                        timeoutSeconds,
+                        maxRetriesOverride);
+                }
+                recordCreativeEffectiveSampling(creativeSamplingClaimed, safeTemp, safeTopP);
+                return rememberConfiguredTokenBudget(
+                        selectedModel,
+                        effectiveModel,
                         maxTokens,
-                        safeTemp);
+                        ChatUsageLedger.ParameterKind.NUM_PREDICT);
+            }
+            String tokenParam = OpenAiTokenParamCompat.tokenParamKey(effectiveModel, baseUrl);
+            if (tokenParam == null) {
+                wireMaxTokens = null;
             }
             var builder = OpenAiChatModel.builder()
+                    .httpClientBuilder(modelRuntimeHealthTracker.observedHttpClientBuilder("primary"))
                     .baseUrl(baseUrl)
                     .apiKey(safeApiKey)
                     .modelName(effectiveModel)
-                    .timeout(Duration.ofSeconds(timeoutSeconds));
+                    .timeout(primaryTimeout);
+
+            // Keep SDK image/tool serialization while honoring Ollama's bounded-answer policy.
+            if (local && ollamaNativeThinkFalseEnabled && "gemma4:26b".equals(effectiveModel)
+                    && LocalLlmGatewaySecurity.isLoopbackBaseUrl(baseUrl)) {
+                builder.defaultRequestParameters(dev.langchain4j.model.openai.OpenAiChatRequestParameters.builder()
+                        .reasoningEffort("none")
+                        .build());
+            }
 
             if (local && LocalLlmGatewaySecurity.shouldAttachOwnerToken(baseUrl, allowedHosts)) {
                 Map<String, String> headers = LocalLlmGatewaySecurity.ownerTokenHeaders(ownerTokenHeader, ownerToken);
@@ -275,7 +414,10 @@ public class DynamicChatModelFactory {
             }
 
             // Prevent nested retries/timeouts; LangChain4j 1.0.1 exposes maxRetries(Integer).
-            builder.maxRetries(Integer.valueOf(Math.max(0, dynamicMaxRetries)));
+            int effectiveMaxRetries = maxRetriesOverride == null
+                    ? dynamicMaxRetries
+                    : maxRetriesOverride;
+            builder.maxRetries(Integer.valueOf(sharedLocalFailover ? 0 : Math.max(0, effectiveMaxRetries)));
 
             if (safeTemp != null) {
                 builder.temperature(safeTemp);
@@ -291,21 +433,439 @@ public class DynamicChatModelFactory {
                 builder.presencePenalty(safePresencePenalty);
             }
 
-            if (maxTokens != null) {
-                if (OpenAiTokenParamCompat.shouldSendLegacyMaxTokens(effectiveModel, baseUrl)) {
-                    builder.maxTokens(maxTokens);
+            if (wireMaxTokens != null) {
+                if ("max_tokens".equals(tokenParam)) {
+                    builder.maxTokens(wireMaxTokens);
                 } else {
-                    builder.maxCompletionTokens(maxTokens);
+                    builder.maxCompletionTokens(wireMaxTokens);
                 }
             }
 
             // Safety: ensure modelName is not dropped by later builder mutations (e.g., maxTokens/maxCompletionTokens)
             builder.modelName(effectiveModel);
 
-            return builder.build();
+            ChatModel selectedModel = builder.build();
+            recordSelectedRequestEndpoint(effectiveModel, baseUrl);
+            if (sharedLocalFailover) selectedModel = localFailoverRouter.routeLocalInference(selectedModel,
+                    baseUrl, effectiveModel, timeoutSeconds * 1000, safeTemp, safeTopP,
+                    safeFreqPenalty, safePresencePenalty, wireMaxTokens, "openai_chat_completions");
+            else selectedModel = decorateRequestAttempt(
+                    selectedModel,
+                    local ? "local_openai_compatible" : "openai",
+                    effectiveModel,
+                    baseUrl,
+                    "openai_chat_completions",
+                    safeTemp,
+                    safeTopP,
+                    safeFreqPenalty,
+                    safePresencePenalty,
+                    wireMaxTokens,
+                    timeoutSeconds,
+                    maxRetriesOverride);
+            if (local && !sharedLocalFailover) {
+                selectedModel = guardLocalOpenAiCompatibleEndpoint(selectedModel, baseUrl, effectiveModel);
+            }
+            recordCreativeEffectiveSampling(creativeSamplingClaimed, safeTemp, safeTopP);
+            ChatUsageLedger.ParameterKind parameterKind = tokenParam == null
+                    ? ChatUsageLedger.ParameterKind.OMITTED
+                    : "max_tokens".equals(tokenParam)
+                            ? ChatUsageLedger.ParameterKind.MAX_TOKENS
+                            : ChatUsageLedger.ParameterKind.MAX_COMPLETION_TOKENS;
+            return rememberConfiguredTokenBudget(selectedModel, effectiveModel, maxTokens, parameterKind);
         } catch (Exception e) {
             throw wrapConnect(e, baseUrl);
         }
+        } catch (RuntimeException | Error failure) {
+            recordCreativeSamplingFailure(creativeSamplingClaimed);
+            throw failure;
+        }
+    }
+
+    public static String configuredModelId(ChatModel model) {
+        return model == null ? null : CONFIGURED_MODEL_IDS.get(model);
+    }
+
+    public static ChatUsageLedger.ConfiguredCap configuredTokenBudget(ChatModel model) {
+        if (model == null) {
+            return ChatUsageLedger.ConfiguredCap.providerDefaultUnknown(null, null);
+        }
+        ChatUsageLedger.ConfiguredCap configured = CONFIGURED_TOKEN_BUDGETS.get(model);
+        return configured == null
+                ? ChatUsageLedger.ConfiguredCap.providerDefaultUnknown(null, null)
+                : configured;
+    }
+
+    private static void recordCreativeEffectiveSampling(Double temperature, Double topP) {
+        recordCreativeEffectiveSampling(claimCreativeProviderSampling(), temperature, topP);
+    }
+
+    private static boolean claimCreativeProviderSampling() {
+        com.example.lms.service.guard.GuardContext context =
+                com.example.lms.service.guard.GuardContextHolder.get();
+        if (context == null
+                || !context.planBool("creative.emergence.active", false)
+                || !context.planBool("creative.emergence.final.providerSamplingPending", false)) {
+            return false;
+        }
+        context.getPlanOverrides().remove("creative.emergence.final.providerSamplingPending");
+        context.getPlanOverrides().remove("creative.emergence.effectiveOptionsHash");
+        context.getPlanOverrides().remove("creative.emergence.provider.effectiveTemperature");
+        context.getPlanOverrides().remove("creative.emergence.provider.effectiveTopP");
+        com.example.lms.search.TraceStore.put("creative.emergence.effectiveOptionsHash", null);
+        return true;
+    }
+
+    private static void recordCreativeSamplingFailure(boolean claimed) {
+        if (!claimed) {
+            return;
+        }
+        com.example.lms.service.guard.GuardContext context =
+                com.example.lms.service.guard.GuardContextHolder.get();
+        if (context == null) {
+            return;
+        }
+        context.getPlanOverrides().remove("creative.emergence.final.providerSamplingPending");
+        context.getPlanOverrides().remove("creative.emergence.effectiveOptionsHash");
+        context.getPlanOverrides().remove("creative.emergence.provider.effectiveTemperature");
+        context.getPlanOverrides().remove("creative.emergence.provider.effectiveTopP");
+        context.putPlanOverride("creative.emergence.suppressedReason", "sampling-option-unproven");
+        com.example.lms.search.TraceStore.put("creative.emergence.effectiveOptionsHash", null);
+        com.example.lms.search.TraceStore.put(
+                "creative.emergence.suppressedReason", "sampling-option-unproven");
+    }
+
+    private static void recordCreativeEffectiveSampling(
+            boolean claimed,
+            Double temperature,
+            Double topP) {
+        if (!claimed) {
+            return;
+        }
+        com.example.lms.service.guard.GuardContext context =
+                com.example.lms.service.guard.GuardContextHolder.get();
+        if (context == null) {
+            return;
+        }
+        if (!validCompleteCreativeProfile(context)) {
+            context.putPlanOverride("creative.emergence.suppressedReason", "incomplete-profile");
+            com.example.lms.search.TraceStore.put(
+                    "creative.emergence.suppressedReason", "incomplete-profile");
+            return;
+        }
+        String profile = String.valueOf(context.getPlanOverride("creative.emergence.profile"));
+        if (!profile.matches("VIVID|WILD|FERAL")
+                || temperature == null || !Double.isFinite(temperature)
+                || topP == null || !Double.isFinite(topP)) {
+            context.putPlanOverride("creative.emergence.suppressedReason", "sampling-option-unproven");
+            com.example.lms.search.TraceStore.put(
+                    "creative.emergence.suppressedReason", "sampling-option-unproven");
+            return;
+        }
+        String effectiveHash = SafeRedactor.hashValue(String.format(
+                Locale.ROOT, "%s|%.2f|%.2f", profile, temperature, topP));
+        context.putPlanOverride("creative.emergence.provider.effectiveTemperature", temperature);
+        context.putPlanOverride("creative.emergence.provider.effectiveTopP", topP);
+        context.putPlanOverride("creative.emergence.effectiveOptionsHash", effectiveHash);
+        com.example.lms.search.TraceStore.put("creative.emergence.effectiveOptionsHash", effectiveHash);
+    }
+
+    private static boolean validCompleteCreativeProfile(
+            com.example.lms.service.guard.GuardContext context) {
+        if (context == null || context.isSensitiveTopic()
+                || context.planBool("privacy.boundary.enforce", false)
+                || !context.planBool("creative.emergence.active", false)
+                || !"explore".equals(context.getPlanOverride("promptPose.application.intentSlot"))) {
+            return false;
+        }
+        String requestedHash = String.valueOf(
+                context.getPlanOverride("creative.emergence.requestedOptionsHash"))
+                .toLowerCase(Locale.ROOT);
+        if (!requestedHash.matches("hash:[0-9a-f]{12}")) {
+            return false;
+        }
+        return switch (String.valueOf(context.getPlanOverride("creative.emergence.profile"))) {
+            case "VIVID" -> creativeProfileValuesInRange(context,
+                    0.85d, 0.90d, 0.70d, 0.76d,
+                    1.10d, 1.25d, 0.95d, 0.97d,
+                    1.05d, 1.20d, 0.95d, 0.97d,
+                    0.80d, 0.88d);
+            case "WILD" -> creativeProfileValuesInRange(context,
+                    0.91d, 0.97d, 0.77d, 0.83d,
+                    1.26d, 1.45d, 0.97d, 0.99d,
+                    1.21d, 1.40d, 0.97d, 0.99d,
+                    0.89d, 0.97d);
+            case "FERAL" -> creativeProfileValuesInRange(context,
+                    0.98d, 1.00d, 0.84d, 0.85d,
+                    1.46d, 1.50d, 0.99d, 1.00d,
+                    1.41d, 1.50d, 0.99d, 1.00d,
+                    0.98d, 1.00d);
+            default -> false;
+        };
+    }
+
+    private static boolean creativeProfileValuesInRange(
+            com.example.lms.service.guard.GuardContext context,
+            double searchTempMin, double searchTempMax,
+            double searchRateMin, double searchRateMax,
+            double candidateTempMin, double candidateTempMax,
+            double candidateTopPMin, double candidateTopPMax,
+            double finalTempMin, double finalTempMax,
+            double finalTopPMin, double finalTopPMax,
+            double selfAskMin, double selfAskMax) {
+        return creativeValueInRange(context, "creative.emergence.search.temperature", searchTempMin, searchTempMax)
+                && creativeValueInRange(context, "creative.emergence.search.rate", searchRateMin, searchRateMax)
+                && creativeValueInRange(context, "creative.emergence.candidate.temperature",
+                        candidateTempMin, candidateTempMax)
+                && creativeValueInRange(context, "creative.emergence.candidate.topP",
+                        candidateTopPMin, candidateTopPMax)
+                && creativeValueInRange(context, "creative.emergence.final.temperature",
+                        finalTempMin, finalTempMax)
+                && creativeValueInRange(context, "creative.emergence.final.topP",
+                        finalTopPMin, finalTopPMax)
+                && creativeValueInRange(context, "creative.emergence.selfAsk.temperature",
+                        selfAskMin, selfAskMax);
+    }
+
+    private static boolean creativeValueInRange(
+            com.example.lms.service.guard.GuardContext context,
+            String key,
+            double min,
+            double max) {
+        double value = context.planDouble(key, Double.NaN);
+        return Double.isFinite(value) && value >= min && value <= max;
+    }
+
+    private static ChatModel rememberConfiguredTokenBudget(
+            ChatModel model,
+            String modelId,
+            Integer maxTokens,
+            ChatUsageLedger.ParameterKind parameterKind) {
+        ChatUsageLedger.ConfiguredCap configured;
+        if (maxTokens == null
+                || (maxTokens > 0 && parameterKind == ChatUsageLedger.ParameterKind.OMITTED)) {
+            configured = ChatUsageLedger.ConfiguredCap.omitted(
+                    null,
+                    maxTokens,
+                    ChatUsageLedger.CapSource.NORMALIZED_REQUEST);
+        } else if (maxTokens > 0) {
+            configured = ChatUsageLedger.ConfiguredCap.explicit(
+                    null,
+                    maxTokens,
+                    maxTokens,
+                    parameterKind,
+                    ChatUsageLedger.CapSource.NORMALIZED_REQUEST);
+        } else {
+            configured = new ChatUsageLedger.ConfiguredCap(
+                    null,
+                    null,
+                    null,
+                    ChatUsageLedger.CapState.PROVIDER_DEFAULT_UNKNOWN,
+                    ChatUsageLedger.ParameterKind.OMITTED,
+                    ChatUsageLedger.CapSource.NORMALIZED_REQUEST);
+        }
+        CONFIGURED_TOKEN_BUDGETS.put(model, configured);
+        if (modelId != null && !modelId.isBlank()) {
+            CONFIGURED_MODEL_IDS.put(model, modelId.trim());
+        }
+        return model;
+    }
+
+    private void recordSelectedRequestEndpoint(String modelId, String baseUrl) {
+        try {
+            Object captureEnabled = com.example.lms.search.TraceStore.get(
+                    ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY);
+            if (!Boolean.TRUE.equals(captureEnabled)) {
+                return;
+            }
+            Object rawTimelineId = com.example.lms.search.TraceStore.get(
+                    ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY);
+            String timelineId = rawTimelineId == null ? "" : String.valueOf(rawTimelineId).trim();
+            if (timelineId.isBlank()) {
+                return;
+            }
+            modelRuntimeHealthTracker.recordRequestPhase(
+                    timelineId,
+                    "pending",
+                    modelId,
+                    baseUrl,
+                    "none");
+        } catch (RuntimeException ex) {
+            log.debug("DynamicChatModelFactory: request endpoint timeline skipped errorType={}",
+                    SafeRedactor.traceLabelOrFallback(ex.getClass().getSimpleName(), "unknown"));
+        }
+    }
+
+    private ChatModel decorateRequestAttempt(
+            ChatModel model,
+            String provider,
+            String modelId,
+            String baseUrl,
+            String protocol,
+            Double temperature,
+            Double topP,
+            Double frequencyPenalty,
+            Double presencePenalty,
+            Integer maxTokens,
+            int timeoutSeconds,
+            Integer maxRetriesOverride) {
+        if (modelRuntimeHealthTracker == null) {
+            return model;
+        }
+        Map<String, Object> ownedOptions = new LinkedHashMap<>();
+        ownedOptions.put("temperature", temperature);
+        ownedOptions.put("topP", topP);
+        ownedOptions.put("frequencyPenalty", frequencyPenalty);
+        ownedOptions.put("presencePenalty", presencePenalty);
+        if ("ollama_native".equals(protocol)
+                || !OpenAiTokenParamCompat.shouldSendLegacyMaxTokens(modelId, baseUrl)) {
+            ownedOptions.put("maxOutputTokens", maxTokens);
+        } else {
+            ownedOptions.put("maxTokens", maxTokens);
+        }
+        ownedOptions.put("timeoutMs", Math.max(1, timeoutSeconds) * 1_000L);
+        ownedOptions.put("maxRetries", maxRetriesOverride == null ? dynamicMaxRetries : maxRetriesOverride);
+        return modelRuntimeHealthTracker.decorateRequestAttempt(
+                model,
+                "primary",
+                modelRuntimeHealthTracker.redactedRequestAttemptRoute(
+                        "dynamic_factory", modelId, baseUrl, protocol),
+                ModelRuntimeHealthTracker.requestAttemptOptionEnvelope(
+                        provider, modelId, protocol, ownedOptions));
+    }
+
+    private static Duration localPrimaryTimeout(int timeoutSeconds, boolean sharedFailover) {
+        long configured = Math.max(1L, timeoutSeconds) * 1000L;
+        if (!sharedFailover) return Duration.ofMillis(configured);
+        var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        long remaining = budget == null ? configured : Math.min(configured, budget.remainingMillis());
+        return Duration.ofMillis(Math.max(1L, remaining));
+    }
+
+    private ChatModel guardLocalOpenAiCompatibleEndpoint(ChatModel model, String baseUrl, String modelName) {
+        if (localGatewayProbe != null) return localGatewayProbe.guardLocalModel(model, baseUrl, modelName);
+        ModelRuntimeHealthTracker.EndpointQuarantinePolicy policy =
+                llmGatewayProperties.getLocalDeviceFailover().toEndpointQuarantinePolicy();
+        if (model == null || !policy.enabled()) {
+            return model;
+        }
+        return new NamedChatModel() {
+            @Override
+            public String resolvedModelName() {
+                // 가드 래퍼는 자신이 감싼 로컬 엔드포인트의 모델명을 대표한다.
+                return modelName != null && !modelName.isBlank()
+                        ? modelName
+                        : NamedChatModel.resolve(model);
+            }
+
+            @Override
+            public ChatResponse doChat(dev.langchain4j.model.chat.request.ChatRequest request) {
+                return doGuarded(request.messages(), request);
+            }
+
+            private ChatResponse doGuarded(
+                    List<ChatMessage> messages,
+                    dev.langchain4j.model.chat.request.ChatRequest request) {
+                long now = System.currentTimeMillis();
+                ModelRuntimeHealthTracker.EndpointAccess access = modelRuntimeHealthTracker.acquireEndpointAccess(
+                        "local", baseUrl, policy, now);
+                traceLocalEndpointAccess(access);
+                if (!access.allowed()) {
+                    throw new LlmGatewayException(
+                            "Local endpoint quarantined endpointHash=" + access.endpointHash(),
+                            LlmFailureClass.GPU_DEVICE_LOST,
+                            "gpu_device_lost");
+                }
+                try {
+                    ChatResponse response;
+                    if (request == null || messages == null || messages.isEmpty()) {
+                        response = model.chat(messages);
+                    } else {
+                        try {
+                            response = model.chat(request);
+                        } catch (RuntimeException failure) {
+                            if (isMissingDoChatContract(failure)) {
+                                response = model.chat(messages);
+                            } else {
+                                throw failure;
+                            }
+                        }
+                    }
+                    boolean successfulGpuPrimary = response != null
+                            && response.aiMessage() != null
+                            && response.aiMessage().text() != null
+                            && !response.aiMessage().text().isBlank();
+                    modelRuntimeHealthTracker.completeEndpointAccess(
+                            access, successfulGpuPrimary && !access.halfOpenPermit(), policy, System.currentTimeMillis());
+                    if (successfulGpuPrimary) modelRuntimeHealthTracker.recordEndpointModelSuccess("local", baseUrl, modelName);
+                    return response;
+                } catch (RuntimeException failure) {
+                    if (LlmGatewayFailureClassifier.isCancellation(failure)) {
+                        modelRuntimeHealthTracker.releaseEndpointAccess(access);
+                        throw failure;
+                    }
+                    LlmFailureClass failureClass = FAILURE_CLASSIFIER.classify(failure);
+                    if (failureClass == LlmFailureClass.GPU_DEVICE_LOST) {
+                        modelRuntimeHealthTracker.recordEndpointDeviceLoss(
+                                "local", baseUrl, policy, System.currentTimeMillis());
+                    } else if (isRunnerTermination(failure)) {
+                        modelRuntimeHealthTracker.recordEndpointRunnerTermination(
+                                "local", baseUrl, false, policy, System.currentTimeMillis());
+                    } else {
+                        modelRuntimeHealthTracker.recordEndpointTransientFailure(
+                                "local", baseUrl, modelName, failureClass, policy, System.currentTimeMillis());
+                    }
+                    modelRuntimeHealthTracker.completeEndpointAccess(
+                            access, false, policy, System.currentTimeMillis());
+                    throw failure;
+                }
+            }
+        };
+    }
+
+    private static boolean isMissingDoChatContract(RuntimeException failure) {
+        if (failure == null
+                || failure.getClass() != RuntimeException.class
+                || !"Not implemented".equals(failure.getMessage())) {
+            return false;
+        }
+        // Only the interface-default doChat produces this exact throw before any
+        // transport; a provider error raised inside a real doChat must propagate.
+        StackTraceElement[] frames = failure.getStackTrace();
+        return frames.length > 0
+                && "dev.langchain4j.model.chat.ChatModel".equals(frames[0].getClassName())
+                && "doChat".equals(frames[0].getMethodName());
+    }
+
+    private static void traceLocalEndpointAccess(ModelRuntimeHealthTracker.EndpointAccess access) {
+        if (access == null) {
+            return;
+        }
+        com.example.lms.search.TraceStore.put("llm.localEndpoint.endpointHash", access.endpointHash());
+        com.example.lms.search.TraceStore.put(
+                "llm.localEndpoint.state", access.state().name().toLowerCase(Locale.ROOT));
+        com.example.lms.search.TraceStore.put("llm.localEndpoint.wouldBlock", access.wouldBlock());
+        com.example.lms.search.TraceStore.put("llm.localEndpoint.enforced", !access.allowed());
+        com.example.lms.search.TraceStore.put("llm.localEndpoint.halfOpenPermit", access.halfOpenPermit());
+        com.example.lms.search.TraceStore.put("llm.localEndpoint.retryAfterMs", access.retryAfterMs());
+    }
+
+    private static boolean isRunnerTermination(Throwable failure) {
+        Throwable current = failure;
+        int depth = 0;
+        while (current != null && depth++ < 20) {
+            String message = current.getMessage();
+            String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+            if (normalized.contains("runner process has terminated")
+                    || normalized.contains("llama-server process has terminated")) {
+                return true;
+            }
+            Throwable next = current.getCause();
+            if (next == current) {
+                break;
+            }
+            current = next;
+        }
+        return false;
     }
 
     private String localApiKeyForCall(String apiKeyForCall) {
@@ -315,9 +875,18 @@ public class DynamicChatModelFactory {
     }
 
     private String resolveOpenAiApiKey() {
-        // UAW strict policy: if multiple sources are set (even if equal), fail-fast.
-        // See KeyResolver.resolveOpenAiApiKeyStrict().
         return keyResolver.resolveOpenAiApiKeyStrict();
+    }
+
+    private String resolveLocalApiKey() {
+        ProviderCredentialResolver.Resolution resolution = keyResolver.resolveLocalLlmCredential();
+        if (!resolution.enabled() && resolution.credentialPresent()) {
+            throw new IllegalStateException(
+                    "provider=local_llm disabledReason=" + resolution.disabledReason());
+        }
+        return resolution.valueOrNull() == null || resolution.valueOrNull().isBlank()
+                ? "ollama"
+                : resolution.valueOrNull();
     }
 
     private void assertOpenAiReady(String model, String baseUrl, String apiKey) {
@@ -364,6 +933,11 @@ public class DynamicChatModelFactory {
     private String selectLocalBaseUrl(String model) {
         String m = model == null ? "" : model.toLowerCase(Locale.ROOT);
 
+        String configuredCoderModel = trimToNull(env.getProperty("llm.coder.model"));
+        if (configuredCoderModel != null && configuredCoderModel.equalsIgnoreCase(model)) {
+            return firstNonBlank(coderLocalBaseUrl, highLocalBaseUrl, localBaseUrl);
+        }
+
         if (m.contains("qwen3-coder")) {
             return firstNonBlank(coderLocalBaseUrl, highLocalBaseUrl, localBaseUrl);
         }
@@ -373,7 +947,13 @@ public class DynamicChatModelFactory {
         if (m.contains("qwen3-vl")) {
             return firstNonBlank(visionLocalBaseUrl, fastLocalBaseUrl, localBaseUrl);
         }
-        if (m.contains("qwen3:8b") || m.contains("qwen2.5")) {
+        if (m.contains("qwen3:8b") || m.contains("qwen3.5:9b") || m.contains("qwen2.5")) {
+            return firstNonBlank(fastLocalBaseUrl, localBaseUrl);
+        }
+        if (m.contains("gemma3:4b") || m.contains("gemma3_4b")) {
+            return firstNonBlank(fastLocalBaseUrl, localBaseUrl);
+        }
+        if (m.contains("gemma4:12b")) {
             return firstNonBlank(fastLocalBaseUrl, localBaseUrl);
         }
         if (m.contains("gemma4") || m.contains("gemma3")) {
@@ -383,16 +963,25 @@ public class DynamicChatModelFactory {
     }
 
     private boolean shouldUseOllamaNativeThinkFalse(String model, String baseUrl) {
-        if (!ollamaNativeThinkFalseEnabled) {
-            return false;
+        return OllamaNativeChatModel.supportsThinkFalseRoute(
+                ollamaNativeThinkFalseEnabled,
+                model,
+                baseUrl);
+    }
+
+    private Integer ollamaNativeNumGpu() {
+        String value = trimToNull(ollamaNativeNumGpu);
+        if (value == null) {
+            return null;
         }
-        String m = model == null ? "" : model.toLowerCase(Locale.ROOT);
-        if (!(m.contains("qwen3:") || m.contains("qwen3-vl"))) {
-            return false;
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed < 0 ? null : parsed;
+        } catch (NumberFormatException ex) {
+            log.warn("[AWX][local-llm] invalid llm.ollama-native.num-gpu valueHash={} valueLength={}",
+                    SafeRedactor.hashValue(value), value.length());
+            return null;
         }
-        String url = baseUrl == null ? "" : baseUrl.toLowerCase(Locale.ROOT);
-        return url.contains("127.0.0.1:11434") || url.contains("localhost:11434")
-                || url.contains("127.0.0.1:11435") || url.contains("localhost:11435");
     }
 
     private String firstNonBlank(String... values) {

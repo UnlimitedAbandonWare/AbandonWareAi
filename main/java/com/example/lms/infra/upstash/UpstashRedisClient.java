@@ -33,9 +33,9 @@ public class UpstashRedisClient {
     private final WebClient.Builder http;
     private final ObjectMapper om = new ObjectMapper();
 
-    @Value("${upstash.redis.rest-url:}")
+    @Value("${upstash.redis.rest-url:${UPSTASH_REDIS_REST_URL:}}")
     private String url;
-    @Value("${upstash.redis.rest-token:}")
+    @Value("${upstash.redis.rest-token:${UPSTASH_REDIS_REST_TOKEN:}}")
     private String token;
 
     /**
@@ -45,7 +45,46 @@ public class UpstashRedisClient {
      * @return {@code true} when ready for use
      */
     public boolean enabled() {
-        return !ConfigValueGuards.isMissing(url) && !ConfigValueGuards.isMissing(token);
+        return configurationFailure() == null;
+    }
+
+    private String configurationFailure() {
+        if (ConfigValueGuards.isMissing(url)) return "missing_url";
+        if (ConfigValueGuards.isMissing(token)) return "missing_token";
+        try {
+            var endpoint = java.net.URI.create(url.trim());
+            String host = endpoint.getHost();
+            boolean loopback = "127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host)
+                    || "[::1]".equals(host) || "::1".equals(host);
+            if (host == null || endpoint.getRawUserInfo() != null || endpoint.getRawQuery() != null
+                    || endpoint.getRawFragment() != null || !("https".equalsIgnoreCase(endpoint.getScheme())
+                    || (loopback && "http".equalsIgnoreCase(endpoint.getScheme())))) return "invalid_url";
+            return null;
+        } catch (IllegalArgumentException invalid) { return "invalid_url"; }
+    }
+
+    /** Strict atomic command for admission: unavailable Redis must never mean allowed. */
+    public Mono<List<Long>> eval(String script, List<String> keys, List<String> arguments) {
+        return Mono.defer(() -> {
+        long began = System.nanoTime();
+        String missing = configurationFailure();
+        if (missing != null) return Mono.error(admissionFailure(new IllegalStateException(missing), began));
+        var command = new java.util.ArrayList<String>();
+        command.add("EVAL"); command.add(script); command.add(Integer.toString(keys.size()));
+        command.addAll(keys); command.addAll(arguments);
+        return pipeline(List.of(command)).timeout(Duration.ofSeconds(2)).map(rows -> {
+            if (rows.size() != 1 || rows.get(0).containsKey("error")
+                    || !(rows.get(0).get("result") instanceof List<?> values))
+                throw new IllegalStateException("redis_admission_invalid_reply");
+            var result = new java.util.ArrayList<Long>();
+            for (Object value : values) {
+                if (!(value instanceof Integer || value instanceof Long)) throw new IllegalStateException("redis_admission_invalid_reply");
+                Number number = (Number) value;
+                result.add(number.longValue());
+            }
+            return List.copyOf(result);
+        }).onErrorMap(error -> admissionFailure(error, began));
+        });
     }
 
     /**
@@ -95,8 +134,11 @@ public class UpstashRedisClient {
                 List.of("INCR", key),
                 List.of("EXPIRE", key, String.valueOf(ttl.toSeconds()))
         );
-        return pipeline(body)
+        return batch(body, "/multi-exec")
                 .map(list -> {
+                    if (!"1".equals(value(list, 1))) {
+                        throw new IllegalStateException("redis_expire_unsuccessful");
+                    }
                     var v = value(list, 0);
                     try {
                         return Long.parseLong(v);
@@ -105,6 +147,7 @@ public class UpstashRedisClient {
                         return Long.MAX_VALUE;
                     }
                 })
+                .doOnError(e -> traceSuppressed("incrExpire", e))
                 .onErrorReturn(Long.MAX_VALUE);
     }
 
@@ -117,9 +160,13 @@ public class UpstashRedisClient {
      * @return a Mono emitting the parsed response
      */
     private Mono<List<Map<String, Object>>> pipeline(List<?> commands) {
+        return batch(commands, "/pipeline");
+    }
+
+    private Mono<List<Map<String, Object>>> batch(List<?> commands, String endpoint) {
         return http.build()
                 .post()
-                .uri(url.trim() + "/pipeline")
+                .uri(url.trim() + endpoint)
                 .header("Authorization", "Bearer " + token.trim())
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(commands)
@@ -127,9 +174,23 @@ public class UpstashRedisClient {
                 .bodyToMono(String.class)
                 .map(json -> {
                     try {
-                        return om.readValue(json, new TypeReference<List<Map<String, Object>>>() {});
+                        List<Map<String, Object>> rows = om.readValue(json, new TypeReference<List<Map<String, Object>>>() {});
+                        if (rows == null || rows.size() != commands.size()) throw new IllegalStateException("redis_admission_invalid_reply");
+                        for (var row : rows) {
+                            if (row == null) throw new IllegalStateException("redis_admission_invalid_reply");
+                            if (row.containsKey("error")) {
+                                String error = String.valueOf(row.get("error")).toUpperCase(java.util.Locale.ROOT);
+                                String reason = error.contains("NOPERM") || error.contains("READONLY") ? "permission_denied"
+                                        : error.contains("WRONGPASS") || error.contains("NOAUTH") ? "authentication_failed" : "upstream_command_error";
+                                throw new IllegalStateException(reason);
+                            }
+                            if (!row.containsKey("result")) throw new IllegalStateException("redis_admission_invalid_reply");
+                        }
+                        return rows;
+                    } catch (IllegalStateException classified) {
+                        throw classified;
                     } catch (Exception e) {
-                        throw new RuntimeException(e);
+                        throw new IllegalStateException("redis_admission_invalid_reply");
                     }
                 });
     }
@@ -145,6 +206,30 @@ public class UpstashRedisClient {
         if (list == null || list.size() <= idx) return null;
         var v = list.get(idx).get("result");
         return v == null ? null : String.valueOf(v);
+    }
+
+    private static IllegalStateException admissionFailure(Throwable failure, long began) {
+        String reason;
+        Integer status = null;
+        if (failure instanceof org.springframework.web.reactive.function.client.WebClientResponseException response) {
+            status = response.getStatusCode().value();
+            reason = status == 401 ? "authentication_failed" : status == 403 ? "permission_denied"
+                    : status == 429 ? "provider_rate_limited" : "upstream_http_error";
+        } else if (failure instanceof java.util.concurrent.TimeoutException) reason = "timeout";
+        else if (failure instanceof org.springframework.web.reactive.function.client.WebClientRequestException) reason = "network_error";
+        else reason = switch (java.util.Objects.toString(failure.getMessage(), "")) {
+            case "missing_url", "missing_token", "invalid_url", "permission_denied", "authentication_failed", "upstream_command_error" -> failure.getMessage();
+            case "redis_admission_invalid_reply" -> "invalid_response";
+            default -> "unavailable";
+        };
+        long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began);
+        TraceStore.put("upstash.redis.admission.reasonCode", reason);
+        TraceStore.put("upstash.redis.admission.upstreamStatus", status == null ? "not_observed" : status);
+        TraceStore.put("upstash.redis.admission.elapsedMs", elapsedMs);
+        TraceStore.put("upstash.redis.admission.retryCount", 0);
+        org.slf4j.LoggerFactory.getLogger(UpstashRedisClient.class).warn(
+                "redis.admission result=unavailable reasonCode={} upstreamStatus={} elapsedMs={} retryCount=0", reason, status, elapsedMs);
+        return new IllegalStateException("redis_admission_unavailable");
     }
 
     private static void traceSuppressed(String stage, Throwable failure) {

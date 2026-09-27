@@ -198,7 +198,7 @@ public final class OpenAiEndpointCompatibility {
                     sb.append("[System]\n").append(t).append("\n\n");
                 }
             } else if (msg instanceof UserMessage um) {
-                String t = safeText(um.singleText());
+                String t = safeText(userText(um));
                 if (!t.isBlank()) {
                     sb.append("User: ").append(t).append("\n\n");
                 }
@@ -207,9 +207,31 @@ public final class OpenAiEndpointCompatibility {
                 if (!t.isBlank()) {
                     sb.append("Assistant: ").append(t).append("\n\n");
                 }
+            } else if (msg instanceof dev.langchain4j.data.message.ToolExecutionResultMessage tm) {
+                String t = safeText(tm.text());
+                if (!t.isBlank()) {
+                    sb.append("Tool ").append(safeText(tm.toolName())).append(": ").append(t).append("\n\n");
+                }
             }
         }
         sb.append("Assistant:");
+        return sb.toString();
+    }
+
+    /** Joins all text parts; multimodal/non-text contents never throw here. */
+    static String userText(UserMessage message) {
+        if (message == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (dev.langchain4j.data.message.Content content : message.contents()) {
+            if (content instanceof dev.langchain4j.data.message.TextContent textContent) {
+                if (sb.length() > 0) {
+                    sb.append('\n');
+                }
+                sb.append(textContent.text());
+            }
+        }
         return sb.toString();
     }
 

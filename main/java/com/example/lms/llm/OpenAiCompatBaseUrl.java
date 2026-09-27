@@ -1,14 +1,13 @@
 package com.example.lms.llm;
 
-import java.util.Locale;
+import java.net.URI;
+import java.util.List;
 
 /**
  * Normalizes OpenAI-compatible base URLs.
  *
- * <p>LangChain4j's OpenAiChatModel expects a base URL that ends with "/v1".
- * In the wild, configs often omit it ("http://localhost:11434"), or point to
- * a leaf endpoint (".../v1/chat/completions"). This helper tries to sanitize
- * those cases without being overly clever.</p>
+ * <p>Preserves provider and reverse-proxy prefixes. Host-only compatibility
+ * endpoints retain the established /v1 default; known endpoint suffixes are removed.</p>
  */
 public final class OpenAiCompatBaseUrl {
 
@@ -27,27 +26,26 @@ public final class OpenAiCompatBaseUrl {
             return "";
         }
 
-        // Remove trailing slashes.
-        while (s.endsWith("/")) {
-            s = s.substring(0, s.length() - 1);
-        }
-
-        // If URL already contains "/v1" segment, trim anything after it.
-        String lower = s.toLowerCase(Locale.ROOT);
-        int idx = lower.indexOf("/v1");
-        if (idx >= 0) {
-            int end = idx + 3; // length of "/v1"
-            // Only treat as segment if boundary matches
-            boolean boundaryOk = (lower.length() == end)
-                    || (lower.charAt(end) == '/')
-                    || (lower.charAt(end) == '?')
-                    || (lower.charAt(end) == '#');
-            if (boundaryOk) {
-                return s.substring(0, end);
+        try {
+            URI uri = URI.create(s);
+            if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                    || uri.getHost() == null || uri.getRawUserInfo() != null
+                    || uri.getRawQuery() != null || uri.getRawFragment() != null) {
+                throw new IllegalArgumentException();
             }
+            String path = uri.getRawPath();
+            while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+            for (String suffix : List.of("/chat/completions", "/responses", "/embeddings", "/completions")) {
+                if (path.endsWith(suffix)) {
+                    path = path.substring(0, path.length() - suffix.length());
+                    break;
+                }
+            }
+            if (path.isEmpty()) path = "/v1";
+            return uri.getScheme() + "://" + uri.getRawAuthority() + path;
+        } catch (IllegalArgumentException invalid) {
+            // Do not echo a URL that may contain credentials or private query values.
+            throw new IllegalArgumentException("invalid_openai_compatible_base_url");
         }
-
-        // Otherwise append /v1
-        return s + "/v1";
     }
 }

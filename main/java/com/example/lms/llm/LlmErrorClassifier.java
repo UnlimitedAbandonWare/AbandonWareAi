@@ -26,6 +26,9 @@ public final class LlmErrorClassifier {
 
     public static Result classify(Throwable t) {
         try {
+            if (com.example.lms.llm.gateway.LlmGatewayFailureClassifier.hasNonReplayableReason(t)) {
+                return new Result("NON_REPLAYABLE", false, null, "non_replayable_gateway_failure");
+            }
             // Walk the cause chain (do not assume the deepest cause keeps the useful message).
             java.util.ArrayList<Throwable> chain = new java.util.ArrayList<>();
             Throwable cur = (t == null) ? new RuntimeException("null") : t;
