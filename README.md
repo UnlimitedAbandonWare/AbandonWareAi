@@ -1,3 +1,24 @@
+# Dynamic RAG Orchestration Platform
+
+This checkout is the Desktop canonical root for the Dynamic RAG Orchestration Platform.
+The older pack notes below are retained as historical design context.
+
+## Run
+
+- `Start-RAG.bat` — starts the Spring Boot stack (profiles `local,meta-display`, ports `18180`/`18181`/`18182`).
+- `Close-RAG.bat` — stops the stack. `Debug-RAG.bat` / `Debug-Meta-Display.bat` — diagnostics.
+- `verify_boot.ps1` / `verify_boot.sh` — boot verification.
+
+## Configuration (env names only — real values are never committed)
+
+- Copy `.env.example` to `.env` (gitignored) or export the variables yourself:
+  `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`,
+  `BRAVE_API_KEY_FREE`, `BRAVE_API_KEY`, `NAVER_KEYS`, `PINECONE_API_KEY`, `PINECONE_ENV`,
+  `PROBE_ADMIN_TOKEN`, `DEEPGRAM_API_KEY`, `DEEPGRAM_API_KEY_SECONDARY`.
+- Provider/model routing SSOT: `configs/api-routing.yaml` + `docs/API_ROUTING_SPEC.md`.
+- Device-local secret material stays under `.secrets/` (gitignored). A local `apikey.txt`
+  may be created when needed — it is gitignored; never commit a real key file.
+
 # Nova Protocol — Zero Break (v0.1) Drop‑in Pack
 이 패키지는 **Zero Break / Brave / Safe Autorun** 3종 Plan DSL과,
 Spring 기반 RAG 오케스트레이션에 연결되는 핵심 게이트/인터셉터/관리 API 스켈레톤을 제공합니다.

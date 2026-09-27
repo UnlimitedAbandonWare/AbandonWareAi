@@ -1,0 +1,38 @@
+/.secrets/
+/config/secrets/
+/.env
+/.env.*
+/shared.env
+/shared.env.*
+/data/device-resources/*
+
+# --- vibe-coding search scope (2026-09-20) ---
+# Rarely touched during agent edits; skipping these keeps repo-wide search fast.
+# Build outputs, caches, runtime logs, generated agent artifacts.
+/build/
+**/build/
+/out/
+**/out/
+/target/
+**/.gradle/
+/var/*
+**/node_modules/
+**/__pycache__/
+*.class
+*.log
+/.next/
+__pycache__/
+*.pyc
+
+# --- vibe-max-agency read exceptions (AGENTS.md DEMO1-VIBE-MAX-AGENCY) ---
+!/data/device-resources/events/
+!/data/device-resources/registry/
+!/var/debug/
+!/var/debug/**
+!/var/dev-admin-token.txt
+!/logs/
+!/var/
+!/data/device-resources/
+!/var/meta-display-db/
+/var/meta-display-db/*
+!/var/meta-display-db/export/

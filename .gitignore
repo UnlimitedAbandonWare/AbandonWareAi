@@ -128,11 +128,31 @@ app/src/main/resources/application-machine.yml
 /app/src/main/resources/application-*.properties
 !/app/src/main/resources/*example*.*
 !/app/src/main/resources/*sample*.*
-# Generic sensitive patterns
-/**/*secret*.*
-/**/*token*.*
-/**/*credential*.*
-/**/*api[-_]*key*.*
+# Generic sensitive patterns — extension-scoped so they cannot swallow source
+# files (e.g. CancellationToken.java, *Token*Test.java). Broad `*.*` catch-alls
+# previously hid real Java sources from git; see repo-hygiene-audit-20260918.
+/**/*secret*.yml
+/**/*secret*.yaml
+/**/*secret*.properties
+/**/*secret*.json
+/**/*token*.yml
+/**/*token*.yaml
+/**/*token*.properties
+/**/*token*.json
+/**/*credential*.yml
+/**/*credential*.yaml
+/**/*credential*.properties
+/**/*credential*.json
+!main/java/com/example/lms/guard/ProviderCredentialResolver.java
+!main/java/com/example/lms/guard/OpenAiCredentialPropertyBridge.java
+!src/test/java/com/example/lms/guard/ProviderCredentialResolverTest.java
+!src/test/java/com/example/lms/guard/OpenAiCredentialPropertyBridgeTest.java
+!src/test/java/com/example/lms/provider/ProviderCredentialConsumerContractTest.java
+!src/test/java/com/abandonware/ai/agent/integrations/AgentTavilyCredentialResolverContractTest.java
+/**/*api[-_]*key*.yml
+/**/*api[-_]*key*.yaml
+/**/*api[-_]*key*.properties
+/**/*api[-_]*key*.json
 !scripts/git_secret_guard.ps1
 
 # --- Context purity / vector-memory anti-contamination ---
@@ -158,6 +178,11 @@ __reports__/
 build-logs/
 logs/
 AUTO_BUILD_*
+
+# Local browser profiles from Codex/UI smoke runs can contain cached tokens or
+# opaque browser databases. Keep them out of Git even when other smoke artifacts
+# are reviewed manually.
+/var/codex-smoke/chrome-cdp-*/
 AUTO_PATTERN_*
 BUILD_ERROR_*
 BUILD_FIX_*
@@ -185,6 +210,11 @@ PATCH_NOTES_src111_*
 /__patch_drop__/applied/*.err
 !/__patch_drop__/README.md
 !/__patch_drop__/applied/README.md
+
+# Producer-kit bundles carry packaged .agents/skills payloads for remote install.
+# Ignoring them keeps agent skill discovery on the canonical tree while the
+# PatchDrop delivery path itself is unchanged.
+/__patch_drop__/producer-kit/
 
 # --- Source governance hygiene v3 ---
 main/resources/keystore.p12
@@ -257,3 +287,56 @@ docs/agent/
 !**/src/main/resources/*sample*.yml
 !**/src/main/resources/*sample*.yaml
 !**/src/main/resources/*sample*.properties
+
+# Visible alias of the private root .env (NTFS hard link).
+/shared.env
+/shared.env.*
+
+# Shared project credentials, including their recovery history, are never source.
+/.secrets/
+/config/secrets/
+/data/device-resources/
+
+# --- Generated/runtime/agent artifact zones (audit 2026-09-18) ---
+# These trees hold 0 tracked files and ~48k untracked artifacts that made
+# `git status` unusable. Runtime/handoff/cache output is not source.
+/var/
+/data/agent-handoff/
+/verification/
+/output/
+/.gradle-*/
+/.playwright-cli/
+/.superpowers/
+/.codex-remote-attachments/
+/.env.shared/
+/BackupsXS/
+/.next/
+# Per-run agent backups, runtime logs/pids, JVM crash dumps, bytecode caches.
+/*.bak-*
+/awx-bootrun-*.log
+/awx-bootrun-*.pid
+/hs_err_pid*.log
+/javac.*.args
+__pycache__/
+*.pyc
+
+# --- GitHub publish pass (2026-09-23) ---
+# Runtime data, local model/venv trees, and build output are not source.
+# All of these carried 0 tracked files in HEAD.
+/data/
+/ONNX
+/ONNX/
+bin/
+/tools/conversate-asr/
+/autoevolve_debug/
+*.mv.db
+*.trace.db
+*.lock.db
+# PatchDrop exchange dirs are transient at any depth; share root READMEs only.
+**/__patch_drop__/
+!/__patch_drop__/
+/__patch_drop__/*
+!/__patch_drop__/README.md
+!/__patch_drop__/applied/
+/__patch_drop__/applied/*
+!/__patch_drop__/applied/README.md
