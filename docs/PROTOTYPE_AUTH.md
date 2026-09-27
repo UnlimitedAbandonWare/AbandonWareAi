@@ -12,6 +12,8 @@
   - 기본값 `false` (코드) — 프로덕션/공개 배포에서는 켜지 않는다.
   - `application-meta-display.yml`에서 `true` (`local,meta-display` 프로파일 =
     개발/착용 런타임 모두 로드). 로컬 전용 강제는 env `DEMO_AUTH_PROTO_OPEN=true`.
+  - 잠금은 opt-in이다: 로컬/착용에서 닫으려면 `DEMO_AUTH_PROTO_OPEN=false`를 명시.
+    기본 부트가 열린 것은 의도된 상태이며 리그레션이 아니다.
 - 적용 지점 (코드가 막던 곳만 최소 완화):
   - `AdminTokenGuardInterceptor` — proto-open이면 `preHandle`/`isPresentedTokenAuthorized`/
     `hasConfiguredToken`이 전부 통과 (X-Admin-Token/세션 쿠키 불필요).
