@@ -22,12 +22,32 @@ public final class GpuHardwareDiagnostics {
 
     private static final String STATUS_DISABLED = "disabled_by_config";
     private static final String STATUS_OK = "ok";
+    private static final CommandRunner LOCAL_QUERY = GpuHardwareDiagnostics::runNvidiaSmi;
+    private static QuerySample lastQuery;
+
+    private record QuerySample(CommandRunner runner, int timeoutMs, long completedNanos,
+                               long observedAtMillis, CommandResult result, IOException failure) { }
+
+    private static synchronized QuerySample query(CommandRunner runner, int timeoutMs) throws InterruptedException {
+        // Both successful and failed observations have a short bound; concurrent requests share one probe.
+        if (lastQuery != null && lastQuery.runner() == runner && lastQuery.timeoutMs() == timeoutMs
+                && System.nanoTime() - lastQuery.completedNanos() < TimeUnit.SECONDS.toNanos(2)) return lastQuery;
+        CommandResult result = null;
+        IOException failure = null;
+        try {
+            result = runner.run(timeoutMs);
+        } catch (IOException unavailable) {
+            failure = unavailable;
+        }
+        lastQuery = new QuerySample(runner, timeoutMs, System.nanoTime(), System.currentTimeMillis(), result, failure);
+        return lastQuery;
+    }
 
     private GpuHardwareDiagnostics() {
     }
 
     public static Map<String, Object> snapshot(Environment env) {
-        return snapshot(env, GpuHardwareDiagnostics::runNvidiaSmi);
+        return snapshot(env, LOCAL_QUERY);
     }
 
     static Map<String, Object> snapshot(Environment env, CommandRunner runner) {
@@ -43,31 +63,37 @@ public final class GpuHardwareDiagnostics {
         }
 
         try {
-            CommandResult result = runner.run(timeoutMs);
+            QuerySample sample = query(runner, timeoutMs);
+            out.put("observedAtEpochMs", sample.observedAtMillis());
+            out.put("observationAgeMs", Math.max(0L, System.currentTimeMillis() - sample.observedAtMillis()));
+            if (sample.failure() != null) throw sample.failure();
+            CommandResult result = sample.result();
+            out.put("queryExitCode", result.exitCode());
+            out.put("driverQuerySucceeded", !result.timedOut() && result.exitCode() == 0);
             if (result.timedOut()) {
                 out.put("status", "timeout");
                 out.put("disabledReason", "timeout");
                 return finish(env, out);
             }
-            if (result.exitCode() != 0) {
-                out.put("status", "error");
-                out.put("disabledReason", "nvidia_smi_exit_" + result.exitCode());
-                return finish(env, out);
-            }
-
             List<Map<String, Object>> devices = parseNvidiaSmiCsv(result.stdout());
             out.put("devices", devices);
             out.put("detectedCount", devices.size());
             out.put("hasRtx3090", hasDevice(devices, "3090"));
             out.put("hasRtx3060", hasDevice(devices, "3060"));
-            out.put("heavyLaneReady", Boolean.TRUE.equals(out.get("hasRtx3090"))
+            out.put("heavyLaneReady", result.exitCode() == 0 && Boolean.TRUE.equals(out.get("hasRtx3090"))
                     && Boolean.TRUE.equals(out.get("hasRtx3060")));
+            out.put("memoryEvidenceComplete", !devices.isEmpty()
+                    && devices.stream().allMatch(device -> device.containsKey("memoryUsedRatio")));
             out.put("maxMemoryUsedRatio", maxDouble(devices, "memoryUsedRatio"));
             out.put("maxUtilizationGpuPct", maxInt(devices, "utilizationGpuPct"));
             out.put("maxTemperatureC", maxInt(devices, "temperatureC"));
             out.put("available", !devices.isEmpty());
             out.put("status", devices.isEmpty() ? "parse_error" : STATUS_OK);
             out.put("disabledReason", devices.isEmpty() ? "no_parseable_devices" : null);
+            if (result.exitCode() != 0) {
+                out.put("status", devices.isEmpty() ? "error" : "partial");
+                out.put("disabledReason", "nvidia_smi_exit_" + result.exitCode());
+            }
             return finish(env, out);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -115,9 +141,22 @@ public final class GpuHardwareDiagnostics {
             device.put("index", index);
             device.put("nameLabel", name);
             device.put("role", roleForName(name));
+            device.put("roleEvidence", "model_name_candidate");
+            if (columns.length >= 11) {
+                String uuid = columns[7].trim();
+                if (uuid.matches("GPU-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")) {
+                    device.put("uuidHash", SafeRedactor.hashValue(uuid));
+                }
+                String pci = columns[8].trim();
+                if (pci.matches("[0-9A-Fa-f]{4,8}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\\.[0-7]")) device.put("pciBusId", pci);
+                String driver = columns[9].trim();
+                if (driver.matches("[0-9]+(?:\\.[0-9]+){1,3}")) device.put("driverVersion", driver);
+                putIfPresent(device, "memoryFreeMiB", parseInt(columns[10]));
+            }
             putIfPresent(device, "memoryTotalMiB", memoryTotal);
             putIfPresent(device, "memoryUsedMiB", memoryUsed);
-            if (memoryTotal != null && memoryUsed != null && memoryTotal > 0) {
+            if (memoryTotal != null && memoryUsed != null && memoryTotal > 0
+                    && memoryUsed >= 0 && memoryUsed <= memoryTotal) {
                 device.put("memoryUsedRatio", round4(memoryUsed / (double) memoryTotal));
             }
             putIfPresent(device, "utilizationGpuPct", utilization);
@@ -192,6 +231,13 @@ public final class GpuHardwareDiagnostics {
             return out;
         }
 
+        if (Boolean.FALSE.equals(safeSnapshot.get("memoryEvidenceComplete"))) {
+            out.put("pressureLevel", blockWhenUnavailable ? "block" : "observe_only");
+            out.put("status", blockWhenUnavailable ? "blocked" : "observe_only");
+            out.put("reason", "gpu_memory_evidence_needed");
+            if (blockWhenUnavailable) blockHeavy(out);
+            return out;
+        }
         double maxMemory = doubleValue(safeSnapshot.get("maxMemoryUsedRatio"), 0.0d);
         out.put("maxMemoryUsedRatio", maxMemory);
         if (maxMemory >= blockThreshold) {
@@ -230,7 +276,7 @@ public final class GpuHardwareDiagnostics {
     private static CommandResult runNvidiaSmi(int timeoutMs) throws IOException, InterruptedException {
         Process process = new ProcessBuilder(
                 "nvidia-smi",
-                "--query-gpu=index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw",
+                "--query-gpu=index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,uuid,pci.bus_id,driver_version,memory.free",
                 "--format=csv,noheader,nounits")
                 .start();
         boolean completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
@@ -252,6 +298,10 @@ public final class GpuHardwareDiagnostics {
     private static Map<String, Object> base(boolean enabled, int timeoutMs) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("enabled", enabled);
+        out.put("observedAtEpochMs", System.currentTimeMillis());
+        out.put("readinessScope", "hardware_inventory_only");
+        out.put("inferenceStatus", "not_observed");
+        out.put("driverQuerySucceeded", false);
         out.put("available", false);
         out.put("status", "");
         out.put("disabledReason", null);
@@ -273,7 +323,7 @@ public final class GpuHardwareDiagnostics {
             TraceStore.put("uaw.gpu-hardware.hasRtx3090", snapshot.getOrDefault("hasRtx3090", false));
             TraceStore.put("uaw.gpu-hardware.hasRtx3060", snapshot.getOrDefault("hasRtx3060", false));
             TraceStore.put("uaw.gpu-hardware.heavyLaneReady", snapshot.getOrDefault("heavyLaneReady", false));
-            TraceStore.put("uaw.gpu-hardware.maxMemoryUsedRatio", snapshot.getOrDefault("maxMemoryUsedRatio", 0.0d));
+            TraceStore.put("uaw.gpu-hardware.maxMemoryUsedRatio", snapshot.get("maxMemoryUsedRatio"));
             Map<String, Object> admission = admissionFromSnapshot(snapshot);
             TraceStore.put("uaw.gpu-hardware.admission.status", admission.getOrDefault("status", ""));
             TraceStore.put("uaw.gpu-hardware.admission.reason", SafeRedactor.traceLabelOrFallback(String.valueOf(admission.getOrDefault("reason", "")), "unknown"));
@@ -319,7 +369,7 @@ public final class GpuHardwareDiagnostics {
                 max = max == null ? d : Math.max(max, d);
             }
         }
-        return max == null ? 0.0d : max;
+        return max;
     }
 
     private static Integer maxInt(List<Map<String, Object>> devices, String key) {
@@ -334,7 +384,7 @@ public final class GpuHardwareDiagnostics {
                 max = max == null ? i : Math.max(max, i);
             }
         }
-        return max == null ? 0 : max;
+        return max;
     }
 
     private static String commandFailureStatus(IOException ex) {

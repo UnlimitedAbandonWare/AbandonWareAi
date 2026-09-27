@@ -2,6 +2,7 @@ package com.example.lms.guard;
 
 import com.example.lms.config.ConfigValueGuards;
 import com.example.lms.search.TraceStore;
+import com.example.lms.routing.ApiRoutingDebug;
 import com.example.lms.service.search.NaverCredentialBridge;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
@@ -12,39 +13,51 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Strict API-key resolution helper.
+ * Compatibility facade for the central provider credential resolver.
  *
  * <p>
- * Policy: if multiple sources are set (even if equal), fail-fast so runtime
- * does not silently pick an arbitrary key source.
+ * Equal duplicate aliases resolve to the established precedence order. Distinct
+ * values fail closed for only that provider and are returned as {@code null}.
  * </p>
  */
 @Component
 public class KeyResolver {
 
     private final Environment env;
+    private final ProviderCredentialResolver providerCredentialResolver;
 
     public KeyResolver(Environment env) {
         this.env = env;
+        this.providerCredentialResolver = new ProviderCredentialResolver(env);
     }
 
     /**
-     * Resolve OpenAI API key with strict conflict rules.
+     * Resolve the effective OpenAI API key.
      *
      * <ul>
      * <li>Allowed sources: llm.api-key-openai OR llm.openai.api-key OR
      * OPENAI_API_KEY</li>
-     * <li>If more than one source is configured (non-blank), throw
-     * IllegalStateException</li>
+     * <li>Equal duplicate values are accepted; distinct values disable OpenAI</li>
      * <li>If none configured, return null</li>
      * </ul>
      */
     public String resolveOpenAiApiKeyStrict() {
-        return resolveStrict(
-                "OpenAI",
-                externalSrc("llm.api-key-openai", env.getProperty("llm.api-key-openai")),
-                externalSrc("llm.openai.api-key", env.getProperty("llm.openai.api-key")),
-                externalSrc("OPENAI_API_KEY", env.getProperty("OPENAI_API_KEY")));
+        return resolveOpenAiCredential().valueOrNull();
+    }
+
+    public ProviderCredentialResolver.Resolution resolveOpenAiCredential() {
+        ProviderCredentialResolver.Resolution resolution =
+                providerCredentialResolver.resolve(ProviderCredentialResolver.Provider.OPENAI);
+        ApiRoutingDebug.decision(
+                "llm",
+                "openai",
+                "n/a",
+                "openai.api",
+                resolution != null && resolution.enabled() && ApiRoutingDebug.keyPresent(resolution.valueOrNull()),
+                resolution == null || resolution.sourceName() == null || resolution.sourceName().isBlank()
+                        ? "OPENAI_API_KEY"
+                        : resolution.sourceName());
+        return resolution;
     }
 
     /**
@@ -63,10 +76,22 @@ public class KeyResolver {
      * </p>
      */
     public String resolveLocalApiKeyStrict() {
-        return resolveStrict(
-                "Local(OpenAI-compatible)",
-                localSrc("llm.api-key", env.getProperty("llm.api-key")),
-                localSrc("LLM_API_KEY", env.getProperty("LLM_API_KEY")));
+        return resolveLocalLlmCredential().valueOrNull();
+    }
+
+    public ProviderCredentialResolver.Resolution resolveLocalLlmCredential() {
+        ProviderCredentialResolver.Resolution resolution =
+                providerCredentialResolver.resolve(ProviderCredentialResolver.Provider.LOCAL_LLM);
+        ApiRoutingDebug.decision(
+                "llm",
+                "local",
+                "n/a",
+                "llm.local",
+                resolution != null && resolution.enabled() && ApiRoutingDebug.keyPresent(resolution.valueOrNull()),
+                resolution == null || resolution.sourceName() == null || resolution.sourceName().isBlank()
+                        ? "LLM_API_KEY"
+                        : resolution.sourceName());
+        return resolution;
     }
 
     /**
@@ -77,21 +102,27 @@ public class KeyResolver {
      * </p>
      */
     public String resolveGeminiApiKeyStrict() {
-        return resolveStrict(
-                "Gemini",
-                externalSrc("gemini.api-key", env.getProperty("gemini.api-key")),
-                externalSrc("gemini.api.key", env.getProperty("gemini.api.key")),
-                externalSrc("GEMINI_API_KEY", env.getProperty("GEMINI_API_KEY")));
+        return providerCredentialResolver
+                .resolve(ProviderCredentialResolver.Provider.GEMINI)
+                .valueOrNull();
     }
 
     /**
      * Resolve Groq API key without falling back to generic local/OpenAI keys.
      */
     public String resolveGroqApiKeyStrict() {
-        return resolveStrict(
+        String key = resolveStrict(
                 "Groq",
                 externalSrc("llm.groq.api-key", env.getProperty("llm.groq.api-key")),
                 externalSrc("GROQ_API_KEY", env.getProperty("GROQ_API_KEY")));
+        ApiRoutingDebug.decision(
+                "llm",
+                "groq",
+                "n/a",
+                "api.groq.com",
+                ApiRoutingDebug.keyPresent(key),
+                ApiRoutingDebug.keyPresent(env.getProperty("llm.groq.api-key")) ? "llm.groq.api-key" : "GROQ_API_KEY");
+        return key;
     }
 
     /**
@@ -129,19 +160,19 @@ public class KeyResolver {
      * naver.keys, NAVER_KEYS, then naver.client-id/naver.client-secret.
      */
     public String resolveNaverKeysCsvSafe() {
-        String naverKeys = trimToNull(env.getProperty("naver.keys"));
-        String envKeys = trimToNull(env.getProperty("NAVER_KEYS"));
         String clientId = firstTrimmed("naver.client-id", "NAVER_CLIENT_ID");
         String clientSecret = firstTrimmed("naver.client-secret", "NAVER_CLIENT_SECRET");
-        String resolved = NaverCredentialBridge.resolveKeysCsvFull(naverKeys, envKeys, clientId, clientSecret);
+        ProviderCredentialResolver.Resolution resolution = providerCredentialResolver
+                .resolve(ProviderCredentialResolver.Provider.NAVER);
+        String resolved = resolution.valueOrNull();
 
-        boolean keysPresent = !ConfigValueGuards.isMissing(resolved);
+        boolean keysPresent = resolution.enabled() && !ConfigValueGuards.isMissing(resolved);
         traceNaverCredentialResolution(
-                naverSourceName(naverKeys, envKeys, clientId, clientSecret, resolved),
+                naverSourceName(resolution),
                 keysPresent,
                 !ConfigValueGuards.isMissing(clientId) && !ConfigValueGuards.isMissing(clientSecret),
                 NaverCredentialBridge.countCredentialPairs(resolved),
-                keysPresent ? "" : "no_valid_keys_found");
+                keysPresent ? "" : naverDisabledReason(resolution));
         return resolved == null ? "" : resolved;
     }
 
@@ -212,25 +243,23 @@ public class KeyResolver {
         return value != null ? value : trimToNull(env.getProperty(envName));
     }
 
-    private static String naverSourceName(
-            String naverKeys,
-            String envKeys,
-            String clientId,
-            String clientSecret,
-            String resolved) {
-        if (ConfigValueGuards.isMissing(resolved)) {
+    private static String naverSourceName(ProviderCredentialResolver.Resolution resolution) {
+        if (resolution == null || !resolution.enabled()) {
             return "none";
         }
-        if (NaverCredentialBridge.hasValidCredentialPair(naverKeys)) {
-            return "naver.keys";
+        String sourceName = resolution.sourceName();
+        if (sourceName == null || sourceName.isBlank()) {
+            return "unknown";
         }
-        if (NaverCredentialBridge.hasValidCredentialPair(envKeys)) {
-            return "NAVER_KEYS";
+        return sourceName.toLowerCase().contains("client-pair") ? "client-pair" : sourceName;
+    }
+
+    private static String naverDisabledReason(ProviderCredentialResolver.Resolution resolution) {
+        if (resolution == null || resolution.disabledReason() == null || resolution.disabledReason().isBlank()
+                || "missing-credential".equals(resolution.disabledReason())) {
+            return "no_valid_keys_found";
         }
-        if (!ConfigValueGuards.isMissing(clientId) && !ConfigValueGuards.isMissing(clientSecret)) {
-            return "client-pair";
-        }
-        return "unknown";
+        return resolution.disabledReason();
     }
 
     private static void traceNaverCredentialResolution(

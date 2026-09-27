@@ -2,9 +2,13 @@ package com.example.lms.guard;
 
 import com.example.lms.rag.model.QueryDomain;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.trace.SafeRedactor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import java.util.Locale;
 
 @Component
 public class GuardProfileProps {
@@ -13,8 +17,13 @@ public class GuardProfileProps {
     private String profile;
 
     public GuardProfile currentProfile() {
+        GuardContext context = GuardContextHolder.get();
+        GuardProfile selected = context == null ? null : context.getRequestGuardProfile();
+        if (selected != null) {
+            return selected;
+        }
         try {
-            return GuardProfile.valueOf(profile.toUpperCase());
+            return GuardProfile.valueOf(profile.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             traceSuppressed("guardProfile.currentProfile", e);
             return GuardProfile.PROFILE_MEMORY;
@@ -47,7 +56,12 @@ public class GuardProfileProps {
      */
     public void setCurrentProfile(GuardProfile profile) {
         if (profile != null) {
-            this.profile = profile.name();
+            GuardContext context = GuardContextHolder.get();
+            if (context != null) {
+                context.setRequestGuardProfile(profile);
+            } else {
+                this.profile = profile.name();
+            }
         }
     }
 

@@ -32,16 +32,24 @@ public class ContaminationAccumulator {
     }
 
     public double compute() {
+        return compute(traceReader.readFrame());
+    }
+
+    double compute(HarmonyTraceReader.TraceFrame frame) {
         double total = SIGNALS.stream()
-                .mapToDouble(this::score)
+                .mapToDouble(signal -> score(signal, frame))
                 .sum();
         return clamp(total);
     }
 
     public List<String> topContaminants(int limit) {
+        return topContaminants(limit, traceReader.readFrame());
+    }
+
+    List<String> topContaminants(int limit, HarmonyTraceReader.TraceFrame frame) {
         int boundedLimit = Math.max(0, limit);
         return SIGNALS.stream()
-                .map(signal -> new ScoredSignal(signal.name(), score(signal)))
+                .map(signal -> new ScoredSignal(signal.name(), score(signal, frame)))
                 .filter(signal -> signal.score() > 0.0d)
                 .sorted(Comparator.comparingDouble(ScoredSignal::score).reversed())
                 .limit(boundedLimit)
@@ -49,9 +57,12 @@ public class ContaminationAccumulator {
                 .toList();
     }
 
-    private Object safeGet(String key) {
+    private Object safeGet(String key, HarmonyTraceReader.TraceFrame frame) {
         try {
-            return traceReader.read(key).value();
+            HarmonyTraceReader.TraceFrame selected = frame == null
+                    ? HarmonyTraceReader.TraceFrame.missing()
+                    : frame;
+            return selected.read(key).value();
         } catch (RuntimeException ignored) {
             TraceStore.put("harmony.contamination.traceRead.failed", Boolean.TRUE);
             TraceStore.put("harmony.contamination.traceRead.key", key);
@@ -60,16 +71,16 @@ public class ContaminationAccumulator {
         }
     }
 
-    private double score(Signal signal) {
+    private double score(Signal signal, HarmonyTraceReader.TraceFrame frame) {
         if ("booster_conflict".equals(signal.name())) {
-            return boosterConflictScore(signal);
+            return boosterConflictScore(signal, frame);
         }
-        return score(signal, safeGet(signal.traceKey()));
+        return score(signal, safeGet(signal.traceKey(), frame));
     }
 
-    private double boosterConflictScore(Signal signal) {
-        Object value = safeGet(signal.traceKey());
-        Object conflictResolved = safeGet("boosterMode.conflictResolved");
+    private double boosterConflictScore(Signal signal, HarmonyTraceReader.TraceFrame frame) {
+        Object value = safeGet(signal.traceKey(), frame);
+        Object conflictResolved = safeGet("boosterMode.conflictResolved", frame);
         if (isResolvedSinglePrimaryMode(value)
                 || isNormalSinglePrimaryHash(value)
                 || Boolean.TRUE.equals(conflictResolved)) {
@@ -124,7 +135,7 @@ public class ContaminationAccumulator {
         if (value instanceof Collection<?> collection) {
             return !collection.isEmpty();
         }
-        return true;
+        return false;
     }
 
     private static double listScaled(double weight, Object value) {

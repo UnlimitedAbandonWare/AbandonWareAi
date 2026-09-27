@@ -47,9 +47,9 @@ public final class GpuGatewayDiagnostics {
                 prop(env, "llm.owner-token", ""),
                 prop(env, "LLM_OWNER_TOKEN", ""));
 
-        String primaryChat = prop(env, "awx.gpu-gateway.primary-chat-base-url", "");
-        String fastHelper = prop(env, "awx.gpu-gateway.fast-base-url", "");
-        String embedding = prop(env, "awx.gpu-gateway.embedding-base-url", "");
+        String primaryChat = endpointBaseUrl(env, "llm.base-url", "awx.gpu-gateway.primary-chat-base-url", heavyAllowed);
+        String fastHelper = endpointBaseUrl(env, "llm.fast.base-url", "awx.gpu-gateway.fast-base-url", heavyAllowed);
+        String embedding = endpointBaseUrl(env, "embedding.base-url", "awx.gpu-gateway.embedding-base-url", heavyAllowed);
 
         Map<String, Object> endpoints = new LinkedHashMap<>();
         endpoints.put("primaryChat", endpoint(primaryChat, "rtx3090", "primary-chat",
@@ -106,11 +106,13 @@ public final class GpuGatewayDiagnostics {
                 .connectTimeout(Duration.ofMillis(timeoutMs))
                 .build();
 
+        boolean executorNode = bool(env, "awx.node.heavy-workloads-allowed",
+                bool(env, "uaw.autolearn.runtime-node.heavy-workloads-allowed", true));
         Map<String, Object> preflightEndpoints = new LinkedHashMap<>();
         preflightEndpoints.put("primaryChat", preflightEndpoint(
                 client,
                 "primaryChat",
-                prop(env, "awx.gpu-gateway.primary-chat-base-url", ""),
+                endpointBaseUrl(env, "llm.base-url", "awx.gpu-gateway.primary-chat-base-url", executorNode),
                 endpointInfo(endpoints, "primaryChat"),
                 timeoutMs,
                 allowedHosts,
@@ -120,7 +122,7 @@ public final class GpuGatewayDiagnostics {
         preflightEndpoints.put("fastHelper", preflightEndpoint(
                 client,
                 "fastHelper",
-                prop(env, "awx.gpu-gateway.fast-base-url", ""),
+                endpointBaseUrl(env, "llm.fast.base-url", "awx.gpu-gateway.fast-base-url", executorNode),
                 endpointInfo(endpoints, "fastHelper"),
                 timeoutMs,
                 allowedHosts,
@@ -130,7 +132,7 @@ public final class GpuGatewayDiagnostics {
         preflightEndpoints.put("embedding", preflightEndpoint(
                 client,
                 "embedding",
-                prop(env, "awx.gpu-gateway.embedding-base-url", ""),
+                endpointBaseUrl(env, "embedding.base-url", "awx.gpu-gateway.embedding-base-url", executorNode),
                 endpointInfo(endpoints, "embedding"),
                 timeoutMs,
                 allowedHosts,
@@ -163,6 +165,18 @@ public final class GpuGatewayDiagnostics {
         out.put("endpoints", preflightEndpoints);
         tracePreflight(out);
         return out;
+    }
+
+    /**
+     * On the GPU executor node the request-routing properties are the truth and win over the
+     * gpu-gateway diagnostics props. On a pure control-plane node the gpu-gateway props describe
+     * the remote executor target, which is a different endpoint from this node's own llm.* props.
+     */
+    private static String endpointBaseUrl(Environment env, String requestProperty, String diagnosticProperty,
+                                          boolean executorNode) {
+        return executorNode
+                ? firstNonBlank(prop(env, requestProperty, ""), prop(env, diagnosticProperty, ""))
+                : firstNonBlank(prop(env, diagnosticProperty, ""), prop(env, requestProperty, ""));
     }
 
     private static Map<String, Object> endpoint(String baseUrl,

@@ -1,30 +1,29 @@
 package com.example.lms.harmony;
 
-import com.example.lms.debug.AblationPenaltyBootDumper;
 import com.example.lms.search.TraceStore;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @RestController
 @RequestMapping("/api/harmony")
 public class HarmonyScoreController {
 
-    private static final AtomicInteger STREAM_ID = new AtomicInteger();
-
     private final HarmonyScoreEngine engine;
+    private final HarmonySseRuntime streamRuntime;
 
-    public HarmonyScoreController(HarmonyScoreEngine engine) {
+    @Autowired
+    public HarmonyScoreController(HarmonyScoreEngine engine, HarmonySseRuntime streamRuntime) {
         this.engine = engine;
+        this.streamRuntime = streamRuntime;
     }
 
     @GetMapping(value = "/score", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -34,13 +33,8 @@ public class HarmonyScoreController {
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
-        SseEmitter emitter = new SseEmitter(300_000L);
-        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(task, "harmony-score-stream-" + STREAM_ID.incrementAndGet());
-            thread.setDaemon(true);
-            return thread;
-        });
-        var future = executor.scheduleAtFixedRate(() -> {
+        SseEmitter emitter = createEmitter(300_000L);
+        HarmonySseRuntime.StreamLease lease = streamRuntime.open(() -> {
             try {
                 emitter.send(SseEmitter.event()
                         .name("harmony")
@@ -49,23 +43,24 @@ public class HarmonyScoreController {
                 TraceStore.put("harmony.score.stream.io.catchObserved", Boolean.TRUE);
                 recordStreamFailure("io", error);
                 emitter.completeWithError(error);
-                executor.shutdown();
+                throw new StreamTickTerminated(error);
             } catch (RuntimeException error) {
                 TraceStore.put("harmony.score.stream.runtime.catchObserved", Boolean.TRUE);
                 recordStreamFailure("runtime", error);
                 emitter.completeWithError(error);
-                executor.shutdown();
+                throw new StreamTickTerminated(error);
             }
-        }, 0L, 30L, TimeUnit.SECONDS);
+        }).orElseThrow(() -> capacityRejection());
 
-        Runnable close = () -> {
-            future.cancel(false);
-            executor.shutdown();
-        };
+        Runnable close = lease::close;
         emitter.onCompletion(close);
         emitter.onTimeout(close);
         emitter.onError(error -> close.run());
         return emitter;
+    }
+
+    SseEmitter createEmitter(long timeoutMs) {
+        return new SseEmitter(timeoutMs);
     }
 
     @GetMapping(value = "/push", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -89,7 +84,6 @@ public class HarmonyScoreController {
     }
 
     private HarmonyScoreSnapshot computeSnapshot() {
-        AblationPenaltyBootDumper.seedCurrentTrace();
         return engine.compute();
     }
 
@@ -98,5 +92,18 @@ public class HarmonyScoreController {
         TraceStore.put("harmony.score.stream.failureClass", failureClass);
         TraceStore.put("harmony.score.stream.errorType",
                 error == null ? "unknown" : error.getClass().getSimpleName());
+    }
+
+    private static ResponseStatusException capacityRejection() {
+        TraceStore.put("harmony.score.stream.rejected", Boolean.TRUE);
+        TraceStore.put("harmony.score.stream.rejectReason", "harmony_sse_capacity");
+        TraceStore.inc("harmony.score.stream.rejected.count");
+        return new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "harmony_sse_capacity");
+    }
+
+    private static final class StreamTickTerminated extends RuntimeException {
+        private StreamTickTerminated(Throwable cause) {
+            super("harmony_sse_terminal", cause);
+        }
     }
 }

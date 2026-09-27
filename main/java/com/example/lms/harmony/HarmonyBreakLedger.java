@@ -1,31 +1,40 @@
 package com.example.lms.harmony;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.trace.SafeRedactor;
 import com.example.lms.trace.TraceSnapshotStore;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class HarmonyBreakLedger {
 
-    private static final List<HbDef> DEFINITIONS = List.of(
-            new HbDef("HB-01", 35.6d, "ablation.penalties", "Silent catch contamination"),
-            new HbDef("HB-02", 32.0d, "retrievalOrder.lastSetBy", "RetrievalOrderService authority missing"),
-            new HbDef("HB-03", 24.0d, "boosterMode.active", "Booster trigger conflict"),
-            new HbDef("HB-04", 22.4d, "hypernova.twpmP", "DPP-HYPERNOVA integration missing"),
-            new HbDef("HB-05", 21.0d, "hypernova.cvarPhi", "TWPM/CVaR canonical path duplicate"),
-            new HbDef("HB-06", 20.0d, "ablation.score.current", "Score scale normalization missing"),
-            new HbDef("HB-07", 18.0d, "extremeZ.cancelShieldWrapped", "CancelShield interrupt propagation"),
-            new HbDef("HB-08", 16.8d, "cfvm.boltzmannTemp", "CFVM Boltzmann temperature split"),
-            new HbDef("HB-09", 14.0d, "cfvm.tempAnnealApplied", "CFVM raw tile temperature disabled"),
-            new HbDef("HB-10", 12.0d, "moe.evolverPlateRegistered", "MoE evolver bypass risk"),
-            new HbDef("HB-11", 11.2d, "extremeZ.timeBudgetConsumedMs", "TimeBudgetGuard trace missing"),
-            new HbDef("HB-12", 10.5d, "cihRag.breadcrumb.queryRedacted", "Breadcrumb redaction missing"));
+    private static final Set<String> NON_EVIDENCE_LABELS = Set.of(
+            "false",
+            "unknown",
+            "missing",
+            "not_observed",
+            "unavailable",
+            "none",
+            "null",
+            "n/a",
+            "na",
+            "present",
+            "disabled",
+            "redacted",
+            "(redacted)",
+            "[redacted]");
 
     private final HarmonyTraceReader traceReader;
+    private final HarmonyEvidenceContract contract;
+    private final String contractFailure;
 
     public HarmonyBreakLedger() {
         this(new HarmonyTraceReader());
@@ -33,69 +42,171 @@ public class HarmonyBreakLedger {
 
     @Autowired
     public HarmonyBreakLedger(HarmonyTraceReader traceReader) {
-        this.traceReader = traceReader == null ? new HarmonyTraceReader() : traceReader;
+        this(traceReader, loadContract());
     }
 
     public HarmonyBreakLedger(ObjectProvider<TraceSnapshotStore> traceSnapshotStoreProvider) {
         this(new HarmonyTraceReader(traceSnapshotStoreProvider));
     }
 
+    private HarmonyBreakLedger(HarmonyTraceReader traceReader, ContractLoad contractLoad) {
+        this.traceReader = traceReader == null ? new HarmonyTraceReader() : traceReader;
+        this.contract = contractLoad.contract();
+        this.contractFailure = contractLoad.failureClass();
+    }
+
     public List<HarmonyScoreSnapshot.HarmonyBreakEntry> evaluate() {
-        return DEFINITIONS.stream()
-                .map(this::evaluateOne)
+        try {
+            return evaluate(traceReader.readFrame());
+        } catch (RuntimeException error) {
+            TraceStore.put("harmony.breakLedger.traceRead.failed", Boolean.TRUE);
+            TraceStore.put("harmony.breakLedger.traceRead.key", "coherentFrame");
+            TraceStore.put("harmony.breakLedger.traceRead.errorType", error.getClass().getSimpleName());
+            return blockedEntries(
+                    "trace_frame_unavailable type=" + error.getClass().getSimpleName());
+        }
+    }
+
+    List<HarmonyScoreSnapshot.HarmonyBreakEntry> evaluate(HarmonyTraceReader.TraceFrame frame) {
+        if (contract == null) {
+            return blockedEntries("contract_integrity_failed type=" + contractFailure);
+        }
+        HarmonyTraceReader.TraceFrame selected = frame == null
+                ? HarmonyTraceReader.TraceFrame.missing()
+                : frame;
+        return contract.breaks().stream()
+                .map(definition -> evaluateOne(definition, selected))
                 .toList();
     }
 
     public double totalPenalty(List<HarmonyScoreSnapshot.HarmonyBreakEntry> breaks) {
         if (breaks == null) {
-            return DEFINITIONS.stream().mapToDouble(HbDef::penalty).sum();
+            return contract == null
+                    ? 100.0d
+                    : contract.breaks().stream()
+                    .mapToDouble(HarmonyEvidenceContract.HarmonyBreakDefinition::weight)
+                    .sum();
         }
         return breaks.stream()
-                .filter(entry -> "OPEN".equals(entry.status()))
+                .filter(entry -> !"DONE".equals(entry.status()))
                 .mapToDouble(HarmonyScoreSnapshot.HarmonyBreakEntry::penaltyScore)
                 .sum();
     }
 
-    private HarmonyScoreSnapshot.HarmonyBreakEntry evaluateOne(HbDef definition) {
+    private HarmonyScoreSnapshot.HarmonyBreakEntry evaluateOne(
+            HarmonyEvidenceContract.HarmonyBreakDefinition definition,
+            HarmonyTraceReader.TraceFrame frame) {
         try {
-            HarmonyTraceReader.TraceRead read = traceReader.read(definition.traceKey());
-            if (isDoneValue(read.value())) {
+            List<HarmonyEvidenceContract.RuntimeRequirement> missing = definition.runtimeRequirements().stream()
+                    .filter(requirement -> !isDoneValue(
+                            requirement,
+                            frame.read(requirement.traceKey()).value()))
+                    .toList();
+            if (missing.isEmpty()) {
+                String evidence = definition.runtimeRequirements().stream()
+                        .map(requirement -> requirement.traceKey() + "="
+                                + frame.read(requirement.traceKey()).evidenceSource())
+                        .collect(Collectors.joining(","));
                 return new HarmonyScoreSnapshot.HarmonyBreakEntry(
                         definition.id(),
-                        "DONE",
-                        definition.penalty(),
-                        definition.traceKey() + "=" + read.evidenceSource());
+                        contract.verifiedStatus(),
+                        definition.weight(),
+                        evidence);
             }
+            boolean hashOnly = missing.stream()
+                    .map(requirement -> frame.read(requirement.traceKey()).value())
+                    .anyMatch(HarmonyBreakLedger::isHashOnly);
             return new HarmonyScoreSnapshot.HarmonyBreakEntry(
                     definition.id(),
-                    "OPEN",
-                    definition.penalty(),
-                    "evidence_needed: TraceStore key missing key=" + definition.traceKey());
+                    contract.blockedStatus(),
+                    definition.weight(),
+                    (hashOnly
+                            ? "hash_only_evidence_rejected keys="
+                            : "required_evidence_missing_or_invalid keys=")
+                            + missing.stream()
+                            .map(HarmonyEvidenceContract.RuntimeRequirement::traceKey)
+                            .collect(Collectors.joining(",")));
         } catch (RuntimeException error) {
             TraceStore.put("harmony.breakLedger.traceRead.failed", Boolean.TRUE);
-            TraceStore.put("harmony.breakLedger.traceRead.key", definition.traceKey());
+            TraceStore.put("harmony.breakLedger.traceRead.key", definition.id());
             TraceStore.put("harmony.breakLedger.traceRead.errorType", error.getClass().getSimpleName());
             return new HarmonyScoreSnapshot.HarmonyBreakEntry(
                     definition.id(),
-                    "UNKNOWN",
-                    definition.penalty(),
-                    "evidence_needed: TraceStore.get failed type=" + error.getClass().getSimpleName());
+                    contract.blockedStatus(),
+                    definition.weight(),
+                    "trace_evidence_read_failed type=" + error.getClass().getSimpleName());
         }
     }
 
-    private static boolean isDoneValue(Object value) {
-        if (value == null) {
+    private static boolean isDoneValue(
+            HarmonyEvidenceContract.RuntimeRequirement requirement,
+            Object value) {
+        return switch (requirement.rule()) {
+            case EMPTY_COLLECTION -> value instanceof Collection<?> collection && collection.isEmpty();
+            case NON_BLANK_STRING -> isConcreteAuthorityLabel(requirement.traceKey(), value);
+            case FINITE_NUMBER -> value instanceof Number number
+                    && Double.isFinite(number.doubleValue());
+            case ZERO_NUMBER -> value instanceof Number number
+                    && Double.isFinite(number.doubleValue())
+                    && number.doubleValue() == 0.0d;
+            case NON_NEGATIVE_NUMBER -> value instanceof Number number
+                    && Double.isFinite(number.doubleValue())
+                    && number.doubleValue() >= 0.0d;
+            case TRUE_BOOLEAN -> Boolean.TRUE.equals(value);
+        };
+    }
+
+    private static boolean isConcreteAuthorityLabel(String traceKey, Object value) {
+        if (!(value instanceof String text) || text.isBlank()) {
             return false;
         }
-        if (value instanceof Boolean bool) {
-            return bool;
+        String trimmed = text.trim();
+        String normalized = trimmed.toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("hash:") || NON_EVIDENCE_LABELS.contains(normalized)) {
+            return false;
         }
-        if (value instanceof String text) {
-            return !text.isBlank() && !"false".equalsIgnoreCase(text.trim());
-        }
-        return true;
+        Object sanitized = SafeRedactor.diagnosticValue(traceKey, trimmed);
+        return sanitized instanceof String safe && trimmed.equals(safe);
     }
 
-    private record HbDef(String id, double penalty, String traceKey, String description) {
+    String subsystemFor(String breakId) {
+        return contract == null ? null : contract.subsystemFor(breakId);
+    }
+
+    private List<HarmonyScoreSnapshot.HarmonyBreakEntry> blockedEntries(String reason) {
+        TraceStore.put("harmony.evidenceContract.status", "BLOCKED_EVIDENCE");
+        if (contract == null) {
+            TraceStore.put("harmony.evidenceContract.errorType", contractFailure);
+            return List.of(new HarmonyScoreSnapshot.HarmonyBreakEntry(
+                    "HB-CONTRACT",
+                    "BLOCKED_EVIDENCE",
+                    100.0d,
+                    reason));
+        }
+        return contract.breaks().stream()
+                .map(definition -> new HarmonyScoreSnapshot.HarmonyBreakEntry(
+                        definition.id(),
+                        contract.blockedStatus(),
+                        definition.weight(),
+                        reason))
+                .toList();
+    }
+
+    private static boolean isHashOnly(Object value) {
+        return value instanceof String text
+                && text.trim().toLowerCase(Locale.ROOT).startsWith("hash:");
+    }
+
+    private static ContractLoad loadContract() {
+        try {
+            return new ContractLoad(HarmonyEvidenceContract.loadClasspath(), "");
+        } catch (RuntimeException error) {
+            TraceStore.put("harmony.evidenceContract.status", "BLOCKED_EVIDENCE");
+            TraceStore.put("harmony.evidenceContract.errorType", error.getClass().getSimpleName());
+            return new ContractLoad(null, error.getClass().getSimpleName());
+        }
+    }
+
+    private record ContractLoad(HarmonyEvidenceContract contract, String failureClass) {
     }
 }
