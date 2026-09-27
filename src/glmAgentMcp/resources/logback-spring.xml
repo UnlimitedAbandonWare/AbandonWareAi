@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Spring Boot prefers this file; keep STDOUT exclusive to JSON-RPC. -->
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>timestamp=%date{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <logger name="ai.abandonware.subagent.mcp" level="INFO" additivity="false">
+        <appender-ref ref="STDERR"/>
+    </logger>
+    <logger name="com.abandonware.ai.agent.orchestrator.subagent.GlmAgentCore"
+            level="INFO" additivity="false">
+        <appender-ref ref="STDERR"/>
+    </logger>
+    <logger name="io.modelcontextprotocol" level="WARN"/>
+    <logger name="org.springframework" level="WARN"/>
+
+    <root level="WARN">
+        <appender-ref ref="STDERR"/>
+    </root>
+</configuration>
