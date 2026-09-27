@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Desktop Y-to-C Intake"
+  short_description: "Prepare tools and apply Notebook directives on Desktop"
+  default_prompt: "Use $demo1-desktop-canonical-goal-intake for an exact implementation directive or Notebook patch request: prepare available tools and the existing runtime session, bind the selected directive to Desktop, and continue its authorized patch and verification."

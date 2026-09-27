@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Notebook Directive Consolidator"
+  short_description: "Consolidate Notebook directives safely"
+  default_prompt: "Use $demo1-consolidating-notebook-directives to reconcile Notebook source directives into one Desktop-owned execution program and retire only verified superseded files."

@@ -77,6 +77,12 @@ python -B scripts/conditional_local_git.py lock --repo . [--days 1.0] [--backup-
   VERSION/CHANGELOG/RELEASE root files, no semver bumps, `gh release`, or
   versioned artifact uploads — agents make local selective commits only,
   never a version/release structure.
+- Sole valid main remote is `AbandonWareAi`
+  (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`); `AbandonWare3` is
+  fully discarded — never a valid remote, temporary origin, migration keep, or
+  backup upstream, and never a second remote. If `git remote -v` still lists
+  `AbandonWare3`, report it and never fetch/push to it — removal needs an
+  explicit user ask (AGENTS.md `DEMO1-GIT-REMOTE-SOLE`).
 - Never print or commit secret values; never commit raw conversation,
   databases, models, indexes, or large logs.
 - Never delete/rename/empty `.git` or `index.lock`, never kill `git.exe`.

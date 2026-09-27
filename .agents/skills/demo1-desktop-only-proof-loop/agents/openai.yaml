@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Desktop Proof Loop"
+  short_description: "Desktop-only evidence loop"
+  default_prompt: "Use $demo1-desktop-only-proof-loop to decide whether Desktop local proof is enough for this demo-1 safe patch."

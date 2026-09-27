@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 Demand External Proof"
+  short_description: "Optional Browser Computer Supabase proof"
+  default_prompt: "Use $demo1-demand-driven-external-proof to classify Browser, Computer, and Supabase evidence as demand-driven."
