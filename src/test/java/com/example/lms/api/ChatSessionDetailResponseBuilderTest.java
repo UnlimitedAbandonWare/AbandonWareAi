@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -87,6 +88,151 @@ class ChatSessionDetailResponseBuilderTest {
         assertEquals("anonymousUser", response.getHeaders().getFirst("X-Session-Owner"));
         assertEquals(1, body.messages().size());
         assertEquals("hello", body.messages().get(0).content());
+    }
+
+    @Test
+    void turnTracesJoinOwningTurnAndModelMetaOnlyWhenTraceExposed() {
+        LocalDateTime now = LocalDateTime.of(2026, 6, 12, 15, 10);
+        String durable = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                "reason=scored\nmethod=rule\nstorageMode=durable_fallback\npathHash=none\nassistantMessageId=11\n"
+                        .getBytes(StandardCharsets.UTF_8));
+        ChatSession session = ChatSession.builder()
+                .id(101L)
+                .title("trace session")
+                .createdAt(now)
+                .messages(List.of(
+                        message(10L, "user", "q", now),
+                        message(11L, "assistant", "a", now.plusSeconds(1)),
+                        message(12L, "system", "?MODEL?gemma4:26b", now.plusSeconds(2)),
+                        message(13L, "system", "?TRACESNAP?snap-9|v2|" + durable, now.plusSeconds(3))))
+                .build();
+
+        ResponseEntity<ChatApiController.SessionDetail> response = ChatSessionDetailResponseBuilder.build(
+                session,
+                "guest",
+                objectMapper,
+                Map.of(SettingsService.KEY_OPENAI_MODEL, "configured-model"),
+                true,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class));
+
+        ChatApiController.SessionDetail body = response.getBody();
+        assertNotNull(body);
+        assertEquals(1, body.turnTraces().size());
+        ChatApiController.TurnTraceDto trace = body.turnTraces().get(0);
+        assertEquals(11L, trace.turnId());
+        assertEquals("snap-9", trace.snapshotId());
+        assertEquals("durable_fallback", trace.fields().get("storageMode"));
+        assertEquals("gemma4:26b", trace.fields().get("modelUsed"));
+
+        ChatApiController.SessionDetail hidden = ChatSessionDetailResponseBuilder.build(
+                session,
+                "guest",
+                objectMapper,
+                Map.of(),
+                false,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class)).getBody();
+        assertNotNull(hidden);
+        assertTrue(hidden.turnTraces().isEmpty());
+    }
+
+    @Test
+    void legacyPointerJoinsTheUniquePrecedingAssistantButWrongRoleV2DoesNot() {
+        LocalDateTime now = LocalDateTime.of(2026, 6, 12, 15, 12);
+        String wrongRole = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                "reason=scored\nmethod=rule\nstorageMode=durable_fallback\npathHash=none\nassistantMessageId=10\n"
+                        .getBytes(StandardCharsets.UTF_8));
+        ChatSession session = ChatSession.builder()
+                .id(102L)
+                .title("unlinked trace")
+                .createdAt(now)
+                .messages(List.of(
+                        message(10L, "user", "q", now),
+                        message(11L, "assistant", "a", now.plusSeconds(1)),
+                        message(12L, "system", "?TRACESNAP?legacy-snap", now.plusSeconds(2)),
+                        message(13L, "system", "?TRACESNAP?wrong-role|v2|" + wrongRole, now.plusSeconds(3))))
+                .build();
+
+        ChatApiController.SessionDetail detail = ChatSessionDetailResponseBuilder.build(
+                session, "guest", objectMapper, Map.of(), true,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class)).getBody();
+        assertNotNull(detail);
+        assertEquals(1, detail.turnTraces().size());
+        assertEquals(11L, detail.turnTraces().get(0).turnId());
+        assertEquals("legacy-snap", detail.turnTraces().get(0).snapshotId());
+        assertEquals(4, detail.messages().size(), "operator cards remain available alongside a safe legacy join");
+    }
+
+    @Test
+    void conflictingSnapshotsForOneAssistantDoNotChooseByPointerOrder() {
+        LocalDateTime now = LocalDateTime.of(2026, 6, 12, 15, 14);
+        String projection = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                "reason=scored\nmethod=rule\nstorageMode=durable_fallback\npathHash=none\nassistantMessageId=11\n"
+                        .getBytes(StandardCharsets.UTF_8));
+        ChatSession session = ChatSession.builder()
+                .id(103L)
+                .title("ambiguous trace")
+                .createdAt(now)
+                .messages(List.of(
+                        message(10L, "user", "q", now),
+                        message(11L, "assistant", "a", now.plusSeconds(1)),
+                        message(12L, "system", "?TRACESNAP?snap-a|v2|" + projection, now.plusSeconds(2)),
+                        message(13L, "system", "?TRACESNAP?snap-b|v2|" + projection, now.plusSeconds(3))))
+                .build();
+
+        ChatApiController.SessionDetail detail = ChatSessionDetailResponseBuilder.build(
+                session, "guest", objectMapper, Map.of(), true,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class)).getBody();
+        assertNotNull(detail);
+        assertTrue(detail.turnTraces().isEmpty());
+        assertEquals(4, detail.messages().size());
+    }
+
+    @Test
+    void legacyV1UsesCreatedAtThenIdAndLeavesMultipleAssistantsUnbound() {
+        LocalDateTime now = LocalDateTime.of(2026, 6, 12, 15, 16);
+        String legacy = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                "reason=scored\nmethod=rule\nstorageMode=durable_fallback\npathHash=none\n"
+                        .getBytes(StandardCharsets.UTF_8));
+        ChatSession ordered = ChatSession.builder().id(104L).title("legacy ordered")
+                .createdAt(now).messages(List.of(
+                        message(13L, "system", "?TRACESNAP?snap-v1|v1|" + legacy, now),
+                        message(11L, "assistant", "answer", now),
+                        message(10L, "user", "question", now)))
+                .build();
+        ChatApiController.SessionDetail joined = ChatSessionDetailResponseBuilder.build(
+                ordered, "guest", objectMapper, Map.of(), true,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class)).getBody();
+        assertNotNull(joined);
+        assertEquals(1, joined.turnTraces().size());
+        assertEquals(11L, joined.turnTraces().get(0).turnId());
+
+        ChatSession ambiguous = ChatSession.builder().id(105L).title("legacy ambiguous")
+                .createdAt(now).messages(List.of(
+                        message(10L, "user", "question", now),
+                        message(11L, "assistant", "first", now.plusSeconds(1)),
+                        message(12L, "assistant", "second", now.plusSeconds(2)),
+                        message(13L, "system", "?TRACESNAP?snap-v1|v1|" + legacy, now.plusSeconds(3))))
+                .build();
+        ChatApiController.SessionDetail unbound = ChatSessionDetailResponseBuilder.build(
+                ambiguous, "guest", objectMapper, Map.of(), true,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class)).getBody();
+        assertNotNull(unbound);
+        assertTrue(unbound.turnTraces().isEmpty());
+
+        String invalidV1 = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                "reason=scored\nmethod=rule\nstorageMode=durable_fallback\npathHash=none\nassistantMessageId=11\n"
+                        .getBytes(StandardCharsets.UTF_8));
+        ChatSession malformed = ChatSession.builder().id(106L).title("invalid legacy")
+                .createdAt(now).messages(List.of(
+                        message(10L, "user", "question", now),
+                        message(11L, "assistant", "answer", now.plusSeconds(1)),
+                        message(13L, "system", "?TRACESNAP?snap-v1|v1|" + invalidV1, now.plusSeconds(2))))
+                .build();
+        ChatApiController.SessionDetail rejected = ChatSessionDetailResponseBuilder.build(
+                malformed, "guest", objectMapper, Map.of(), true,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class)).getBody();
+        assertNotNull(rejected);
+        assertTrue(rejected.turnTraces().isEmpty(), "invalid v1 fields must not be treated as a legacy join");
     }
 
     @Test

@@ -2,17 +2,21 @@ package com.example.lms.api;
 
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
+import java.lang.reflect.Method;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -72,5 +76,37 @@ class ApiSecurityExceptionAdviceTest {
         assertEquals(Boolean.TRUE, TraceStore.get("api.security.suppressed.auth_lookup"));
         assertEquals("IllegalStateException", TraceStore.get("api.security.suppressed.auth_lookup.errorType"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains(raw));
+    }
+
+    @Test
+    void asyncClientDisconnectReturnsNoBodyAndOnlyRedactedBreadcrumbs() throws Exception {
+        String raw = "ServletOutputStream failed token=dummy-client-disconnect-token";
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/chat/stream");
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+        ApiSecurityExceptionAdvice advice = new ApiSecurityExceptionAdvice();
+
+        advice.handleClientDisconnect(
+                new AsyncRequestNotUsableException(raw),
+                request,
+                servletResponse);
+
+        assertEquals(204, servletResponse.getStatus());
+        assertEquals("", servletResponse.getContentAsString());
+        assertEquals(Boolean.TRUE, TraceStore.get("api.clientDisconnect"));
+        assertEquals("async_request_not_usable", TraceStore.get("api.clientDisconnect.reason"));
+        assertEquals(SafeRedactor.hashValue("/api/chat/stream"), TraceStore.get("api.clientDisconnect.pathHash"));
+        assertEquals(16, TraceStore.get("api.clientDisconnect.pathLength"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(raw));
+    }
+
+    @Test
+    void asyncClientDisconnectHandlerDoesNotReturnResponseEntity() throws Exception {
+        Method handler = ApiSecurityExceptionAdvice.class.getDeclaredMethod(
+                "handleClientDisconnect",
+                AsyncRequestNotUsableException.class,
+                jakarta.servlet.http.HttpServletRequest.class,
+                HttpServletResponse.class);
+
+        assertEquals(Void.TYPE, handler.getReturnType());
     }
 }

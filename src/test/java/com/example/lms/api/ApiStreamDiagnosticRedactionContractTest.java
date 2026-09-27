@@ -103,9 +103,26 @@ class ApiStreamDiagnosticRedactionContractTest {
         assertTrue(code.contains("Error: errorHash=%s errorLength=%d"));
         assertTrue(code.contains("errorHash=%s errorLength=%d"));
         assertTrue(code.contains("SafeRedactor.hashValue(err == null ? null : err.getMessage())"));
-        assertTrue(code.contains("SafeRedactor.hashValue(ex.getMessage())"));
+        assertTrue(code.contains("SafeRedactor.hashValue(String.valueOf(ex)), String.valueOf(ex).length())"));
         assertTrue(code.contains("SafeRedactor.hashValue(String.valueOf(ex)), String.valueOf(ex).length()"));
         assertTrue(code.contains("SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length()"));
         assertTrue(code.contains("SafeRedactor.hashValue(String.valueOf(t)), String.valueOf(t).length()"));
+    }
+
+    @Test
+    void chatApiStreamErrorsUseStableCodeOwnedLabel() throws Exception {
+        String code = Files.readString(
+                Path.of("main/java/com/example/lms/api/ChatApiController.java"),
+                StandardCharsets.UTF_8);
+        String stableLabel = "Chat stream failed errorHash=%s errorLength=%d";
+        int first = code.indexOf(stableLabel);
+
+        assertTrue(first > 0, "replay-sink stream failures should use the stable label");
+        assertTrue(code.contains("String errMsg = com.example.lms.llm.ModelSelectionException.streamFailureCode(ex);")
+                && code.indexOf("sink.tryEmitNext(sse(ChatStreamEvent.error(errMsg)))",
+                        code.indexOf("ModelSelectionException.streamFailureCode(ex)")) > 0,
+                "direct stream failures should use the owned streamFailureCode label");
+        assertFalse(code.contains("String errMsg = String.format(\"???"),
+                "stream errors must not expose mojibake labels");
     }
 }
