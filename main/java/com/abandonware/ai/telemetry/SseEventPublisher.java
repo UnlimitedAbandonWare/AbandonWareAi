@@ -1,5 +1,6 @@
 package com.abandonware.ai.telemetry;
 
+import com.example.lms.search.TraceStore;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -25,6 +26,8 @@ public class SseEventPublisher {
         try {
             e.send(SseEmitter.event().name(event).data(data));
         } catch (IOException ex) {
+            TraceStore.put("sse.eventPublisher.send.failed", true);
+            TraceStore.put("sse.eventPublisher.send.errorType", ex.getClass().getSimpleName());
             emitters.remove(id);
         }
     }

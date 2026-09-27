@@ -4,6 +4,7 @@ import com.acme.aicore.domain.model.SearchBundle;
 import com.acme.aicore.domain.model.WebSearchQuery;
 import com.acme.aicore.domain.ports.WebSearchProvider;
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.guard.ProviderCredentialResolver;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.web.BraveSearchService;
 import com.example.lms.trace.LogCorrelation;
@@ -39,8 +40,10 @@ public class BraveSearchProvider implements WebSearchProvider {
     private static final java.util.concurrent.atomic.AtomicBoolean LOGGED_EMPTY_QUERY = new java.util.concurrent.atomic.AtomicBoolean(
             false);
 
-    @Value("${gpt-search.brave.subscription-token:${gpt-search.brave.api-key:${search.brave.subscription-token:${search.brave.api-key:${brave.subscription.token:${brave.api.key:${GPT_SEARCH_BRAVE_SUBSCRIPTION_TOKEN:${GPT_SEARCH_BRAVE_API_KEY:${BRAVE_SUBSCRIPTION_TOKEN:${BRAVE_API_KEY:__MISSING__}}}}}}}}}}")
+    @Value("${gpt-search.brave.api-key:${BRAVE_API_KEY:${GPT_SEARCH_BRAVE_API_KEY:__MISSING__}}}")
     private String apiKey;
+    @Value("${gpt-search.brave.api-key-free:${BRAVE_API_KEY_FREE:${GPT_SEARCH_BRAVE_API_KEY_FREE:}}}")
+    private String apiKeyFree;
 
     /**
      * Accepts either a host base URL (e.g. https://api.search.brave.com) or a
@@ -84,6 +87,9 @@ public class BraveSearchProvider implements WebSearchProvider {
     @Autowired(required = false)
     private BraveSearchService braveQuotaGuard;
 
+    @Autowired(required = false)
+    private ProviderCredentialResolver credentialResolver;
+
     @Override
     public String id() {
         return "brave";
@@ -124,8 +130,34 @@ public class BraveSearchProvider implements WebSearchProvider {
             traceBraveCounts(text, effectiveCount, 0, 0, true, "disabled_by_config");
             return Mono.just(SearchBundle.empty());
         }
+        // When the shared quota guard is present the lane+token is pinned at
+        // reservation time (inside the cache-miss branch below), so a request
+        // that lands on the BASE lane is never blocked by the FREE-tier check
+        // and a granted FREE reservation always carries the FREE token.
+        BraveSearchService quotaGuard = braveQuotaGuard;
+        String effectiveApiKey = apiKey;
+        if (quotaGuard == null) {
+        ProviderCredentialResolver resolver = credentialResolver;
+        if (resolver != null) {
+            ProviderCredentialResolver.Resolution free = resolver.resolveBraveFree();
+            if (free.enabled() && !ConfigValueGuards.isMissing(free.valueOrNull())) {
+                effectiveApiKey = free.valueOrNull();
+            } else {
+            ProviderCredentialResolver.Resolution resolution = resolver.resolve(
+                    ProviderCredentialResolver.Provider.BRAVE);
+            effectiveApiKey = resolution.valueOrNull();
+            if (!resolution.enabled() && ConfigValueGuards.isMissing(effectiveApiKey)) {
+                String reason = "missing-credential".equals(resolution.disabledReason())
+                        ? "missing_brave_api_key"
+                        : resolution.disabledReason();
+                traceBraveCounts(text, effectiveCount, 0, 0, true, reason);
+                return Mono.just(SearchBundle.empty());
+            }
+            }
+        }
+        }
         // Return empty bundle when no API key is configured.
-        if (ConfigValueGuards.isMissing(apiKey)) {
+        if (quotaGuard == null && ConfigValueGuards.isMissing(effectiveApiKey)) {
             if (LOGGED_MISSING_KEY.compareAndSet(false, true)) {
                 log.warn("[ProviderGuard] BraveSearchProvider: 키 없음으로 disable (missing api key){}",
                         LogCorrelation.suffix());
@@ -133,6 +165,7 @@ public class BraveSearchProvider implements WebSearchProvider {
             traceBraveCounts(text, effectiveCount, 0, 0, true, "missing_brave_api_key");
             return Mono.just(SearchBundle.empty());
         }
+        final String providerApiKey = effectiveApiKey;
 
         final int effectiveQps = Math.max(1, qps);
         final int effectiveTimeoutMs = (timeoutMs > 0 ? timeoutMs : Math.max(1, timeoutSec) * 1000);
@@ -195,11 +228,11 @@ public class BraveSearchProvider implements WebSearchProvider {
                                             null, elapsedMs(startedNs));
                                     return Mono.just(SearchBundle.empty());
                                 }
-                                BraveSearchService quotaGuard = braveQuotaGuard;
-                                BraveSearchService.QuotaReservation quotaReservation =
+                                BraveSearchService.LaneReservation laneReservation =
                                         quotaGuard == null
-                                                ? BraveSearchService.QuotaReservation.unmanaged()
-                                                : quotaGuard.tryReserveFreeTierQuota();
+                                                ? BraveSearchService.LaneReservation.unmanaged(providerApiKey)
+                                                : quotaGuard.reserveForRequest();
+                                BraveSearchService.QuotaReservation quotaReservation = laneReservation.reservation();
                                 if (!quotaReservation.allowed()) {
                                     String reason = quotaGuard == null || quotaGuard.disabledReason() == null
                                             || quotaGuard.disabledReason().isBlank()
@@ -208,6 +241,12 @@ public class BraveSearchProvider implements WebSearchProvider {
                                     traceBraveCounts(text, effectiveCount, 0, 0, true, reason);
                                     return Mono.just(SearchBundle.empty());
                                 }
+                                String wireToken = laneReservation.token();
+                                if (ConfigValueGuards.isMissing(wireToken)) {
+                                    traceBraveCounts(text, effectiveCount, 0, 0, true, "missing_brave_api_key");
+                                    return Mono.just(SearchBundle.empty());
+                                }
+                                TraceStore.put("web.brave.keyLane", laneReservation.freeLane() ? "free" : "base");
                                 java.util.concurrent.atomic.AtomicBoolean quotaCompleted =
                                         new java.util.concurrent.atomic.AtomicBoolean(false);
                                 // Execute the HTTP call to Brave. Use configured base URL,
@@ -219,7 +258,7 @@ public class BraveSearchProvider implements WebSearchProvider {
                                                 .queryParam("q", text)
                                                 .queryParam("count", effectiveCount)
                                                 .build())
-                                        .header("X-Subscription-Token", apiKey)
+                                        .header("X-Subscription-Token", wireToken)
                                         .retrieve()
                                         .bodyToMono(String.class)
                                         .timeout(Duration.ofMillis(effectiveTimeoutMs))

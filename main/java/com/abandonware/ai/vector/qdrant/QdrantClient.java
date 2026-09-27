@@ -4,6 +4,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.List;
@@ -11,6 +13,7 @@ import java.util.Map;
 
 @Component
 public class QdrantClient {
+    private static final Logger log = LoggerFactory.getLogger(QdrantClient.class);
 
     private final RestClient http;
     private final QdrantProperties props;
@@ -50,7 +53,9 @@ public class QdrantClient {
                         "vectors", java.util.Map.of("size", props.getVectorSize(), "distance", props.getDistance())
                     ))
                     .retrieve().toBodilessEntity();
-        } catch (Exception ignore) {}
+        } catch (Exception error) {
+            logFailSoft("ensureCollection", error);
+        }
     }
 
     /** Upserts batch of vectors with payloads. Placeholder schema. */
@@ -68,6 +73,18 @@ public class QdrantClient {
             http.put().uri("/collections/{c}/points", props.getCollection())
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body).retrieve().toBodilessEntity();
-        } catch (Exception ignore) {}
+        } catch (Exception error) {
+            logFailSoft("upsert", error);
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception error) {
+        if (log.isDebugEnabled()) {
+            log.debug("[QdrantClient] fail-soft stage={} errorType={}", stage, errorType(error));
+        }
+    }
+
+    private static String errorType(Exception error) {
+        return error == null ? "unknown" : error.getClass().getSimpleName();
     }
 }

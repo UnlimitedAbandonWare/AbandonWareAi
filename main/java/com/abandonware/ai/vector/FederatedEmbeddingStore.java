@@ -1,5 +1,7 @@
 package com.abandonware.ai.vector;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -7,6 +9,8 @@ import java.util.*;
 
 @Component
 public class FederatedEmbeddingStore {
+
+    private static final Logger log = LoggerFactory.getLogger(FederatedEmbeddingStore.class);
 
     private final LocalEmbeddingStore local = new LocalEmbeddingStore();
     private final Map<String, LocalEmbeddingStore> remotes = new HashMap<>();
@@ -22,9 +26,18 @@ public class FederatedEmbeddingStore {
             try {
                 var r = es.search(q, Math.max(3, topK/2));
                 base = fuseRrf(base, r, topK);
-            } catch (Throwable ignore){}
+            } catch (Throwable t){
+                logFailSoft("remoteSearch", t);
+            }
         }
         return base;
+    }
+
+    private static void logFailSoft(String stage, Throwable t) {
+        if (log.isDebugEnabled()) {
+            String errorType = t == null ? "unknown" : t.getClass().getSimpleName();
+            log.debug("[AWX][vector][federated-store] failSoft stage={} errorType={}", stage, errorType);
+        }
     }
 
     private List<LocalEmbeddingStore.Result> fuseRrf(List<LocalEmbeddingStore.Result> a, List<LocalEmbeddingStore.Result> b, int topK){

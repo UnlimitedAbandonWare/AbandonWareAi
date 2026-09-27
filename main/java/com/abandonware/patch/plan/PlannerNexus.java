@@ -1,11 +1,15 @@
 package com.abandonware.patch.plan;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
 import java.io.InputStream;
 import java.util.Collections;
 import java.util.Map;
 
 public class PlannerNexus {
+
+    private static final Logger log = LoggerFactory.getLogger(PlannerNexus.class);
 
     public Plan load(String name) {
         String path = "/plans/" + name + ".yaml";
@@ -29,7 +33,15 @@ public class PlannerNexus {
             p.dppTopK = asInt(plan.get("dppTopK"), 8);
             return p;
         } catch (Exception e) {
+            logFailSoft("load", e);
             return defaultPlan();
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][patch][planner-nexus] failSoft stage={} errorType={}", stage, errorType);
         }
     }
 

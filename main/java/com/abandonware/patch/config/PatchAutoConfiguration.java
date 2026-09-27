@@ -14,11 +14,15 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
 public class PatchAutoConfiguration implements WebMvcConfigurer {
+
+    private static final Logger log = LoggerFactory.getLogger(PatchAutoConfiguration.class);
 
     @Bean @ConditionalOnMissingBean
     public ScoreCalibrator scoreCalibrator() { return new IdentityScoreCalibrator(); }
@@ -56,6 +60,17 @@ public class PatchAutoConfiguration implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        try { registry.addInterceptor(ruleBreakInterceptor()); } catch (Exception ignore) {}
+        try {
+            registry.addInterceptor(ruleBreakInterceptor());
+        } catch (Exception e) {
+            logFailSoft("addInterceptors", e);
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isDebugEnabled()) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.debug("[AWX][patch][autoconfig] failSoft stage={} errorType={}", stage, errorType);
+        }
     }
 }

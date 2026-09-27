@@ -3,8 +3,12 @@ package com.abandonware.ai.util;
 import java.net.URI;
 import java.util.*;
 import java.util.regex.Pattern;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class UrlCanonicalizer {
+    private static final Logger log = Logger.getLogger(UrlCanonicalizer.class.getName());
+
     private static final Set<String> DROP_PARAMS = new HashSet<>(Arrays.asList(
             "gclid","fbclid","ref"
     ));
@@ -50,7 +54,15 @@ public final class UrlCanonicalizer {
             if (result.endsWith("/")) result = result.substring(0, result.length()-1);
             return result;
         }catch(Exception e){
+            logFailSoft("canonicalKey", e);
             return url;
+        }
+    }
+
+    private static void logFailSoft(String stage, Exception e) {
+        if (log.isLoggable(Level.FINE)) {
+            String errorType = e == null ? "unknown" : e.getClass().getSimpleName();
+            log.fine("[AWX][url][canonicalizer] failSoft stage=" + stage + " errorType=" + errorType);
         }
     }
 }
