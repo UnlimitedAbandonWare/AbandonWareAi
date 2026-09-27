@@ -2,7 +2,7 @@
 
 Date: 2026-07-23
 
-Status: design A approved in chat; written specification pending user review
+Status: approved for implementation on 2026-07-24
 
 ## Goal
 
@@ -14,14 +14,14 @@ The finished surface must make the chat, current response state, and composer im
 
 - Canonical root: `C:\AbandonWare\demo-1\demo-1\src`
 - Branch: `main`
-- Index lock: absent
+- A zero-byte stale index lock was found during the 2026-07-24 continuation. It had exclusive access and no active Git process, was removed under the user's prior unlock authorization, and was confirmed absent before edits resumed.
 - Active top-level PatchDrop patches: 0
 - Target UI files and the Node browser contract are currently untracked. `ChatFrontendSecurityTest.java` is already modified. Implementation must preserve these files as the user-approved current baseline and must not stage unrelated work.
 - The current mobile layout intentionally puts `.chat-area-wrapper` before the intro and controls using CSS `order` while the DOM remains intro, controls, chat. This preserves chat-first visual placement but creates a different keyboard and screen-reader order.
 - The 639 px browser view exposes at least the core rail, seven status pills, multiple evidence cards, a large empty transcript, the project introduction, and controls as separate stacked regions.
 - Two live randomized chat probes reproduced the same inconsistency: after about 20 seconds the route showed `client-wait`, the Debug heartbeat showed `Model wait: WARN`, and Health still showed `Live OK / external proof supporting`.
 - Stop remained a successful terminal action: route `server cancel`, trace `cancelled`, and Debug heartbeat `Response stopped: OK`. Cancellation must not be reclassified as a model failure.
-- `node scripts\chat_ui_stream_contract_tests.js` passes, but its 65-second no-data and Stop assertions do not cover the Health pill.
+- The full Java UI class and broad Gradle ladder passed on the current source, but `node scripts\chat_ui_stream_contract_tests.js` reproduced a separate RED fixture conflict: the Node contract still required the superseded `-40px`/`overflow:hidden` CSS while the browser-proven source uses `-20px`/`overflow:clip`. Reconcile that test-only contract before any new CSS work.
 - The live 18166 and 8081 servers serve older build artifacts. They prove the behavior exists in deployed local artifacts but cannot prove a current-source fix.
 - `EvidenceGroundedTriadicDebugAdjudicator`, `DiverseSamplingOrchestrator`, and `EnsembleJudgeService` already provide protected, advisory SUPPORT/FALSIFY/neutral decisions. The normal `ChatWorkflow` intentionally treats candidate dossiers as untrusted references and does not add a separate ensemble judge.
 - Supabase remains read-only evidence debt: CLI missing, MCP reachable with HTTP 403, and `project_ref` missing. Browser and Computer are supporting evidence lanes.
@@ -110,18 +110,22 @@ Quick actions only fill the composer and update existing local control state. Th
 
 ### 5. Visual system
 
-Keep the existing light surface but make it calmer and more deliberate:
+Keep the existing bright operator console and refine it into a calm premium surface:
 
-- one neutral page background, one elevated chat surface, and one restrained accent color;
-- consistent 12–16 px radii and an eight-point spacing rhythm;
-- stronger type hierarchy with reduced all-caps and repeated card chrome;
-- minimum 44 px pointer targets for interactive header, disclosure, and composer controls;
-- sticky composer inside the chat surface, with visible focus and sufficient contrast;
-- compact severity colors that never rely on color alone;
-- no horizontal overflow at 320, 375, 639, 760, 1024, and 1440 px widths;
-- reduced-motion support for any transition.
+- use a warm-neutral page canvas, a crisp white primary workspace, and one restrained forest-teal accent;
+- use only two elevation levels: a soft workspace shadow and a quieter raised-control shadow; avoid ornamental glass, glow, and decorative gradients;
+- use consistent 12–16 px component radii, one 22 px workspace radius, and an eight-point spacing rhythm;
+- strengthen typography with a compact display heading, readable body text, sentence-case labels, and tabular numerals for bounded operational metrics;
+- reduce repeated borders and card chrome while keeping state boundaries and diagnostic groupings explicit;
+- keep minimum 44 px pointer targets for interactive header, disclosure, New Chat, and composer controls;
+- keep the composer reachable inside the chat surface, with visible focus and sufficient contrast;
+- express severity with bounded text or icons as well as color;
+- preserve the proven `overflow: clip` wrapper and internally scrolling transcript so New Chat and the composer cannot collapse or leave the viewport;
+- allow an opened native disclosure to expand the document instead of clipping its contents;
+- prevent horizontal overflow at 320, 375, 390, 639, 760, 1024, and 1440 px widths;
+- preserve reduced-motion support for transitions.
 
-The design must not hide operational warnings. It changes priority and grouping, not truth.
+The design must not hide operational warnings or turn missing external proof into success. It changes priority and presentation, not truth.
 
 ### 6. Health state coherence
 
@@ -155,6 +159,18 @@ Reuse the existing protected triadic path. The intended role contracts are:
 The neutral result is not majority voting. Missing evidence, malformed output, unresolved contradiction, missing role, or insufficient score gap remains `HOLD`. The result remains advisory, admin-triggered, disabled by default, redacted, and incapable of applying source changes.
 
 Normal `/chat-ui` prompts may ask the primary model to format a hypothetical answer as SUPPORT/FALSIFY/HOLD, but that formatting request must not be represented as the protected multi-agent adjudicator having run.
+
+In addition to the protected runtime path, ship one standalone Korean Codex prompt artifact for manual copy/paste review. It must:
+
+- accept exact claims plus SUPPORT, SUPPORT_ALTERNATIVE, and FALSIFY dossiers;
+- normalize them into claim, evidence ID, counterexample, coherence, and missing-proof rows;
+- decide only `APPLY`, `HOLD`, or `REJECT`, never by candidate count or confidence tone;
+- force `HOLD` for a missing role, missing same-input RED/GREEN evidence, unresolved contradiction, unavailable external scope, or malformed evidence ownership;
+- return at most three accepted fixes, at most three unresolved risks, and exactly one next proof;
+- distinguish a manual Codex review from the protected runtime adjudicator and never imply that the latter ran;
+- keep raw prompts, queries, model answers, credentials, and full provider errors out of the report.
+
+The standalone artifact remains intentionally unregistered unless a live manifest contract proves registration is required.
 
 ### 8. Hypothetical and web fact-check scenarios
 
