@@ -3,6 +3,12 @@ package com.example.lms.uaw.autolearn;
 import com.example.lms.agent.CuriosityTriggerService;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.gptsearch.dto.SearchMode;
+import com.example.lms.orchestration.control.RagControlCoordinator;
+import com.example.lms.orchestration.control.RagControlLearningGate;
+import com.example.lms.orchestration.control.RagControlProperties;
+import com.example.lms.orchestration.control.RagControlRolloutState;
+import com.example.lms.orchestration.control.RagControlRuntimeAdapter;
+import com.example.lms.orchestration.control.RagGuardProbeComposer;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.ChatResult;
 import com.example.lms.service.ChatService;
@@ -10,6 +16,8 @@ import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.guard.GuardContext;
 import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.service.rag.learn.CfvmKAllocationTuner;
+import com.example.lms.trace.SafeRedactor;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
@@ -42,6 +51,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
@@ -167,6 +177,345 @@ class UawAutolearnServiceTest {
                 anyInt(), any(UawDatasetWriter.TrainingMetadata.class), org.mockito.ArgumentMatchers.eq(true));
         verify(handoffWriter).recordCycle(anyString(), anyString(), any(AutoLearnCycleResult.class),
                 any(UawAutolearnQualityTracker.CycleDiagnostics.class));
+    }
+
+    @Test
+    void enforcedRagControlHoldSkipsCfvmDatasetAndAcceptedHandoffWrites() {
+        CfvmKAllocationTuner tuner = mock(CfvmKAllocationTuner.class);
+        RagControlRuntimeAdapter.capturePresentationInput(
+                new RagControlRuntimeAdapter.RuntimeInput(true, 1, 1, false, true, true, true));
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            assertNull(RagControlRuntimeAdapter.currentPresentationInput());
+            TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+            TraceStore.put("selfask.3way.requery.confirmed", true);
+            RagControlRuntimeAdapter.capturePresentationInput(
+                    new RagControlRuntimeAdapter.RuntimeInput(true, 3, 3, false, true, true, true));
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of("alpha evidence source", "beta evidence source", "gamma evidence source"));
+        });
+        when(datasetWriter.append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class))).thenReturn(true);
+        RagControlRolloutState rollout = new RagControlRolloutState(
+                new RagControlProperties(1, 0.01d, 20));
+        rollout.record(new RagControlRolloutState.Observation(true, false, false, false, 1));
+        RagControlLearningGate controlGate = new RagControlLearningGate(
+                new RagControlCoordinator(new RagGuardProbeComposer(), rollout),
+                new RagControlRuntimeAdapter());
+        UawAutolearnService controlled = new UawAutolearnService(
+                chatService,
+                props,
+                null,
+                datasetWriter,
+                new LearningSampleValidationMetadataBuilder(),
+                provider(handoffWriter),
+                new UawAutolearnQualityTracker(props, null, null),
+                provider(null),
+                provider(tuner),
+                provider(null),
+                env,
+                null,
+                provider(null),
+                provider(controlGate));
+
+        AutoLearnCycleResult result = controlled.runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session",
+                () -> false,
+                System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(0, result.acceptedCount());
+        assertTrue(result.phaseFailures().containsKey("rag_control_hold"));
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.autolearn.ragControl.hold"));
+        assertNull(RagControlRuntimeAdapter.currentPresentationInput());
+        verify(datasetWriter, never()).append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class));
+        verify(tuner, never()).feedback(anyString(), anyString(), anyDouble());
+        ArgumentCaptor<String> heldHashes = ArgumentCaptor.forClass(String.class);
+        verify(handoffWriter).recordHeldSample(
+                heldHashes.capture(), heldHashes.capture(), heldHashes.capture(),
+                heldHashes.capture(), heldHashes.capture(), heldHashes.capture(), anyInt());
+        String heldQuestion = props.getDefaultSeeds().get(0);
+        String heldAnswer = "supported answer";
+        String heldModel = "gemma4:26b";
+        assertEquals(List.of(
+                        SafeRedactor.hashValue(heldQuestion + '\0' + heldAnswer + '\0' + heldModel),
+                        SafeRedactor.hashValue("uaw-test-session"),
+                        SafeRedactor.hashValue(props.getDataset().getName()),
+                        SafeRedactor.hashValue(heldQuestion),
+                        SafeRedactor.hashValue(heldAnswer),
+                        SafeRedactor.hashValue(heldModel)),
+                heldHashes.getAllValues());
+        assertTrue(heldHashes.getAllValues().stream()
+                .allMatch(hash -> hash.matches("(?i)hash:[a-f0-9]{12,64}")));
+        verify(handoffWriter, never()).recordSkippedSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(),
+                org.mockito.ArgumentMatchers.isNull(), anyString(),
+                org.mockito.ArgumentMatchers.eq("rag_control_hold"));
+        verify(handoffWriter, never()).recordSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(),
+                any(UawDatasetWriter.TrainingMetadata.class), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
+    void missingRuntimeLineageAloneDoesNotTeamKillEnforcedUawWrite() {
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+            TraceStore.put("selfask.3way.requery.confirmed", true);
+            RagControlRuntimeAdapter.capturePresentationInput(
+                    new RagControlRuntimeAdapter.RuntimeInput(
+                            true, 3, 3, false, true, true, false, true));
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of("alpha evidence source", "beta evidence source", "gamma evidence source"));
+        });
+        when(datasetWriter.append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class))).thenReturn(true);
+        UawAutolearnService controlled = serviceWithGate(
+                new RagControlLearningGate(
+                        new RagControlCoordinator(new RagGuardProbeComposer(), promotedRollout()),
+                        new RagControlRuntimeAdapter()),
+                null);
+
+        AutoLearnCycleResult result = controlled.runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session", () -> false, System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(1, result.acceptedCount());
+        assertEquals(Boolean.FALSE, TraceStore.get("uaw.autolearn.ragControl.hold"));
+        assertEquals(Boolean.TRUE, TraceStore.get("ragControl.learning.shadowOnly"));
+        verify(datasetWriter).append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class));
+        verify(handoffWriter, never()).recordHeldSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyInt());
+    }
+
+    @Test
+    void unfinishedPresentationBoundaryStillHoldsEnforcedUawWrite() {
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+            TraceStore.put("selfask.3way.requery.confirmed", true);
+            RagControlRuntimeAdapter.capturePresentationInput(
+                    RagControlRuntimeAdapter.RuntimeInput.evidenceNeeded(true));
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of("alpha evidence source", "beta evidence source", "gamma evidence source"));
+        });
+        when(datasetWriter.append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class))).thenReturn(true);
+        UawAutolearnService controlled = serviceWithGate(
+                new RagControlLearningGate(
+                        new RagControlCoordinator(new RagGuardProbeComposer(), promotedRollout()),
+                        new RagControlRuntimeAdapter()),
+                null);
+
+        AutoLearnCycleResult result = controlled.runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session", () -> false, System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(0, result.acceptedCount());
+        assertTrue(result.phaseFailures().containsKey("rag_control_hold"));
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.autolearn.ragControl.hold"));
+        verify(datasetWriter, never()).append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class));
+        verify(handoffWriter).recordHeldSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyInt());
+    }
+
+    @Test
+    void earlySkippedSampleConsumesPresentationInput() {
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            RagControlRuntimeAdapter.capturePresentationInput(
+                    new RagControlRuntimeAdapter.RuntimeInput(true, 1, 1, false, true, true, true));
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of("only one evidence source"));
+        });
+
+        AutoLearnCycleResult result = service(null).runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session", () -> false, System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(0, result.acceptedCount());
+        assertTrue(result.phaseFailures().containsKey("insufficient_evidence"));
+        assertNull(RagControlRuntimeAdapter.currentPresentationInput());
+    }
+
+    @Test
+    void priorSampleHardGuardCannotLeakIntoNextSample() {
+        props.setBatchSize(2);
+        props.setDefaultSeeds(List.of(
+                "Why can a cache return stale evidence after invalidation?",
+                "How can a bounded retry avoid duplicate retrieval work?"));
+        AtomicInteger calls = new AtomicInteger();
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+            TraceStore.put("selfask.3way.requery.confirmed", true);
+            if (calls.getAndIncrement() == 0) {
+                RagControlRuntimeAdapter.capturePresentationInput(
+                        new RagControlRuntimeAdapter.RuntimeInput(true, 3, 3, false, true, true, true));
+            } else {
+                RagControlRuntimeAdapter.capturePresentationInput(
+                        new RagControlRuntimeAdapter.RuntimeInput(
+                                true, 3, 3, false, true, true, false, true));
+            }
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of("alpha evidence source", "beta evidence source", "gamma evidence source"));
+        });
+        when(datasetWriter.append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class))).thenReturn(true);
+        UawAutolearnService controlled = serviceWithGate(
+                new RagControlLearningGate(
+                        new RagControlCoordinator(new RagGuardProbeComposer(), promotedRollout()),
+                        new RagControlRuntimeAdapter()),
+                null);
+
+        AutoLearnCycleResult result = controlled.runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session", () -> false, System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(2, result.attempted());
+        assertEquals(1, result.acceptedCount());
+        verify(handoffWriter, times(1)).recordHeldSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyInt());
+        verify(datasetWriter, times(1)).append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class));
+        assertEquals(Boolean.FALSE, TraceStore.get("uaw.autolearn.ragControl.hold"));
+    }
+
+    @Test
+    void ragGateProviderResolutionFailureFailsClosedAndDoesNotWriteDataset() {
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+            TraceStore.put("selfask.3way.requery.confirmed", true);
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of("alpha evidence source", "beta evidence source", "gamma evidence source"));
+        });
+        @SuppressWarnings("unchecked")
+        ObjectProvider<RagControlLearningGate> failingGateProvider = mock(ObjectProvider.class);
+        when(failingGateProvider.getIfAvailable())
+                .thenThrow(new IllegalStateException("private-gate-provider-detail"));
+        UawAutolearnService controlled = new UawAutolearnService(
+                chatService, props, null, datasetWriter,
+                new LearningSampleValidationMetadataBuilder(), provider(handoffWriter),
+                new UawAutolearnQualityTracker(props, null, null), provider(null), provider(null),
+                provider(null), env, null, provider(null), failingGateProvider);
+
+        AutoLearnCycleResult result = controlled.runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session", () -> false, System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(0, result.acceptedCount());
+        assertTrue(result.phaseFailures().containsKey("rag_control_hold"));
+        assertEquals("learning_gate_failed", TraceStore.get("uaw.autolearn.ragControl.failureClass"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("private-gate-provider-detail"));
+        verify(datasetWriter, never()).append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class));
+    }
+
+    @Test
+    void absentRagGateClearsPriorDecisionAndFailsClosedWithoutDatasetWrite() {
+        TraceStore.put("uaw.autolearn.ragControl.hold", true);
+        TraceStore.put("uaw.autolearn.ragControl.failureClass", "stale_failure");
+        for (String key : List.of(
+                "ragControl.learning.boundary",
+                "ragControl.learning.action",
+                "ragControl.learning.rolloutMode",
+                "ragControl.learning.holdWrites",
+                "ragControl.learning.shadowOnly",
+                "ragControl.learning.failureClass",
+                "ragControl.learning.errorType")) {
+            TraceStore.put(key, "stale_decision");
+        }
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            assertNull(TraceStore.get("ragControl.learning.boundary"));
+            assertNull(TraceStore.get("ragControl.learning.action"));
+            assertNull(TraceStore.get("ragControl.learning.rolloutMode"));
+            assertNull(TraceStore.get("ragControl.learning.holdWrites"));
+            assertNull(TraceStore.get("ragControl.learning.shadowOnly"));
+            assertNull(TraceStore.get("ragControl.learning.failureClass"));
+            assertNull(TraceStore.get("ragControl.learning.errorType"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+            TraceStore.put("selfask.3way.requery.confirmed", true);
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of("alpha evidence source", "beta evidence source", "gamma evidence source"));
+        });
+        when(datasetWriter.append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class))).thenReturn(true);
+
+        UawAutolearnService withoutGate = new UawAutolearnService(
+                chatService, props, null, datasetWriter,
+                new LearningSampleValidationMetadataBuilder(), provider(handoffWriter),
+                new UawAutolearnQualityTracker(props, null, null), provider(null), provider(null),
+                provider(null), env, null, provider(null), provider((RagControlLearningGate) null));
+        AutoLearnCycleResult result = withoutGate.runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session", () -> false, System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(0, result.acceptedCount());
+        assertTrue(result.phaseFailures().containsKey("rag_control_hold"));
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.autolearn.ragControl.hold"));
+        assertEquals("learning_gate_unavailable", TraceStore.get("uaw.autolearn.ragControl.failureClass"));
+        verify(datasetWriter, never()).append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class));
+    }
+
+    @Test
+    void enforcedGateBlocksCfvmFeedbackForAlreadyRejectedValidation() {
+        props.setDefaultSeeds(List.of("Legal investment contract advice for a lawsuit"));
+        CfvmKAllocationTuner tuner = mock(CfvmKAllocationTuner.class);
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(inv -> {
+            TraceStore.put("cfvm.kalloc.key", "cfvm9:t1");
+            TraceStore.put("cfvm.kalloc.arm", "BASE");
+            TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+            TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+            return ChatResult.of("supported answer", "gemma4:26b", true,
+                    Set.of(
+                            "alpha contract statute evidence source",
+                            "beta lawsuit precedent evidence source",
+                            "gamma investment risk evidence source",
+                            "delta official filing evidence source",
+                            "epsilon regulatory guidance evidence source"));
+        });
+        RagControlRolloutState rollout = new RagControlRolloutState(
+                new RagControlProperties(1, 0.01d, 20));
+        rollout.record(new RagControlRolloutState.Observation(true, false, false, false, 1));
+        RagControlLearningGate controlGate = new RagControlLearningGate(
+                new RagControlCoordinator(new RagGuardProbeComposer(), rollout),
+                new RagControlRuntimeAdapter());
+        UawAutolearnService controlled = new UawAutolearnService(
+                chatService, props, null, datasetWriter,
+                new LearningSampleValidationMetadataBuilder(), provider(handoffWriter),
+                new UawAutolearnQualityTracker(props, null, null), provider(null), provider(tuner),
+                provider(null), env, null, provider(null), provider(controlGate));
+
+        AutoLearnCycleResult result = controlled.runCycle(
+                tempDir.resolve("train_rag.jsonl").toFile(),
+                "uaw-test-session", () -> false, System.nanoTime() + 60_000_000_000L);
+
+        assertEquals(0, result.acceptedCount());
+        assertTrue(result.phaseFailures().containsKey("rag_control_hold"));
+        verify(tuner, never()).feedback(anyString(), anyString(), anyDouble());
+        verify(datasetWriter, never()).append(any(File.class), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyString(), any(UawDatasetWriter.TrainingMetadata.class));
+        verify(handoffWriter, never()).recordSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(),
+                any(UawDatasetWriter.TrainingMetadata.class), org.mockito.ArgumentMatchers.anyBoolean());
+        verify(handoffWriter).recordHeldSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyInt());
+        verify(handoffWriter, never()).recordSkippedSample(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(),
+                org.mockito.ArgumentMatchers.isNull(), anyString(),
+                org.mockito.ArgumentMatchers.eq("rag_control_hold"));
     }
 
     @Test
@@ -720,7 +1069,43 @@ class UawAutolearnServiceTest {
                 provider(quotaGuard),
                 env,
                 null,
-                provider(null));
+                provider(null),
+                provider(shadowLearningGate()));
+    }
+
+    private UawAutolearnService serviceWithGate(
+            RagControlLearningGate controlGate,
+            CfvmKAllocationTuner tuner) {
+        return new UawAutolearnService(
+                chatService,
+                props,
+                null,
+                datasetWriter,
+                new LearningSampleValidationMetadataBuilder(),
+                provider(handoffWriter),
+                new UawAutolearnQualityTracker(props, null, null),
+                provider(null),
+                provider(tuner),
+                provider(null),
+                env,
+                null,
+                provider(null),
+                provider(controlGate));
+    }
+
+    private static RagControlRolloutState promotedRollout() {
+        RagControlRolloutState rollout = new RagControlRolloutState(
+                new RagControlProperties(1, 0.01d, 20));
+        rollout.record(new RagControlRolloutState.Observation(true, false, false, false, 1));
+        return rollout;
+    }
+
+    private static RagControlLearningGate shadowLearningGate() {
+        return new RagControlLearningGate(
+                new RagControlCoordinator(
+                        new RagGuardProbeComposer(),
+                        new RagControlRolloutState(new RagControlProperties())),
+                new RagControlRuntimeAdapter());
     }
 
     private static <T> ObjectProvider<T> provider(T value) {

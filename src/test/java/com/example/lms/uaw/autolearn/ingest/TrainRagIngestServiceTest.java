@@ -1,5 +1,11 @@
 package com.example.lms.uaw.autolearn.ingest;
 
+import com.example.lms.orchestration.control.RagControlCoordinator;
+import com.example.lms.orchestration.control.RagControlLearningGate;
+import com.example.lms.orchestration.control.RagControlProperties;
+import com.example.lms.orchestration.control.RagControlRolloutState;
+import com.example.lms.orchestration.control.RagControlRuntimeAdapter;
+import com.example.lms.orchestration.control.RagGuardProbeComposer;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.VectorMetaKeys;
 import com.example.lms.service.VectorStoreService;
@@ -40,6 +46,63 @@ class TrainRagIngestServiceTest {
     @AfterEach
     void tearDown() {
         TraceStore.clear();
+    }
+
+    @Test
+    void backgroundRagControlObservationNeverBlocksVectorWriteInEnforceMode() throws Exception {
+        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorSidService vectorSidService = mock(VectorSidService.class);
+        UawAutolearnProperties props = new UawAutolearnProperties();
+        props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_pgpc_shadow.json").toString());
+        props.getRetrain().setMaxIngestLinesPerRun(10);
+
+        Path jsonl = tempDir.resolve("train_rag_pgpc_shadow.jsonl");
+        Files.writeString(jsonl, """
+                {"question":"q","answer":"a","sessionId":"s1","validation":{"accepted":true,"rejectReasons":[],"thresholds":{"contaminationMax":0.30,"contextContaminationMax":0.35},"anomalies":{"flags":[]},"feedback":{"vectorDecision":"SHADOW_REVIEW"}}}
+                """);
+
+        RagControlRolloutState rollout = new RagControlRolloutState(
+                new RagControlProperties(1, 0.01d, 20));
+        rollout.record(new RagControlRolloutState.Observation(true, false, false, false, 1));
+        assertEquals(RagControlRolloutState.Mode.ENFORCE, rollout.mode());
+        RagControlLearningGate learningGate = new RagControlLearningGate(
+                new RagControlCoordinator(new RagGuardProbeComposer(), rollout),
+                new RagControlRuntimeAdapter());
+
+        TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
+        service.setRagControlLearningGate(learningGate);
+
+        assertEquals(1, service.ingestNewSamples(jsonl, "ds", () -> false));
+        assertEquals(0, service.ingestNewSamples(jsonl, "ds", () -> false));
+        verify(vectorStoreService, times(1)).enqueue(anyString(), anyString(), anyString(), any());
+        verify(vectorStoreService, times(1)).flush();
+        assertEquals(true, TraceStore.get("ragControl.learning.shadowOnly"));
+        assertEquals(false, TraceStore.get("ragControl.learning.holdWrites"));
+        assertEquals("shadow", TraceStore.get("ragControl.learning.rolloutMode"));
+        assertEquals("hold", TraceStore.get("uaw.retrain.ragControl.action"));
+        assertEquals("runtime_lineage_missing", TraceStore.get("uaw.retrain.ragControl.reasonCode"));
+    }
+
+    @Test
+    void backgroundIngestWithoutGateRecordsUnavailableObservationButStillWrites() throws Exception {
+        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorSidService vectorSidService = mock(VectorSidService.class);
+        UawAutolearnProperties props = new UawAutolearnProperties();
+        props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_pgpc_missing_gate.json").toString());
+        props.getRetrain().setMaxIngestLinesPerRun(10);
+
+        Path jsonl = tempDir.resolve("train_rag_pgpc_missing_gate.jsonl");
+        Files.writeString(jsonl, """
+                {"question":"q","answer":"a","sessionId":"s1","validation":{"accepted":true,"rejectReasons":[],"thresholds":{"contaminationMax":0.30,"contextContaminationMax":0.35},"anomalies":{"flags":[]},"feedback":{"vectorDecision":"SHADOW_REVIEW"}}}
+                """);
+
+        TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
+
+        assertEquals(1, service.ingestNewSamples(jsonl, "ds", () -> false));
+        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), any());
+        verify(vectorStoreService).flush();
+        assertEquals(false, TraceStore.get("uaw.retrain.ragControl.present"));
+        assertEquals("learning_gate_unavailable", TraceStore.get("uaw.retrain.ragControl.failureClass"));
     }
 
     @Test
@@ -91,6 +154,36 @@ class TrainRagIngestServiceTest {
         assertTrue(String.valueOf(meta.get(VectorMetaKeys.META_AGENT_HANDOFF_MANIFEST_HASH)).length() > 10);
         assertTrue(String.valueOf(meta.get(VectorMetaKeys.META_AGENT_HANDOFF_SAMPLE_HASH)).length() > 10);
         assertTrue(Double.parseDouble(String.valueOf(meta.get(VectorMetaKeys.META_CONTEXT_CONTAMINATION_SCORE))) > 0.0d);
+    }
+
+    @Test
+    void ingestQuarantinesUnpromotedNeedleRoiCandidate() throws Exception {
+        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorSidService vectorSidService = mock(VectorSidService.class);
+        UawAutolearnProperties props = new UawAutolearnProperties();
+        props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_needle_roi.json").toString());
+        props.getRetrain().setMaxIngestLinesPerRun(10);
+
+        Path jsonl = tempDir.resolve("train_rag_needle_roi.jsonl");
+        Files.writeString(jsonl, """
+                {"question":"q","answer":"a","sessionId":"s1","validation":{"accepted":true,"questionType":"causal","selfAskLanes":["BQ","ER","RC"],"selfAskLaneCoverage":1.0,"sampleScore":0.88,"riskScore":0.2,"contradictionScore":0.0,"contradictionCause":"unknown","contaminationScore":0.02,"legacyContextScore":0.0,"contextContaminationScore":0.02,"requery":{"required":true,"confirmed":true},"rejectReasons":[],"needleRoi":{"needleSignalCandidate":true,"signalValueScore":0.42,"promoted":false,"rejectReason":"signal_below_threshold"},"thresholds":{"sampleScoreMin":0.55,"contaminationMax":0.30,"contextContaminationMax":0.35,"contradictionMax":0.60,"requeryPenalty":0.0,"mode":"dynamic"},"runtime":{"evidenceCount":4,"afterFilterCount":4,"contextDiversity":0.85,"laneCoverage":1.0,"errorRateWindow":0.10},"anomalies":{"flags":[],"spike":false,"drift":false},"feedback":{"cfvmReward":0.60,"vectorDecision":"SHADOW_REVIEW"}},"evaluationCriteria":["cause_effect_support"]}
+                """);
+
+        TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
+        int count = service.ingestNewSamples(jsonl, "ds", () -> false);
+
+        assertEquals(1, count);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        Map<String, Object> meta = metaCaptor.getValue();
+        assertEquals(true, meta.get(VectorMetaKeys.META_LEARNING_ROI_NEEDLE_SIGNAL_CANDIDATE));
+        assertEquals(false, meta.get(VectorMetaKeys.META_LEARNING_ROI_PROMOTED));
+        assertEquals(0.42, ((Number) meta.get(VectorMetaKeys.META_LEARNING_ROI_SIGNAL_VALUE_SCORE)).doubleValue(), 0.0001);
+        assertEquals("signal_below_threshold", meta.get(VectorMetaKeys.META_LEARNING_ROI_REJECT_REASON));
+        assertEquals("rejected", meta.get(VectorMetaKeys.META_LEARNING_VALIDATION_DECISION));
+        assertEquals("QUARANTINE", meta.get(VectorMetaKeys.META_DELETE_DECISION));
+        assertEquals("validation_needle_roi_rejected", meta.get(VectorMetaKeys.META_DELETE_REASON));
     }
 
     @Test
@@ -301,13 +394,17 @@ class TrainRagIngestServiceTest {
         props.getRetrain().setMaxIngestLinesPerRun(10);
 
         String supabaseSource = "sb_publishable_" + "metadata01";
+        String privateMarker = "private-metadata-marker";
         Path jsonl = tempDir.resolve("train_rag_metadata_only.jsonl");
         Files.writeString(jsonl, """
-                {"question":"raw private question sk-test-secret","answer":"raw private answer %s%s","sessionId":"s1","source":"uaw_autolearn %s","validation":{"accepted":true,"sampleScore":0.91,"contaminationScore":0.01,"legacyContextScore":0.0,"rejectReasons":[],"thresholds":{"sampleScoreMin":0.55,"contaminationMax":0.30,"contextContaminationMax":0.35,"contradictionMax":0.60},"anomalies":{"flags":[]},"feedback":{"vectorDecision":"SHADOW_REVIEW"}}}
-                """.formatted("Bearer ", "abc.def.ghi", supabaseSource));
+                {"question":"raw private question sk-test-secret","answer":"raw private answer %s%s","sessionId":"session-%s","source":"uaw_autolearn %s %s","branch":"%s","model":"%s","provider":"%s","disabledReason":"%s","ts":"not-an-instant-%s","validation":{"accepted":true,"questionType":"%s","selfAskLanes":["BQ","%s"],"contradictionCause":"%s","sampleScore":0.91,"contaminationScore":0.01,"legacyContextScore":0.0,"rejectReasons":[],"evaluationCriteria":["cause_effect_support","%s"],"thresholds":{"sampleScoreMin":0.55,"contaminationMax":0.30,"contextContaminationMax":0.35,"contradictionMax":0.60},"anomalies":{"flags":[]},"feedback":{"vectorDecision":"SHADOW_REVIEW"}}}
+                """.formatted(
+                        "Bearer ", "abc.def.ghi", privateMarker, supabaseSource, privateMarker,
+                        privateMarker, privateMarker, privateMarker, privateMarker, privateMarker,
+                        privateMarker, privateMarker, privateMarker, privateMarker));
 
         TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
-        int count = service.ingestNewSamples(jsonl, "ds", () -> false);
+        int count = service.ingestNewSamples(jsonl, "dataset-" + privateMarker, () -> false);
 
         assertEquals(1, count);
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
@@ -321,7 +418,118 @@ class TrainRagIngestServiceTest {
         assertFalse(text.contains("raw private answer"));
         assertFalse(text.contains("Bearer " + "abc.def.ghi"));
         assertFalse(text.contains(supabaseSource));
-        assertEquals("METADATA_ONLY", metaCaptor.getValue().get("vector_projection_mode"));
+        Map<String, Object> meta = metaCaptor.getValue();
+        String renderedMeta = String.valueOf(meta);
+        assertFalse(renderedMeta.contains(privateMarker));
+        assertFalse(renderedMeta.contains(supabaseSource));
+        assertFalse(renderedMeta.contains("Bearer " + "abc.def.ghi"));
+        assertTrue(String.valueOf(meta.get("dataset")).startsWith("hash:"));
+        assertTrue(String.valueOf(meta.get("sid_logical")).startsWith("hash:"));
+        assertTrue(String.valueOf(meta.get("branch")).startsWith("hash:"));
+        assertTrue(String.valueOf(meta.get("model")).startsWith("hash:"));
+        assertTrue(String.valueOf(meta.get("provider")).startsWith("hash:"));
+        assertTrue(String.valueOf(meta.get("disabledReason")).startsWith("hash:"));
+        assertEquals("BQ," + SafeRedactor.hashValue(privateMarker),
+                meta.get(VectorMetaKeys.META_LEARNING_SELF_ASK_LANES));
+        assertEquals("cause_effect_support," + SafeRedactor.hashValue(privateMarker),
+                meta.get(VectorMetaKeys.META_LEARNING_EVALUATION_CRITERIA));
+        assertEquals("METADATA_ONLY", meta.get("vector_projection_mode"));
+    }
+
+    @Test
+    void metadataProjectionPreservesCanonicalDiagnosticLabels() throws Exception {
+        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorSidService vectorSidService = mock(VectorSidService.class);
+        UawAutolearnProperties props = new UawAutolearnProperties();
+        props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_canonical_labels.json").toString());
+        props.getRetrain().setMaxIngestLinesPerRun(10);
+
+        Path jsonl = tempDir.resolve("train_rag_canonical_labels.jsonl");
+        Files.writeString(jsonl, """
+                {"question":"q","answer":"a","sessionId":"s1","validation":{"accepted":false,"questionType":"factual_entity","sampleScore":0.20,"contaminationScore":0.10,"legacyContextScore":0.0,"rejectReasons":["validation_rejected","sample_score_threshold","context_contamination_threshold","requery_unconfirmed"],"evaluationCriteria":["citation_or_entity_match","answer_supported_by_evidence"],"thresholds":{"sampleScoreMin":0.55,"contaminationMax":0.30,"contextContaminationMax":0.35,"contradictionMax":0.60},"anomalies":{"flags":[]},"feedback":{"vectorDecision":"QUARANTINE"},"needleRoi":{"needleSignalCandidate":true,"signalValueScore":0.20,"promoted":false,"rejectReason":"needle_roi_rejected"}}}
+                """);
+
+        TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
+        assertEquals(1, service.ingestNewSamples(jsonl, "ds", () -> false));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        Map<String, Object> meta = metaCaptor.getValue();
+        assertEquals("validation_rejected,sample_score_threshold,context_contamination_threshold,requery_unconfirmed",
+                meta.get(VectorMetaKeys.META_LEARNING_REJECT_REASONS));
+        assertEquals("citation_or_entity_match,answer_supported_by_evidence",
+                meta.get(VectorMetaKeys.META_LEARNING_EVALUATION_CRITERIA));
+        assertEquals("needle_roi_rejected", meta.get(VectorMetaKeys.META_LEARNING_ROI_REJECT_REASON));
+    }
+
+    @Test
+    void metadataProjectionRejectsTypeConfusionAndUsesSafeNumericDefaults() throws Exception {
+        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorSidService vectorSidService = mock(VectorSidService.class);
+        UawAutolearnProperties props = new UawAutolearnProperties();
+        props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_typed_domains.json").toString());
+        props.getRetrain().setMaxIngestLinesPerRun(10);
+
+        Path jsonl = tempDir.resolve("train_rag_typed_domains.jsonl");
+        Files.writeString(jsonl, """
+                {"question":"q","answer":"a","sessionId":"s1","afterFilterCount":-9,"finalGate":1,"contextDiversity":9,"validation":{"accepted":true,"questionType":42,"sampleScore":2.0,"riskScore":-1.0,"contradictionScore":5.0,"contradictionCause":7,"contaminationScore":-2.0,"legacyContextScore":5.0,"requery":{"required":1,"confirmed":"maybe"},"rejectReasons":[],"thresholds":{"sampleScoreMin":-1.0,"contaminationMax":2.0,"contextContaminationMax":2.0,"contradictionMax":2.0,"requeryPenalty":-1.0},"anomalies":{"flags":[],"spike":1,"drift":"maybe"},"feedback":{"cfvmReward":2.0,"vectorDecision":42},"needleRoi":{"needleSignalCandidate":1,"signalValueScore":2.0,"promoted":"maybe","rejectReason":42}}}
+                """);
+
+        TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
+        assertEquals(1, service.ingestNewSamples(jsonl, "ds", () -> false));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        Map<String, Object> meta = metaCaptor.getValue();
+        assertEquals(0, meta.get("afterFilterCount"));
+        assertEquals(0.0d, ((Number) meta.get("contextDiversity")).doubleValue(), 0.0001d);
+        assertFalse(meta.containsKey("finalGate"));
+        assertFalse(meta.containsKey(VectorMetaKeys.META_LEARNING_QUESTION_TYPE));
+        assertFalse(meta.containsKey(VectorMetaKeys.META_LEARNING_CONTRADICTION_CAUSE));
+        assertFalse(meta.containsKey(VectorMetaKeys.META_LEARNING_REQUERY_REQUIRED));
+        assertFalse(meta.containsKey(VectorMetaKeys.META_LEARNING_REQUERY_CONFIRMED));
+        assertFalse(meta.containsKey(VectorMetaKeys.META_LEARNING_ANOMALY_SPIKE));
+        assertFalse(meta.containsKey(VectorMetaKeys.META_LEARNING_ANOMALY_DRIFT));
+        assertEquals("QUARANTINE", meta.get(VectorMetaKeys.META_LEARNING_VECTOR_DECISION));
+        assertEquals("rejected", meta.get(VectorMetaKeys.META_LEARNING_VALIDATION_DECISION));
+        assertEquals(0.0d, ((Number) meta.get(VectorMetaKeys.META_LEARNING_SAMPLE_SCORE)).doubleValue(), 0.0001d);
+        assertEquals(0.50d, ((Number) meta.get(VectorMetaKeys.META_LEARNING_CONTAMINATION_SCORE)).doubleValue(), 0.0001d);
+        assertEquals(0.55d, ((Number) meta.get(VectorMetaKeys.META_LEARNING_DYNAMIC_SAMPLE_THRESHOLD)).doubleValue(), 0.0001d);
+        assertEquals(0.35d, ((Number) meta.get(VectorMetaKeys.META_LEARNING_DYNAMIC_CONTAMINATION_THRESHOLD)).doubleValue(), 0.0001d);
+        assertEquals(0.0d, ((Number) meta.get(VectorMetaKeys.META_LEARNING_CFVM_REWARD)).doubleValue(), 0.0001d);
+        assertEquals(0.0d, ((Number) meta.get(VectorMetaKeys.META_LEARNING_ROI_SIGNAL_VALUE_SCORE)).doubleValue(), 0.0001d);
+    }
+
+    @Test
+    void invalidTimestampUsesCanonicalFallbackAndEmitsOnlyRedactedReason() throws Exception {
+        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorSidService vectorSidService = mock(VectorSidService.class);
+        UawAutolearnProperties props = new UawAutolearnProperties();
+        props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_invalid_timestamp.json").toString());
+        props.getRetrain().setMaxIngestLinesPerRun(10);
+
+        Path jsonl = tempDir.resolve("train_rag_invalid_timestamp.jsonl");
+        Files.writeString(jsonl, """
+                {"question":"q","answer":"a","sessionId":"s1","ts":"raw-timestamp-sentinel","validation":{"accepted":true,"rejectReasons":[],"thresholds":{"contaminationMax":0.30,"contextContaminationMax":0.35},"anomalies":{"flags":[]},"feedback":{"vectorDecision":"SHADOW_REVIEW"}}}
+                """);
+
+        TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
+        assertEquals(1, service.ingestNewSamples(jsonl, "ds", () -> false));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        Map<String, Object> meta = metaCaptor.getValue();
+        String projected = String.valueOf(meta.get("ts"));
+        assertEquals(projected, java.time.Instant.parse(projected).toString());
+        assertFalse(projected.contains("raw-timestamp-sentinel"));
+        assertEquals(
+                "invalid_timestamp",
+                TraceStore.getString("uaw.retrain.ingest.timestampFallbackReason"));
+        assertEquals(1L, TraceStore.getLong("uaw.retrain.ingest.timestampFallbackCount"));
+        assertFalse(TraceStore.getAll().toString().contains("raw-timestamp-sentinel"));
     }
 
     @Test

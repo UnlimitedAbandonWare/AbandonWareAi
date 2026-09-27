@@ -50,6 +50,8 @@ class UawDatasetWriterTest {
         assertTrue(content.contains("\"runtime\""));
         assertTrue(content.contains("\"anomalies\""));
         assertTrue(content.contains("\"feedback\""));
+        assertTrue(content.contains("\"needleRoi\""));
+        assertTrue(content.contains("\"promoted\":true"));
     }
 
     @Test
@@ -77,6 +79,44 @@ class UawDatasetWriterTest {
 
         assertFalse(ok);
         assertFalse(file.exists());
+    }
+
+    @Test
+    void appendRejectsUnpromotedNeedleRoiCandidateEvenWhenLegacyReasonsAreEmpty() {
+        TraceStore.clear();
+        UawDatasetWriter writer = writer();
+        File file = tempDir.resolve("train_rag.jsonl").toFile();
+
+        LearningSampleValidationMetadata rejected = new LearningSampleValidationMetadata(
+                "causal",
+                List.of("BQ", "ER", "RC"),
+                1.0d,
+                0.74d,
+                0.20d,
+                0.78d,
+                0.0d,
+                "unknown",
+                new LearningSampleValidationMetadata.Requery(true, true),
+                0.0d,
+                0.0d,
+                0.82d,
+                List.of(),
+                List.of("cause_effect_support"),
+                LearningSampleValidationMetadata.Thresholds.defaults(),
+                LearningSampleValidationMetadata.Runtime.defaults(),
+                LearningSampleValidationMetadata.Anomalies.none(),
+                LearningSampleValidationMetadata.Feedback.none(),
+                new LearningSampleValidationMetadata.NeedleRoi(true, 0.40d, false, "signal_below_threshold"));
+
+        boolean ok = writer.append(file, "ds", "q", "a", "gemma4:26b", 3, "s1",
+                new UawDatasetWriter.TrainingMetadata(
+                        "uaw_autolearn", "mixed", "", 4, true, 0.75d, rejected));
+
+        assertFalse(ok);
+        assertFalse(file.exists());
+        assertEquals("needle_roi_rejected",
+                TraceStore.getString("uaw.autolearn.datasetWriter.lastFailureReason"));
+        TraceStore.clear();
     }
 
     @Test
@@ -209,7 +249,12 @@ class UawDatasetWriterTest {
                 0.0d,
                 0.82d,
                 List.of(),
-                List.of("cause_effect_support", "alternative_cause_checked", "requery_confirmation_required"));
+                List.of("cause_effect_support", "alternative_cause_checked", "requery_confirmation_required"),
+                LearningSampleValidationMetadata.Thresholds.defaults(),
+                LearningSampleValidationMetadata.Runtime.defaults(),
+                LearningSampleValidationMetadata.Anomalies.none(),
+                LearningSampleValidationMetadata.Feedback.none(),
+                new LearningSampleValidationMetadata.NeedleRoi(true, 0.82d, true, "accepted"));
     }
 
     private static UawDatasetWriter.TrainingMetadata metadata() {

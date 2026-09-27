@@ -231,7 +231,6 @@ class LegacyLmsFeatureFlagContractTest {
                 Path.of("main/java/com/example/lms/netty"),
                 Path.of("main/java/com/example/lms/trial"),
                 Path.of("main/java/com/example/lms/compare"),
-                Path.of("main/java/com/example/lms/replay"),
                 Path.of("main/java/com/example/lms/alias"),
                 Path.of("main/java/com/example/lms/gptapi"),
                 Path.of("main/java/com/example/lms/learning/llm/compare"),

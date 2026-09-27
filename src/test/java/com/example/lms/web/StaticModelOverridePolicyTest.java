@@ -43,4 +43,16 @@ class StaticModelOverridePolicyTest {
         assertTrue(js.contains("replaceWithSanitizedHtml(bubble, cleanHtml);"));
         assertFalse(js.contains("bubble.innerHTML = rawHtml"));
     }
+
+    @Test
+    void traceStreamEventsRenderHtmlThroughExistingSanitizer() throws IOException {
+        String js = Files.readString(Path.of("main/resources/static/js/chat.js"));
+        int traceBranchStart = js.indexOf("if (type === \"trace\") {");
+        int traceBranchEnd = js.indexOf("setStatusRailValue(dom.traceStatus, type);", traceBranchStart);
+        String traceBranch = traceBranchStart >= 0 && traceBranchEnd > traceBranchStart
+                ? js.substring(traceBranchStart, traceBranchEnd)
+                : "";
+
+        assertTrue(traceBranch.contains("if (payload.html) renderTraceHtml(payload, bubble);"));
+    }
 }

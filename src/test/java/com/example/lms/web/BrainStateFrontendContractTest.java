@@ -50,7 +50,7 @@ class BrainStateFrontendContractTest {
         String dashboard = read("main/resources/templates/dashboard.html");
         String vector = read("main/resources/templates/vector-diagnostics.html");
 
-        assertTrue(chat.contains("cytoscape@3.33.4"));
+        assertFalse(chat.contains("cytoscape"), "chat page must not load cytoscape (dead asset removed)");
         assertTrue(page.contains("cytoscape@3.33.4"));
         assertTrue(chat.contains("/js/brain-state-ui.js"));
         assertTrue(page.contains("/js/brain-state-ui.js"));
@@ -80,16 +80,43 @@ class BrainStateFrontendContractTest {
     void embeddedBrainStatePanelDoesNotCollapseChatConversationViewport() throws Exception {
         String css = read("main/resources/static/css/chat-style.css").replace("\r\n", "\n");
 
-        assertTrue(css.contains(".chat-area-wrapper > .brain-state-panel--compact"),
-                "chat-embedded Brain State must have a chat-surface-specific compact rule");
-        assertTrue(css.contains(".chat-area-wrapper > .brain-state-panel--compact .brain-state-main"),
-                "chat-embedded Brain State graph body must be reduced so it cannot push messages away");
+        assertTrue(css.contains(".diagnostics-stack > .brain-state-panel--compact"),
+                "diagnostics-embedded Brain State must have a compact scrolling rule");
+        assertTrue(css.contains(".diagnostics-stack > .brain-state-panel--compact > div"),
+                "each live Brain State row must stay compact inside diagnostics");
         assertTrue(css.contains("#chatWindow {\n    flex: 1 1"),
                 "chatWindow must keep a flexible conversation viewport");
         assertTrue(css.contains("min-height: clamp("),
                 "chatWindow must keep enough height for conversation text");
         assertTrue(css.contains("overflow: auto"),
                 "chatWindow or compact Brain State must scroll instead of expanding over the conversation");
+    }
+
+    @Test
+    void chatUiLayersDiagnosticsBehindAdminAndCompactSurfaceStripsChrome() throws Exception {
+        String chat = read("main/resources/templates/chat-ui.html");
+        String controller = read("main/java/com/example/lms/web/PageController.java");
+        String view = read("main/java/com/example/lms/config/ChatUiViewConfig.java");
+
+        assertTrue(chat.contains(
+                "<div class=\"answer-tools-panel\" data-admin-diagnostics th:if=\"${chatDiagnosticsEnabled}\">"),
+                "answer tools panel must render only when chatDiagnosticsEnabled is set");
+        assertTrue(chat.contains("data-session-mode-list"));
+        assertTrue(view.contains("if (\"compact\".equals(surface)) document.select(\".conversation-sidebar\").remove();"),
+                "the active projector must strip heavy chrome on the compact surface");
+        assertTrue(chat.contains("th:attr=\"data-chat-surface=${chatSurface}\""),
+                "body must expose the resolved surface for styling hooks");
+        assertFalse(chat.contains("cytoscape"),
+                "chat page must not load the unused cytoscape CDN bundle");
+
+        assertTrue(controller.contains("chatDiagnosticsEnabled"),
+                "chatUi must publish chatDiagnosticsEnabled");
+        assertTrue(controller.contains("chatSurface"),
+                "chatUi must publish chatSurface");
+        assertTrue(controller.contains("ROLE_ADMIN"),
+                "admin detection must use ROLE_ADMIN authority");
+        assertTrue(controller.contains("normalizeChatSurface"),
+                "surface values must normalize to compact|web");
     }
 
     private static String read(String path) throws Exception {

@@ -54,6 +54,73 @@ class LearningSampleValidationMetadataBuilderTest {
     }
 
     @Test
+    void promotesNeedleRoiOnlyAfterThreeWayRequeryConfirmation() {
+        TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+        TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+        TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+        TraceStore.put("selfask.3way.requery.confirmed", true);
+        TraceStore.put("needle.triggered", true);
+        TraceStore.put("needle.docs.count", 3);
+        TraceStore.put("needle.urls.count", 2);
+        TraceStore.put("needle.quality.authorityAvg", 0.92d);
+        TraceStore.put("needle.quality.coverage", 0.82d);
+        TraceStore.put("needle.quality.duplicateRatio", 0.10d);
+
+        LearningSampleValidationMetadata meta = builder.build(
+                "Why does a weak authority signal become useful after Self-Ask requery?",
+                "The answer is supported by rechecked evidence.",
+                "gemma4:26b",
+                5,
+                5,
+                true,
+                0.90d,
+                "");
+
+        assertTrue(meta.accepted());
+        assertTrue(meta.needleRoi().needleSignalCandidate());
+        assertTrue(meta.needleRoi().promoted());
+        assertTrue(meta.needleRoi().signalValueScore() >= meta.thresholds().sampleScoreMin());
+        assertEquals("accepted", meta.needleRoi().rejectReason());
+        assertEquals(true, TraceStore.get("learning.roi.needleSignalCandidate"));
+        assertEquals(true, TraceStore.get("learning.roi.promoted"));
+        assertEquals(true, TraceStore.get("selfask.3way.requery.required"));
+        assertEquals(true, TraceStore.get("selfask.3way.requery.confirmed"));
+    }
+
+    @Test
+    void rejectsNeedleRoiPromotionWhenRequeryAttemptTimedOut() {
+        TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
+        TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));
+        TraceStore.append("selfask.3way.events", Map.of("lane", "RC"));
+        TraceStore.put("selfask.3way.requery.confirmed", true);
+        TraceStore.append("selfask.requery.attempts", Map.of("lane", "BQ", "failureClass", "timeout"));
+        TraceStore.put("needle.triggered", true);
+        TraceStore.put("needle.docs.count", 4);
+        TraceStore.put("needle.urls.count", 3);
+        TraceStore.put("needle.quality.authorityAvg", 0.95d);
+        TraceStore.put("needle.quality.coverage", 0.85d);
+        TraceStore.put("needle.quality.duplicateRatio", 0.05d);
+
+        LearningSampleValidationMetadata meta = builder.build(
+                "Why does timeout evidence need requery confirmation?",
+                "The answer is supported by cited retrieval evidence.",
+                "gemma4:26b",
+                5,
+                5,
+                true,
+                0.90d,
+                "");
+
+        assertFalse(meta.accepted());
+        assertTrue(meta.needleRoi().needleSignalCandidate());
+        assertFalse(meta.needleRoi().promoted());
+        assertEquals("runtime_failure_timeout", meta.needleRoi().rejectReason());
+        assertTrue(meta.rejectReasons().contains("needle_roi_runtime_failure"));
+        assertEquals(false, TraceStore.get("learning.roi.promoted"));
+        assertEquals("runtime_failure_timeout", TraceStore.getString("learning.roi.rejectReason"));
+    }
+
+    @Test
     void doesNotConfirmHighRiskRequeryFromLaneCoverageOnly() {
         TraceStore.append("selfask.3way.events", Map.of("lane", "BQ"));
         TraceStore.append("selfask.3way.events", Map.of("lane", "ER"));

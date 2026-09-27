@@ -1,5 +1,8 @@
 package com.example.lms.uaw.thumbnail;
 
+import com.example.lms.llm.ChatModel;
+import com.example.lms.prompt.QueryKeywordPromptBuilder;
+import com.example.lms.search.provider.WebSearchProvider;
 import com.example.lms.search.TraceStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -13,6 +16,8 @@ import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UawThumbnailRedactionContractTest {
@@ -111,6 +116,154 @@ class UawThumbnailRedactionContractTest {
         String trace = TraceStore.getAll().toString();
         assertFalse(trace.contains("sk-"));
         assertFalse(trace.contains("Authorization"));
+    }
+
+    @Test
+    void thumbnailEvidenceDomainParseFailureLeavesRedactedTraceBreadcrumb() {
+        String rawUrl = "http://[ownerToken=thumb-secret";
+
+        String domain = new UawThumbnailService.EvidenceItem("anchor", "title", rawUrl, "quote").domain();
+
+        assertEquals("", domain);
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.thumbnail.suppressed"));
+        assertEquals("evidence.domainParse", TraceStore.get("uaw.thumbnail.suppressed.stage"));
+        assertEquals(1L, TraceStore.getLong("uaw.thumbnail.suppressed.evidence.domainParse"));
+        assertEquals("IllegalArgumentException",
+                TraceStore.get("uaw.thumbnail.suppressed.evidence.domainParse.errorType"));
+        assertNotNull(TraceStore.get("uaw.thumbnail.suppressed.evidence.domainParse.errorHash"));
+        assertTrue((Integer) TraceStore.get("uaw.thumbnail.suppressed.evidence.domainParse.errorLength") > 0);
+        String trace = TraceStore.getAll().toString();
+        assertFalse(trace.contains(rawUrl));
+        assertFalse(trace.contains("thumb-secret"));
+    }
+
+    @Test
+    void thumbnailWebSearchFailureLeavesRedactedTraceBreadcrumb() {
+        WebSearchProvider failingProvider = new WebSearchProvider() {
+            @Override
+            public List<String> search(String query, int topK) {
+                throw new IllegalStateException("ownerToken=web-secret");
+            }
+
+            @Override
+            public com.example.lms.service.NaverSearchService.SearchResult searchWithTrace(String query, int topK) {
+                return null;
+            }
+
+            @Override
+            public boolean isEnabled() {
+                return true;
+            }
+
+            @Override
+            public String getName() {
+                return "failing-provider";
+            }
+        };
+        UawThumbnailService service = new UawThumbnailService(
+                new UawThumbnailProperties(), null, failingProvider, null, null, null, null);
+
+        List<?> evidence = ReflectionTestUtils.invokeMethod(service, "collectEvidence",
+                List.of("anchor ownerToken=anchor-secret"), null);
+
+        assertNotNull(evidence);
+        assertTrue(evidence.isEmpty());
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.thumbnail.suppressed"));
+        assertEquals("evidence.webSearch", TraceStore.get("uaw.thumbnail.suppressed.stage"));
+        assertEquals(1L, TraceStore.getLong("uaw.thumbnail.suppressed.evidence.webSearch"));
+        assertEquals("IllegalStateException",
+                TraceStore.get("uaw.thumbnail.suppressed.evidence.webSearch.errorType"));
+        assertNotNull(TraceStore.get("uaw.thumbnail.suppressed.evidence.webSearch.errorHash"));
+        assertTrue((Integer) TraceStore.get("uaw.thumbnail.suppressed.evidence.webSearch.errorLength") > 0);
+        String trace = TraceStore.getAll().toString();
+        assertFalse(trace.contains("web-secret"));
+        assertFalse(trace.contains("anchor-secret"));
+    }
+
+    @Test
+    void thumbnailAnchorLlmFailureLeavesRedactedTraceBreadcrumb() {
+        ChatModel failingChatModel = prompt -> {
+            throw new IllegalStateException("ownerToken=anchor-llm-secret");
+        };
+        UawThumbnailService service = new UawThumbnailService(
+                new UawThumbnailProperties(), null, null, new QueryKeywordPromptBuilder(),
+                failingChatModel, null, null);
+
+        List<?> anchors = ReflectionTestUtils.invokeMethod(service, "generateAnchors",
+                "topic ownerToken=topic-secret", null);
+
+        assertNotNull(anchors);
+        assertFalse(anchors.isEmpty());
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.thumbnail.suppressed"));
+        assertEquals("anchors.llm", TraceStore.get("uaw.thumbnail.suppressed.stage"));
+        assertEquals(1L, TraceStore.getLong("uaw.thumbnail.suppressed.anchors.llm"));
+        assertEquals("IllegalStateException",
+                TraceStore.get("uaw.thumbnail.suppressed.anchors.llm.errorType"));
+        assertNotNull(TraceStore.get("uaw.thumbnail.suppressed.anchors.llm.errorHash"));
+        assertTrue((Integer) TraceStore.get("uaw.thumbnail.suppressed.anchors.llm.errorLength") > 0);
+        String trace = TraceStore.getAll().toString();
+        assertFalse(trace.contains("anchor-llm-secret"));
+        assertFalse(trace.contains("topic-secret"));
+    }
+
+    @Test
+    void thumbnailRenderFailureLeavesRedactedTraceBreadcrumb() {
+        ChatModel failingChatModel = prompt -> {
+            throw new IllegalStateException("ownerToken=render-secret");
+        };
+        UawThumbnailService service = new UawThumbnailService(
+                new UawThumbnailProperties(), null, null, new QueryKeywordPromptBuilder(),
+                failingChatModel, null, null);
+
+        Object rendered = ReflectionTestUtils.invokeMethod(service, "render",
+                "topic ownerToken=topic-secret",
+                "entity",
+                List.of("anchor"),
+                List.of(new UawThumbnailService.EvidenceItem(
+                        "anchor", "title", "https://example.test/source", "quote")),
+                null);
+
+        assertNull(rendered);
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.thumbnail.suppressed"));
+        assertEquals("render.failed", TraceStore.get("uaw.thumbnail.suppressed.stage"));
+        assertEquals(1L, TraceStore.getLong("uaw.thumbnail.suppressed.render.failed"));
+        assertEquals("IllegalStateException",
+                TraceStore.get("uaw.thumbnail.suppressed.render.failed.errorType"));
+        assertNotNull(TraceStore.get("uaw.thumbnail.suppressed.render.failed.errorHash"));
+        assertTrue((Integer) TraceStore.get("uaw.thumbnail.suppressed.render.failed.errorLength") > 0);
+        String trace = TraceStore.getAll().toString();
+        assertFalse(trace.contains("render-secret"));
+        assertFalse(trace.contains("topic-secret"));
+    }
+
+    @Test
+    void thumbnailGraphRagEventPublishFailureLeavesRedactedTraceBreadcrumb() {
+        org.springframework.context.ApplicationEventPublisher failingPublisher = event -> {
+            throw new IllegalStateException("ownerToken=event-secret");
+        };
+        UawThumbnailService service = new UawThumbnailService(
+                new UawThumbnailProperties(), null, null, null, null, null, failingPublisher);
+        UawThumbnailService.ThumbnailResult result = new UawThumbnailService.ThumbnailResult(
+                "plan",
+                "topic",
+                "entity",
+                "caption",
+                List.of("anchor ownerToken=anchor-secret"),
+                List.of(),
+                0.8d);
+
+        ReflectionTestUtils.invokeMethod(service, "publishGraphRagEvent", result);
+
+        assertEquals(Boolean.TRUE, TraceStore.get("uaw.thumbnail.suppressed"));
+        assertEquals("event.graphRagPublish", TraceStore.get("uaw.thumbnail.suppressed.stage"));
+        assertEquals(1L, TraceStore.getLong("uaw.thumbnail.suppressed.event.graphRagPublish"));
+        assertEquals("IllegalStateException",
+                TraceStore.get("uaw.thumbnail.suppressed.event.graphRagPublish.errorType"));
+        assertNotNull(TraceStore.get("uaw.thumbnail.suppressed.event.graphRagPublish.errorHash"));
+        assertTrue((Integer) TraceStore.get("uaw.thumbnail.suppressed.event.graphRagPublish.errorLength") > 0);
+        String trace = TraceStore.getAll().toString();
+        assertFalse(trace.contains("event-secret"));
+        assertFalse(trace.contains("anchor-secret"));
     }
 
     @Test

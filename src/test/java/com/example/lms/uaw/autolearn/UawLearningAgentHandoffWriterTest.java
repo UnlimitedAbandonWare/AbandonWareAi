@@ -8,17 +8,44 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.jar.Attributes;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class UawLearningAgentHandoffWriterTest {
+public class UawLearningAgentHandoffWriterTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @TempDir
@@ -94,6 +121,51 @@ class UawLearningAgentHandoffWriterTest {
         assertEquals(true, acceptedSummary.get("exists"));
     }
 
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+            "synthetic_email, al07@example.invalid",
+            "synthetic_phone, +1-202-555-0147",
+            "synthetic_address_like, 17 Synthetic Placeholder Road"
+    })
+    void syntheticCategoriesTraverseBothTemporarySerializationBoundaries(
+            String category, String marker) throws Exception {
+        // Characterize admission and persistence; the normative PII policy is still pending.
+        UawDatasetWriter datasetWriter = new UawDatasetWriter(
+                new UawDatasetTrainingDataFilter(new UawDatasetFilterProperties(), null));
+        UawLearningAgentHandoffWriter handoffWriter = new UawLearningAgentHandoffWriter(props());
+        Path training = tempDir.resolve("train_rag.jsonl");
+        String question = "Explain validation of this entirely synthetic record: " + marker;
+        String answer = "Validate the supplied synthetic record, preserve its evidence, "
+                + "and check the result before admitting a training sample.";
+        UawDatasetWriter.TrainingMetadata accepted =
+                metadata(LearningSampleValidationMetadata.empty(), true);
+
+        boolean admitted = datasetWriter.append(training.toFile(), "al07-synthetic", question,
+                answer, "synthetic-model", 3, "synthetic-session", accepted);
+        handoffWriter.recordSample("synthetic-session", "al07-synthetic", question, answer,
+                "synthetic-model", 3, accepted, admitted);
+
+        assertTrue(admitted, "synthetic sample must reach the real serialization boundary");
+        List<String> trainingRows = Files.readAllLines(training, StandardCharsets.UTF_8);
+        List<String> handoffRows = Files.readAllLines(
+                tempDir.resolve("handoff/accepted.jsonl"), StandardCharsets.UTF_8);
+        assertEquals(1, trainingRows.size());
+        assertEquals(1, handoffRows.size());
+        assertFalse(Files.exists(tempDir.resolve("handoff/rejected.jsonl")));
+        assertTrue(objectMapper.readTree(trainingRows.get(0)).isObject());
+        JsonNode handoff = objectMapper.readTree(handoffRows.get(0));
+        assertEquals("ACCEPTED", handoff.path("decision").asText());
+        assertEquals("ACCEPTED", handoff.path("outcome").asText());
+        assertTrue(handoff.path("writerOk").asBoolean());
+
+        // Emit category/count observations only, never the synthetic marker or serialized rows.
+        System.out.printf("AL07_CHAR category=%s admitted=%d trainingRows=%d acceptedRows=%d "
+                        + "rejectedRows=0 trainingMarkerRows=%d handoffMarkerRows=%d%n",
+                category, admitted ? 1 : 0, trainingRows.size(), handoffRows.size(),
+                trainingRows.stream().filter(row -> row.contains(marker)).count(),
+                handoffRows.stream().filter(row -> row.contains(marker)).count());
+    }
+
     @Test
     void recordSampleClassifiesQuarantineBeforeWriterFailure() throws Exception {
         UawAutolearnProperties props = props();
@@ -139,6 +211,75 @@ class UawLearningAgentHandoffWriterTest {
         assertEquals("SKIPPED", node.path("decision").asText());
         assertEquals("SKIPPED", node.path("outcome").asText());
         assertEquals("insufficient_evidence", node.path("failureReason").asText());
+    }
+
+    @Test
+    void recordHeldSamplePersistsOnlyPrehashedEvidence() throws Exception {
+        UawAutolearnProperties props = props();
+        UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(props);
+        String session = "HELD_PRIVATE_SESSION_MARKER";
+        String dataset = "HELD_PRIVATE_DATASET_MARKER";
+        String question = "HELD_PRIVATE_QUESTION_MARKER";
+        String answer = "HELD_PRIVATE_ANSWER_MARKER";
+        String model = "HELD_PRIVATE_MODEL_MARKER";
+        String sample = question + '\0' + answer + '\0' + model;
+
+        writer.recordHeldSample(
+                SafeRedactor.hashValue(sample),
+                SafeRedactor.hashValue(session),
+                SafeRedactor.hashValue(dataset),
+                SafeRedactor.hashValue(question),
+                SafeRedactor.hashValue(answer),
+                SafeRedactor.hashValue(model),
+                7);
+
+        String line = Files.readString(tempDir.resolve("handoff/rejected.jsonl"), StandardCharsets.UTF_8).trim();
+        JsonNode node = objectMapper.readTree(line);
+        assertEquals("uaw_autolearn_hold", node.path("type").asText());
+        assertEquals("HOLD", node.path("decision").asText());
+        assertEquals("HELD", node.path("outcome").asText());
+        assertEquals("rag_control_hold", node.path("failureReason").asText());
+        assertEquals(SafeRedactor.hashValue(sample), node.path("sampleHash").asText());
+        assertEquals(SafeRedactor.hashValue(session), node.path("sessionHash").asText());
+        assertEquals(SafeRedactor.hashValue(dataset), node.path("datasetHash").asText());
+        assertEquals(SafeRedactor.hashValue(question), node.path("questionHash").asText());
+        assertEquals(SafeRedactor.hashValue(answer), node.path("answerHash").asText());
+        assertEquals(SafeRedactor.hashValue(model), node.path("modelHash").asText());
+        assertEquals(7, node.path("evidenceCount").asInt());
+        assertFalse(node.path("containsFullText").asBoolean(true));
+        for (String marker : java.util.List.of(session, dataset, question, answer, model)) {
+            assertFalse(line.contains(marker));
+        }
+        for (String forbidden : java.util.List.of(
+                "questionPreview", "answerPreview", "dataset", "model", "branch", "provider",
+                "disabledReason", "validation", "traceHints")) {
+            assertFalse(node.has(forbidden), forbidden);
+        }
+        Method api = UawLearningAgentHandoffWriter.class.getDeclaredMethod(
+                "recordHeldSample",
+                String.class, String.class, String.class, String.class, String.class, String.class, int.class);
+        assertFalse(Modifier.isPublic(api.getModifiers()));
+        assertFalse(Modifier.isProtected(api.getModifiers()));
+        assertFalse(Modifier.isPrivate(api.getModifiers()));
+    }
+
+    @Test
+    void recordHeldSampleRejectsNonHashInputs() throws Exception {
+        UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(props());
+        String raw = "RAW_HELD_INPUT_MUST_NOT_PERSIST";
+
+        writer.recordHeldSample(raw, raw, raw, raw, raw, raw, -7);
+
+        String line = Files.readString(tempDir.resolve("handoff/rejected.jsonl"), StandardCharsets.UTF_8).trim();
+        JsonNode node = objectMapper.readTree(line);
+        assertFalse(line.contains(raw));
+        assertEquals("", node.path("sampleHash").asText());
+        assertEquals("", node.path("sessionHash").asText());
+        assertEquals("", node.path("datasetHash").asText());
+        assertEquals("", node.path("questionHash").asText());
+        assertEquals("", node.path("answerHash").asText());
+        assertEquals("", node.path("modelHash").asText());
+        assertEquals(0, node.path("evidenceCount").asInt());
     }
 
     @Test
@@ -315,14 +456,293 @@ class UawLearningAgentHandoffWriterTest {
         assertEquals(SafeRedactor.hashValue(datasetPath), latestCycle.path("datasetPathHash").asText());
     }
 
+    @Test
+    void lockTimeoutProducesHoldWithoutMutation() throws Exception {
+        Path root = tempDir.resolve("timeout-handoff");
+        Files.createDirectories(root);
+        Path sidecar = root.resolve(".uaw-agent-handoff.lock");
+        try (FileChannel channel = FileChannel.open(sidecar,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             FileLock ignored = channel.lock()) {
+            UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(
+                    propsFor(root), 50L, Files::move,
+                    nanos -> TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos)));
+
+            long started = System.nanoTime();
+            recordSkipped(writer, "timeout");
+            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+            assertTrue(elapsedMillis < 2_000L, "lock wait must remain bounded");
+            assertEquals("write_held", TraceStore.get("uaw.agent.handoff.status"));
+            assertEquals("HOLD", TraceStore.get("uaw.agent.handoff.lastDecision"));
+            assertEquals("lock_timeout", TraceStore.get("uaw.agent.handoff.holdReason"));
+            assertFalse(Files.exists(root.resolve("rejected.jsonl")));
+            assertFalse(Files.exists(root.resolve("manifest.json")));
+        }
+    }
+
+    @Test
+    void interruptedLockWaitProducesHoldAndRestoresInterrupt() throws Exception {
+        Path root = tempDir.resolve("interrupted-handoff");
+        Files.createDirectories(root);
+        CountDownLatch waiting = new CountDownLatch(1);
+        AtomicBoolean restored = new AtomicBoolean(false);
+        AtomicReference<Object> status = new AtomicReference<>();
+        AtomicReference<Object> holdReason = new AtomicReference<>();
+        Path sidecar = root.resolve(".uaw-agent-handoff.lock");
+        try (FileChannel channel = FileChannel.open(sidecar,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             FileLock ignored = channel.lock()) {
+            UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(
+                    propsFor(root), 10_000L, Files::move, nanos -> {
+                waiting.countDown();
+                TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos));
+            });
+            Thread thread = new Thread(() -> {
+                recordSkipped(writer, "interrupted");
+                restored.set(Thread.currentThread().isInterrupted());
+                status.set(TraceStore.get("uaw.agent.handoff.status"));
+                holdReason.set(TraceStore.get("uaw.agent.handoff.holdReason"));
+            }, "uaw-handoff-interrupted-test");
+
+            thread.start();
+            assertTrue(waiting.await(5, TimeUnit.SECONDS));
+            thread.interrupt();
+            thread.join(5_000L);
+
+            assertFalse(thread.isAlive());
+            assertTrue(restored.get(), "interrupt flag must be restored before returning");
+            assertEquals("write_held", status.get());
+            assertEquals("interrupted", holdReason.get());
+            assertFalse(Files.exists(root.resolve("rejected.jsonl")));
+            assertFalse(Files.exists(root.resolve("manifest.json")));
+        }
+    }
+
+    @Test
+    void concurrentWriterInstancesAppendExactlyOnceAndKeepManifestValid() throws Exception {
+        Path root = tempDir.resolve("concurrent-handoff");
+        int writers = 8;
+        int recordsPerWriter = 8;
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(writers);
+        try {
+            List<Future<?>> futures = new java.util.ArrayList<>();
+            for (int writerIndex = 0; writerIndex < writers; writerIndex++) {
+                int index = writerIndex;
+                futures.add(pool.submit(() -> {
+                    UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(
+                            propsFor(root), 10_000L, Files::move,
+                            nanos -> TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos)));
+                    start.await();
+                    for (int record = 0; record < recordsPerWriter; record++) {
+                        recordSkipped(writer, "writer-" + index + "-record-" + record);
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (Future<?> future : futures) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertJsonlRecords(root.resolve("rejected.jsonl"), writers * recordsPerWriter);
+        objectMapper.readTree(Files.readString(root.resolve("manifest.json"), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void twoProcessesAppendExactlyOnceAndLeaveValidManifest() throws Exception {
+        Path root = tempDir.resolve("process-handoff");
+        Process first = startProbe("write", root.toString(), "first", "20");
+        Process second = startProbe("write", root.toString(), "second", "20");
+        assertProcessExit(first, 0);
+        assertProcessExit(second, 0);
+
+        assertJsonlRecords(root.resolve("rejected.jsonl"), 40);
+        objectMapper.readTree(Files.readString(root.resolve("manifest.json"), StandardCharsets.UTF_8));
+        assertTrue(Files.exists(root.resolve(".uaw-agent-handoff.lock")));
+    }
+
+    @Test
+    void postWriteHashMatchesExactJsonlBytes() throws Exception {
+        Path root = tempDir.resolve("receipt-handoff");
+        UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(propsFor(root));
+
+        recordSkipped(writer, "receipt");
+
+        byte[] bytes = Files.readAllBytes(root.resolve("rejected.jsonl"));
+        String expected = "sha256:" + HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(bytes));
+        assertEquals(expected, TraceStore.get("uaw.agent.handoff.lastRecordHash"));
+        assertEquals(bytes.length, TraceStore.get("uaw.agent.handoff.lastRecordBytes"));
+        assertTrue(String.valueOf(TraceStore.get("uaw.agent.handoff.lastManifestHash"))
+                .matches("sha256:[a-f0-9]{64}"));
+    }
+
+    @Test
+    void atomicMoveFallbackIsExplicitAndGenericFailureDoesNotDowngrade() throws Exception {
+        Path fallbackRoot = tempDir.resolve("fallback-handoff");
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        UawLearningAgentHandoffWriter fallbackWriter = new UawLearningAgentHandoffWriter(
+                propsFor(fallbackRoot), 2_000L, (source, target, options) -> {
+            int call = fallbackCalls.incrementAndGet();
+            if (call == 1 && Arrays.asList(options).contains(StandardCopyOption.ATOMIC_MOVE)) {
+                throw new AtomicMoveNotSupportedException(source.toString(), target.toString(), "test fallback");
+            }
+            return Files.move(source, target, options);
+        }, nanos -> TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos)));
+
+        recordSkipped(fallbackWriter, "fallback");
+
+        assertEquals(2, fallbackCalls.get());
+        assertEquals("replace_non_atomic", TraceStore.get("uaw.agent.handoff.manifestMove"));
+        objectMapper.readTree(Files.readString(fallbackRoot.resolve("manifest.json"), StandardCharsets.UTF_8));
+
+        TraceStore.clear();
+        Path deniedRoot = tempDir.resolve("denied-handoff");
+        Files.createDirectories(deniedRoot);
+        Path manifest = deniedRoot.resolve("manifest.json");
+        Files.writeString(manifest, "{\"old\":true}", StandardCharsets.UTF_8);
+        AtomicInteger deniedCalls = new AtomicInteger();
+        UawLearningAgentHandoffWriter deniedWriter = new UawLearningAgentHandoffWriter(
+                propsFor(deniedRoot), 2_000L, (source, target, options) -> {
+            deniedCalls.incrementAndGet();
+            throw new AccessDeniedException(target.toString());
+        }, nanos -> TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos)));
+
+        recordSkipped(deniedWriter, "denied");
+
+        assertEquals(1, deniedCalls.get(), "generic move failure must not trigger a fallback");
+        assertEquals("sample_recorded_manifest_failed", TraceStore.get("uaw.agent.handoff.status"));
+        assertTrue(String.valueOf(TraceStore.get("uaw.agent.handoff.lastRecordHash"))
+                .matches("sha256:[a-f0-9]{64}"));
+        assertTrue(objectMapper.readTree(Files.readString(manifest, StandardCharsets.UTF_8))
+                .path("old").asBoolean());
+    }
+
+    @Test
+    void crashedOwnerReleasesLockAndForeignTempIsNotClaimed() throws Exception {
+        Path root = tempDir.resolve("crash-handoff");
+        Process crashed = startProbe("crash", root.toString());
+        assertProcessExit(crashed, 23);
+        Path foreignTemp = root.resolve(".manifest.json.foreign.tmp");
+        assertTrue(Files.exists(root.resolve("probe.ready")));
+        assertTrue(Files.exists(foreignTemp));
+
+        UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(
+                propsFor(root), 10_000L, Files::move,
+                nanos -> TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos)));
+        recordSkipped(writer, "after-crash");
+
+        assertEquals("sample_recorded", TraceStore.get("uaw.agent.handoff.status"));
+        assertTrue(Files.exists(foreignTemp), "another process's temp must remain untouched");
+        assertTrue(Files.exists(root.resolve(".uaw-agent-handoff.lock")));
+    }
+
     private UawAutolearnProperties props() {
+        return propsFor(tempDir.resolve("handoff"));
+    }
+
+    private static UawAutolearnProperties propsFor(Path root) {
         UawAutolearnProperties props = new UawAutolearnProperties();
-        props.getAgentHandoff().setRootPath(tempDir.resolve("handoff").toString());
-        props.getAgentHandoff().setAcceptedPath(tempDir.resolve("handoff/accepted.jsonl").toString());
-        props.getAgentHandoff().setRejectedPath(tempDir.resolve("handoff/rejected.jsonl").toString());
-        props.getAgentHandoff().setCyclePath(tempDir.resolve("handoff/cycles.jsonl").toString());
-        props.getAgentHandoff().setManifestPath(tempDir.resolve("handoff/manifest.json").toString());
+        props.getAgentHandoff().setRootPath(root.toString());
+        props.getAgentHandoff().setAcceptedPath(root.resolve("accepted.jsonl").toString());
+        props.getAgentHandoff().setRejectedPath(root.resolve("rejected.jsonl").toString());
+        props.getAgentHandoff().setCyclePath(root.resolve("cycles.jsonl").toString());
+        props.getAgentHandoff().setManifestPath(root.resolve("manifest.json").toString());
         return props;
+    }
+
+    private static void recordSkipped(UawLearningAgentHandoffWriter writer, String marker) {
+        writer.recordSkippedSample(
+                marker + "-session", "uaw-train", marker + "-question", "", "", 0,
+                null, "SKIPPED", "insufficient_evidence");
+    }
+
+    private void assertJsonlRecords(Path path, int expectedCount) throws Exception {
+        List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8).stream()
+                .filter(line -> !line.isBlank())
+                .toList();
+        assertEquals(expectedCount, lines.size());
+        Set<String> hashes = new HashSet<>();
+        for (String line : lines) {
+            JsonNode node = objectMapper.readTree(line);
+            assertEquals("uaw_autolearn_sample", node.path("type").asText());
+            assertTrue(hashes.add(node.path("sampleHash").asText()), "sample hash must be unique");
+        }
+    }
+
+    private static Process startProbe(String... arguments) throws Exception {
+        Path javaExecutable = Path.of(System.getProperty("java.home"), "bin",
+                System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java");
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        String classPath = Arrays.stream(System.getProperty("java.class.path")
+                        .split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)))
+                .map(entry -> Path.of(entry).toUri().toASCIIString())
+                .collect(java.util.stream.Collectors.joining(" "));
+        manifest.getMainAttributes().put(Attributes.Name.CLASS_PATH, classPath);
+        Path classPathJar = Files.createTempFile("uaw-handoff-probe-classpath-", ".jar");
+        try (JarOutputStream ignored = new JarOutputStream(Files.newOutputStream(classPathJar), manifest)) {
+            // The manifest-only JAR keeps the Windows child-process command line bounded.
+        }
+        classPathJar.toFile().deleteOnExit();
+        List<String> command = new java.util.ArrayList<>();
+        command.add(javaExecutable.toString());
+        command.add("-cp");
+        command.add(classPathJar.toString());
+        command.add(ProcessProbe.class.getName());
+        command.addAll(List.of(arguments));
+        return new ProcessBuilder(command).redirectErrorStream(true).start();
+    }
+
+    private static void assertProcessExit(Process process, int expected) throws Exception {
+        try {
+            assertTrue(process.waitFor(30, TimeUnit.SECONDS), "probe process timed out");
+            assertEquals(expected, process.exitValue());
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
+    public static final class ProcessProbe {
+        private ProcessProbe() {
+        }
+
+        public static void main(String[] args) throws Exception {
+            String mode = args[0];
+            Path root = Path.of(args[1]);
+            if ("write".equals(mode)) {
+                String prefix = args[2];
+                int count = Integer.parseInt(args[3]);
+                UawLearningAgentHandoffWriter writer = new UawLearningAgentHandoffWriter(
+                        propsFor(root), 10_000L, Files::move,
+                        nanos -> TimeUnit.NANOSECONDS.sleep(Math.max(1L, nanos)));
+                for (int index = 0; index < count; index++) {
+                    recordSkipped(writer, prefix + '-' + index);
+                    if (!"sample_recorded".equals(TraceStore.get("uaw.agent.handoff.status"))) {
+                        System.exit(2);
+                    }
+                }
+                return;
+            }
+            if (!"crash".equals(mode)) {
+                System.exit(3);
+            }
+            Files.createDirectories(root);
+            try (FileChannel channel = FileChannel.open(root.resolve(".uaw-agent-handoff.lock"),
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                 FileLock ignored = channel.lock()) {
+                Files.writeString(root.resolve(".manifest.json.foreign.tmp"), "{}", StandardCharsets.UTF_8);
+                Files.writeString(root.resolve("probe.ready"), "ready", StandardCharsets.UTF_8);
+                Runtime.getRuntime().halt(23);
+            }
+        }
     }
 
     private static UawDatasetWriter.TrainingMetadata metadata(LearningSampleValidationMetadata validation,
