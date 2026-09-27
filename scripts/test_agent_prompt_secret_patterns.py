@@ -16,6 +16,7 @@ SECRET_SCAN_AGENT_IDS = {
     "demo1_desktop_patchdrop_janitor",
     "demo1_desktop_referee_ablation_postprocess",
     "demo1_dynamic_rag_autonomous_patch_directive",
+    "demo1_claude_peers_web_probe_agent_upgrade_5h",
     "demo1_three_node_smb_codex",
     "demo1_db_schema_source_patch_9h",
     "demo1_graphrag_kg_macmini_patchdrop",
@@ -48,6 +49,23 @@ def load_manifest():
         return yaml.safe_load(fh)
 
 
+def render_agent_prompt(manifest_root, agent):
+    parts = []
+    for part_kind in agent.get("merge", {}).get("order", ["trait", "system"]):
+        if part_kind == "trait":
+            configured_paths = agent.get("traits", [])
+        elif part_kind == "system":
+            configured_paths = [agent["system"]]
+        else:
+            continue
+        for configured_path in configured_paths:
+            path = Path(configured_path)
+            if not path.is_absolute():
+                path = manifest_root / path
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n\n".join(parts)
+
+
 class AgentPromptSecretPatternTest(unittest.TestCase):
     def test_secret_scan_prompts_include_supabase_key_patterns(self):
         manifest_root = MANIFEST.parent
@@ -57,15 +75,14 @@ class AgentPromptSecretPatternTest(unittest.TestCase):
             with self.subTest(agent_id=agent_id):
                 agent = agents[agent_id]
                 source_path = manifest_root / agent["system"]
-                output_path = manifest_root / agent["output"]["path"]
 
                 source = source_path.read_text(encoding="utf-8")
-                output = output_path.read_text(encoding=agent["output"].get("encoding", "utf-8"))
+                rendered = render_agent_prompt(manifest_root, agent)
 
                 self.assertRegex(source, SUPABASE_REGEX_FRAGMENT)
                 self.assertRegex(source, SUPABASE_PAT_REGEX_FRAGMENT)
-                self.assertRegex(output, SUPABASE_REGEX_FRAGMENT)
-                self.assertRegex(output, SUPABASE_PAT_REGEX_FRAGMENT)
+                self.assertRegex(rendered, SUPABASE_REGEX_FRAGMENT)
+                self.assertRegex(rendered, SUPABASE_PAT_REGEX_FRAGMENT)
 
     def test_standalone_secret_scan_docs_include_supabase_key_patterns(self):
         for relative_path in sorted(ADDITIONAL_SECRET_SCAN_DOCS):

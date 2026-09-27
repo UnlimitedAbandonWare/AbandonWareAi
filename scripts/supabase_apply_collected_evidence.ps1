@@ -10,6 +10,8 @@ param(
 
     [string]$OutputDir = '',
 
+    [switch]$OrchestratedByGoalNext,
+
     [switch]$Help
 )
 
@@ -20,6 +22,10 @@ if ($Help) {
 [AWX][supabase][apply-collected] usage:
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\supabase_apply_collected_evidence.ps1
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\supabase_apply_collected_evidence.ps1 -Root <repo-root> -ResultsPath data\db-gap-report\supabase-query-results.json -AdvisorsPath data\db-gap-report\supabase-advisors.json
+
+Internal orchestration:
+  -OrchestratedByGoalNext keeps import and DB-gap checks here, then defers source-health and completion-audit gates to goal_next_auto.
+  Omit this switch for standalone/manual verification.
 
 Required external evidence before this can close:
   SUPABASE_PROJECT_REF present
@@ -250,6 +256,43 @@ function Sync-ReadOnlySnapshotBundle {
     return [pscustomobject]$result
 }
 
+function Get-CollectedEvidenceFileSafety {
+    param([string[]]$Paths = @())
+    $result = [ordered]@{
+        FileCount = 0
+        HighConfidenceSecretHits = 0
+        BearerPatternHits = 0
+        RawJdbcUrlHits = 0
+        SecretHits = 0
+        MutationAllowedTrueHits = 0
+        Unsafe = $false
+    }
+    $seen = @{}
+    foreach ($path in @($Paths)) {
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+            continue
+        }
+        try {
+            $resolved = (Resolve-Path -LiteralPath $path).Path
+        } catch {
+            continue
+        }
+        if ($seen.ContainsKey($resolved)) {
+            continue
+        }
+        $seen[$resolved] = $true
+        $result.FileCount++
+        $text = Get-Content -Raw -LiteralPath $resolved
+        $result.HighConfidenceSecretHits += Count-Pattern -Text $text -Pattern 'sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}'
+        $result.BearerPatternHits += Count-Pattern -Text $text -Pattern 'Bearer\s+[A-Za-z0-9._-]+'
+        $result.RawJdbcUrlHits += Count-Pattern -Text $text -Pattern '(?i:jdbc:[A-Za-z0-9_+.-]*://)'
+        $result.MutationAllowedTrueHits += Count-Pattern -Text $text -Pattern '"mutationAllowed"\s*:\s*true'
+    }
+    $result.SecretHits = $result.HighConfidenceSecretHits + $result.BearerPatternHits + $result.RawJdbcUrlHits
+    $result.Unsafe = $result.SecretHits -gt 0 -or $result.MutationAllowedTrueHits -gt 0
+    return [pscustomobject]$result
+}
+
 $Root = Resolve-RepoRoot $Root
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = Join-Path $Root 'var\codex-smoke\supabase-apply-collected-evidence'
@@ -269,6 +312,36 @@ $SnapshotPath = Resolve-RepoPath -ProjectRoot $Root -PathText $SnapshotPath
 $ResultsPath = Resolve-RepoPath -ProjectRoot $Root -PathText $ResultsPath
 $AdvisorsPath = Resolve-RepoPath -ProjectRoot $Root -PathText $AdvisorsPath
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+
+$collectedEvidenceSafety = Get-CollectedEvidenceFileSafety -Paths @($SnapshotPath, $ResultsPath, $AdvisorsPath)
+if ($collectedEvidenceSafety.Unsafe) {
+    $summaryPath = Join-Path $OutputDir 'supabase-apply-collected.summary.json'
+    Write-JsonFile -Path $summaryPath -Value ([ordered]@{
+        schemaVersion = 'awx.supabase.apply_collected_evidence.summary.v1'
+        ok = $false
+        decision = 'secret-leak-risk'
+        importDecision = 'not_run_collected_evidence_unsafe'
+        schemaSnapshotComplete = $false
+        resultSetComplete = $false
+        collectedEvidenceUnsafe = $true
+        collectedEvidenceFileCount = $collectedEvidenceSafety.FileCount
+        collectedEvidenceSecretHits = $collectedEvidenceSafety.SecretHits
+        collectedEvidenceHighConfidenceSecretHits = $collectedEvidenceSafety.HighConfidenceSecretHits
+        collectedEvidenceBearerPatternHits = $collectedEvidenceSafety.BearerPatternHits
+        collectedEvidenceRawJdbcUrlHits = $collectedEvidenceSafety.RawJdbcUrlHits
+        collectedEvidenceMutationAllowedTrueHits = $collectedEvidenceSafety.MutationAllowedTrueHits
+        secretHits = $collectedEvidenceSafety.SecretHits
+        rawSecretPatternHits = $collectedEvidenceSafety.SecretHits
+        mutationAllowed = $collectedEvidenceSafety.MutationAllowedTrueHits -gt 0
+        resultsPathPresent = Test-Path -LiteralPath $ResultsPath
+        advisorsPathPresent = Test-Path -LiteralPath $AdvisorsPath
+        nextActions = @('replace_collected_evidence_with_redacted_readonly_results','rerun_supabase_schema_snapshot_import')
+        evidenceNeeded = @('collected_evidence_unsafe')
+    })
+    Write-Host "[AWX][supabase][apply-collected] collectedEvidenceUnsafe=True secretHits=$($collectedEvidenceSafety.SecretHits) mutationAllowedTrueHits=$($collectedEvidenceSafety.MutationAllowedTrueHits)"
+    Write-Host '[AWX][supabase][apply-collected] secret-leak-risk'
+    exit 4
+}
 
 $snapshotBundleSync = Sync-ReadOnlySnapshotBundle -ProjectRoot $Root -SnapshotPath $SnapshotPath
 
@@ -291,21 +364,40 @@ $dbGapRoot = Join-Path $Root 'main\java'
 $dbGapOutput = Join-Path $Root 'data\db-gap-report'
 $dbGap = Invoke-PythonCapture -ProjectRoot $Root -ScriptPath $dbGapScript -Arguments @('--root', $dbGapRoot, '--output', $dbGapOutput, '--format', 'both') -LogPath $dbGapLog
 
+$derivedGateOwner = if ($OrchestratedByGoalNext.IsPresent) { 'goal_next_auto' } else { 'supabase_apply_collected_evidence' }
+$sourceHealthStatus = if ($OrchestratedByGoalNext.IsPresent) { 'deferred_to_goal_next' } else { 'executed' }
+$completionAuditStatus = if ($OrchestratedByGoalNext.IsPresent) { 'deferred_to_goal_next' } else { 'executed' }
+$sourceHealthExit = $null
+$completionAuditExit = $null
+
 $scorecardScript = Join-Path $Root 'scripts\source_health_scorecard.py'
 $scorecardLog = Join-Path $OutputDir 'source-health-scorecard.log'
 $scorecardOutput = Join-Path $Root 'verification\source-health-scorecard.json'
-$scorecard = Invoke-PythonCapture -ProjectRoot $Root -ScriptPath $scorecardScript -Arguments @('--root', $Root, '--output', $scorecardOutput) -LogPath $scorecardLog
-
 $auditScript = Join-Path $Root 'scripts\awx_mcp_completion_audit.py'
 $auditLog = Join-Path $OutputDir 'awx-mcp-completion-audit.log'
 $auditPath = Join-Path $OutputDir 'awx-mcp-completion-audit.result.json'
-$audit = Invoke-PythonCapture -ProjectRoot $Root -ScriptPath $auditScript -Arguments @('--root', $Root, '--output', $auditPath) -LogPath $auditLog
-if (-not [string]::IsNullOrWhiteSpace($audit.Output)) {
-    Set-Content -LiteralPath $auditPath -Value $audit.Output -Encoding UTF8
+
+if ($OrchestratedByGoalNext.IsPresent) {
+    foreach ($staleDerivedArtifact in @($scorecardLog, $auditLog, $auditPath)) {
+        Remove-Item -LiteralPath $staleDerivedArtifact -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    $scorecard = Invoke-PythonCapture -ProjectRoot $Root -ScriptPath $scorecardScript -Arguments @('--root', $Root, '--output', $scorecardOutput) -LogPath $scorecardLog
+    $sourceHealthExit = [int]$scorecard.ExitCode
+
+    $audit = Invoke-PythonCapture -ProjectRoot $Root -ScriptPath $auditScript -Arguments @('--root', $Root, '--output', $auditPath) -LogPath $auditLog
+    $completionAuditExit = [int]$audit.ExitCode
+    if (-not [string]::IsNullOrWhiteSpace($audit.Output)) {
+        Set-Content -LiteralPath $auditPath -Value $audit.Output -Encoding UTF8
+    }
 }
 
 $combined = @()
-foreach ($p in @($importPath, $dbGapLog, $scorecardLog, $auditLog, $auditPath)) {
+$combinedPaths = @($importPath, $dbGapLog)
+if (-not $OrchestratedByGoalNext.IsPresent) {
+    $combinedPaths += @($scorecardLog, $auditLog, $auditPath)
+}
+foreach ($p in $combinedPaths) {
     if (Test-Path -LiteralPath $p) {
         $combined += Get-Content -Raw -LiteralPath $p
     }
@@ -340,6 +432,9 @@ $requiredResultNames = @(
     'views',
     'views_missing_security_invoker',
     'exposed_security_definer_functions',
+    'shadow_memory_candidate_tables',
+    'shadow_memory_candidate_columns',
+    'shadow_memory_metadata_fingerprints',
     'extensions'
 )
 $recommendedNextActions = @(
@@ -370,18 +465,39 @@ foreach ($name in @($dataApiEvidenceMissing)) {
 }
 $resultsPathPresent = Test-Path -LiteralPath $ResultsPath
 $advisorsPathPresent = Test-Path -LiteralPath $AdvisorsPath
+$projectRefEnvPresent = -not [string]::IsNullOrWhiteSpace($env:SUPABASE_PROJECT_REF)
+$accessTokenEnvPresent = -not [string]::IsNullOrWhiteSpace($env:SUPABASE_ACCESS_TOKEN)
+$mcpOAuthSupported = $true
+$supportedAuthModes = @('supabase_mcp_oauth_session', 'manual_SUPABASE_ACCESS_TOKEN')
+$envPreflightStatus = if ($projectRefEnvPresent -and $accessTokenEnvPresent) {
+    'project_ref_present_manual_token_present'
+} elseif ($projectRefEnvPresent) {
+    'project_ref_present_mcp_auth_pending'
+} elseif ($accessTokenEnvPresent) {
+    'missing_project_ref_manual_token_present'
+} else {
+    'missing_project_ref_and_mcp_auth'
+}
+$readOnlyMcpEndpointTemplate = 'https://mcp.supabase.com/mcp?project_ref=${SUPABASE_PROJECT_REF}&read_only=true&features=database,debugging,docs'
 if (-not $resultsPathPresent) {
     $safeEvidenceNeeded = Add-SafeEvidenceNeededItem -Items $safeEvidenceNeeded -Text 'results_path_missing'
 }
 if (-not $advisorsPathPresent) {
     $safeEvidenceNeeded = Add-SafeEvidenceNeededItem -Items $safeEvidenceNeeded -Text 'advisors_path_missing'
 }
-$verifierFailed = $dbGap.ExitCode -ne 0 -or $scorecard.ExitCode -ne 0 -or $audit.ExitCode -ne 0
+$followUpVerifierFailed = $dbGap.ExitCode -ne 0
+if (-not $OrchestratedByGoalNext.IsPresent -and $sourceHealthExit -ne 0) {
+    $followUpVerifierFailed = $true
+}
+$completionAuditIncomplete = (-not $OrchestratedByGoalNext.IsPresent) -and ($completionAuditExit -ne 0)
+if ($completionAuditIncomplete) {
+    $safeEvidenceNeeded = Add-SafeEvidenceNeededItem -Items $safeEvidenceNeeded -Text 'completion_audit_incomplete'
+}
 $importIncomplete = $importDecision -ne 'supabase_schema_snapshot_imported' -or -not $schemaComplete -or -not $resultSetComplete -or $evidenceNeededCount -gt 0
 $decision = 'ok'
 if ($secretHits -gt 0 -or $mutationAllowed) {
     $decision = 'secret-leak-risk'
-} elseif ($verifierFailed -or $importIncomplete) {
+} elseif ($followUpVerifierFailed -or $completionAuditIncomplete -or $importIncomplete) {
     $decision = 'evidence_needed'
 }
 $summaryPath = Join-Path $OutputDir 'supabase-apply-collected.summary.json'
@@ -405,11 +521,22 @@ Write-JsonFile -Path $summaryPath -Value ([ordered]@{
     advisorResultPathRecommendation = 'data/db-gap-report/supabase-advisors.json'
     resultTemplatePathRecommendation = 'data/db-gap-report/supabase-query-results.template.json'
     collectionPacketPathRecommendation = 'data/db-gap-report/supabase-execute-sql-collection.packet.json'
+    readOnlyMcpEndpointTemplate = $readOnlyMcpEndpointTemplate
+    projectRefEnvPresent = $projectRefEnvPresent
+    accessTokenEnvPresent = $accessTokenEnvPresent
+    accessTokenManualFallbackEnvPresent = $accessTokenEnvPresent
+    mcpOAuthSupported = $mcpOAuthSupported
+    supportedAuthModes = @($supportedAuthModes)
+    envPreflightStatus = $envPreflightStatus
     importTool = 'supabase_schema_snapshot_import'
     applyCollectedEvidenceCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\supabase_apply_collected_evidence.ps1 -Root .'
+    orchestratedByGoalNext = [bool]$OrchestratedByGoalNext
+    derivedGateOwner = $derivedGateOwner
     dbGapExit = $dbGap.ExitCode
-    sourceHealthExit = $scorecard.ExitCode
-    completionAuditExit = $audit.ExitCode
+    sourceHealthStatus = $sourceHealthStatus
+    sourceHealthExit = $sourceHealthExit
+    completionAuditStatus = $completionAuditStatus
+    completionAuditExit = $completionAuditExit
     secretHits = $secretHits
     rawSecretPatternHits = $secretHits
     mutationAllowed = $mutationAllowed
@@ -433,17 +560,24 @@ if (@($missingResultNames).Count -gt 0) {
 if (@($dataApiEvidenceMissing).Count -gt 0) {
     Write-Host "[AWX][supabase][apply-collected] dataApiEvidenceMissing=$($dataApiEvidenceMissing -join ',')"
 }
-Write-Host "[AWX][supabase][apply-collected] dbGapExit=$($dbGap.ExitCode) sourceHealthExit=$($scorecard.ExitCode) completionAuditExit=$($audit.ExitCode) secretHits=$secretHits"
+$sourceHealthExitText = if ($null -eq $sourceHealthExit) { 'n/a' } else { [string]$sourceHealthExit }
+$completionAuditExitText = if ($null -eq $completionAuditExit) { 'n/a' } else { [string]$completionAuditExit }
+Write-Host "[AWX][supabase][apply-collected] dbGapExit=$($dbGap.ExitCode) sourceHealthStatus=$sourceHealthStatus sourceHealthExit=$sourceHealthExitText completionAuditStatus=$completionAuditStatus completionAuditExit=$completionAuditExitText secretHits=$secretHits"
 Write-Host "[AWX][supabase][apply-collected] resultsPathPresent=$resultsPathPresent advisorsPathPresent=$advisorsPathPresent"
+Write-Host "[AWX][supabase][apply-collected] projectRefEnvPresent=$projectRefEnvPresent accessTokenEnvPresent=$accessTokenEnvPresent envPreflightStatus=$envPreflightStatus"
 Write-Host "[AWX][supabase][apply-collected] snapshotBundleSynced=$($snapshotBundleSync.Synced) snapshotBundleCopiedCount=$($snapshotBundleSync.CopiedCount) snapshotBundleReason=$($snapshotBundleSync.Reason)"
 
 if ($secretHits -gt 0 -or $mutationAllowed) {
     Write-Host '[AWX][supabase][apply-collected] secret-leak-risk'
     exit 4
 }
-if ($verifierFailed) {
+if ($followUpVerifierFailed) {
     Write-Host '[AWX][supabase][apply-collected] evidence_needed: follow-up verifier failed'
     exit 3
+}
+if ($completionAuditIncomplete) {
+    Write-Host '[AWX][supabase][apply-collected] evidence_needed: completion audit incomplete'
+    exit 2
 }
 if ($importIncomplete) {
     Write-Host '[AWX][supabase][apply-collected] evidence_needed: imported Supabase evidence is incomplete'

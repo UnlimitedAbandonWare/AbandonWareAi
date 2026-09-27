@@ -63,7 +63,10 @@ function Invoke-Apply {
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$OutputDir,
         [string]$SnapshotPath = '',
-        [string]$ImportMode = 'complete'
+        [string]$ResultsPath = '',
+        [string]$AdvisorsPath = '',
+        [string]$ImportMode = 'complete',
+        [switch]$OrchestratedByGoalNext
     )
     $scriptPath = Join-Path $script:ScriptsRoot 'supabase_apply_collected_evidence.ps1'
     $arguments = @(
@@ -79,6 +82,15 @@ function Invoke-Apply {
     )
     if (-not [string]::IsNullOrWhiteSpace($SnapshotPath)) {
         $arguments += @('-SnapshotPath', $SnapshotPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ResultsPath)) {
+        $arguments += @('-ResultsPath', $ResultsPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($AdvisorsPath)) {
+        $arguments += @('-AdvisorsPath', $AdvisorsPath)
+    }
+    if ($OrchestratedByGoalNext.IsPresent) {
+        $arguments += '-OrchestratedByGoalNext'
     }
     $previousMode = $env:AWX_FAKE_SUPABASE_IMPORT_MODE
     $env:AWX_FAKE_SUPABASE_IMPORT_MODE = $ImportMode
@@ -127,6 +139,7 @@ try {
     Assert-Contains 'apply help names access token env without value' $help.Output 'SUPABASE_ACCESS_TOKEN'
     Assert-Contains 'apply help names results path' $help.Output 'data\db-gap-report\supabase-query-results.json'
     Assert-Contains 'apply help names advisors path' $help.Output 'data\db-gap-report\supabase-advisors.json'
+    Assert-Contains 'apply help names internal goal-next ownership mode' $help.Output 'OrchestratedByGoalNext'
     Assert-True 'apply help prints no raw auth header' (-not ($help.Output -match 'Bearer\s+[A-Za-z0-9._~+/-]+=*')) "output=$($help.Output)"
 
     Set-TestFile (Join-Path $reportDir 'supabase-schema-snapshot.json') '{"schemaVersion":"awx.mcp.supabase_schema_snapshot.v1","readOnly":true,"mutationAllowed":false}'
@@ -202,8 +215,81 @@ print('[fake-source-health] ok')
 '@
 
     Set-TestFile (Join-Path $fakeScripts 'awx_mcp_completion_audit.py') @'
+import os
+if os.environ.get("AWX_FAKE_SUPABASE_IMPORT_MODE") == "audit-incomplete":
+    print('{"ok":false,"status":"local_control_tower_incomplete","evidence_needed":["goal-next.command-packet missing auth-mode evidence"],"rawSecretPatternHits":0}')
+    raise SystemExit(1)
 print('{"ok":true,"status":"local_control_tower_ready","evidence_needed":[],"rawSecretPatternHits":0}')
 '@
+
+    $unsafeResultsPath = Join-Path $FakeRoot 'unsafe-results.json'
+    $fakeSecret = 'sk-' + ('A' * 24)
+    Set-TestFile $unsafeResultsPath (@{
+        mutationAllowed = $true
+        results = @(
+            @{
+                name = 'schemas_and_tables'
+                rows = @(
+                    @{
+                        table_schema = 'public'
+                        table_name = 'notes'
+                        accidental_secret = $fakeSecret
+                    }
+                )
+            }
+        )
+    } | ConvertTo-Json -Depth 20 -Compress)
+    $unsafeOutput = Join-Path $FakeRoot 'out-unsafe-results'
+    $unsafe = Invoke-Apply -Root $FakeRoot -OutputDir $unsafeOutput -ResultsPath $unsafeResultsPath -ImportMode 'complete'
+    Assert-True 'unsafe collected result file exits secret-leak-risk before import success' ($unsafe.ExitCode -eq 4) "expected exit 4; output=$($unsafe.Output)"
+    Assert-Contains 'unsafe collected result output names input gate' $unsafe.Output 'collectedEvidenceUnsafe=True'
+    Assert-True 'unsafe collected result output redacts fake secret' (-not $unsafe.Output.Contains($fakeSecret)) "output=$($unsafe.Output)"
+    $unsafeSummaryPath = Join-Path $unsafeOutput 'supabase-apply-collected.summary.json'
+    Assert-True 'unsafe collected result writes summary artifact' (Test-Path $unsafeSummaryPath) 'missing unsafe summary artifact'
+    if (Test-Path $unsafeSummaryPath) {
+        $unsafeSummary = Get-Content -Raw -LiteralPath $unsafeSummaryPath | ConvertFrom-Json
+        $unsafeSummaryText = $unsafeSummary | ConvertTo-Json -Depth 20 -Compress
+        Assert-True 'unsafe summary reports secret-leak-risk' ($unsafeSummary.decision -eq 'secret-leak-risk') "summary=$unsafeSummaryText"
+        Assert-True 'unsafe summary records raw secret hits by count only' ([int]$unsafeSummary.collectedEvidenceSecretHits -gt 0) "summary=$unsafeSummaryText"
+        Assert-True 'unsafe summary records mutation allowed hits by count only' ([int]$unsafeSummary.collectedEvidenceMutationAllowedTrueHits -gt 0) "summary=$unsafeSummaryText"
+        Assert-True 'unsafe summary does not expose fake secret' (-not $unsafeSummaryText.Contains($fakeSecret)) "summary=$unsafeSummaryText"
+    }
+
+    $orchestratedOutput = Join-Path $FakeRoot 'out-orchestrated'
+    $staleNestedSecret = 'Bearer ' + ('z' * 30)
+    Set-TestFile (Join-Path $orchestratedOutput 'source-health-scorecard.log') "stale-source-health $staleNestedSecret"
+    Set-TestFile (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.log') "stale-audit-log $staleNestedSecret"
+    Set-TestFile (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.result.json') "{`"stale`":true,`"payload`":`"$staleNestedSecret`"}"
+    $orchestrated = Invoke-Apply -Root $FakeRoot -OutputDir $orchestratedOutput -ImportMode 'complete' -OrchestratedByGoalNext
+    Assert-True 'goal-next orchestrated apply exits zero for complete import and db gap' ($orchestrated.ExitCode -eq 0) "expected exit 0; output=$($orchestrated.Output)"
+    Assert-Contains 'goal-next orchestrated apply still runs db gap scanner' $orchestrated.Output 'dbGapExit=0'
+    Assert-Contains 'goal-next orchestrated apply defers source health explicitly' $orchestrated.Output 'sourceHealthStatus=deferred_to_goal_next sourceHealthExit=n/a'
+    Assert-Contains 'goal-next orchestrated apply defers completion audit explicitly' $orchestrated.Output 'completionAuditStatus=deferred_to_goal_next completionAuditExit=n/a'
+    Assert-True 'goal-next orchestrated apply writes db gap log' (Test-Path (Join-Path $orchestratedOutput 'db-gap-scanner.log')) 'missing orchestrated db gap log'
+    Assert-True 'goal-next orchestrated apply omits nested source health log' (-not (Test-Path (Join-Path $orchestratedOutput 'source-health-scorecard.log'))) 'unexpected nested source health log'
+    Assert-True 'goal-next orchestrated apply omits nested completion audit log' (-not (Test-Path (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.log'))) 'unexpected nested completion audit log'
+    Assert-True 'goal-next orchestrated apply omits nested completion audit artifact' (-not (Test-Path (Join-Path $orchestratedOutput 'awx-mcp-completion-audit.result.json'))) 'unexpected nested completion audit artifact'
+    Assert-True 'goal-next orchestrated apply does not expose stale nested secret' (-not $orchestrated.Output.Contains($staleNestedSecret)) "output=$($orchestrated.Output)"
+    Assert-True 'goal-next orchestrated apply does not write nested scorecard output' (-not (Test-Path (Join-Path $FakeRoot 'verification\source-health-scorecard.json'))) 'unexpected nested scorecard output'
+    $orchestratedSummaryPath = Join-Path $orchestratedOutput 'supabase-apply-collected.summary.json'
+    Assert-True 'goal-next orchestrated apply writes summary artifact' (Test-Path $orchestratedSummaryPath) 'missing orchestrated summary artifact'
+    if (Test-Path $orchestratedSummaryPath) {
+        $orchestratedSummary = Get-Content -Raw -LiteralPath $orchestratedSummaryPath | ConvertFrom-Json
+        $orchestratedSummaryText = $orchestratedSummary | ConvertTo-Json -Depth 20 -Compress
+        Assert-True 'goal-next orchestrated summary records single owner' (
+            $orchestratedSummary.orchestratedByGoalNext -eq $true -and
+            [string]$orchestratedSummary.derivedGateOwner -eq 'goal_next_auto'
+        ) "summary=$orchestratedSummaryText"
+        Assert-True 'goal-next orchestrated summary records deferred statuses' (
+            [string]$orchestratedSummary.sourceHealthStatus -eq 'deferred_to_goal_next' -and
+            [string]$orchestratedSummary.completionAuditStatus -eq 'deferred_to_goal_next'
+        ) "summary=$orchestratedSummaryText"
+        Assert-True 'goal-next orchestrated summary does not fake nested exit success' (
+            $null -eq $orchestratedSummary.sourceHealthExit -and
+            $null -eq $orchestratedSummary.completionAuditExit
+        ) "summary=$orchestratedSummaryText"
+        Assert-True 'goal-next orchestrated summary preserves db gap execution' ([int]$orchestratedSummary.dbGapExit -eq 0) "summary=$orchestratedSummaryText"
+    }
 
     $completeOutput = Join-Path $FakeRoot 'out-complete'
     $complete = Invoke-Apply -Root $FakeRoot -OutputDir $completeOutput -ImportMode 'complete'
@@ -225,6 +311,21 @@ print('{"ok":true,"status":"local_control_tower_ready","evidence_needed":[],"raw
     }
     Assert-True 'apply writes db gap output under provided root' (Test-Path (Join-Path $FakeRoot 'data\db-gap-report\gap_matrix.json')) 'missing fake-root DB gap output'
     Assert-True 'apply writes scorecard output under provided root' (Test-Path (Join-Path $FakeRoot 'verification\source-health-scorecard.json')) 'missing fake-root scorecard output'
+
+    $auditIncompleteOutput = Join-Path $FakeRoot 'out-audit-incomplete'
+    $auditIncomplete = Invoke-Apply -Root $FakeRoot -OutputDir $auditIncompleteOutput -ImportMode 'audit-incomplete'
+    Assert-True 'completion audit incomplete exits evidence_needed not verifier failure' ($auditIncomplete.ExitCode -eq 2) "expected exit 2; output=$($auditIncomplete.Output)"
+    Assert-Contains 'audit incomplete output names completion audit exit' $auditIncomplete.Output 'completionAuditExit=1'
+    Assert-Contains 'audit incomplete output avoids follow-up verifier failure' $auditIncomplete.Output 'completion audit incomplete'
+    $auditIncompleteSummaryPath = Join-Path $auditIncompleteOutput 'supabase-apply-collected.summary.json'
+    Assert-True 'audit incomplete writes summary artifact' (Test-Path $auditIncompleteSummaryPath) 'missing audit incomplete summary'
+    if (Test-Path $auditIncompleteSummaryPath) {
+        $auditIncompleteSummary = Get-Content -Raw -LiteralPath $auditIncompleteSummaryPath | ConvertFrom-Json
+        $auditIncompleteSummaryText = $auditIncompleteSummary | ConvertTo-Json -Depth 20 -Compress
+        Assert-True 'audit incomplete summary records evidence_needed' ($auditIncompleteSummary.decision -eq 'evidence_needed') "summary=$auditIncompleteSummaryText"
+        Assert-True 'audit incomplete summary records completion audit exit' ([int]$auditIncompleteSummary.completionAuditExit -eq 1) "summary=$auditIncompleteSummaryText"
+        Assert-Contains 'audit incomplete summary records safe completion audit gap' $auditIncompleteSummaryText 'completion_audit_incomplete'
+    }
 
     $freshBundleDir = Join-Path $FakeRoot 'var\codex-smoke\supabase-readonly-snapshot'
     New-Item -ItemType Directory -Force -Path $freshBundleDir | Out-Null
@@ -283,9 +384,20 @@ print('{"ok":true,"status":"local_control_tower_ready","evidence_needed":[],"raw
         Assert-Contains 'partial summary includes query collection next action' $partialSummaryText 'execute_each_query_once'
         Assert-Contains 'partial summary includes advisor collection next action' $partialSummaryText 'collect_get_advisors_rows'
         Assert-Contains 'partial summary includes import rerun next action' $partialSummaryText 'rerun_supabase_schema_snapshot_import'
+        Assert-True 'partial summary reports project ref env presence only' ($partialSummary.projectRefEnvPresent -eq $false) "summary=$partialSummaryText"
+        Assert-True 'partial summary reports access token env presence only' ($partialSummary.accessTokenEnvPresent -eq $false) "summary=$partialSummaryText"
+        Assert-True 'partial summary reports oauth-aware env preflight status' ($partialSummary.envPreflightStatus -eq 'missing_project_ref_and_mcp_auth') "summary=$partialSummaryText"
+        Assert-True 'partial summary records oauth-capable mcp auth mode' ($partialSummary.mcpOAuthSupported -eq $true -and (($partialSummary.supportedAuthModes -join ',') -match 'supabase_mcp_oauth_session')) "summary=$partialSummaryText"
+        Assert-True 'partial summary keeps access token as manual fallback only' ($partialSummary.accessTokenManualFallbackEnvPresent -eq $false -and (($partialSummary.supportedAuthModes -join ',') -match 'manual_SUPABASE_ACCESS_TOKEN')) "summary=$partialSummaryText"
+        Assert-Contains 'partial summary includes project ref mcp endpoint template' $partialSummaryText 'project_ref=${SUPABASE_PROJECT_REF}'
+        Assert-Contains 'partial summary includes read only mcp endpoint flag' $partialSummaryText 'read_only=true'
+        Assert-Contains 'partial summary includes scoped feature groups' $partialSummaryText 'features=database,debugging,docs'
         Assert-Contains 'partial summary includes required data api grants result' $partialSummaryText 'data_api_role_grants'
         Assert-Contains 'partial summary includes required rls flags result' $partialSummaryText 'rls_and_table_flags'
-        Assert-True 'partial summary records required result count' ([int]$partialSummary.requiredResultCount -ge 12) "summary=$partialSummaryText"
+        Assert-True 'partial summary records canonical required result contract' (
+            [int]$partialSummary.requiredResultCount -eq 15 -and
+            (@($partialSummary.requiredResultNames) -join ',') -eq 'schemas_and_tables,rls_and_table_flags,policies,data_api_role_grants,exposed_tables_without_rls,rls_user_metadata_policies,update_policies_without_select_policy,storage_upsert_policy_gaps,views,views_missing_security_invoker,exposed_security_definer_functions,shadow_memory_candidate_tables,shadow_memory_candidate_columns,shadow_memory_metadata_fingerprints,extensions'
+        ) "summary=$partialSummaryText"
         Assert-Contains 'partial summary includes import evidence_needed' $partialSummaryText 'import:Supabase execute_sql result sets missing / populate a results JSON file and rerun supabase_schema_snapshot_import'
         Assert-Contains 'partial summary includes missing data api grants result' $partialSummaryText 'missing_result_set:data_api_role_grants'
         Assert-Contains 'partial summary includes missing rls flags result' $partialSummaryText 'missing_result_set:rls_and_table_flags'

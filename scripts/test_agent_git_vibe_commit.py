@@ -218,6 +218,28 @@ class AgentGitVibeCommitTests(unittest.TestCase):
             notes = [e["text"] for e in journal["events"] if e["kind"] == "info"]
             self.assertIn(f"AUTO:committed={payload['committed']}", notes)
 
+    def test_discarded_or_mismatched_remote_defers_every_mode(self):
+        for url, reason in (
+            ("https://github.com/UnlimitedAbandonWare/AbandonWare3", "forbidden-remote"),
+            ("https://example.com/other/repo.git", "origin-mismatch"),
+        ):
+            with self.subTest(url=url), FixtureDirectory() as tmp:
+                repo, message = self.owned_fixture(Path(tmp))
+                git(repo, "remote", "add", "origin", url)
+                head_before = git_out(repo, "rev-parse", "HEAD")
+                index_before = (git_dir(repo) / "index").read_bytes()
+                for extra in ([], ["--dry-run"], ["--strict-staging"]):
+                    proc = run_tool("--repo", str(repo), "--path", "owned.txt",
+                                    "--message-file", str(message), *extra)
+                    payload = json.loads(proc.stdout)
+                    self.assertEqual(proc.returncode, 2, proc.stdout)
+                    self.assertEqual(payload["outcome"], "deferred")
+                    self.assertEqual(payload["deferred"], reason)
+                    self.assertIsNone(payload["committed"])
+                    self.assertNotIn(url, proc.stdout)
+                self.assertEqual(head_before, git_out(repo, "rev-parse", "HEAD"))
+                self.assertEqual(index_before, (git_dir(repo) / "index").read_bytes())
+
     def test_deferred_reason_for_missing_message_labels(self):
         with FixtureDirectory() as tmp:
             repo = make_repo(Path(tmp))
